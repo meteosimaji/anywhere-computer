@@ -38,10 +38,11 @@ mismatch, invalid oversized frames, and rejected verification-disabled TLS
 contexts. The test certificates are temporary test material, never enrollment
 credentials, and are deleted at fixture teardown.
 
-Still required: production credential provisioning through OS storage,
-peer/device configuration, TLS CLI provisioning, outbound rendezvous for
-NAT, reconnect backoff/status, resource scopes, public HTTP MCP/OAuth,
-host-to-isolated-Windows tests and a stable production internet path. No remote listener
+Still required for this custom mTLS transport: production certificate provisioning
+through OS storage, peer/device configuration, TLS CLI provisioning, outbound
+routing for NAT, reconnect backoff/status, live cross-platform tests and a stable
+production internet path. Tool grants are implemented; filesystem-level scopes
+are separate work. HTTP MCP/OAuth integration is described below. No remote listener
 is enabled by default, and computer_status continues to report remote_ready
 false until those integrations exist.
 
@@ -109,9 +110,9 @@ of an already dispatched operation after the HTTP observer disconnects. Test
 credentials are disposable; they are not production authentication. As with
 stdio, the caller must not blindly repeat an interrupted mutation.
 
-Still missing for a deployable ChatGPT connection: OAuth discovery and token
-issuance/verification, user-to-device authorization, public HTTPS gateway,
-trusted proxy handling, NAT/outbound routing and a stable production internet path. There
+Still missing for a deployable ChatGPT connection: browser authentication and
+consent, client onboarding, a production HTTPS gateway, trusted proxy handling,
+NAT/outbound routing and a stable production internet path. There
 is deliberately no CLI command enabling this listener for public use yet.
 `computer_status.remote_ready` remains false. The adapter is based on the MCP
 [2025-11-25 transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports);
@@ -120,8 +121,10 @@ OAuth integration must also follow the
 
 The internal code/token grant store and authenticated device binding are now
 implemented; see [Device authorization](AUTHORIZATION.md). OAuth HTTP discovery
-and code redemption endpoints are also implemented as optional HTTP routes.
-Login/consent, public HTTPS deployment and internet routing remain unimplemented.
+and code redemption/refresh endpoints are implemented as optional HTTP routes.
+The internal client manager saves rotating credentials in the OS keyring and
+serializes updates across processes. Login/consent and integration into a
+production HTTP connector, HTTPS deployment and internet routing remain unimplemented.
 
 A temporary public HTTPS path has now been exercised on macOS with a restricted
 probe engine. See [Internet testing](INTERNET-TESTING.md) for the exact scope,
