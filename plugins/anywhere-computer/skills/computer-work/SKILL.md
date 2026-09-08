@@ -19,6 +19,12 @@ filesystem. Each chunk is committed separately; the transfer is not atomic as a
 whole. After a lost response, inspect operations_get and the staged file hash and
 length before another append. files_restore can restore binary backups too.
 
+For efficient large downloads, use download_begin with a fresh 32-hex transfer_id,
+then download_read ranges up to 256 KiB. The saved copy survives source changes
+and engine restart. Verify chunk and whole hashes at the receiver, then download_close.
+Keep the ID; inspect download_status and operations_get after a lost begin response.
+A closed ID cannot be reused; a new HTTP grant cannot access an old grant's copy.
+
 For larger uploads to new destinations, use upload_begin with a fresh 32-hex
 transfer_id, final byte length and SHA-256; keep this ID. Send contiguous upload_chunk
 requests, inspect upload_status after interruptions, then upload_commit. Declared

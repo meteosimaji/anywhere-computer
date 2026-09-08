@@ -13,10 +13,13 @@ from pydantic import JsonValue
 
 from . import __version__
 from .documents import read_document
+from .downloads import Downloads
 from .files import Files, absolute_path
 from .models import (
+    BeginDownload,
     BeginUpload,
     Contract,
+    DownloadRange,
     EditFile,
     Empty,
     FilePath,
@@ -70,6 +73,7 @@ class Engine:
         self.ledger = Ledger(directory)
         self.files = Files(directory, locks=file_locks)
         self.uploads = Uploads(directory, file_locks=self.files.locks)
+        self.downloads = Downloads(directory)
         self.sessions = Sessions()
         self.searches = Searches()
         self.instance_id = uuid.uuid4().hex
@@ -127,6 +131,18 @@ class Engine:
 
         async def write_binary(args: WriteBinary) -> Result:
             return await asyncio.to_thread(self.files.write_binary, args)
+
+        async def download_begin(args: BeginDownload) -> Result:
+            return await asyncio.to_thread(self.downloads.begin, args)
+
+        async def download_read(args: DownloadRange) -> Result:
+            return await asyncio.to_thread(self.downloads.read, args)
+
+        async def download_status(args: TransferId) -> Result:
+            return await asyncio.to_thread(self.downloads.status, args)
+
+        async def download_close(args: TransferId) -> Result:
+            return await asyncio.to_thread(self.downloads.close, args)
 
         async def upload_begin(args: BeginUpload) -> Result:
             return await asyncio.to_thread(self.uploads.begin, args)
@@ -254,6 +270,28 @@ class Engine:
             ReadBinary,
             read_binary,
             read_only=True,
+        )
+        self.register(
+            "download_begin",
+            "Save a durable copy of a regular file up to 1 GiB. Supply a fresh 32-hex "
+            "transfer_id and optionally expected_sha256. Hash once; retain the ID for resume.",
+            BeginDownload, download_begin,
+        )
+        self.register(
+            "download_read",
+            "Read up to 256 KiB from your durable download copy without rescanning the source. "
+            "Verify chunk and final SHA-256 at the receiver.",
+            DownloadRange, download_read, read_only=True,
+        )
+        self.register(
+            "download_status",
+            "Read durable download metadata by your transfer_id, including after restart.",
+            TransferId, download_status, read_only=True,
+        )
+        self.register(
+            "download_close",
+            "Release stored download chunks. Retain closed metadata; never delete the source.",
+            TransferId, download_close, destructive=True,
         )
         self.register(
             "upload_begin",

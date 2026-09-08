@@ -103,12 +103,13 @@ class Files:
                     collected.extend(block[left - position : right - position])
                 position = end
             after = os.fstat(source.fileno())
+            # Windows Python 3.12 stat ctime uses birthtime; fstat uses change time.
+            # Compare ctime only between fd samples, never across the two APIs.
             current = path.stat()
             if (
                 (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)
                 or current.st_size != before.st_size
                 or current.st_mtime_ns != before.st_mtime_ns
-                or current.st_ctime_ns != before.st_ctime_ns
                 or position != before.st_size
                 or after.st_size != before.st_size
                 or after.st_mtime_ns != before.st_mtime_ns

@@ -38,6 +38,16 @@ class TransferId(Contract):
     transfer_id: str = Field(pattern=r"^[a-f0-9]{32}$")
 
 
+class BeginDownload(TransferId):
+    path: str = Field(min_length=1)
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class DownloadRange(TransferId):
+    offset: int = Field(default=0, ge=0, le=1073741824)
+    limit: int = Field(default=262144, ge=1, le=262144)
+
+
 class BeginUpload(TransferId):
     path: str = Field(min_length=1)
     total_bytes: int = Field(ge=0, le=1073741824)
