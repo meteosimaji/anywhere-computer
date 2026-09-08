@@ -136,15 +136,85 @@ def test_startup_retry_budget_and_interrupt_release_locks(startup_profile, monke
     assert observation["event"] == "interrupted"
 
 
-def test_competing_watcher_does_not_overwrite_history(startup_profile):
+def test_competing_watcher_does_not_overwrite_history(startup_profile, monkeypatch):
     directory, _, _, _ = startup_profile
     path = directory / "remote-watch-status.json"
     previous = b'{"owned-by-running-watcher":true}'
     path.write_bytes(previous)
+    monkeypatch.setattr(remote_service, "load_http_config",
+                        lambda *a: pytest.fail("Competing watcher must not begin preflight"))
     with ProcessLock(directory / "remote-watch.lock"):
         with pytest.raises(TimeoutError):
             remote_service.watch_remote(directory)
     assert path.read_bytes() == previous
+
+
+@pytest.mark.parametrize("target,event", [
+    ("load_http_config", "configuration_error"),
+    ("OwnerCredentials", "credential_backend_error"),
+    ("TunnelCredential", "credential_backend_error"),
+    ("cloudflared_executable", "connector_check_error"),
+])
+def test_initial_failure_is_recorded_under_owned_lock(
+    startup_profile, monkeypatch, target, event,
+):
+    directory, vault, _, _ = startup_profile
+    before, writes = dict(vault.data), vault.writes
+    previous_handler = signal.getsignal(signal.SIGTERM)
+    failure = RuntimeError("synthetic secret details")
+
+    def fail(*args, **kwargs):
+        with pytest.raises(TimeoutError), ProcessLock(directory / "remote-watch.lock"):
+            pass
+        raise failure
+
+    monkeypatch.setattr(remote_service, target, fail)
+    monkeypatch.setattr(remote_service, "supervise", lambda *a, **k: pytest.fail("Must not start"))
+    with pytest.raises(RuntimeError) as caught:
+        remote_service.watch_remote(directory)
+    assert caught.value is failure
+    raw = (directory / "remote-watch-status.json").read_text()
+    assert json.loads(raw)["event"] == event
+    assert json.loads(raw)["startup_attempt"] is None
+    assert "synthetic" not in raw and "secret" not in raw
+    assert signal.getsignal(signal.SIGTERM) == previous_handler
+    assert vault.data == before and vault.writes == writes
+    with ProcessLock(directory / "remote-watch.lock"):
+        pass
+
+
+async def test_missing_configuration_can_be_diagnosed_after_failed_start(tmp_path):
+    from anywhere_computer.http_diagnostics import diagnose_remote
+
+    directory = tmp_path / "new-profile"
+    with pytest.raises((OSError, ValueError)):
+        remote_service.watch_remote(directory)
+    report = await diagnose_remote(directory)
+    assert report["state"] == "configuration_unavailable"
+    assert report["supervisor_history"]["last_observation"]["event"] == "configuration_error"
+
+
+@pytest.mark.parametrize("lock_name", [
+    "http-watch.lock", "cloudflare-tunnel.lock", "http-server.lock",
+])
+def test_preflight_resource_conflict_is_recorded_without_taking_over(
+    startup_profile, monkeypatch, lock_name,
+):
+    directory, vault, _, _ = startup_profile
+    writes = vault.writes
+    monkeypatch.setattr(remote_service, "supervise", lambda *a, **k: pytest.fail("Must not start"))
+    with ProcessLock(directory / lock_name):
+        with pytest.raises(TimeoutError):
+            remote_service.watch_remote(directory)
+        with pytest.raises(TimeoutError), ProcessLock(directory / lock_name):
+            pass
+    observation = json.loads((directory / "remote-watch-status.json").read_text())
+    assert observation["event"] == "startup_conflict"
+    assert vault.writes == writes
+    for name in ("remote-watch.lock", "http-watch.lock", "cloudflare-tunnel.lock",
+                 "http-server.lock"):
+        with ProcessLock(directory / name):
+            pass
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX SIGTERM/SIGKILL integration")

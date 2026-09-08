@@ -7,6 +7,7 @@ import signal
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from threading import Event
 
@@ -18,6 +19,7 @@ from .http_service import http_service, load_http_config
 from .http_supervisor import _stop_child, supervise
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
+from .state import prepare_directory
 from .watch_status import WatchEvent, save_watch_observation
 
 
@@ -109,16 +111,20 @@ async def serve_remote(
                 stop_remote_connector(child)
 
 
+def record_remote_startup(path: Path, event: WatchEvent, attempt: int | None = None) -> None:
+    try:
+        save_watch_observation(path, event, 0, 5, None, startup_attempt=attempt)
+    except (OSError, ValueError):
+        print(json.dumps({"watch_observation_saved": False}), flush=True)
+
+
 def wait_for_remote_credentials(
     owner: OwnerCredentials, credential: TunnelCredential, *, status_path: Path | None = None,
 ) -> None:
     """Retry failed reads on the selected stores; never initialize or switch stores."""
     def observe_credentials(event: WatchEvent, attempt: int) -> None:
         if status_path is not None:
-            try:
-                save_watch_observation(status_path, event, 0, 5, None, startup_attempt=attempt)
-            except (OSError, ValueError):
-                print(json.dumps({"watch_observation_saved": False}), flush=True)
+            record_remote_startup(status_path, event, attempt)
 
     for attempt in range(6):
         observe_credentials("credential_check", attempt + 1)
@@ -152,19 +158,36 @@ def wait_for_remote_credentials(
 
 def watch_remote(directory: Path, *, connector: str | None = None) -> int:
     """Restart a failed combined service with a bounded budget and owner pipe."""
-    config = load_http_config(directory)
-    owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner)
-    credential = TunnelCredential(directory)
-    executable = (cloudflared_executable() if connector is None
-                  else cloudflared_executable(connector))
-    connector_arguments = [] if connector is None else ["--connector", executable]
+    prepare_directory(directory)
     with ProcessLock(directory / "remote-watch.lock"):
         prior = signal.signal(signal.SIGTERM, signal.default_int_handler)
         try:
-            with (
-                ProcessLock(directory / "http-watch.lock"), ProcessLock(credential.lock),
-                ProcessLock(directory / "http-server.lock"),
-            ):
+            stage: WatchEvent = "configuration_error"
+            try:
+                config = load_http_config(directory)
+                stage = "credential_backend_error"
+                owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner)
+                credential = TunnelCredential(directory)
+                stage = "connector_check_error"
+                executable = (cloudflared_executable() if connector is None
+                              else cloudflared_executable(connector))
+            except KeyboardInterrupt:
+                record_remote_startup(directory / "remote-watch-status.json", "interrupted")
+                raise
+            except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):
+                record_remote_startup(directory / "remote-watch-status.json", stage)
+                raise
+            connector_arguments = [] if connector is None else ["--connector", executable]
+            with ExitStack() as startup_locks:
+                try:
+                    for path in (directory / "http-watch.lock", credential.lock,
+                                 directory / "http-server.lock"):
+                        startup_locks.enter_context(ProcessLock(path))
+                except TimeoutError:
+                    record_remote_startup(
+                        directory / "remote-watch-status.json", "startup_conflict",
+                    )
+                    raise
                 wait_for_remote_credentials(
                     owner, credential, status_path=directory / "remote-watch-status.json",
                 )
