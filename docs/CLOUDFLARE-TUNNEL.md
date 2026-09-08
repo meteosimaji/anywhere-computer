@@ -131,3 +131,24 @@ Sources: [run parameters](https://developers.cloudflare.com/tunnel/advanced/run-
 [pinned release](https://github.com/cloudflare/cloudflared/releases/tag/2026.2.0),
 [Windows pipe access control](https://learn.microsoft.com/en-us/windows/win32/ipc/named-pipe-security-and-access-rights),
 [Windows cancellation](https://learn.microsoft.com/en-us/windows/win32/api/ioapiset/nf-ioapiset-cancelsynchronousio).
+
+
+## Connection diagnosis
+
+Run `uv run anywhere remote-doctor --state-dir /absolute/path/to/state` to inspect
+loopback metadata and whether the optional connector executable is available.
+It does not read the credential store, start processes, or modify configuration.
+Add `--probe-public` to also request the configured HTTPS metadata endpoint:
+
+```sh
+uv run anywhere remote-doctor --state-dir /absolute/path/to/state --probe-public
+```
+
+The public probe uses normal certificate and hostname verification, a five-second
+async timeout and the same bounded metadata parser as the loopback probe. It
+sends no authorization or cookies and does not follow redirects. Results separate
+local reachability, public reachability, resource mismatch and certificate failure.
+An installed executable is not evidence that a connector is running; its process
+state remains `unverified`. Even matching metadata at both endpoints does not
+prove that an authenticated MCP operation will succeed or identify the connector
+that served it. Exit status is zero only when requested metadata probes match.

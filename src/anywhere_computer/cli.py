@@ -15,7 +15,7 @@ from .credentials import has_interactive_input
 from .devices import DeviceStore
 from .diagnostics import diagnose
 from .http_client import run_http_mcp
-from .http_diagnostics import diagnose_http
+from .http_diagnostics import diagnose_http, diagnose_remote
 from .http_service import (
     configure_http,
     enable_http_device,
@@ -54,6 +54,7 @@ def main() -> None:
             "http-serve",
             "http-watch",
             "remote-serve",
+            "remote-doctor",
             "http-show",
             "http-doctor",
             "http-revoke",
@@ -92,7 +93,11 @@ def main() -> None:
     parser.add_argument("--storage-id", help="Local storage ID returned by transfers")
     parser.add_argument("--after", help="Pagination cursor returned by transfers")
     parser.add_argument("--limit", type=int, help="Transfer page size, 1–100")
+    parser.add_argument("--probe-public", action="store_true",
+                        help="Also probe configured HTTPS metadata (remote-doctor only)")
     args = parser.parse_args()
+    if args.probe_public and args.command != "remote-doctor":
+        parser.error("--probe-public is only valid for remote-doctor")
     transfer_command = args.command in {"transfers", "transfer-release"}
     if not transfer_command and any(value is not None for value in (
         args.transfer_area, args.transfer_kind, args.storage_id, args.after, args.limit,
@@ -278,6 +283,13 @@ def main() -> None:
                 )
             )
             print(config.model_dump_json(indent=2))
+        elif args.command == "remote-doctor":
+            diagnosis = asyncio.run(diagnose_remote(directory, probe_public=args.probe_public))
+            print(json.dumps(diagnosis, ensure_ascii=False, indent=2))
+            if diagnosis["state"] not in {
+                "local_metadata_reachable", "local_and_public_metadata_reachable"
+            }:
+                raise SystemExit(1)
         elif args.command == "http-doctor":
             diagnosis = asyncio.run(diagnose_http(directory))
             print(json.dumps(diagnosis, ensure_ascii=False, indent=2))

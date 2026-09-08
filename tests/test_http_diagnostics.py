@@ -3,6 +3,7 @@ import json
 
 import pytest
 from test_http_service import configured as configured
+from test_remote_transport import certificates as certificates
 
 from anywhere_computer.http_diagnostics import diagnose_http
 from anywhere_computer.http_service import HTTPServiceConfig, http_service
@@ -107,3 +108,118 @@ async def test_http_doctor_cli_exit_codes(configured, tmp_path):
     )
     assert stopped.returncode == 1
     assert json.loads(stopped.stdout)["state"] == "unreachable"
+
+
+async def test_remote_doctor_default_never_uses_public_network(configured, tmp_path, monkeypatch):
+    from anywhere_computer import http_diagnostics as diagnostic
+
+    original = diagnostic._metadata
+    calls = []
+
+    async def metadata(port, *, resource=None):
+        calls.append(resource)
+        assert resource is None
+        return await original(port)
+
+    monkeypatch.setattr(diagnostic, "_metadata", metadata)
+    _, owner = configured
+    async with http_service(tmp_path, credentials=owner):
+        report = await diagnostic.diagnose_remote(tmp_path)
+    assert report["state"] == "local_metadata_reachable"
+    assert report["public"] == {"state": "not_requested"}
+    assert report["connector"]["process_state"] == "unverified"
+    assert report["authenticated"] is False and report["changed"] is False
+    assert calls == [None]
+
+
+@pytest.mark.parametrize("public_state", ["ok", "mismatch", "certificate", "unreachable"])
+async def test_remote_doctor_separates_local_and_public(configured, tmp_path, monkeypatch,
+                                                       public_state):
+    import ssl
+
+    from anywhere_computer import http_diagnostics as diagnostic
+
+    original = diagnostic._metadata
+    config, owner = configured
+
+    async def metadata(port, *, resource=None):
+        if resource is None:
+            return await original(port)
+        assert resource == config.resource
+        if public_state == "certificate":
+            raise ssl.SSLCertVerificationError("synthetic certificate failure")
+        if public_state == "unreachable":
+            raise OSError("synthetic network failure")
+        return {"resource": config.resource if public_state == "ok" else "https://other.example/mcp"}
+
+    monkeypatch.setattr(diagnostic, "_metadata", metadata)
+    async with http_service(tmp_path, credentials=owner):
+        report = await diagnostic.diagnose_remote(tmp_path, probe_public=True)
+    assert report["loopback"]["state"] == "metadata_reachable"
+    assert report["public"]["state"] == {
+        "ok": "metadata_reachable", "mismatch": "resource_mismatch",
+        "certificate": "certificate_verification_failed", "unreachable": "unreachable",
+    }[public_state]
+    assert report["state"] == (
+        "local_and_public_metadata_reachable" if public_state == "ok" else "attention_required"
+    )
+
+
+async def test_public_metadata_real_tls_verifies_hostname_and_bounds(certificates, monkeypatch):
+    import ssl
+
+    from anywhere_computer import http_diagnostics as diagnostic
+
+    context, _ = certificates
+    server_context = context("server", False)
+    server_context.verify_mode = ssl.CERT_NONE
+    requests = []
+    response = {"status": 200, "size": None, "resource": "unset"}
+
+    async def handler(reader, writer):
+        try:
+            requests.append(await reader.readuntil(b"\r\n\r\n"))
+            body = json.dumps({"resource": response["resource"]}).encode()
+            size = response["size"] or len(body)
+            writer.write(
+                f"HTTP/1.1 {response['status']} Test\r\nContent-Type: application/json\r\n"
+                f"Content-Length: {size}\r\nLocation: https://not-followed.example/mcp\r\n\r\n"
+                .encode() + body
+            )
+            await writer.drain()
+        finally:
+            writer.close()
+
+    server = await asyncio.start_server(handler, "127.0.0.1", 0, ssl=server_context)
+    port = server.sockets[0].getsockname()[1]
+    resource = f"https://localhost:{port}/mcp"
+    response["resource"] = resource
+    try:
+        # The disposable CA is not system-trusted. No insecure fallback is used.
+        with pytest.raises(ssl.SSLCertVerificationError):
+            await diagnostic._metadata(443, resource=resource)
+        trusted = context("client", True)
+        monkeypatch.setattr(diagnostic.ssl, "create_default_context", lambda: trusted)
+        assert await diagnostic._metadata(443, resource=resource) == {"resource": resource}
+        assert b"Authorization:" not in requests[-1] and b"Cookie:" not in requests[-1]
+        with pytest.raises(ssl.SSLCertVerificationError):
+            await diagnostic._metadata(443, resource=f"https://127.0.0.1:{port}/mcp")
+        response["status"] = 302
+        with pytest.raises(ValueError):
+            await diagnostic._metadata(443, resource=resource)
+        response.update(status=200, size=20000)
+        with pytest.raises(ValueError):
+            await diagnostic._metadata(443, resource=resource)
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_remote_doctor_missing_configuration_is_read_only(tmp_path):
+    from anywhere_computer.http_diagnostics import diagnose_remote
+
+    directory = tmp_path / "absent"
+    report = await diagnose_remote(directory, probe_public=True)
+    assert report["state"] == "configuration_unavailable"
+    assert report["public"]["state"] == "not_requested"
+    assert not directory.exists()

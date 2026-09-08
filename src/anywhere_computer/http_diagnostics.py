@@ -1,20 +1,31 @@
-"""Bounded loopback metadata probe; no credentials, repairs, or public network calls."""
+"""Bounded metadata diagnostics; public HTTPS is explicit, credentials are never sent."""
 
 import asyncio
 import json
+import shutil
+import ssl
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
 from .http_service import load_http_config
 
 
-async def _metadata(port: int) -> dict[str, JsonValue]:
-    reader, writer = await asyncio.open_connection("127.0.0.1", port, limit=8192)
+async def _metadata(port: int, *, resource: str | None = None) -> dict[str, JsonValue]:
+    host, authority = "127.0.0.1", f"127.0.0.1:{port}"
+    context = None
+    if resource is not None:
+        parsed = urlsplit(resource)
+        host, authority, port = parsed.hostname or "", parsed.netloc, parsed.port or 443
+        context = ssl.create_default_context()
+    reader, writer = await asyncio.open_connection(
+        host, port, limit=8192, ssl=context, server_hostname=host if context else None
+    )
     try:
         writer.write(
             f"GET /.well-known/oauth-protected-resource HTTP/1.1\r\n"
-            f"Host: 127.0.0.1:{port}\r\nAccept: application/json\r\n"
+            f"Host: {authority}\r\nAccept: application/json\r\n"
             "Connection: close\r\n\r\n".encode("ascii")
         )
         await writer.drain()
@@ -96,3 +107,59 @@ async def diagnose_http(directory: Path) -> dict[str, JsonValue]:
         port=config.port,
         resource=config.resource,
     )
+
+
+async def diagnose_remote(directory: Path, *, probe_public: bool = False) -> dict[str, JsonValue]:
+    """Inspect configuration and metadata without reading credentials or repairing state."""
+    local = await diagnose_http(directory)
+    public: dict[str, JsonValue] = {"state": "not_requested"}
+    result: dict[str, JsonValue] = {
+        "loopback": local,
+        "public": public,
+        "connector": {
+            "executable_available": shutil.which("cloudflared") is not None,
+            "process_state": "unverified",
+        },
+        "changed": False,
+        "authenticated": False,
+        "state": "attention_required",
+    }
+    if local["state"] == "configuration_unavailable":
+        result["state"] = "configuration_unavailable"
+        return result
+    if probe_public:
+        try:
+            config = load_http_config(directory)
+        except (OSError, ValueError):
+            result["state"] = "configuration_unavailable"
+            return result
+        try:
+            metadata = await asyncio.wait_for(_metadata(443, resource=config.resource), 5)
+            public["state"] = (
+                "metadata_reachable" if metadata["resource"] == config.resource
+                else "resource_mismatch"
+            )
+        except ssl.SSLCertVerificationError:
+            public["state"] = "certificate_verification_failed"
+        except (OSError, TimeoutError):
+            public["state"] = "unreachable"
+        except (ValueError, RecursionError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+            public["state"] = "unexpected_response"
+    if local["state"] == "metadata_reachable":
+        if not probe_public:
+            result["state"] = "local_metadata_reachable"
+        elif public["state"] == "metadata_reachable":
+            result["state"] = "local_and_public_metadata_reachable"
+    if local["state"] != "metadata_reachable":
+        result["action"] = local["action"]
+    elif probe_public and public["state"] != "metadata_reachable":
+        result["action"] = (
+            "Loopback responds. Inspect the connector, configured HTTPS route, "
+            "DNS and certificate; no repair was attempted."
+        )
+    else:
+        result["action"] = (
+            "Metadata is not proof of client authorization or connector ownership. "
+            "Complete an authenticated MCP request to verify access."
+        )
+    return result
