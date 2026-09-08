@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import cast
 
 import psutil
-from filelock import FileLock
 from pydantic import JsonValue
 
 from .credentials import local_credential
 from .engine import Engine
+from .locking import ProcessLock
 from .models import Reply, Request
 from .state import prepare_directory
 
@@ -73,7 +73,7 @@ async def serve(
     prepare_directory(directory)
     secret = credential if credential is not None else local_credential(directory)
     stop = shutdown or asyncio.Event()
-    with FileLock(directory / "agent.lock", timeout=0):
+    with ProcessLock(directory / "agent.lock", timeout=0):
         engine = Engine(directory)
         connections: set[asyncio.Task[None]] = set()
 
@@ -185,7 +185,7 @@ async def serve(
 
 def ensure_agent(directory: Path) -> dict[str, JsonValue]:
     prepare_directory(directory)
-    with FileLock(directory / "startup.lock", timeout=15):
+    with ProcessLock(directory / "startup.lock", timeout=15):
         credential = local_credential(directory, create=True)
         try:
             reply = asyncio.run(exchange(directory, "__status", timeout=2, credential=credential))

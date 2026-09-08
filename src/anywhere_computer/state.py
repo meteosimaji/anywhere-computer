@@ -8,14 +8,23 @@ import sys
 import time
 from pathlib import Path
 
-from platformdirs import user_state_path
-
 from .models import Reply, Request
 
 
 def state_directory() -> Path:
     override = os.environ.get("ANYWHERE_STATE_DIR")
-    return Path(override).expanduser() if override else user_state_path("Anywhere Computer")
+    if override:
+        return Path(override).expanduser()
+    home = Path.home()
+    if sys.platform == "win32":
+        base = Path(os.environ.get("LOCALAPPDATA", str(home / "AppData/Local")))
+        return base / "Anywhere Computer" / "Anywhere Computer"
+    if base := os.environ.get("XDG_STATE_HOME", "").strip():
+        if Path(base).is_absolute():
+            return Path(base) / "Anywhere Computer"
+    if sys.platform == "darwin":
+        return home / "Library/Application Support/Anywhere Computer"
+    return home / ".local/state/Anywhere Computer"
 
 
 def prepare_directory(directory: Path) -> None:

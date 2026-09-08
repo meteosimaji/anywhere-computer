@@ -6,9 +6,9 @@ import stat
 import tempfile
 from pathlib import Path
 
-from filelock import FileLock
 from pydantic import JsonValue
 
+from .locking import ProcessLock
 from .models import EditFile, ListDirectory, MoveFile, ReadFile, WriteFile
 
 MAX_READ_BYTES = 16 * 1024 * 1024
@@ -62,7 +62,7 @@ class Files:
     def write(self, args: WriteFile) -> dict[str, JsonValue]:
         path = absolute_path(args.path)
         lock_name = sha256(str(path.resolve()).encode())
-        with FileLock(self.locks / lock_name, timeout=5):
+        with ProcessLock(self.locks / lock_name, timeout=5):
             if path.is_symlink():
                 raise ValueError("Write to the real file path, not a symbolic link")
             exists = path.exists()
