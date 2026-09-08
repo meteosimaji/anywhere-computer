@@ -86,6 +86,22 @@ def _secret_digest(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _registered_redirect(redirect: str, registered: list[str]) -> bool:
+    """RFC 8252 loopback exception: change only the port, never the host/path/query."""
+    validate_authorization_url(redirect, loopback=True)
+    if redirect in registered:
+        return True
+    pattern = r"http://(127\.0\.0\.1|\[::1\])(?::([0-9]+))?([/?].*|)"
+    requested = re.fullmatch(pattern, redirect)
+    if requested is None or not requested[2] or not 1 <= int(requested[2]) <= 65535:
+        return False
+    for value in registered:
+        saved = re.fullmatch(pattern, value)
+        if saved and requested[1] == saved[1] and requested[3] == saved[3]:
+            return True
+    return False
+
+
 class AuthorizationStore:
     def __init__(self, directory: Path, *, resource: str, known_tools: frozenset[str]) -> None:
         validate_authorization_url(resource)
@@ -230,7 +246,7 @@ class AuthorizationStore:
         ).fetchone()
         if (
             registered is None
-            or redirect not in json.loads(registered[0])
+            or not _registered_redirect(redirect, json.loads(registered[0]))
             or target is None
             or target[0] != owner
             or not target[2]

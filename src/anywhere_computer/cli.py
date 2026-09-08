@@ -13,6 +13,7 @@ from .devices import DeviceStore
 from .diagnostics import diagnose
 from .http_client import run_http_mcp
 from .mcp_server import run_mcp
+from .native_login import login
 from .owner_credentials import OwnerCredentials
 from .ssh_transport import run_ssh_mcp
 from .state import state_directory
@@ -32,6 +33,7 @@ def main() -> None:
             "remote-mcp",
             "http-mcp",
             "owner-init",
+            "login",
             "devices",
             "device-add",
             "device-rename",
@@ -46,21 +48,28 @@ def main() -> None:
     parser.add_argument("--resource", help="Authorized HTTPS /mcp resource")
     parser.add_argument("--client-id", help="Registered public OAuth client ID")
     parser.add_argument("--owner", help="Owner identifier for initial authentication setup")
+    parser.add_argument("--scope", action="append", help="Tool to authorize (repeat per tool)")
     parser.add_argument(
         "--profile", help="Authorized connection profile in the OS credential store"
     )
     args = parser.parse_args()
-    if args.resource is not None and args.command not in {"http-mcp", "owner-init"}:
-        parser.error("--resource is only valid for http-mcp and owner-init")
+    if args.resource is not None and args.command not in {"http-mcp", "owner-init", "login"}:
+        parser.error("--resource is only valid for http-mcp, owner-init and login")
     if any(value is not None for value in (args.client_id, args.profile)):
-        if args.command != "http-mcp":
-            parser.error("--client-id and --profile are only valid for http-mcp")
+        if args.command not in {"http-mcp", "login"}:
+            parser.error("--client-id and --profile are only valid for http-mcp and login")
+    if args.scope is not None and args.command != "login":
+        parser.error("--scope is only valid for login")
+    if args.command == "login" and not args.scope:
+        parser.error("login requires at least one --scope tool")
     if args.owner is not None and args.command != "owner-init":
         parser.error("--owner is only valid for owner-init")
     if args.command == "owner-init" and not all((args.resource, args.owner)):
         parser.error("owner-init requires --resource and --owner")
-    if args.command == "http-mcp" and not all((args.resource, args.client_id, args.profile)):
-        parser.error("http-mcp requires --resource, --client-id and --profile")
+    if args.command in {"http-mcp", "login"} and not all(
+        (args.resource, args.client_id, args.profile)
+    ):
+        parser.error("http-mcp and login require --resource, --client-id and --profile")
     if args.ssh_host is not None and args.command not in {"remote-mcp", "device-add"}:
         parser.error("--ssh-host is only valid for remote-mcp and device-add")
     if args.name is not None and args.command not in {"device-add", "device-rename"}:
@@ -124,11 +133,16 @@ def main() -> None:
                 raise ValueError("Owner passwords did not match")
             owner_credentials.initialize(password)
             print(json.dumps({"owner_initialized": True}))
-        elif args.command == "http-mcp":
+        elif args.command in {"http-mcp", "login"}:
             tokens = ClientTokens(
                 directory, resource=args.resource, client=args.client_id, profile=args.profile
             )
-            asyncio.run(run_http_mcp(tokens))
+            if args.command == "login":
+                print("ブラウザーで接続を承認してください。", file=sys.stderr)
+                asyncio.run(login(tokens, frozenset(args.scope)))
+                print(json.dumps({"authorized": True, "profile": args.profile}))
+            else:
+                asyncio.run(run_http_mcp(tokens))
         elif args.command == "remote-mcp":
             raise SystemExit(run_ssh_mcp(args.ssh_host))
         elif args.command == "serve":

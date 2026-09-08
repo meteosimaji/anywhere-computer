@@ -11,7 +11,8 @@ or anonymous mode in the HTTP binding.
 ## What is implemented
 
 An embedding application registers public clients with exact HTTPS callback URLs
-(or explicit IP-loopback callbacks for native clients), and enrolls a device
+(or explicit IP-loopback callbacks for native clients, with only the port allowed
+to vary under RFC 8252), and enrolls a device
 under its owner's stable identifier with a set of allowed tool names. Registration
 and enrollment are trusted administrative APIs, not unauthenticated HTTP handlers.
 The embedding application must verify the owner and obtain consent for the
@@ -238,3 +239,52 @@ a synthetic owner password in macOS Keychain, then exchanges the code, operates
 on its single disposable file and verifies revocation and cleanup. It is an HTTP
 form integration test, not visual browser testing, ChatGPT onboarding or a second
 physical device test. See the dated browser-authorization receipt in `research/`.
+
+## Native client login
+
+`anywhere login --resource https://HOST/mcp --client-id CLIENT --profile PROFILE
+--scope files_read` opens the external system browser, obtains approval, redeems
+one authorization code and saves the validated pair in the existing native-keyring
+profile. Repeat `--scope` for each tool to request. It uses this product's colocated
+`/authorize` and `/oauth/token` endpoints; discovery-selected external providers,
+client auto-registration and a complete server provisioning wizard remain work.
+The server's client registration and device enrollment APIs remain trusted only.
+
+Register `http://127.0.0.1/oauth/callback` and `http://[::1]/oauth/callback` for this
+native client. The client binds an ephemeral IPv4 loopback port before opening
+the browser, falling back to IPv6 loopback if IPv4 cannot bind. Ordinary HTTPS
+redirects remain exact matches. For registered HTTP IP-loopback callbacks only,
+registration matching allows a different port; the literal IP, path and query
+remain exact. Code redemption must still supply the exact full redirect used
+when the code was issued, including that chosen port.
+
+Each login has fresh in-memory state and an S256 PKCE verifier. The verifier is
+not included in the browser URL. The temporary callback requires GET, its exact
+Host/port/path, a matching state, no duplicate query fields and exactly one code
+or error. An optional issuer must match the configured origin. It rejects bodies,
+transfer encoding, duplicate headers and Origin-bearing cross-origin requests.
+The listener accepts at most eight active connections, reads at most 8 KiB of
+headers with a five-second connection deadline, and closes on success, denial,
+failure, cancellation or the five-minute login deadline. Callback HTML never
+contains codes, tokens or provider error descriptions and disables caching,
+referrers and external resources. The page confirms only receipt; the terminal
+reports success after credentials have actually been saved.
+
+Token redemption uses standard-library HTTPS with CA/hostname checks, no redirects,
+no retry, JSON validation and a 16 KiB response bound. Received permissions must
+exactly match those requested. A lost exchange response requires a fresh login;
+an old code is never automatically resent. Failed login leaves existing saved
+credentials unchanged. Concurrent explicit logins into one profile use the
+existing atomic keyring save; the last completed login becomes that profile's
+credential. Outstanding server grants require separate revocation.
+
+Tests exercise real loopback callback sockets, wrong state/Host/path/issuer,
+duplicated fields, denial, browser failure/timeout, dynamic-port matching and a
+real TLS token endpoint including rejection before secrets are sent to the wrong
+hostname. The public probe now drives this native client with an HTTP form driver
+standing in for a human browser, uses the actual callback and macOS Keychain,
+then continues through HTTP MCP operations and revocation. It does not prove
+browser rendering or actual ChatGPT UI onboarding. The dated native-login receipt
+records the tested runtime and cleanup.
+
+Reference: [RFC 8252, loopback redirects and native client registration](https://www.rfc-editor.org/rfc/rfc8252).

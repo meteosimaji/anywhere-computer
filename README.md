@@ -49,12 +49,19 @@ anywhere remote-mcp --ssh-host windows-lab
 ```
 
 事前に認可済みの HTTP 接続プロフィールには、次の起動経路もあります。
-ブラウザーでのログイン・端末認可の設定手順は開発中です。認証情報を引数へ渡す
-オプションは設けず、OS の資格情報ストアから読み込みます。
+同じ接続先に所有者認証とクライアント登録を設定済みの場合、まずブラウザーで
+許可する機能を確認します。認証情報のコピーは不要で、OS の資格情報ストアへ保存します。
+サーバーの初期設定と常設 HTTPS の構築手順は引き続き開発中です。
 
 ```sh
+anywhere login --resource https://your-agent.example/mcp --client-id registered-client --profile laptop --scope files_read --scope files_write --scope operations_get
 anywhere http-mcp --resource https://your-agent.example/mcp --client-id registered-client --profile laptop
 ```
+
+認可の戻り先は、その都度空いているローカルポートを使います。サーバーには
+`http://127.0.0.1/oauth/callback` と `http://[::1]/oauth/callback` を登録します。
+コマンドは外部ブラウザーを開き、最長5分間承認を待ちます。待受は接続開始時だけ
+ローカル IP に作られ、完了・拒否・失敗・時間切れで閉じます。
 
 HTTP 応答を失った操作は再送せず、既知の操作 ID と `unknown` 状態を返します。
 接続を作り直して `operations_get` で結果を照会できます。詳しい前提と制限は

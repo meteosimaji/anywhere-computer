@@ -25,7 +25,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from anywhere_computer.authorization import AuthorizationStore, pkce_s256
+from anywhere_computer.authorization import AuthorizationStore
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
 from anywhere_computer.browser_authorization import BrowserAuthorization
 from anywhere_computer.client_tokens import ClientAuthorizationRequired, ClientTokens, TokenReply
@@ -33,6 +33,7 @@ from anywhere_computer.engine import Engine
 from anywhere_computer.http_client import HTTPBackend, HTTPResponse
 from anywhere_computer.http_mcp import HTTPMCP
 from anywhere_computer.models import ReadFile, Request, WriteFile
+from anywhere_computer.native_login import login
 from anywhere_computer.oauth_endpoints import OAuthEndpoints
 from anywhere_computer.owner_credentials import OwnerCredentials
 
@@ -220,8 +221,10 @@ async def verify(receipt_path):
                 resource=public + "/mcp",
                 known_tools=frozenset(engine.tools),
             )
-            callback = "https://example.com/disposable-probe-callback"
-            store.register_client("probe-client", frozenset({callback}))
+            store.register_client(
+                "probe-client",
+                frozenset({"http://127.0.0.1/oauth/callback", "http://[::1]/oauth/callback"}),
+            )
             store.enroll_device("probe-owner", "probe-device", frozenset(engine.tools))
             backend = AuthorizedDeviceMCP(store, engine, owner="probe-owner", device="probe-device")
             owner_credentials = OwnerCredentials(
@@ -265,64 +268,73 @@ async def verify(receipt_path):
                 await asyncio.sleep(2)  # GET readiness only; mutations are never retried.
             report["metadata_verified"] = True
             print(json.dumps({"stage": "public_metadata_verified"}), flush=True)
-            verifier = secrets.token_urlsafe(32)
-            state = secrets.token_urlsafe(32)
-            query = urllib.parse.urlencode(
-                {
-                    "response_type": "code",
-                    "client_id": "probe-client",
-                    "redirect_uri": callback,
-                    "resource": public + "/mcp",
-                    "scope": " ".join(sorted(engine.tools)),
-                    "state": state,
-                    "code_challenge": pkce_s256(verifier),
-                    "code_challenge_method": "S256",
-                }
-            )
-            status, form_headers, page = await asyncio.to_thread(
-                public_request, public + "/authorize?" + query, html=True
-            )
-            if status != 200 or not isinstance(page, str):
-                raise RuntimeError("Public consent page was unavailable")
-            hidden = dict(re.findall(r"name=(request_id|csrf) value='([^']+)'", page))
-            cookie_header = next(
-                value for key, value in form_headers.items() if key.lower() == "set-cookie"
-            ).split(";", 1)[0]
-            status, consent_headers, _ = await asyncio.to_thread(
-                public_request,
-                public + "/authorize",
-                method="POST",
-                headers={"Origin": public, "Cookie": cookie_header},
-                form={**hidden, "approve": "yes", "password": owner_password},
-            )
-            if status != 303:
-                raise RuntimeError("Public owner authentication failed")
-            location = next(
-                value for key, value in consent_headers.items() if key.lower() == "location"
-            )
-            returned = urllib.parse.urlsplit(location)
-            fields = urllib.parse.parse_qs(returned.query)
-            if returned._replace(query="").geturl() != callback or fields.get("state") != [state]:
-                raise RuntimeError("Public consent callback binding failed")
-            code = fields["code"][0]
-            report["owner_password_consent_verified"] = True
-            report["browser_rendering_tested"] = False
-            code_requested_at = time.time()
-            status, _, token_body = await asyncio.to_thread(
-                public_request,
-                public + "/oauth/token",
-                method="POST",
-                form={
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "code_verifier": verifier,
-                    "client_id": "probe-client",
-                    "redirect_uri": callback,
-                    "resource": public + "/mcp",
-                },
-            )
-            if status != 200 or not token_body or "access_token" not in token_body:
-                raise RuntimeError("Public token exchange failed")
+            token_body = None
+            native_callback_port = None
+            native_callback_host = None
+
+            def simulated_browser(url):
+                nonlocal native_callback_port, native_callback_host
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)
+                callback = query["redirect_uri"][0]
+                status, form_headers, page = public_request(url, html=True)
+                if status != 200 or not isinstance(page, str):
+                    raise RuntimeError("Public consent page was unavailable")
+                hidden = dict(re.findall(r"name=(request_id|csrf) value='([^']+)'", page))
+                cookie_header = next(
+                    value for key, value in form_headers.items() if key.lower() == "set-cookie"
+                ).split(";", 1)[0]
+                status, consent_headers, _ = public_request(
+                    public + "/authorize",
+                    method="POST",
+                    headers={"Origin": public, "Cookie": cookie_header},
+                    form={**hidden, "approve": "yes", "password": owner_password},
+                )
+                if status != 303:
+                    raise RuntimeError("Public owner authentication failed")
+                location = next(
+                    value for key, value in consent_headers.items() if key.lower() == "location"
+                )
+                returned = urllib.parse.urlsplit(location)
+                fields = urllib.parse.parse_qs(returned.query)
+                if (
+                    returned._replace(query="").geturl() != callback
+                    or fields.get("state") != query["state"]
+                    or returned.hostname not in {"127.0.0.1", "::1"}
+                    or returned.scheme != "http"
+                ):
+                    raise RuntimeError("Public consent callback binding failed")
+                connection = http.client.HTTPConnection(returned.hostname, returned.port, timeout=5)
+                try:
+                    connection.request("GET", returned.path + "?" + returned.query)
+                    response = connection.getresponse()
+                    response.read(16384)
+                    if response.status != 200:
+                        raise RuntimeError("Native callback rejected authorization")
+                finally:
+                    connection.close()
+                native_callback_port = returned.port
+                native_callback_host = returned.hostname
+                report["owner_password_consent_verified"] = True
+                report["browser_rendering_tested"] = False
+                return True
+
+            def exchange_code(resource, client, redirect, code, verifier):
+                nonlocal token_body
+                status, _, token_body = public_request(
+                    public + "/oauth/token",
+                    method="POST",
+                    form={
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "code_verifier": verifier,
+                        "client_id": client,
+                        "redirect_uri": redirect,
+                        "resource": resource,
+                    },
+                )
+                if status != 200 or not token_body:
+                    raise RuntimeError("Public token exchange failed")
+                return TokenReply.model_validate(token_body)
 
             def refresh_client(resource, client, refresh_token):
                 status, _, renewed = public_request(
@@ -346,9 +358,25 @@ async def verify(receipt_path):
                 profile="disposable-probe",
                 refresh=refresh_client,
             )
-            await asyncio.to_thread(
-                client_tokens.install, token_body, requested_at=code_requested_at
+            await login(
+                client_tokens,
+                frozenset(engine.tools),
+                open_browser=simulated_browser,
+                exchange=exchange_code,
             )
+            report["native_login_verified"] = True
+            if native_callback_port is None or native_callback_host is None or token_body is None:
+                raise RuntimeError("Native login did not finish")
+            try:
+                reader, writer = await asyncio.open_connection(
+                    native_callback_host, native_callback_port
+                )
+            except OSError:
+                report["native_callback_closed"] = True
+            else:
+                writer.close()
+                await writer.wait_closed()
+                raise RuntimeError("Native callback remained open")
             dropped_write = False
             write_posts = 0
             rejected_after_revocation = False
