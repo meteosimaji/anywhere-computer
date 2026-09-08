@@ -168,3 +168,72 @@ async def test_timeout_preserves_results_and_cancels_pending_search(tmp_path, mo
         assert len(page["results"]) == 1
     finally:
         await searches.close()
+
+
+async def test_regex_search_supports_context_names_and_invalid_pattern(tmp_path):
+    (tmp_path / "note12.txt").write_text("before\nitem42\nafter\nitemXX\n")
+    page = await results(tmp_path, pattern=r"^item\d+$", mode="regex", kind="text",
+                         context_lines=1)
+    assert [row["line"] for row in page["results"]] == [2]
+    assert page["results"][0]["before"][0]["text"] == "before\n"
+    assert page["results"][0]["after"][0]["text"] == "after\n"
+    names = await results(tmp_path, pattern=r"note\d+\.txt$", mode="regex")
+    assert len(names["results"]) == 1
+    with pytest.raises(ValueError, match="Invalid regular"):
+        await results(tmp_path, pattern="[", mode="regex")
+
+
+async def test_regex_search_deadline_terminates_pathological_match(tmp_path):
+    (tmp_path / "text").write_text("a" * 10000 + "!")
+    page = await results(tmp_path, pattern="(a+)+$", mode="regex", kind="text", timeout_ms=200)
+    assert page["state"] == "completed"
+    assert page["limit_reason"] == "timeout"
+
+
+async def test_total_result_capacity_preserves_existing_cursor(tmp_path, monkeypatch):
+    import anywhere_computer.search as module
+
+    monkeypatch.setattr(module, "SEARCH_OUTPUT_LIMIT", 500)
+    (tmp_path / "text").write_text("hit" + "x" * 200 + "\n" + "hit" + "x" * 200)
+    page = await results(tmp_path, pattern="hit", kind="text")
+    assert page["limit_reason"] == "output_bytes"
+    assert len(page["results"]) == 1 and page["next_cursor"] == 1
+
+
+@pytest.mark.parametrize("kind", ["names", "text"])
+async def test_regex_worker_launch_failure_is_not_a_skipped_file(tmp_path, monkeypatch, kind):
+    import anywhere_computer.search as module
+
+    (tmp_path / "text").write_text("hit")
+
+    async def failure(*args, **kwargs):
+        raise OSError("synthetic launch failure")
+
+    monkeypatch.setattr(module, "regex_line_numbers", failure)
+    page = await results(tmp_path, pattern="hit", mode="regex", kind=kind)
+    assert page["state"] == "failed" and page["skipped"] == 0
+
+
+async def test_search_stop_reaps_live_regex_worker(tmp_path, monkeypatch):
+    original = asyncio.create_subprocess_exec
+    children = []
+    started = asyncio.Event()
+
+    async def create(*args, **kwargs):
+        child = await original(*args, **kwargs)
+        children.append(child)
+        started.set()
+        return child
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create)
+    (tmp_path / "text").write_text("a" * 10000 + "!")
+    searches = Searches()
+    try:
+        entry = searches.start(StartSearch(path=str(tmp_path), pattern="(a+)+$",
+                                          mode="regex", kind="text"))
+        await asyncio.wait_for(started.wait(), 5)
+        stopped = await asyncio.wait_for(searches.stop(entry["search_id"]), 5)
+        assert stopped["state"] == "cancelled"
+        assert children and all(child.returncode is not None for child in children)
+    finally:
+        await searches.close()

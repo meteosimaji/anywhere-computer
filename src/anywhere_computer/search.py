@@ -5,6 +5,7 @@ import fnmatch
 import io
 import json
 import os
+import re
 import threading
 import uuid
 from collections import deque
@@ -15,6 +16,9 @@ from pydantic import JsonValue
 
 from .files import absolute_path, read_bytes
 from .models import SearchPage, StartSearch
+from .regex_worker import regex_line_numbers
+
+SEARCH_OUTPUT_LIMIT = 16 * 1024 * 1024
 
 
 @dataclass
@@ -27,6 +31,7 @@ class Search:
     visited_files: int = 0
     directory_errors: int = 0
     limit_reason: str | None = None
+    result_bytes: int = 0
     cancelled: threading.Event = field(default_factory=threading.Event)
     task: asyncio.Task[None] | None = None
 
@@ -36,6 +41,11 @@ class Searches:
         self.searches: dict[str, Search] = {}
 
     def start(self, args: StartSearch) -> dict[str, JsonValue]:
+        if args.mode == "regex":
+            try:
+                re.compile(args.pattern)
+            except re.error:
+                raise ValueError("Invalid regular expression") from None
         root = absolute_path(args.path)
         if not root.is_dir():
             raise ValueError("Search root must be a directory")
@@ -113,21 +123,64 @@ class Searches:
                     if not fnmatch.fnmatchcase(subject, filename_glob):
                         continue
                     if args.kind == "names":
-                        if self._matches(subject, pattern, args.whole_word):
-                            search.results.append({"path": str(path)})
+                        found = (
+                            bool(
+                                await regex_line_numbers(
+                                    name,
+                                    args.pattern,
+                                    ignore_case=args.ignore_case,
+                                    whole_word=args.whole_word,
+                                    limit=1,
+                                    timeout=600,
+                                )
+                            )
+                            if args.mode == "regex"
+                            else self._matches(subject, pattern, args.whole_word)
+                        )
+                        if found and not self._append_result(search, {"path": str(path)}):
+                            return
                     else:
                         try:
-                            matches = await asyncio.to_thread(
-                                self._file_matches,
-                                path,
-                                pattern,
-                                args.ignore_case,
-                                args.max_results - len(search.results),
-                                args.whole_word,
-                                search.cancelled,
-                                args.context_lines,
-                            )
-                            search.results.extend(matches)
+                            if args.mode == "regex":
+                                text = (await asyncio.to_thread(read_bytes, path)).decode("utf-8")
+                                try:
+                                    selected = await regex_line_numbers(
+                                        text,
+                                        args.pattern,
+                                        ignore_case=args.ignore_case,
+                                        whole_word=args.whole_word,
+                                        limit=args.max_results - len(search.results),
+                                        timeout=600,
+                                    )
+                                except (OSError, ValueError):
+                                    search.state = "failed"
+                                    return
+                                lines = list(io.StringIO(text, newline=None))
+                                for number in selected:
+                                    entry: dict[str, JsonValue] = {
+                                        "path": str(path),
+                                        "line": number,
+                                        "text": lines[number - 1][:2000],
+                                    }
+                                    if args.context_lines:
+                                        entry["before"] = [
+                                            {"line": i + 1, "text": lines[i][:2000]}
+                                            for i in range(
+                                                max(0, number - 1 - args.context_lines), number - 1
+                                            )
+                                        ]
+                                        entry["after"] = [
+                                            {"line": i + 1, "text": lines[i][:2000]}
+                                            for i in range(
+                                                number, min(len(lines), number + args.context_lines)
+                                            )
+                                        ]
+                                    if not self._append_result(search, entry):
+                                        return
+                            else:
+                                await self._literal_file(search, path, pattern, args)
+                                if search.limit_reason == "output_bytes":
+                                    return
                         except (OSError, UnicodeError, ValueError):
                             search.skipped += 1
                     if len(search.results) >= args.max_results:
@@ -139,8 +192,37 @@ class Searches:
         except asyncio.CancelledError:
             search.state = "cancelled"
             raise
-        except OSError:
+        except (OSError, ValueError):
             search.state = "failed"
+
+    async def _literal_file(
+        self, search: Search, path: Path, pattern: str, args: StartSearch
+    ) -> None:
+        matches = await asyncio.to_thread(
+            self._file_matches,
+            path,
+            pattern,
+            args.ignore_case,
+            args.max_results - len(search.results),
+            args.whole_word,
+            search.cancelled,
+            args.context_lines,
+        )
+        for entry in matches:
+            if not self._append_result(search, entry):
+                break
+
+    @staticmethod
+    def _append_result(search: Search, entry: JsonValue) -> bool:
+        size = len(json.dumps(entry, ensure_ascii=False).encode("utf-8"))
+        if search.result_bytes + size > SEARCH_OUTPUT_LIMIT:
+            search.truncated = True
+            search.limit_reason = "output_bytes"
+            search.state = "completed"
+            return False
+        search.results.append(entry)
+        search.result_bytes += size
+        return True
 
     @staticmethod
     def _matches(subject: str, pattern: str, whole_word: bool) -> bool:
@@ -185,15 +267,16 @@ class Searches:
                 subject = line.casefold() if ignore_case else line
                 if Searches._matches(subject, pattern, whole_word):
                     entry: dict[str, JsonValue] = {
-                        "path": str(path), "line": number, "text": line[:2000],
+                        "path": str(path),
+                        "line": number,
+                        "text": line[:2000],
                     }
                     if context_lines:
-                        entry["before"] = [
-                            {"line": n, "text": value[:2000]} for n, value in before
-                        ]
+                        entry["before"] = [{"line": n, "text": value[:2000]} for n, value in before]
                         entry["after"] = [
                             {"line": item[0], "text": item[1][:2000]}
-                            for item in upcoming if item is not None
+                            for item in upcoming
+                            if item is not None
                         ]
                     matches.append(entry)
                     if len(matches) >= limit:
