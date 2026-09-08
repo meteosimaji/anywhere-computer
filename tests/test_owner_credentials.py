@@ -222,7 +222,7 @@ def test_owner_change_hidden_confirmation_and_mismatch(configured_owner, monkeyp
             owner.owner,
         ],
     )
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(cli, "has_interactive_input", lambda: True)
     monkeypatch.setattr(cli, "OwnerCredentials", lambda *args, **kwargs: owner)
     answers = iter([OLD_PASSWORD, NEW_PASSWORD, "different confirmation"])
     monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: next(answers))
@@ -255,7 +255,7 @@ def test_owner_setup_uses_hidden_confirmation(monkeypatch, tmp_path, capsys):
             str(tmp_path),
         ],
     )
-    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(cli, "has_interactive_input", lambda: True)
     monkeypatch.setattr(cli, "OwnerCredentials", lambda *args, **kwargs: owner)
     prompts = []
 

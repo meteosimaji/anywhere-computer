@@ -11,6 +11,7 @@ from pathlib import Path
 from .client_tokens import ClientTokens
 from .cloudflare_tunnel import TunnelCredential, run_tunnel
 from .connection import ensure_agent, exchange, serve
+from .credentials import has_interactive_input
 from .devices import DeviceStore
 from .diagnostics import diagnose
 from .http_client import run_http_mcp
@@ -246,7 +247,7 @@ def main() -> None:
                 storage_id=args.storage_id,
             ), ensure_ascii=False, indent=2))
         elif args.command == "tunnel-token":
-            if not sys.stdin.isatty():
+            if not has_interactive_input():
                 raise ValueError("Tunnel token setup requires an interactive terminal")
             tunnel_credential = TunnelCredential(directory)
             tunnel_credential.install(getpass.getpass("Tunnel token (hidden): ").strip())
@@ -297,7 +298,7 @@ def main() -> None:
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)
             asyncio.run(serve_http(directory))
         elif args.command in {"owner-init", "owner-change"}:
-            if not sys.stdin.isatty():
+            if not has_interactive_input():
                 raise ValueError("Owner setup requires an interactive terminal")
             owner_credentials = OwnerCredentials(
                 directory, resource=args.resource, owner=args.owner

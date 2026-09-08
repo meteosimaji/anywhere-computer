@@ -2,6 +2,7 @@
 
 import hashlib
 import secrets
+import sys
 from pathlib import Path
 
 import keyring
@@ -10,6 +11,27 @@ from keyring.backends.chainer import ChainerBackend
 from keyring.errors import KeyringError
 
 SERVICE = "Anywhere Computer"
+
+
+def has_interactive_input() -> bool:
+    """Windows NUL is a character device, but is not a console for hidden input."""
+    if not sys.stdin.isatty():
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+        kernel.GetConsoleMode.restype = wintypes.BOOL
+        mode = wintypes.DWORD()
+        try:
+            handle = msvcrt.get_osfhandle(sys.stdin.fileno())
+            return bool(kernel.GetConsoleMode(handle, ctypes.byref(mode)))
+        except (OSError, ValueError):
+            return False
+    return True
 
 
 def secure_backend() -> KeyringBackend:

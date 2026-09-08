@@ -104,15 +104,21 @@ def test_child_that_ignores_pipe_is_stopped(monkeypatch):
     assert owned[0].poll() is not None
 
 
-def test_cli_token_requires_tty_and_cannot_take_secret_as_argument(tmp_path):
+@pytest.mark.parametrize("command", ["tunnel-token", "owner-init", "owner-change"])
+def test_cli_secret_input_requires_console(tmp_path, command):
+    owner_options = (
+        [] if command == "tunnel-token" else
+        ["--resource", "https://computer.example/mcp", "--owner", "probe"]
+    )
     result = subprocess.run(
         [
             sys.executable,
             "-m",
             "anywhere_computer.cli",
-            "tunnel-token",
+            command,
             "--state-dir",
             str(tmp_path),
+            *owner_options,
         ],
         stdin=subprocess.DEVNULL,
         capture_output=True,
@@ -183,3 +189,17 @@ def test_lost_credential_after_child_exit_is_not_retried(tmp_path, monkeypatch, 
     assert starts == [True]
     assert delays == [1]  # The actual child exit; missing credentials cause no further retry.
     assert TOKEN not in capsys.readouterr().out
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console handle integration")
+def test_windows_real_console_input_is_accepted():
+    code = (
+        "import ctypes,sys; "
+        "from anywhere_computer.credentials import has_interactive_input; "
+        "kernel=ctypes.WinDLL('kernel32'); kernel.FreeConsole(); "
+        "assert kernel.AllocConsole(); sys.stdin=open('CONIN$', 'r'); "
+        "assert has_interactive_input(); print('console-accepted')"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    assert b"console-accepted" in result.stdout
