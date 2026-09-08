@@ -56,8 +56,12 @@ def _identifier(value: str) -> None:
         raise ValueError("Invalid authorization identifier")
 
 
-def _https_url(value: str, *, loopback: bool = False) -> None:
-    if not value or len(value) > 2048 or any(ord(char) <= 32 or ord(char) >= 127 for char in value):
+def validate_authorization_url(value: str, *, loopback: bool = False) -> None:
+    if (
+        not value
+        or len(value) > 2048
+        or any(ord(char) <= 32 or ord(char) >= 127 or char in '\\"<>#' for char in value)
+    ):
         raise ValueError("Invalid authorization URL")
     parsed = urlsplit(value)
     if (
@@ -83,7 +87,7 @@ def _secret_digest(value: str) -> str:
 
 class AuthorizationStore:
     def __init__(self, directory: Path, *, resource: str, known_tools: frozenset[str]) -> None:
-        _https_url(resource)
+        validate_authorization_url(resource)
         if urlsplit(resource).query:
             raise ValueError("Resource URL must not contain a query")
         self.resource = resource
@@ -143,7 +147,7 @@ class AuthorizationStore:
         if not redirects or len(redirects) > 10:
             raise ValueError("Register 1–10 exact callback URLs")
         for redirect in redirects:
-            _https_url(redirect, loopback=True)
+            validate_authorization_url(redirect, loopback=True)
         with self.db:
             self.db.execute(
                 "INSERT INTO clients VALUES(?,?)", (client, json.dumps(sorted(redirects)))

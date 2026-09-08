@@ -220,3 +220,12 @@ async def test_disconnected_http_observer_does_not_cancel_dispatched_work(http_a
         finish.set()
         writer.close()
         await writer.wait_closed()
+
+
+@pytest.mark.parametrize("challenge", ["", "   ", "Bearer\r\nInjected: value"])
+def test_invalid_authentication_challenge_rejected(challenge):
+    async def authenticate(token):
+        return None
+
+    with pytest.raises(ValueError, match="authentication challenge"):
+        HTTPMCP(authenticate, lambda owner: None, auth_challenge=challenge)

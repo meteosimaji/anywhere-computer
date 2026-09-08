@@ -119,5 +119,6 @@ OAuth integration must also follow the
 [authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).
 
 The internal code/token grant store and authenticated device binding are now
-implemented; see [Device authorization](AUTHORIZATION.md). OAuth HTTP discovery,
-login/consent and token issuance endpoints remain unimplemented.
+implemented; see [Device authorization](AUTHORIZATION.md). OAuth HTTP discovery
+and code redemption endpoints are also implemented as optional HTTP routes.
+Login/consent, public HTTPS deployment and internet routing remain unimplemented.

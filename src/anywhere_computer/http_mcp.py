@@ -21,6 +21,8 @@ from .mcp_server import PROTOCOL_VERSION, MCPSession, rpc_error
 
 Authenticate = Callable[[str], Awaitable[str | None]]
 SessionFactory = Callable[[str], MCPSession]
+HTTPResult = tuple[int, dict[str, JsonValue] | None, dict[str, str]]
+HTTPRoute = Callable[[str, dict[str, str], bytes], Awaitable[HTTPResult]]
 HEADER_LIMIT = 16384
 
 
@@ -45,6 +47,8 @@ class HTTPMCP:
         origins: frozenset[str] = frozenset(),
         session_ttl: float = 1800,
         max_sessions: int = 128,
+        public_routes: dict[str, HTTPRoute] | None = None,
+        auth_challenge: str = "Bearer",
     ) -> None:
         if session_ttl <= 0 or max_sessions < 1:
             raise ValueError("Session bounds must be positive")
@@ -53,6 +57,18 @@ class HTTPMCP:
         self.origins = origins
         self.session_ttl = session_ttl
         self.max_sessions = max_sessions
+        # Discovery/token routes are public: handlers enforce their own input/auth contracts.
+        # Never mount a privileged operation here expecting MCP bearer authentication.
+        self.public_routes = dict(public_routes or {})
+        if "/mcp" in self.public_routes or any(
+            not path.startswith("/") or "?" in path or "#" in path for path in self.public_routes
+        ):
+            raise ValueError("Invalid HTTP extension route")
+        if not auth_challenge.strip() or any(
+            ord(char) < 32 or ord(char) > 126 for char in auth_challenge
+        ):
+            raise ValueError("Invalid authentication challenge")
+        self.auth_challenge = auth_challenge
         self.sessions: dict[str, HTTPSession] = {}
         self.tasks: set[asyncio.Task[None]] = set()
         self.hosts: frozenset[str] = frozenset()
@@ -77,7 +93,7 @@ class HTTPMCP:
             await asyncio.gather(*list(self.tasks), return_exceptions=True)
         self.sessions.clear()
 
-    async def _read(self, reader: asyncio.StreamReader) -> tuple[str, dict[str, str], bytes]:
+    async def _read(self, reader: asyncio.StreamReader) -> tuple[str, str, dict[str, str], bytes]:
         raw = await reader.readuntil(b"\r\n\r\n")
         if len(raw) > HEADER_LIMIT:
             raise HTTPFailure(431)
@@ -86,7 +102,7 @@ class HTTPMCP:
         if len(request_line) != 3 or request_line[2] != "HTTP/1.1":
             raise HTTPFailure(400)
         method, target, _ = request_line
-        if target != "/mcp":
+        if target != "/mcp" and target not in self.public_routes:
             raise HTTPFailure(404)
         headers: dict[str, str] = {}
         for line in lines:
@@ -114,7 +130,7 @@ class HTTPMCP:
         if method != "POST" and size:
             raise HTTPFailure(400)
         body = await reader.readexactly(size)
-        return method, headers, body
+        return method, target, headers, body
 
     async def _dispatch(
         self, method: str, headers: dict[str, str], body: bytes
@@ -204,13 +220,18 @@ class HTTPMCP:
         try:
             try:
                 async with asyncio.timeout(10):
-                    method, headers, body = await self._read(reader)
+                    method, target, headers, body = await self._read(reader)
                 async with asyncio.timeout(30):
-                    status, response, extra = await self._dispatch(method, headers, body)
+                    if target in self.public_routes:
+                        status, response, extra = await self.public_routes[target](
+                            method, headers, body
+                        )
+                    else:
+                        status, response, extra = await self._dispatch(method, headers, body)
             except HTTPFailure as error:
                 status, response, extra = error.status, None, {}
                 if status == 401:
-                    extra["WWW-Authenticate"] = "Bearer"
+                    extra["WWW-Authenticate"] = self.auth_challenge
             except (ValueError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
                 status, response, extra = 400, None, {}
             except TimeoutError:
