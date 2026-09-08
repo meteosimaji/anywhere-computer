@@ -10,7 +10,8 @@ if a conflict occurs, read again and reassess the intended edit.
 Use paginated reads and searches. documents_read inspects OOXML content; it does
 not render pages or evaluate Excel formulas. Do not imply complete Office support.
 
-Use files_read_binary/files_write_binary for binary files up to 16 MiB, in chunks
+Use files_read_binary for binary files up to 1 GiB (a full hash scan per call),
+and files_write_binary for files up to 16 MiB, in chunks
 up to 256 KiB. Carry the whole-file expected_sha256 across download reads and
 between upload appends. Stage uploads at an unused temporary absolute path, verify
 the final hash and length, then files_move to an unused destination on the same

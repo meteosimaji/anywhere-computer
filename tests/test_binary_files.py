@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import os
 import uuid
 
 import pytest
@@ -154,7 +155,8 @@ async def test_binary_limits_and_create_conflicts(binary_engine, tmp_path):
     with path.open("ab") as output:
         output.write(b"b")
     read = await binary_engine.execute(operation("files_read_binary", path=str(path)))
-    assert read.state == "failed"
+    assert read.state == "completed"
+    assert read.data["total_bytes"] == MAX_READ_BYTES + 1
 
 
 async def test_binary_chunks_traverse_authenticated_tls_and_respect_grants(certificates, tmp_path):
@@ -252,3 +254,57 @@ async def test_http_binary_lost_response_is_recovered_without_reappend(http_remo
         and packet["params"]["name"] == "files_write_binary"
     ]
     assert len(writes) == 1 and path.read_bytes() == b"prefix" + content
+
+
+async def test_large_binary_read_crosses_blocks_and_rejects_oversize(binary_engine, tmp_path):
+    from anywhere_computer.files import MAX_BINARY_READ_BYTES
+
+    path = tmp_path / "large-range.bin"
+    block = bytes(range(256)) * 1024
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("wb") as output:
+        for _ in range(68):
+            output.write(block)
+            digest.update(block)
+    result = await binary_engine.execute(
+        operation(
+            "files_read_binary", path=str(path), offset=262143, limit=262144,
+            expected_sha256=digest.hexdigest(),
+        )
+    )
+    assert result.state == "completed"
+    assert base64.b64decode(result.data["data_base64"]) == block[-1:] + block[:-1]
+    assert result.data["total_bytes"] == 17 * 1024 * 1024
+    with path.open("r+b") as output:
+        output.truncate(MAX_BINARY_READ_BYTES + 1)
+    rejected = await binary_engine.execute(operation("files_read_binary", path=str(path)))
+    assert rejected.state == "failed" and "data_base64" not in rejected.data
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows denies replacement of this open descriptor")
+async def test_binary_read_rejects_replaced_path(binary_engine, tmp_path, monkeypatch):
+    import os
+
+    path = tmp_path / "replaced.bin"
+    replacement = tmp_path / "replacement.bin"
+    path.write_bytes(b"old")
+    replacement.write_bytes(b"new")
+    original_fstat = os.fstat
+    changed = False
+
+    def replace_after_open(descriptor):
+        nonlocal changed
+        metadata = original_fstat(descriptor)
+        if not changed and metadata.st_ino == path.stat().st_ino:
+            changed = True
+            os.replace(replacement, path)
+        return metadata
+
+    monkeypatch.setattr("anywhere_computer.files.os.fstat", replace_after_open)
+    result = await binary_engine.execute(
+        operation("files_read_binary", path=str(path), expected_sha256=sha256(b"old"))
+    )
+    assert changed and result.state == "failed" and "data_base64" not in result.data
+    assert path.read_bytes() == b"new"

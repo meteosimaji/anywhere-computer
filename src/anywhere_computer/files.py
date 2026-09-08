@@ -24,6 +24,7 @@ from .models import (
 )
 
 MAX_READ_BYTES = 16 * 1024 * 1024
+MAX_BINARY_READ_BYTES = 1024 * 1024 * 1024
 
 
 def absolute_path(value: str) -> Path:
@@ -79,23 +80,54 @@ class Files:
 
     def read_binary(self, args: ReadBinary) -> dict[str, JsonValue]:
         path = absolute_path(args.path)
-        content = read_bytes(path)
-        digest = sha256(content)
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+        with os.fdopen(os.open(path, flags), "rb") as source:
+            before = os.fstat(source.fileno())
+            if not stat.S_ISREG(before.st_mode):
+                raise ValueError("Only regular files can be read")
+            if before.st_size > MAX_BINARY_READ_BYTES:
+                raise ValueError("File exceeds the 1 GiB binary read limit")
+            if args.offset > before.st_size:
+                raise ValueError("Byte offset exceeds the file size")
+            stop = min(before.st_size, args.offset + args.limit)
+            hasher = hashlib.sha256()
+            collected = bytearray()
+            position = 0
+            while block := source.read(262144):
+                end = position + len(block)
+                if end > before.st_size:
+                    raise ValueError("File changed during transfer; restart the download")
+                hasher.update(block)
+                left, right = max(position, args.offset), min(end, stop)
+                if left < right:
+                    collected.extend(block[left - position : right - position])
+                position = end
+            after = os.fstat(source.fileno())
+            current = path.stat()
+            if (
+                (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)
+                or current.st_size != before.st_size
+                or current.st_mtime_ns != before.st_mtime_ns
+                or current.st_ctime_ns != before.st_ctime_ns
+                or position != before.st_size
+                or after.st_size != before.st_size
+                or after.st_mtime_ns != before.st_mtime_ns
+                or after.st_ctime_ns != before.st_ctime_ns
+            ):
+                raise ValueError("File changed during transfer; restart the download")
+        digest = hasher.hexdigest()
         if args.expected_sha256 is not None and args.expected_sha256 != digest:
             raise ValueError("File changed during transfer; restart the download")
-        if args.offset > len(content):
-            raise ValueError("Byte offset exceeds the file size")
-        stop = min(len(content), args.offset + args.limit)
-        chunk = content[args.offset : stop]
+        chunk = bytes(collected)
         return {
             "path": str(path),
             "data_base64": base64.b64encode(chunk).decode("ascii"),
             "offset": args.offset,
             "next_offset": stop,
-            "total_bytes": len(content),
+            "total_bytes": position,
             "sha256": digest,
             "chunk_sha256": sha256(chunk),
-            "eof": stop == len(content),
+            "eof": stop == position,
         }
 
     def write_binary(self, args: WriteBinary) -> dict[str, JsonValue]:

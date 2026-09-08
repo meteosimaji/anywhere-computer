@@ -249,7 +249,7 @@ class Engine:
         )
         self.register(
             "files_read_binary",
-            "Read a base64 byte range (up to 256 KiB) of a regular file up to 16 MiB. "
+            "Read a base64 byte range (up to 256 KiB) of a regular file up to 1 GiB. "
             "Carry expected_sha256 between chunks to detect a changed download.",
             ReadBinary,
             read_binary,
