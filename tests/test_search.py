@@ -99,3 +99,47 @@ async def test_search_stop_marks_cancelled(tmp_path):
     assert stopped["state"] == "cancelled"
     assert searches.get(started["search_id"]).cancelled.is_set()
     await searches.close()
+
+
+async def test_context_includes_boundaries_and_overlapping_matches(tmp_path):
+    (tmp_path / "text").write_bytes(b"hit\r\nnear\r\nhit\r\nlast")
+    page = await results(tmp_path, pattern="hit", kind="text", context_lines=2)
+    first, second = page["results"]
+    assert first["before"] == []
+    assert [row["line"] for row in first["after"]] == [2, 3]
+    assert [row["line"] for row in second["before"]] == [1, 2]
+    assert second["after"] == [{"line": 4, "text": "last"}]
+    assert first["text"] == "hit\n"
+
+
+async def test_context_is_bounded_and_does_not_consume_match_limit(tmp_path):
+    (tmp_path / "text").write_text("x" * 4000 + "\nhit\nafter\nhit")
+    page = await results(tmp_path, pattern="hit", kind="text", context_lines=1, max_results=1)
+    assert len(page["results"]) == 1
+    match = page["results"][0]
+    assert len(match["before"][0]["text"]) == 2000
+    assert match["after"] == [{"line": 3, "text": "after\n"}]
+    assert page["limit_reason"] == "max_results"
+
+
+async def test_large_context_pages_preserve_every_match(tmp_path):
+    (tmp_path / "text").write_text(("hit日本語" * 400 + "\n") * 30, encoding="utf-8")
+    searches = Searches()
+    try:
+        started = searches.start(StartSearch(
+            path=str(tmp_path), pattern="hit", kind="text", context_lines=10,
+        ))
+        search = searches.get(started["search_id"])
+        await search.task
+        cursor, found, pages = 0, [], 0
+        while cursor < 30:
+            page = searches.page(SearchPage(search_id=search.search_id, cursor=cursor))
+            assert page["next_cursor"] > cursor
+            assert len(page["results"]) < 30
+            found.extend(row["line"] for row in page["results"])
+            cursor = page["next_cursor"]
+            pages += 1
+        assert found == list(range(1, 31))
+        assert pages > 1
+    finally:
+        await searches.close()

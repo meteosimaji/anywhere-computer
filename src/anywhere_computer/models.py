@@ -115,6 +115,7 @@ class StartSearch(FilePath):
     filename_glob: SearchGlob = "*"
     excluded_directories: list[SearchGlob] = Field(default_factory=list, max_length=32)
     whole_word: bool = False
+    context_lines: int = Field(default=0, ge=0, le=10)
     max_files: int = Field(default=10000, ge=1, le=100000)
     max_depth: int = Field(default=32, ge=0, le=128)
 

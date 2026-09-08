@@ -3,9 +3,11 @@
 import asyncio
 import fnmatch
 import io
+import json
 import os
 import threading
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -110,6 +112,7 @@ class Searches:
                                 args.max_results - len(search.results),
                                 args.whole_word,
                                 search.cancelled,
+                                args.context_lines,
                             )
                             search.results.extend(matches)
                         except (OSError, UnicodeError, ValueError):
@@ -147,6 +150,7 @@ class Searches:
         limit: int,
         whole_word: bool,
         cancelled: threading.Event,
+        context_lines: int = 0,
     ) -> list[JsonValue]:
         if cancelled.is_set():
             return []
@@ -155,14 +159,34 @@ class Searches:
         text = read_bytes(path).decode("utf-8")
         matches: list[JsonValue] = []
         with io.StringIO(text, newline=None) as stream:
-            for number, line in enumerate(stream, 1):
+            lines = enumerate(stream, 1)
+            upcoming = deque(next(lines, None) for _ in range(context_lines + 1))
+            before: deque[tuple[int, str]] = deque(maxlen=context_lines)
+            while upcoming:
+                current = upcoming.popleft()
+                if current is None:
+                    break
+                number, line = current
                 if cancelled.is_set():
                     break
                 subject = line.casefold() if ignore_case else line
                 if Searches._matches(subject, pattern, whole_word):
-                    matches.append({"path": str(path), "line": number, "text": line[:2000]})
+                    entry: dict[str, JsonValue] = {
+                        "path": str(path), "line": number, "text": line[:2000],
+                    }
+                    if context_lines:
+                        entry["before"] = [
+                            {"line": n, "text": value[:2000]} for n, value in before
+                        ]
+                        entry["after"] = [
+                            {"line": item[0], "text": item[1][:2000]}
+                            for item in upcoming if item is not None
+                        ]
+                    matches.append(entry)
                     if len(matches) >= limit:
                         break
+                before.append((number, line[:2000]))
+                upcoming.append(next(lines, None))
         return matches
 
     def get(self, search_id: str) -> Search:
@@ -172,7 +196,14 @@ class Searches:
 
     def page(self, args: SearchPage) -> dict[str, JsonValue]:
         search = self.get(args.search_id)
-        page = search.results[args.cursor : args.cursor + args.limit]
+        page: list[JsonValue] = []
+        page_bytes = 0
+        for result in search.results[args.cursor : args.cursor + args.limit]:
+            size = len(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+            if page and page_bytes + size > 512000:
+                break
+            page.append(result)
+            page_bytes += size
         return {
             "search_id": search.search_id,
             "state": search.state,
