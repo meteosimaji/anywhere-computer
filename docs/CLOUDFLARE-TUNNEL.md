@@ -32,17 +32,28 @@ dependencies remain unchanged.
    environment variable, config, chat, or repository. This command can replace
    a saved token after the local tunnel runner has stopped. A write is followed
    by readback; an uncertain write is never automatically repeated or rolled back.
-5. Run the configured HTTP service and tunnel in two foreground terminals:
+5. Run the configured HTTP service and tunnel together in one foreground terminal:
 
    ```sh
-   uv run anywhere http-watch --state-dir /absolute/path/to/state
-   uv run anywhere tunnel-run --state-dir /absolute/path/to/state
+   uv run anywhere remote-serve --state-dir /absolute/path/to/state
    ```
 
-   Both commands use the same state directory. The tunnel runner does not start
-   the HTTP service or configure the provider's route. Check loopback with
+   This command binds the HTTP service before launching the tunnel runner. The
+   runner keeps its bounded connector restart policy; when it exits, the HTTP
+   service closes too. Ctrl+C stops the connector before closing HTTP. Existing
+   HTTP/watch/tunnel owners are refused; a startup race that loses the tunnel
+   lock closes this command's HTTP service without taking over the other runner.
+   It does not configure the provider's route. Check loopback with
    `http-doctor`, then perform the complete OAuth/MCP flow through public HTTPS.
    Neither a child PID nor `tunnel_credential_sent` proves public connectivity.
+
+The individual `http-watch` and `tunnel-run` commands remain available for
+separate supervision. `remote-serve` is a foreground lifecycle owner, not an
+OS service installer: it does not restart the HTTP process after a fatal crash,
+start at login, or guarantee descendant cleanup if the parent is forcibly killed
+or graceful connector shutdown times out. Those lifecycle cases still require
+implementation and OS-level verification. Windows virtualenv launchers may add
+an intermediate process; do not infer direct parentage from the launch PID.
 
 ## Credentials and process lifetime
 

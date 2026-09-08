@@ -28,6 +28,7 @@ from .http_supervisor import watch_http
 from .mcp_server import run_mcp
 from .native_login import login
 from .owner_credentials import OwnerCredentials
+from .remote_service import serve_remote
 from .ssh_transport import run_ssh_mcp
 from .state import state_directory
 from .transfer_admin import list_transfers, release_transfer
@@ -52,6 +53,7 @@ def main() -> None:
             "http-configure",
             "http-serve",
             "http-watch",
+            "remote-serve",
             "http-show",
             "http-doctor",
             "http-revoke",
@@ -293,6 +295,14 @@ def main() -> None:
             print(json.dumps(http_authorization_status(directory)))
         elif args.command == "http-watch":
             raise SystemExit(watch_http(directory))
+        elif args.command == "remote-serve":
+            prior_terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
+            try:
+                if sys.platform == "win32":
+                    signal.signal(signal.SIGBREAK, signal.default_int_handler)
+                raise SystemExit(asyncio.run(serve_remote(directory)))
+            finally:
+                signal.signal(signal.SIGTERM, prior_terminate)
         elif args.command == "http-serve":
             if sys.platform == "win32":
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)

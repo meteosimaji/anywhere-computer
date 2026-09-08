@@ -170,3 +170,8 @@ uv と利用可能な OS 資格情報ストアが必要です。初回は Python
 あれば停止せず理由を返します。作業がない場合だけ旧ビルドを終了して切り替えます。
 
 検索の絞り込み・上限・中断の仕様は [検索ガイド](docs/SEARCH.md) を参照してください。
+
+The configured public HTTP service and outbound connector can now run together
+with `uv run anywhere remote-serve --state-dir /absolute/path/to/state`. See
+[the tunnel setup and lifecycle limits](docs/CLOUDFLARE-TUNNEL.md) for required
+credentials, route configuration, shutdown behavior, and remaining service work.
