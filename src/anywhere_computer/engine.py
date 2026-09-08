@@ -23,6 +23,7 @@ from .models import (
     ListDirectory,
     MoveFile,
     OperationId,
+    ReadBinary,
     ReadDocument,
     ReadFile,
     ReadFiles,
@@ -36,6 +37,7 @@ from .models import (
     SessionOutput,
     StartSearch,
     StartSession,
+    WriteBinary,
     WriteFile,
 )
 from .runtime_identity import runtime_identity
@@ -113,6 +115,12 @@ class Engine:
 
         async def write(args: WriteFile) -> Result:
             return await asyncio.to_thread(self.files.write, args)
+
+        async def read_binary(args: ReadBinary) -> Result:
+            return await asyncio.to_thread(self.files.read_binary, args)
+
+        async def write_binary(args: WriteBinary) -> Result:
+            return await asyncio.to_thread(self.files.write_binary, args)
 
         async def restore(args: RestoreFile) -> Result:
             return await asyncio.to_thread(self.files.restore, args)
@@ -216,8 +224,25 @@ class Engine:
             destructive=True,
         )
         self.register(
+            "files_read_binary",
+            "Read a base64 byte range (up to 256 KiB) of a regular file up to 16 MiB. "
+            "Carry expected_sha256 between chunks to detect a changed download.",
+            ReadBinary,
+            read_binary,
+            read_only=True,
+        )
+        self.register(
+            "files_write_binary",
+            "Write up to 256 KiB of canonical base64. Create, replace or append with "
+            "expected_sha256 for existing files. Each chunk is atomic and backed up; "
+            "total file limit is 16 MiB. Stage under a temporary path before publishing.",
+            WriteBinary,
+            write_binary,
+            destructive=True,
+        )
+        self.register(
             "files_restore",
-            "Restore a UTF-8 backup by its ID. Existing targets require "
+            "Restore a text or binary backup by its ID. Existing targets require "
             "their current SHA-256; the replaced content is backed up again.",
             RestoreFile,
             restore,

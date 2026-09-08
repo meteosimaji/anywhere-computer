@@ -22,6 +22,18 @@ class ReadFile(FilePath):
     limit: int = Field(default=200, ge=1, le=5000)
 
 
+class ReadBinary(FilePath):
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=262144, ge=1, le=262144)
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class WriteBinary(FilePath):
+    data_base64: str = Field(max_length=349528)
+    mode: Literal["create", "replace", "append"] = "create"
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
 class ReadDocument(FilePath):
     section: str | None = None
     offset: int = Field(default=0, ge=0)

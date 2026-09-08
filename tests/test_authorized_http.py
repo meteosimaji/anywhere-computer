@@ -114,6 +114,21 @@ async def test_real_http_enforces_device_scope_and_revocation(tmp_path):
             }
             denied = (await http.post("/mcp", json=write)).json()
             assert denied["error"]["code"] == -32602 and not target.exists()
+            binary_denied = (
+                await http.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": "binary",
+                        "method": "tools/call",
+                        "params": {
+                            "name": "files_write_binary",
+                            "arguments": {"path": str(target), "data_base64": "AA=="},
+                        },
+                    },
+                )
+            ).json()
+            assert binary_denied["error"]["code"] == -32602 and not target.exists()
             http.headers.pop("MCP-Session-Id")
             http.headers["Authorization"] = f"Bearer {write_token}"
             started = await http.post("/mcp", json=initialize)

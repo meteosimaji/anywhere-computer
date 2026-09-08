@@ -1,15 +1,27 @@
 """Bounded file reads and conflict-aware atomic edits, implemented from scratch."""
 
+import base64
+import binascii
 import hashlib
 import os
 import stat
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from pydantic import JsonValue
 
 from .locking import ProcessLock
-from .models import EditFile, ListDirectory, MoveFile, ReadFile, RestoreFile, WriteFile
+from .models import (
+    EditFile,
+    ListDirectory,
+    MoveFile,
+    ReadBinary,
+    ReadFile,
+    RestoreFile,
+    WriteBinary,
+    WriteFile,
+)
 
 MAX_READ_BYTES = 16 * 1024 * 1024
 
@@ -63,20 +75,59 @@ class Files:
         }
 
     def write(self, args: WriteFile) -> dict[str, JsonValue]:
+        return self._write_bytes(args.path, args.text.encode(), args.mode, args.expected_sha256)
+
+    def read_binary(self, args: ReadBinary) -> dict[str, JsonValue]:
         path = absolute_path(args.path)
+        content = read_bytes(path)
+        digest = sha256(content)
+        if args.expected_sha256 is not None and args.expected_sha256 != digest:
+            raise ValueError("File changed during transfer; restart the download")
+        if args.offset > len(content):
+            raise ValueError("Byte offset exceeds the file size")
+        stop = min(len(content), args.offset + args.limit)
+        chunk = content[args.offset : stop]
+        return {
+            "path": str(path),
+            "data_base64": base64.b64encode(chunk).decode("ascii"),
+            "offset": args.offset,
+            "next_offset": stop,
+            "total_bytes": len(content),
+            "sha256": digest,
+            "chunk_sha256": sha256(chunk),
+            "eof": stop == len(content),
+        }
+
+    def write_binary(self, args: WriteBinary) -> dict[str, JsonValue]:
+        try:
+            content = base64.b64decode(args.data_base64, validate=True)
+        except (ValueError, binascii.Error):
+            raise ValueError("data_base64 must contain canonical base64") from None
+        if len(content) > 262144 or base64.b64encode(content).decode("ascii") != args.data_base64:
+            raise ValueError("Use canonical base64 for at most 256 KiB per chunk")
+        return self._write_bytes(args.path, content, args.mode, args.expected_sha256)
+
+    def _write_bytes(
+        self,
+        target: str,
+        data: bytes,
+        mode: Literal["create", "replace", "append"],
+        expected_sha256: str | None,
+    ) -> dict[str, JsonValue]:
+        path = absolute_path(target)
         lock_name = sha256(str(path.resolve()).encode())
         with ProcessLock(self.locks / lock_name, timeout=5):
             if path.is_symlink():
                 raise ValueError("Write to the real file path, not a symbolic link")
             exists = path.exists()
-            if args.mode == "create" and exists:
+            if mode == "create" and exists:
                 raise FileExistsError("Target already exists; use a read hash for replacement")
             original = read_bytes(path) if exists else b""
-            if exists and args.expected_sha256 != sha256(original):
+            if exists and expected_sha256 != sha256(original):
                 raise ValueError("File changed or expected_sha256 is missing; read it again")
-            if not exists and args.expected_sha256 is not None:
+            if not exists and expected_sha256 is not None:
                 raise ValueError("Target disappeared after it was read")
-            content = (original if args.mode == "append" else b"") + args.text.encode()
+            content = (original if mode == "append" else b"") + data
             if len(content) > MAX_READ_BYTES:
                 raise ValueError("Result exceeds the file size limit")
             backup_id = None
@@ -121,13 +172,11 @@ class Files:
         original = read_bytes(backup_path)
         if sha256(original) != args.backup_id:
             raise ValueError("Backup content hash is invalid; no file was changed")
-        restored = self.write(
-            WriteFile(
-                path=args.path,
-                text=original.decode("utf-8"),
-                mode="replace" if args.expected_sha256 is not None else "create",
-                expected_sha256=args.expected_sha256,
-            )
+        restored = self._write_bytes(
+            args.path,
+            original,
+            "replace" if args.expected_sha256 is not None else "create",
+            args.expected_sha256,
         )
         return {**restored, "restored_backup_id": args.backup_id}
 

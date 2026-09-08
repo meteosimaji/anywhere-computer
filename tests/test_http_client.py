@@ -27,9 +27,13 @@ from anywhere_computer.oauth_endpoints import OAuthEndpoints
 
 
 @pytest.fixture
-async def http_remote(tmp_path):
+async def http_remote(tmp_path, request):
     resource = "https://computer.example/mcp"
-    permissions = frozenset({"computer_status", "files_read", "files_write", "operations_get"})
+    permissions = getattr(
+        request,
+        "param",
+        frozenset({"computer_status", "files_read", "files_write", "operations_get"}),
+    )
     engine = Engine(tmp_path / "agent")
     authority = AuthorizationStore(
         tmp_path / "authority", resource=resource, known_tools=permissions
@@ -118,7 +122,7 @@ async def http_remote(tmp_path):
             faults["lose_write_response"]
             and packet
             and packet.get("method") == "tools/call"
-            and packet["params"]["name"] == "files_write"
+            and packet["params"]["name"] in {"files_write", "files_write_binary"}
         ):
             faults["lose_write_response"] = False
             raise ConnectionError("Simulated loss after server execution")
