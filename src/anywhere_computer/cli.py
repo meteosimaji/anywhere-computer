@@ -8,6 +8,7 @@ import signal
 import sys
 from pathlib import Path
 
+from .autostart import preview_startup
 from .client_tokens import ClientTokens
 from .cloudflare_tunnel import TunnelCredential, run_tunnel
 from .connection import ensure_agent, exchange, serve
@@ -59,6 +60,7 @@ def main() -> None:
             "remote-watch",
             "remote-setup",
             "remote-doctor",
+            "autostart-preview",
             "http-show",
             "http-doctor",
             "http-revoke",
@@ -250,7 +252,9 @@ def main() -> None:
                 store.close()
             if args.command.startswith("device"):
                 return
-        if args.command == "transfers":
+        if args.command == "autostart-preview":
+            print(json.dumps(preview_startup(directory), ensure_ascii=False, indent=2))
+        elif args.command == "transfers":
             print(json.dumps(list_transfers(
                 directory, area=args.transfer_area, kind=args.transfer_kind,
                 after=args.after, limit=args.limit if args.limit is not None else 100,
