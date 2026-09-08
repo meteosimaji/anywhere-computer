@@ -68,7 +68,7 @@ async def test_concurrent_compare_and_swap_has_one_winner(engine, tmp_path):
         ]
     )
     assert sorted(reply.state for reply in results) == ["completed", "failed"]
-    assert path.read_text() in ("one", "two")
+    assert path.read_text(encoding="utf-8") in ("one", "two")
 
 
 async def test_duplicate_write_and_conflicting_operation_id(engine, tmp_path):
@@ -76,10 +76,10 @@ async def test_duplicate_write_and_conflicting_operation_id(engine, tmp_path):
     call = request("files_write", path=str(path), text="once")
     results = await asyncio.gather(engine.execute(call), engine.execute(call))
     assert all(result.state == "completed" for result in results)
-    assert path.read_text() == "once"
+    assert path.read_text(encoding="utf-8") == "once"
     conflicting = call.model_copy(update={"arguments": {"path": str(path), "text": "twice"}})
     assert (await engine.execute(conflicting)).state == "failed"
-    assert path.read_text() == "once"
+    assert path.read_text(encoding="utf-8") == "once"
 
 
 def test_restart_marks_only_unfinished_unknown(tmp_path):
@@ -160,7 +160,7 @@ async def test_literal_search_pagination(engine, tmp_path):
 async def test_registry_schemas_validation_and_duplicate_guard(engine):
     from anywhere_computer.models import Empty
 
-    assert len(engine.tools) == 21
+    assert len(engine.tools) == 22
     for name, tool in engine.tools.items():
         assert name == tool.name
         assert tool.schema.model_json_schema()["additionalProperties"] is False
@@ -189,3 +189,52 @@ def test_read_named_pipe_rejected_without_waiting(tmp_path):
     os.mkfifo(fifo)
     with pytest.raises(ValueError, match="regular files"):
         read_bytes(fifo)
+
+
+async def test_restore_retains_redo_and_preserves_newer_changes(engine, tmp_path):
+    path = tmp_path / "recover.txt"
+    original = b"before\r\n"
+    path.write_bytes(original)
+    changed = await engine.execute(
+        request(
+            "files_write",
+            path=str(path),
+            text="after\n",
+            mode="replace",
+            expected_sha256=sha256(original),
+        )
+    )
+    backup_id = changed.data["backup_id"]
+    path.write_bytes(b"newer")
+    conflict = await engine.execute(
+        request(
+            "files_restore",
+            path=str(path),
+            backup_id=backup_id,
+            expected_sha256=changed.data["sha256"],
+        )
+    )
+    assert conflict.state == "failed" and path.read_bytes() == b"newer"
+    restored = await engine.execute(
+        request(
+            "files_restore", path=str(path), backup_id=backup_id, expected_sha256=sha256(b"newer")
+        )
+    )
+    assert restored.state == "completed" and path.read_bytes() == original
+    assert restored.data["backup_id"] == sha256(b"newer")
+    path.unlink()
+    recreated = await engine.execute(request("files_restore", path=str(path), backup_id=backup_id))
+    assert recreated.state == "completed" and path.read_bytes() == original
+
+
+async def test_restore_rejects_corrupt_backup_without_modifying_target(engine, tmp_path):
+    backup_id = sha256(b"expected")
+    (engine.files.backups / backup_id).write_bytes(b"corrupted")
+    path = tmp_path / "target"
+    path.write_bytes(b"keep")
+    result = await engine.execute(
+        request(
+            "files_restore", path=str(path), backup_id=backup_id, expected_sha256=sha256(b"keep")
+        )
+    )
+    assert result.state == "failed" and path.read_bytes() == b"keep"

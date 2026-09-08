@@ -26,7 +26,9 @@ WIRE_LIMIT = 8 * 1024 * 1024
 
 
 def load_endpoint(directory: Path) -> dict[str, JsonValue]:
-    return cast(dict[str, JsonValue], json.loads((directory / "agent.json").read_text()))
+    return cast(
+        dict[str, JsonValue], json.loads((directory / "agent.json").read_text(encoding="utf-8"))
+    )
 
 
 async def exchange(

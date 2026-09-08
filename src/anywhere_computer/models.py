@@ -39,6 +39,11 @@ class WriteFile(FilePath):
     expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
+class RestoreFile(FilePath):
+    backup_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
 class EditFile(FilePath):
     old_text: str = Field(min_length=1)
     new_text: str

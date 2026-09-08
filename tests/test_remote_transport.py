@@ -91,7 +91,7 @@ def certificates(tmp_path_factory):
         return result
 
     def fingerprint(name):
-        der = ssl.PEM_cert_to_DER_cert((directory / f"{name}.pem").read_text())
+        der = ssl.PEM_cert_to_DER_cert((directory / f"{name}.pem").read_text(encoding="utf-8"))
         return hashlib.sha256(der).hexdigest()
 
     yield context, fingerprint
@@ -266,7 +266,9 @@ async def test_mcp_session_routes_tools_through_tls(certificates, tmp_path):
             }
         )
         outcome = written["result"]["structuredContent"]
-        assert outcome["state"] == "completed" and target.read_text() == "through TLS"
+        assert (
+            outcome["state"] == "completed" and target.read_text(encoding="utf-8") == "through TLS"
+        )
         restored = await backend.execute(
             request("operations_get", operation_id=outcome["operation_id"])
         )
@@ -311,7 +313,7 @@ async def test_remote_operation_ids_are_separate_per_peer(tmp_path):
             await bridge.dispatch("second", other.model_dump_json().encode())
         )
         assert second.state == "completed"
-        assert (tmp_path / "first").read_text() == "first"
-        assert (tmp_path / "second").read_text() == "second"
+        assert (tmp_path / "first").read_text(encoding="utf-8") == "first"
+        assert (tmp_path / "second").read_text(encoding="utf-8") == "second"
     finally:
         await engine.close()

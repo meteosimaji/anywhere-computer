@@ -28,6 +28,7 @@ from .models import (
     ReadFiles,
     Reply,
     Request,
+    RestoreFile,
     SearchId,
     SearchPage,
     SessionId,
@@ -112,6 +113,9 @@ class Engine:
 
         async def write(args: WriteFile) -> Result:
             return await asyncio.to_thread(self.files.write, args)
+
+        async def restore(args: RestoreFile) -> Result:
+            return await asyncio.to_thread(self.files.restore, args)
 
         async def edit(args: EditFile) -> Result:
             return await asyncio.to_thread(self.files.edit, args)
@@ -209,6 +213,14 @@ class Engine:
             "the hash returned by files_read; updates retain a backup.",
             WriteFile,
             write,
+            destructive=True,
+        )
+        self.register(
+            "files_restore",
+            "Restore a UTF-8 backup by its ID. Existing targets require "
+            "their current SHA-256; the replaced content is backed up again.",
+            RestoreFile,
+            restore,
             destructive=True,
         )
         self.register(

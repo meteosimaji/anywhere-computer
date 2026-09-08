@@ -8,11 +8,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_packaged_runtime_matches_current_source_and_checksums():
     plugin = ROOT / "plugins/anywhere-computer"
-    manifest = json.loads((plugin / ".codex-plugin/plugin.json").read_text())
+    manifest = json.loads((plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == plugin.name
-    config = json.loads((plugin / ".mcp.json").read_text())["mcpServers"]["anywhere-computer"]
+    config = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"][
+        "anywhere-computer"
+    ]
     assert config["command"] == "uv" and config["cwd"] == "."
-    checksums = json.loads((plugin / "bundled/checksums.json").read_text())
+    checksums = json.loads((plugin / "bundled/checksums.json").read_text(encoding="utf-8"))
     for name, digest in checksums.items():
         assert hashlib.sha256((plugin / "bundled" / name).read_bytes()).hexdigest() == digest
     wheel = plugin / config["args"][config["args"].index("--from") + 1]

@@ -1,9 +1,9 @@
 {
   "name": "anywhere-computer",
-  "version": "0.1.0-alpha.1",
+  "version": "0.1.0-alpha.1+codex.20260908145509",
   "description": "Persistent computer tools with conflict-aware files, document inspection and terminal sessions.",
   "author": {
-    "name": "めてお",
+    "name": "\u3081\u3066\u304a",
     "url": "https://github.com/meteosimaji"
   },
   "skills": "./skills/",
@@ -11,7 +11,7 @@
     "displayName": "Anywhere Computer",
     "shortDescription": "Files, documents and persistent terminal work.",
     "longDescription": "Local computer tools with operation recovery, bounded searches and document inspection. Development alpha; internet hosting and graphical desktop control are not included.",
-    "developerName": "めてお",
+    "developerName": "\u3081\u3066\u304a",
     "category": "Productivity",
     "capabilities": [
       "Write"

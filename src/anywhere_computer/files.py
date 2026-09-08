@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import JsonValue
 
 from .locking import ProcessLock
-from .models import EditFile, ListDirectory, MoveFile, ReadFile, WriteFile
+from .models import EditFile, ListDirectory, MoveFile, ReadFile, RestoreFile, WriteFile
 
 MAX_READ_BYTES = 16 * 1024 * 1024
 
@@ -83,9 +83,14 @@ class Files:
             if exists:
                 backup_id = sha256(original)
                 backup_path = self.backups / backup_id
-                if not backup_path.exists():
+                if backup_path.exists() or backup_path.is_symlink():
+                    if backup_path.is_symlink() or read_bytes(backup_path) != original:
+                        raise ValueError("Existing backup is invalid; no file was changed")
+                else:
                     with backup_path.open("xb") as backup:
                         backup.write(original)
+                        backup.flush()
+                        os.fsync(backup.fileno())
             temporary_fd, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=".anywhere-")
             try:
                 with os.fdopen(temporary_fd, "wb") as destination:
@@ -108,6 +113,23 @@ class Files:
                 "bytes": len(content),
                 "backup_id": backup_id,
             }
+
+    def restore(self, args: RestoreFile) -> dict[str, JsonValue]:
+        backup_path = self.backups / args.backup_id
+        if backup_path.is_symlink():
+            raise ValueError("Backup must not be a symbolic link")
+        original = read_bytes(backup_path)
+        if sha256(original) != args.backup_id:
+            raise ValueError("Backup content hash is invalid; no file was changed")
+        restored = self.write(
+            WriteFile(
+                path=args.path,
+                text=original.decode("utf-8"),
+                mode="replace" if args.expected_sha256 is not None else "create",
+                expected_sha256=args.expected_sha256,
+            )
+        )
+        return {**restored, "restored_backup_id": args.backup_id}
 
     def edit(self, args: EditFile) -> dict[str, JsonValue]:
         original = read_bytes(absolute_path(args.path))
