@@ -31,6 +31,7 @@ from .mcp_server import run_mcp
 from .native_login import login
 from .owner_credentials import OwnerCredentials
 from .parent_liveness import watch_parent_pipe
+from .remote_health import configure_public_monitor
 from .remote_service import serve_remote, watch_remote
 from .remote_setup import setup_remote
 from .ssh_transport import run_ssh_mcp
@@ -62,6 +63,8 @@ def main() -> None:
             "remote-watch",
             "remote-setup",
             "remote-doctor",
+            "remote-health-enable",
+            "remote-health-disable",
             "autostart-preview",
             "autostart-install",
             "autostart-uninstall",
@@ -318,6 +321,10 @@ def main() -> None:
                 )
             )
             print(config.model_dump_json(indent=2))
+        elif args.command in {"remote-health-enable", "remote-health-disable"}:
+            print(json.dumps(configure_public_monitor(
+                directory, enabled=args.command == "remote-health-enable",
+            ), indent=2))
         elif args.command == "remote-doctor":
             diagnosis = asyncio.run(diagnose_remote(
                 directory, probe_public=args.probe_public, connector=args.connector,

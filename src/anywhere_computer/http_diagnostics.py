@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from pydantic import JsonValue
 
 from .http_service import load_http_config
+from .remote_health import public_monitor_status
 from .watch_status import read_watch_observation
 
 
@@ -113,6 +114,7 @@ async def diagnose_http(directory: Path) -> dict[str, JsonValue]:
 
 async def diagnose_remote(
     directory: Path, *, probe_public: bool = False, connector: str | None = None,
+    expected_resource: str | None = None,
 ) -> dict[str, JsonValue]:
     """Inspect configuration and metadata without reading credentials or repairing state."""
     if connector is not None and (
@@ -124,6 +126,7 @@ async def diagnose_remote(
     public: dict[str, JsonValue] = {"state": "not_requested"}
     result: dict[str, JsonValue] = {
         "loopback": local,
+        "public_monitor": public_monitor_status(directory),
         "supervisor_history": read_watch_observation(directory / "remote-watch-status.json"),
         "public": public,
         "connector": {
@@ -145,6 +148,10 @@ async def diagnose_remote(
             config = load_http_config(directory)
         except (OSError, ValueError):
             result["state"] = "configuration_unavailable"
+            return result
+        if expected_resource is not None and config.resource != expected_resource:
+            public["state"] = "resource_mismatch"
+            result["state"] = "configuration_changed"
             return result
         try:
             metadata = await asyncio.wait_for(_metadata(443, resource=config.resource), 5)

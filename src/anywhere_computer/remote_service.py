@@ -19,6 +19,7 @@ from .http_service import http_service, load_http_config
 from .http_supervisor import _stop_child, supervise
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
+from .remote_health import monitor_public_health
 from .state import prepare_directory
 from .watch_status import WatchEvent, save_watch_observation
 
@@ -94,6 +95,7 @@ async def serve_remote(
                 start_new_session=os.name != "nt",
                 creationflags=flags,
             )
+            health_task = asyncio.create_task(monitor_public_health(directory))
             try:
                 # Polling avoids an uncancellable executor thread blocked in
                 # wait(), which would otherwise delay asyncio.run shutdown.
@@ -108,7 +110,13 @@ async def serve_remote(
             finally:
                 # Connector shutdown precedes HTTP shutdown. SIGINT/Ctrl+Break
                 # lets the runner clean up its own cloudflared child first.
-                stop_remote_connector(child)
+                health_task.cancel()
+                try:
+                    await health_task
+                except asyncio.CancelledError:
+                    pass
+                finally:
+                    stop_remote_connector(child)
 
 
 def record_remote_startup(path: Path, event: WatchEvent, attempt: int | None = None) -> None:
