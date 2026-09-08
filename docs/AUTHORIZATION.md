@@ -62,8 +62,9 @@ internet OAuth login or a ChatGPT account connection.
 
 Before public use, implement authenticated login and consent with request/CSRF
 binding, client registration/authentication policy, HTTPS,
-request throttling and data retention. Client-side renewal scheduling and
-credential persistence are also outstanding. Public clients are the only client
+request throttling and data retention. The internal client credential manager
+now supports renewal and persistence; wiring it into browser onboarding and the
+production remote connector is still outstanding. Public clients are the only client
 type in this internal store; it must not advertise confidential-client support.
 No public listener is enabled by this change.
 
@@ -124,8 +125,8 @@ refresh token revokes the entire grant, including all derived access and refresh
 tokens. Concurrent renewals through different SQLite connections therefore issue
 at most one pair, then invalidate that grant when reuse is detected. Clients
 must serialize refreshes and must not blindly retry a refresh after losing its
-response; renewed credentials need secure, atomic client-side storage. That
-client workflow is not implemented yet.
+response; renewed credentials need secure, atomic client-side storage. The internal
+client manager below implements this storage and serialization workflow.
 
 Permissions are fixed for the lifetime of this grant. An omitted refresh scope
 uses the current grant's full tool set; an explicitly identical set is accepted.
@@ -142,3 +143,48 @@ secret-free persistence, concurrent rotation/reuse, migration and continuing the
 same HTTP MCP session after an expired access token is renewed.
 
 Reference: [OAuth security BCP, refresh token protection](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14).
+
+## Client credential storage and renewal
+
+`client_tokens.py` implements the internal client manager using the existing OS
+credential service. Its keyring account is separated from the local agent's
+credential and binds the state directory, canonical HTTPS resource, public client
+ID and a connection profile. Distinct device/account profiles do not overwrite
+each other's credentials. Access and refresh tokens, scope, expiry and update
+phase are saved together as a single versioned keyring value. State files contain
+only empty lock files, not tokens. No runtime dependency was added.
+
+For every new request, `ClientTokens.access_token()` acquires an OS process lock,
+then reloads the saved pair. Near expiry it saves `refresh_pending` **before**
+sending the refresh. A successful response must contain fresh access and refresh
+tokens, the same scope and a valid bounded lifetime; the complete replacement is
+saved before the access token is returned. Expiry is measured from the start of
+the request, so network delay does not extend the token's locally assumed life.
+The early-renewal margin is 60 seconds or 10% of the token lifetime, whichever is
+shorter. This avoids immediately re-renewing a short token near the grant deadline.
+
+An interrupted process, lost response, invalid rotation response or failed final
+save leaves a pending state. The next process refuses to resend the old refresh
+token and reports that authorization is required. If the final keyring write
+actually succeeded before the interruption, the next process instead reads and
+uses that ready replacement. A failure to save the initial intent dispatches no
+request and reports a credential-store error, distinct from missing authorization.
+`install()` replaces the state after fresh user authorization; `forget()` deletes
+only the local credential, not the server grant. These APIs do not expose secrets
+through CLI arguments, files or diagnostic representations.
+
+The default refresh transport uses standard-library HTTPS with certificate and
+hostname checks, a 16 KiB response bound, no redirect following and no automatic
+retry. It supports this server's colocated issuer at `/oauth/token`, `/mcp`
+resource, public clients and 900-second maximum access lifetime. General OAuth
+providers and discovery-selected external issuers are not supported by this
+internal adapter. Token renewal never replays an MCP operation. A production
+HTTP connector, browser login, and handling a revoked token's MCP 401 remain
+integration work; the local stdio plugin does not yet invoke this manager.
+
+Tests cover separate-process contention, process death during refresh, response
+loss, save failures before and after dispatch, profile separation, real server
+grant continuity, and real TLS response validation (including hostname rejection
+before sending credentials). Test vaults hold synthetic tokens only. The explicit
+internet probe additionally uses the native macOS Keychain for its disposable
+pair, reopens the client after renewal, and removes the entry on completion.

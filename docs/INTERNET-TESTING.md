@@ -15,8 +15,10 @@ uv run python scripts/verify_internet.py --receipt dist/internet-verification.js
 This command temporarily publishes an isolated test endpoint. Its engine only
 exposes `files_read` and `files_write`, with handlers restricted to one specific
 disposable text file and a 1 KiB write limit. It does not use the normal agent,
-credential store, terminal tools, registered devices or existing files. The test
-creates its own authorization store and random short-lived credentials, keeps
+credentials, terminal tools, registered devices or existing files. The test
+creates its own authorization store and random short-lived credentials. Its
+disposable client pair is saved in a separate OS keyring entry and deleted during
+cleanup; an unlocked native credential store is required. The runner keeps
 secrets out of arguments/output/receipts, and removes its temporary state on
 completion. A unit test verifies that other paths, terminal operations and
 symlink targets are rejected by this particular probe.
@@ -28,10 +30,13 @@ then performs:
 2. Public HTTP code redemption with PKCE (the test creates consent internally).
 3. MCP initialization and discovery of exactly the two restricted tools.
 4. File creation through the actual files_write handler.
-5. Refresh-token rotation through the public token endpoint, a ping using the
-   same MCP session, then a new MCP session and files_read comparison.
+5. Automatic client refresh through the public token endpoint, OS keyring
+   persistence and reopening the client, a ping using the same MCP session,
+   then a new MCP session and files_read comparison. The initial client expiry
+   is deliberately aged by 845 seconds; this tests renewal without claiming
+   a 15-minute endurance run.
 6. Device revocation followed by HTTP 401 on the already established session.
-7. Tunnel shutdown and temporary-state cleanup.
+7. Tunnel shutdown, disposable OS keyring credential deletion and temporary-state cleanup.
 
 Each HTTPS request verifies the CA chain and the original hostname. Redirects
 are not followed. When the OS resolver cannot resolve the freshly issued tunnel
@@ -70,3 +75,10 @@ The subsequent [refresh verification receipt](research/2026-09-09-internet-refre
 also records public token rotation and continuing the same MCP session. Each
 receipt retains its tested implementation and script hashes; older receipts
 remain historical evidence and are not claims about newer revisions.
+
+The [client credential verification receipt](research/2026-09-09-internet-client-credentials-verification.json)
+records the native macOS keyring save/reopen, automatic client renewal over public
+HTTPS, continued MCP session, and deletion of the disposable credential. This
+probe supplies its DNS-resolved, hostname-verified HTTPS callback to the client;
+the default client HTTPS transport is exercised separately against a local TLS
+server. Neither test establishes a production connector or browser login.

@@ -1,7 +1,8 @@
 """Explicit, temporary public-HTTPS probe; requires an existing cloudflared binary.
 
 Only one disposable text file is exposed. No terminal, owner files, production
-agent, keyring credentials, background service or permanent tunnel is used.
+agent credentials, background service or permanent tunnel is used. A disposable
+OAuth pair is saved in the OS keyring and removed during cleanup.
 """
 
 import argparse
@@ -26,6 +27,7 @@ from pathlib import Path
 
 from anywhere_computer.authorization import AuthorizationStore, pkce_s256
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
+from anywhere_computer.client_tokens import ClientTokens, TokenReply
 from anywhere_computer.engine import Engine
 from anywhere_computer.http_mcp import HTTPMCP
 from anywhere_computer.models import ReadFile, WriteFile
@@ -150,6 +152,7 @@ async def verify(receipt_path):
     adapter = None
     engine = None
     store = None
+    client_tokens = None
     with tempfile.TemporaryDirectory(prefix="anywhere-internet-") as raw:
         directory = Path(raw).resolve()
         backend = None
@@ -271,6 +274,35 @@ async def verify(receipt_path):
             )
             if status != 200 or not token_body or "access_token" not in token_body:
                 raise RuntimeError("Public token exchange failed")
+
+            def refresh_client(resource, client, refresh_token):
+                status, _, renewed = public_request(
+                    public + "/oauth/token",
+                    method="POST",
+                    form={
+                        "grant_type": "refresh_token",
+                        "refresh_token": refresh_token,
+                        "client_id": client,
+                        "resource": resource,
+                    },
+                )
+                if status != 200:
+                    raise RuntimeError("Public client renewal failed")
+                return TokenReply.model_validate(renewed)
+
+            client_tokens = ClientTokens(
+                directory / "client",
+                resource=public + "/mcp",
+                client="probe-client",
+                profile="disposable-probe",
+                refresh=refresh_client,
+            )
+            # Simulate an aged access token to exercise automatic renewal without
+            # waiting 15 minutes. Both HTTP exchanges still use real server tokens.
+            await asyncio.to_thread(
+                client_tokens.install, token_body, requested_at=time.time() - 845
+            )
+            report["client_expiry_age_simulated_seconds"] = 845
             token = token_body["access_token"]
             headers = {
                 "Authorization": f"Bearer {token}",
@@ -316,25 +348,20 @@ async def verify(receipt_path):
             )
             if status != 200 or written["result"]["structuredContent"]["state"] != "completed":
                 raise RuntimeError("Public file write failed")
-            status, _, renewed = await asyncio.to_thread(
-                public_request,
-                public + "/oauth/token",
-                method="POST",
-                form={
-                    "grant_type": "refresh_token",
-                    "refresh_token": token_body["refresh_token"],
-                    "client_id": "probe-client",
-                    "resource": public + "/mcp",
-                },
+            renewed_access = await asyncio.to_thread(client_tokens.access_token)
+            if renewed_access == token:
+                raise RuntimeError("Public client did not rotate its access token")
+            reopened_tokens = ClientTokens(
+                directory / "client",
+                resource=public + "/mcp",
+                client="probe-client",
+                profile="disposable-probe",
+                refresh=refresh_client,
             )
-            if (
-                status != 200
-                or not renewed
-                or renewed.get("access_token") == token
-                or renewed.get("refresh_token") == token_body["refresh_token"]
-            ):
-                raise RuntimeError("Public token rotation failed")
-            headers["Authorization"] = f"Bearer {renewed['access_token']}"
+            if await asyncio.to_thread(reopened_tokens.access_token) != renewed_access:
+                raise RuntimeError("OS credential store did not preserve the renewed pair")
+            report["client_keyring_reopen_verified"] = True
+            headers["Authorization"] = f"Bearer {renewed_access}"
             if (await rpc("ping"))[0] != 200:
                 raise RuntimeError("Public session did not survive token rotation")
             report["refresh_rotation_verified"] = True
@@ -366,6 +393,14 @@ async def verify(receipt_path):
                     await tunnel.wait()
             if drain:
                 await asyncio.gather(drain, return_exceptions=True)
+            if client_tokens:
+                try:
+                    await asyncio.to_thread(client_tokens.forget)
+                    report["client_keyring_removed"] = True
+                except Exception:
+                    report["client_keyring_removed"] = False
+                    report["completed"] = False
+                    report["failure_type"] = "ClientCredentialCleanupFailed"
             if adapter:
                 await adapter.close()
             if store:
@@ -379,6 +414,8 @@ async def verify(receipt_path):
     report["temporary_files_removed"] = not directory.exists()
     receipt_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2), flush=True)
+    if not report["completed"]:
+        raise RuntimeError("Internet probe did not complete cleanly")
 
 
 if __name__ == "__main__":
