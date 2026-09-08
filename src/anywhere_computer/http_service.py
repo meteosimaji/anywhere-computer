@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
 
 from .authorization import AuthorizationStore, validate_authorization_url
 from .authorized_http import AuthorizedDeviceMCP
@@ -36,6 +36,10 @@ class HTTPServiceConfig(BaseModel):
     port: int = Field(ge=1, le=65535)
     scopes: frozenset[str] = Field(min_length=1, max_length=64)
     redirects: frozenset[str] = Field(min_length=1, max_length=10)
+
+    @field_serializer("scopes", "redirects", when_used="json")
+    def ordered_values(self, values: frozenset[str]) -> list[str]:
+        return sorted(values)
 
     @field_validator("resource")
     @classmethod

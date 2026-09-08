@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 from anywhere_computer.engine import runtime_identity
-from anywhere_computer.http_service import configure_http, revoke_http_device
+from anywhere_computer.http_service import configure_http
 from anywhere_computer.owner_credentials import OwnerCredentials
 
 
@@ -115,7 +115,24 @@ async def verify(receipt):
             process = await launch()
             await ready(process)
             report["same_port_restart"] = True
-            revoke_http_device(directory)
+            revoker = await asyncio.create_subprocess_exec(
+                sys.executable,
+                "-m",
+                "anywhere_computer.cli",
+                "http-revoke",
+                "--state-dir",
+                str(directory),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            try:
+                output, _ = await asyncio.wait_for(revoker.communicate(), 15)
+                if revoker.returncode != 0 or json.loads(output) != {"http_device_revoked": True}:
+                    raise RuntimeError("Live revoke command failed")
+            finally:
+                if revoker.returncode is None:
+                    revoker.kill()
+                    await revoker.wait()
             report["live_revoke_command"] = True
             await stop(process)
             report["completed"] = True
