@@ -132,6 +132,39 @@ async def test_remote_doctor_default_never_uses_public_network(configured, tmp_p
     assert calls == [None]
 
 
+@pytest.mark.parametrize("available", [False, True])
+async def test_remote_doctor_inspects_only_selected_connector(tmp_path, monkeypatch, available):
+    from anywhere_computer import http_diagnostics as diagnostic
+
+    selected = str(tmp_path / "接続子 with spaces")
+    calls = []
+
+    def lookup(value):
+        calls.append(value)
+        assert value == selected
+        return selected if available else None
+
+    monkeypatch.setattr(diagnostic.shutil, "which", lookup)
+    report = await diagnostic.diagnose_remote(tmp_path, connector=selected)
+    assert calls == [selected]
+    assert report["connector"] == {
+        "executable_available": available, "selection": "explicit_path",
+        "version_state": "unverified", "process_state": "unverified",
+    }
+    assert report["changed"] is False
+
+
+async def test_remote_doctor_rejects_relative_connector_before_probe(tmp_path, monkeypatch):
+    from anywhere_computer import http_diagnostics as diagnostic
+
+    async def unexpected_probe(directory):
+        pytest.fail("Invalid connector must be rejected before metadata requests")
+
+    monkeypatch.setattr(diagnostic, "diagnose_http", unexpected_probe)
+    with pytest.raises(ValueError, match="absolute path"):
+        await diagnostic.diagnose_remote(tmp_path, connector="relative-connector")
+
+
 @pytest.mark.parametrize("public_state", ["ok", "mismatch", "certificate", "unreachable"])
 async def test_remote_doctor_separates_local_and_public(configured, tmp_path, monkeypatch,
                                                        public_state):

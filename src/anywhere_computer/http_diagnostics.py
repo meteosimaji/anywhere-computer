@@ -109,15 +109,24 @@ async def diagnose_http(directory: Path) -> dict[str, JsonValue]:
     )
 
 
-async def diagnose_remote(directory: Path, *, probe_public: bool = False) -> dict[str, JsonValue]:
+async def diagnose_remote(
+    directory: Path, *, probe_public: bool = False, connector: str | None = None,
+) -> dict[str, JsonValue]:
     """Inspect configuration and metadata without reading credentials or repairing state."""
+    if connector is not None and (
+        not Path(connector).is_absolute()
+        or any(ord(char) < 32 or ord(char) == 127 for char in connector)
+    ):
+        raise ValueError("Diagnostic connector must be an absolute path without control characters")
     local = await diagnose_http(directory)
     public: dict[str, JsonValue] = {"state": "not_requested"}
     result: dict[str, JsonValue] = {
         "loopback": local,
         "public": public,
         "connector": {
-            "executable_available": shutil.which("cloudflared") is not None,
+            "executable_available": shutil.which(connector or "cloudflared") is not None,
+            "selection": "explicit_path" if connector is not None else "PATH",
+            "version_state": "unverified",
             "process_state": "unverified",
         },
         "changed": False,

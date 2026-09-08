@@ -116,8 +116,9 @@ def main() -> None:
         parser.error("Invalid startup registration identifier")
     if args.connector is not None and args.command not in {
         "remote-watch", "remote-serve", "tunnel-run", "autostart-preview", "autostart-install",
+        "remote-doctor",
     }:
-        parser.error("--connector is only valid for remote startup and its preview")
+        parser.error("--connector is only valid for remote startup, its preview and remote-doctor")
     if args.watch_parent and args.command not in {"remote-serve", "tunnel-run"}:
         parser.error("--watch-parent is only valid for supervised remote children")
     if args.probe_public and args.command != "remote-doctor":
@@ -318,7 +319,9 @@ def main() -> None:
             )
             print(config.model_dump_json(indent=2))
         elif args.command == "remote-doctor":
-            diagnosis = asyncio.run(diagnose_remote(directory, probe_public=args.probe_public))
+            diagnosis = asyncio.run(diagnose_remote(
+                directory, probe_public=args.probe_public, connector=args.connector,
+            ))
             print(json.dumps(diagnosis, ensure_ascii=False, indent=2))
             if diagnosis["state"] not in {
                 "local_metadata_reachable", "local_and_public_metadata_reachable"
