@@ -1,0 +1,135 @@
+{
+  "checked_on": "2026-09-08",
+  "evidence": "Tool metadata exposed in this Codex session; not a fresh direct tools/list response or execution test.",
+  "local_source": {
+    "repository": "https://github.com/wonderwhy-er/DesktopCommanderMCP",
+    "commit": "56deabc3fe3c586f91728c56da5715712ff34eb6",
+    "version": "0.2.48"
+  },
+  "remote_docs": {
+    "repository": "https://github.com/desktop-commander/remote-desktop-commander",
+    "commit": "b480501dcca59f802ebaf97f2f57b45252d0b720"
+  },
+  "tools": [
+    {
+      "name": "create_directory",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_create_directory(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  path: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "edit_block",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_edit_block(args: { [key: string]: unknown; }): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "force_terminate",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_force_terminate(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  pid: number;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "get_config",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_get_config(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "get_file_info",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_get_file_info(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  path: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "get_more_search_results",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_get_more_search_results(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  length?: number;\n  offset?: number;\n  sessionId: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "get_prompts",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_get_prompts(args: {\n  action: \"get_prompt\";\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  promptId: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "get_recent_tool_calls",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_get_recent_tool_calls(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  maxResults?: number;\n  since?: string;\n  toolName?: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "get_usage_stats",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_get_usage_stats(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "give_feedback_to_desktop_commander",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_give_feedback_to_desktop_commander(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "interact_with_process",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_interact_with_process(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  input: string;\n  pid: number;\n  timeout_ms?: number;\n  verbose_timing?: boolean;\n  wait_for_prompt?: boolean;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "kill_process",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_kill_process(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  pid: number;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "list_devices",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_list_devices(args: {}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "list_directory",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_list_directory(args: {\n  depth?: number;\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  path: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "list_processes",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_list_processes(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "list_searches",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_list_searches(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "list_sessions",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_list_sessions(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "move_file",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_move_file(args: {\n  destination: string;\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  source: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "ping",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_ping(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "read_file",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_read_file(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  isUrl?: boolean;\n  length?: number;\n  offset?: number;\n  options?: { [key: string]: unknown; };\n  path: string;\n  range?: string;\n  sheet?: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "read_multiple_files",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_read_multiple_files(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  paths: Array<string>;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "read_process_output",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_read_process_output(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  length?: number;\n  offset?: number;\n  pid: number;\n  timeout_ms?: number;\n  verbose_timing?: boolean;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "set_config_value",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_set_config_value(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  key: string;\n  value: string | number | boolean | Array<string> | null;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "shutdown",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_shutdown(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "start_process",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_start_process(args: {\n  command: string;\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  shell?: string;\n  timeout_ms: number;\n  verbose_timing?: boolean;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "start_search",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_start_search(args: {\n  contextLines?: number;\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  earlyTermination?: boolean;\n  filePattern?: string;\n  ignoreCase?: boolean;\n  includeHidden?: boolean;\n  literalSearch?: boolean;\n  maxResults?: number;\n  path: string;\n  pattern: string;\n  searchType?: \"files\" | \"content\";\n  timeout_ms?: number;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "stop_search",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_stop_search(args: {\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  sessionId: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "who_am_i",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_who_am_i(args: {}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "write_file",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_write_file(args: {\n  content: string;\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  mode?: \"rewrite\" | \"append\";\n  path: string;\n}): Promise<CallToolResult>; };"
+    },
+    {
+      "name": "write_pdf",
+      "contract": "declare const tools: { mcp__codex_apps__remote_desktop_commander_write_pdf(args: {\n  content: string | Array<{ markdown?: string; pageIndex: number; pdfOptions?: { [key: string]: unknown; }; sourcePdfPath?: string; type: \"insert\"; } | { pageIndexes: Array<number>; type: \"delete\"; }>;\n  // Optional: The ID of the specific device to execute this tool on. If not provided, the first available online device will be used.\n  deviceId?: string;\n  options?: { [key: string]: unknown; };\n  outputPath?: string;\n  path: string;\n}): Promise<CallToolResult>; };"
+    }
+  ]
+}
