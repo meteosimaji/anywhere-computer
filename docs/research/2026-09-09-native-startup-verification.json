@@ -1,0 +1,47 @@
+{
+  "commit": "2dacd550c2853ad9282a1d09acccbea12c411a3f",
+  "ci_run": 34286279682,
+  "url": "https://github.com/meteosimaji/anywhere-computer/actions/runs/34286279682",
+  "evidence": [
+    {
+      "platform": "macos-latest",
+      "report_sha256": "3bca02d0acfb890e250cda102c2d8d409ec33f1667e1674c29dec5c65a951486",
+      "tests": 388,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 4,
+      "native_registration_fixture": "passed"
+    },
+    {
+      "platform": "ubuntu-latest",
+      "report_sha256": "d601030abeb6691312bfca16b08918a6796372bf8eedda7a7a26706f56d32222",
+      "tests": 388,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 3,
+      "native_registration_fixture": "passed"
+    }
+  ],
+  "proven": [
+    "Harmless Python fixture registered with the native user startup manager",
+    "Fixture writes its marker and is reported running",
+    "Owned fixture is stopped and removed",
+    "Final native query reports absence"
+  ],
+  "not_proven": [
+    "Windows readback identity and removal fail in run 34286077807; fixture starts successfully",
+    "Real login and reboot",
+    "Remote supervisor with real credentials under native startup",
+    "Public internet readiness after login",
+    "OS upgrade and runtime relocation"
+  ],
+  "user_machine_startup_modified": false,
+  "windows_failure": {
+    "ci_run": 34286077807,
+    "registered": true,
+    "fixture_started": true,
+    "native_running": true,
+    "identity_matches": false,
+    "removal_confirmed": false
+  }
+}

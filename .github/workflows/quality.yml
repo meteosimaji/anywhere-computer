@@ -18,12 +18,13 @@ jobs:
       - run: uv run ruff check src tests scripts
       - run: uv run mypy
       - run: openssl version
-      - run: uv run pytest -ra --junitxml="${{ runner.temp }}/pytest-results.xml"
+      - run: uv run pytest -ra tests/test_startup_native.py --junitxml="${{ runner.temp }}/pytest-native.xml"
+      - run: uv run pytest -ra --ignore=tests/test_startup_native.py --junitxml="${{ runner.temp }}/pytest-results.xml"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: pytest-results-${{ matrix.os }}
-          path: ${{ runner.temp }}/pytest-results.xml
+          path: ${{ runner.temp }}/pytest-*.xml
           if-no-files-found: ignore
           retention-days: 14
       - run: uv run python scripts/verify_tunnel_pipe.py --download-for-test

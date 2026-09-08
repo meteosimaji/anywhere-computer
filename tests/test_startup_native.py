@@ -96,6 +96,10 @@ def test_native_registration_runs_and_removes_only_its_fixture(tmp_path):
             time.sleep(0.1)
         assert marker.read_text() == "started"
         snapshot = backend.query()
+        if sys.platform == "win32" and not snapshot.matches:
+            # Only this disposable fixture's generated XML; no production credentials.
+            pytest.fail("Fixture readback mismatch\nEXPECTED:\n"
+                        + definition.content.decode("utf-16") + "\nACTUAL:\n" + snapshot.raw)
         assert snapshot.present and snapshot.matches and snapshot.running and snapshot.enabled
         assert snapshot.fingerprint == backend.query().fingerprint
         backend.uninstall(snapshot)
