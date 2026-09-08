@@ -406,7 +406,8 @@ class Engine:
         )
         self.register(
             "terminal_output",
-            "Read output using a byte cursor; reports dropped bytes.",
+            "Read output using a byte cursor; negative cursors start relative to the current "
+            "output end. Returns an absolute next_cursor and reports dropped bytes.",
             SessionOutput,
             output,
             read_only=True,

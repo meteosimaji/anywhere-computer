@@ -113,14 +113,16 @@ class Sessions:
 
     def output(self, args: SessionOutput) -> dict[str, JsonValue]:
         session = self.get(args.session_id)
-        start = max(args.cursor, session.first_cursor)
+        end = session.first_cursor + len(session.output)
+        requested = end + args.cursor if args.cursor < 0 else args.cursor
+        start = max(requested, session.first_cursor)
         position = start - session.first_cursor
         chunk = bytes(session.output[position : position + args.limit])
         return {
             **self.describe(session),
             "text": chunk.decode("utf-8", errors="replace"),
             "next_cursor": start + len(chunk),
-            "dropped_bytes": max(0, start - args.cursor),
+            "dropped_bytes": max(0, start - max(0, requested)),
         }
 
     async def stop(self, session_id: str) -> dict[str, JsonValue]:

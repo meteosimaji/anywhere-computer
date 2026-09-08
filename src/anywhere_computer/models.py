@@ -145,7 +145,7 @@ class SessionInput(SessionId):
 
 
 class SessionOutput(SessionId):
-    cursor: int = Field(default=0, ge=0)
+    cursor: int = 0
     limit: int = Field(default=16000, ge=1, le=100000)
 
 
