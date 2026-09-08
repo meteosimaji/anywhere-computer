@@ -36,3 +36,30 @@ async def test_tail_cursor_and_absolute_continuation(tmp_path):
         assert clipped["text"] == raw[4:].decode()
     finally:
         await sessions.close()
+
+
+async def test_wait_output_wakes_on_input_and_does_not_stop_process_on_timeout(tmp_path):
+    from anywhere_computer.models import SessionInput
+
+    sessions = Sessions()
+    executable = f'"{sys.executable}"' if sys.platform == "win32" else shlex.quote(sys.executable)
+    started = await sessions.start(StartSession(
+        command=executable + ' -u -c "print(input())"', cwd=str(tmp_path),
+    ))
+    identity = started["session_id"]
+    try:
+        empty = await sessions.wait_output(SessionOutput(session_id=identity, wait_ms=20))
+        assert empty["text"] == "" and empty["state"] == "running"
+        waiting = asyncio.create_task(sessions.wait_output(
+            SessionOutput(session_id=identity, wait_ms=3000),
+        ))
+        await sessions.send(SessionInput(session_id=identity, text="delivered\n"))
+        result = await asyncio.wait_for(waiting, 5)
+        assert "delivered" in result["text"]
+        await asyncio.wait_for(sessions.get(identity).reader, 5)
+        ended = await asyncio.wait_for(sessions.wait_output(SessionOutput(
+            session_id=identity, cursor=result["next_cursor"], wait_ms=30000,
+        )), 1)
+        assert ended["state"] == "exited"
+    finally:
+        await sessions.close()

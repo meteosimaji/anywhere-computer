@@ -200,7 +200,7 @@ class Engine:
             }
 
         async def output(args: SessionOutput) -> Result:
-            return self.sessions.output(args)
+            return await self.sessions.wait_output(args)
 
         async def session_list(_: Empty) -> Result:
             return {

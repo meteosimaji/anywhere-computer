@@ -111,6 +111,17 @@ class Sessions:
         await asyncio.wait_for(session.process.stdin.drain(), 10)
         return {"session_id": args.session_id, "bytes_sent": len(args.text.encode())}
 
+    async def wait_output(self, args: SessionOutput) -> dict[str, JsonValue]:
+        session = self.get(args.session_id)
+        deadline = asyncio.get_running_loop().time() + args.wait_ms / 1000
+        while True:
+            result = self.output(args)
+            remaining = deadline - asyncio.get_running_loop().time()
+            if (result["text"] or remaining <= 0
+                    or (session.reader is not None and session.reader.done())):
+                return result
+            await asyncio.sleep(min(0.02, remaining))
+
     def output(self, args: SessionOutput) -> dict[str, JsonValue]:
         session = self.get(args.session_id)
         end = session.first_cursor + len(session.output)
