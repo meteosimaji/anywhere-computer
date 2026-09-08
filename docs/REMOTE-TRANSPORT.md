@@ -75,3 +75,45 @@ lookup and grant revocation across real loopback TLS. Production provisioning
 and an external network test remain outstanding. The SSH wrapper's argument,
 host validation and no-retry behavior are tested; a real SSH peer has not yet
 been assigned, so internet operation is not claimed.
+
+## Streamable HTTP adapter
+
+`http_mcp.py` now provides a loopback-only `/mcp` adapter around the same
+`MCPSession` used by stdio. No runtime dependency was added. It supports
+initialization with a secure session ID, authenticated POST requests, JSON
+responses, notification acknowledgements with HTTP 202, and DELETE session
+termination. GET returns 405 because server-initiated SSE is not offered.
+
+The embedding application must supply an asynchronous bearer-token verifier
+and a session factory receiving the verified identity. Every request, including
+requests using an existing session, is verified after its full body arrives.
+Sessions are bound to that identity, expire after 30 minutes of inactivity and
+are limited to 128 by default. A session ID is not an authorization credential.
+The factory remains responsible for binding the identity to a device and its
+current grants; this adapter alone does not isolate files or processes.
+
+The listener binds only to `127.0.0.1`. Host values must match its actual bound
+port, and Origin values are rejected unless explicitly enrolled by the embedding
+application. Headers are bounded to 16 KiB, messages to 8 MiB, and active
+connections to 32. HTTP requests have read and dispatch deadlines. Ambiguous
+framing, duplicate headers and transfer encodings are rejected. This initial
+adapter accepts Content-Length framing, closes each response connection, and
+does not implement chunked requests, SSE event replay or JSON-RPC response input
+for server-initiated requests (none are issued).
+
+Tests use the official MCP SDK's Streamable HTTP client against a real socket,
+including file write/read, initialization, listing, ping and session deletion.
+Additional tests exercise wrong identities, token revocation during a slow body,
+expired sessions, Host/Origin rejection, capacity/framing limits and completion
+of an already dispatched operation after the HTTP observer disconnects. Test
+credentials are disposable; they are not production authentication. As with
+stdio, the caller must not blindly repeat an interrupted mutation.
+
+Still missing for a deployable ChatGPT connection: OAuth discovery and token
+issuance/verification, user-to-device authorization, public HTTPS gateway,
+trusted proxy handling, NAT/outbound routing and an actual internet path. There
+is deliberately no CLI command enabling this listener for public use yet.
+`computer_status.remote_ready` remains false. The adapter is based on the MCP
+[2025-11-25 transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports);
+OAuth integration must also follow the
+[authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).
