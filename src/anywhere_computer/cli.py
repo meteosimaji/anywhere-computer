@@ -12,6 +12,7 @@ from .connection import ensure_agent, exchange, serve
 from .devices import DeviceStore
 from .diagnostics import diagnose
 from .http_client import run_http_mcp
+from .http_service import configure_http, load_http_config, revoke_http_device, serve_http
 from .mcp_server import run_mcp
 from .native_login import login
 from .owner_credentials import OwnerCredentials
@@ -34,6 +35,10 @@ def main() -> None:
             "http-mcp",
             "owner-init",
             "login",
+            "http-configure",
+            "http-serve",
+            "http-show",
+            "http-revoke",
             "devices",
             "device-add",
             "device-rename",
@@ -49,21 +54,37 @@ def main() -> None:
     parser.add_argument("--client-id", help="Registered public OAuth client ID")
     parser.add_argument("--owner", help="Owner identifier for initial authentication setup")
     parser.add_argument("--scope", action="append", help="Tool to authorize (repeat per tool)")
+    parser.add_argument("--port", type=int, help="Stable loopback HTTP port (default: 8768)")
+    parser.add_argument("--redirect-uri", action="append", help="Registered OAuth callback URL")
     parser.add_argument(
         "--profile", help="Authorized connection profile in the OS credential store"
     )
     args = parser.parse_args()
-    if args.resource is not None and args.command not in {"http-mcp", "owner-init", "login"}:
-        parser.error("--resource is only valid for http-mcp, owner-init and login")
-    if any(value is not None for value in (args.client_id, args.profile)):
-        if args.command not in {"http-mcp", "login"}:
-            parser.error("--client-id and --profile are only valid for http-mcp and login")
-    if args.scope is not None and args.command != "login":
-        parser.error("--scope is only valid for login")
+    if args.resource is not None and args.command not in {
+        "http-mcp",
+        "owner-init",
+        "login",
+        "http-configure",
+    }:
+        parser.error("--resource is only valid for HTTP connection setup")
+    if args.client_id is not None and args.command not in {"http-mcp", "login", "http-configure"}:
+        parser.error("--client-id is only valid for http-mcp, login and http-configure")
+    if args.profile is not None and args.command not in {"http-mcp", "login"}:
+        parser.error("--profile is only valid for http-mcp and login")
+    if args.scope is not None and args.command not in {"login", "http-configure"}:
+        parser.error("--scope is only valid for login and http-configure")
     if args.command == "login" and not args.scope:
         parser.error("login requires at least one --scope tool")
-    if args.owner is not None and args.command != "owner-init":
-        parser.error("--owner is only valid for owner-init")
+    if args.owner is not None and args.command not in {"owner-init", "http-configure"}:
+        parser.error("--owner is only valid for owner-init and http-configure")
+    if (
+        args.port is not None or args.redirect_uri is not None
+    ) and args.command != "http-configure":
+        parser.error("--port and --redirect-uri are only valid for http-configure")
+    if args.command == "http-configure" and not all(
+        (args.resource, args.owner, args.client_id, args.scope)
+    ):
+        parser.error("http-configure requires --resource, --owner, --client-id and --scope")
     if args.command == "owner-init" and not all((args.resource, args.owner)):
         parser.error("owner-init requires --resource and --owner")
     if args.command in {"http-mcp", "login"} and not all(
@@ -122,7 +143,30 @@ def main() -> None:
                 store.close()
             if args.command != "remote-mcp":
                 return
-        if args.command == "owner-init":
+        if args.command == "http-configure":
+            config = asyncio.run(
+                configure_http(
+                    directory,
+                    resource=args.resource,
+                    owner=args.owner,
+                    client=args.client_id,
+                    port=args.port if args.port is not None else 8768,
+                    scopes=frozenset(args.scope),
+                    redirects=frozenset(
+                        args.redirect_uri
+                        or ["http://127.0.0.1/oauth/callback", "http://[::1]/oauth/callback"]
+                    ),
+                )
+            )
+            print(config.model_dump_json(indent=2))
+        elif args.command == "http-show":
+            print(load_http_config(directory).model_dump_json(indent=2))
+        elif args.command == "http-revoke":
+            revoke_http_device(directory)
+            print(json.dumps({"http_device_revoked": True}))
+        elif args.command == "http-serve":
+            asyncio.run(serve_http(directory))
+        elif args.command == "owner-init":
             if not sys.stdin.isatty():
                 raise ValueError("Owner setup requires an interactive terminal")
             owner_credentials = OwnerCredentials(
@@ -165,6 +209,8 @@ def main() -> None:
         else:
             reply = asyncio.run(exchange(directory, "__status", timeout=3))
             print(reply.model_dump_json(indent=2))
+    except KeyboardInterrupt:
+        raise SystemExit(130) from None
     except (OSError, ValueError, RuntimeError, TimeoutError) as error:
         print(f"Anywhere Computer: {error}", file=sys.stderr)
         raise SystemExit(1) from None

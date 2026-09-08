@@ -51,7 +51,8 @@ anywhere remote-mcp --ssh-host windows-lab
 事前に認可済みの HTTP 接続プロフィールには、次の起動経路もあります。
 同じ接続先に所有者認証とクライアント登録を設定済みの場合、まずブラウザーで
 許可する機能を確認します。認証情報のコピーは不要で、OS の資格情報ストアへ保存します。
-サーバーの初期設定と常設 HTTPS の構築手順は引き続き開発中です。
+サーバーの設定・起動は [HTTP サーバーの手順](docs/HTTP-SERVER.md) を参照してください。
+常設 HTTPS の接続口と証明書管理の自動構築は引き続き開発中です。
 
 ```sh
 anywhere login --resource https://your-agent.example/mcp --client-id registered-client --profile laptop --scope files_read --scope files_write --scope operations_get

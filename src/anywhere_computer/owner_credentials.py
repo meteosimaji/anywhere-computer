@@ -36,7 +36,8 @@ class OwnerCredentials:
         if not owner or len(owner) > 128 or any(ord(c) < 33 or ord(c) > 126 for c in owner):
             raise ValueError("Invalid owner identifier")
         prepare_directory(directory)
-        binding = json.dumps([str(directory.resolve()), resource, owner]).encode()
+        self.directory = directory.resolve()
+        binding = json.dumps([str(self.directory), resource, owner]).encode()
         self.account = "oauth-owner-" + hashlib.sha256(binding).hexdigest()
         self.lock_path = directory / (self.account + ".lock")
         self.resource, self.owner = resource, owner
@@ -78,9 +79,7 @@ class OwnerCredentials:
             except Exception:
                 raise ClientCredentialError("Could not save owner verification data") from None
 
-    def verify(self, password: str) -> bool:
-        if not password or len(password.encode("utf-8")) > 1024:
-            return False
+    def _record(self) -> _PasswordRecord:
         raw = self._read()
         if raw is None:
             raise ClientCredentialError("Owner authentication has not been initialized")
@@ -90,6 +89,16 @@ class OwnerCredentials:
             record = _PasswordRecord.model_validate_json(raw)
         except ValueError:
             raise ClientCredentialError("Owner verification data is invalid") from None
+        return record
+
+    def ensure_initialized(self) -> None:
+        """Check readiness without asking for or deriving a password."""
+        self._record()
+
+    def verify(self, password: str) -> bool:
+        if not password or len(password.encode("utf-8")) > 1024:
+            return False
+        record = self._record()
         return hmac.compare_digest(self._derive(password, record.salt), record.digest)
 
     def forget(self) -> None:

@@ -40,6 +40,20 @@ async def test_real_http_enforces_device_scope_and_revocation(tmp_path):
     read_token = issue("device", {"computer_status", "files_read", "operations_get"})
     wrong_device_token = issue("other-device", permissions)
     write_token = issue("device", permissions)
+    limited = AuthorizedDeviceMCP(
+        authority,
+        engine,
+        owner="owner",
+        device="device",
+        client="client",
+        allowed_tools=frozenset({"computer_status", "files_read", "operations_get"}),
+    )
+    assert await limited.authenticate(read_token) is not None
+    assert await limited.authenticate(write_token) is None
+    another_client = AuthorizedDeviceMCP(
+        authority, engine, owner="owner", device="device", client="other"
+    )
+    assert await another_client.authenticate(read_token) is None
     backend = AuthorizedDeviceMCP(authority, engine, owner="owner", device="device")
     adapter = HTTPMCP(backend.authenticate, backend.session)
     port = await adapter.start()

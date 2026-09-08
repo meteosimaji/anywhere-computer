@@ -11,15 +11,29 @@ from .remote_bridge import RemoteAgent
 
 class AuthorizedDeviceMCP:
     def __init__(
-        self, store: AuthorizationStore, engine: Engine, *, owner: str, device: str
+        self,
+        store: AuthorizationStore,
+        engine: Engine,
+        *,
+        owner: str,
+        device: str,
+        client: str | None = None,
+        allowed_tools: frozenset[str] | None = None,
     ) -> None:
         self.store = store
         self.engine = engine
         self.owner = owner
         self.device = device
+        self.client, self.allowed_tools = client, allowed_tools
 
     def _matches(self, grant: GrantIdentity | None) -> bool:
-        return grant is not None and grant.owner == self.owner and grant.device == self.device
+        return (
+            grant is not None
+            and grant.owner == self.owner
+            and grant.device == self.device
+            and (self.client is None or grant.client == self.client)
+            and (self.allowed_tools is None or grant.tools <= self.allowed_tools)
+        )
 
     async def authenticate(self, token: str) -> str | None:
         grant = self.store.verify(token, resource=self.store.resource)
