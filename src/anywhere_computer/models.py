@@ -34,6 +34,25 @@ class WriteBinary(FilePath):
     expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
+class TransferId(Contract):
+    transfer_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+
+
+class BeginUpload(TransferId):
+    path: str = Field(min_length=1)
+    total_bytes: int = Field(ge=0, le=1073741824)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class UploadChunk(TransferId):
+    offset: int = Field(ge=0, le=1073741824)
+    data_base64: str = Field(min_length=4, max_length=349528)
+
+
+class ResolveUpload(TransferId):
+    action: Literal["confirm_published", "discard_staging"]
+
+
 class ReadDocument(FilePath):
     section: str | None = None
     offset: int = Field(default=0, ge=0)

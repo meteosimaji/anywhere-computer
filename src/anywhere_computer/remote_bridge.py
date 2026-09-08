@@ -16,8 +16,9 @@ from pydantic import JsonValue
 
 from .engine import Engine
 from .mcp_server import MCPSession
-from .models import OperationId, Reply, Request
+from .models import OperationId, Reply, Request, TransferId
 from .remote_transport import remote_exchange
+from .uploads import UPLOAD_TOOLS
 
 
 class RemoteAgent:
@@ -76,6 +77,14 @@ class RemoteAgent:
     async def _execute(self, identity: str, request: Request) -> Reply:
         internal = self.internal_id(identity, request.operation_id)
         arguments = dict(request.arguments)
+        if request.tool in UPLOAD_TOOLS:
+            try:
+                transfer = TransferId.model_validate({"transfer_id": arguments.get("transfer_id")})
+                arguments["transfer_id"] = self.internal_id(identity, transfer.transfer_id)
+            except ValueError:
+                return Reply(
+                    operation_id=request.operation_id, state="failed", error="Invalid upload ID"
+                )
         target_id = None
         if request.tool == "operations_get":
             try:

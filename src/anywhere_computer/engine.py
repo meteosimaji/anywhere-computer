@@ -15,6 +15,7 @@ from . import __version__
 from .documents import read_document
 from .files import Files, absolute_path
 from .models import (
+    BeginUpload,
     Contract,
     EditFile,
     Empty,
@@ -29,6 +30,7 @@ from .models import (
     ReadFiles,
     Reply,
     Request,
+    ResolveUpload,
     RestoreFile,
     SearchId,
     SearchPage,
@@ -37,6 +39,8 @@ from .models import (
     SessionOutput,
     StartSearch,
     StartSession,
+    TransferId,
+    UploadChunk,
     WriteBinary,
     WriteFile,
 )
@@ -44,6 +48,7 @@ from .runtime_identity import runtime_identity
 from .search import Searches
 from .sessions import Sessions
 from .state import Ledger
+from .uploads import UploadOutcomeUnknown, Uploads
 
 Input = TypeVar("Input", bound=Contract)
 Result = dict[str, JsonValue]
@@ -64,6 +69,7 @@ class Engine:
     def __init__(self, directory: Path, *, file_locks: Path | None = None) -> None:
         self.ledger = Ledger(directory)
         self.files = Files(directory, locks=file_locks)
+        self.uploads = Uploads(directory, file_locks=self.files.locks)
         self.sessions = Sessions()
         self.searches = Searches()
         self.instance_id = uuid.uuid4().hex
@@ -121,6 +127,24 @@ class Engine:
 
         async def write_binary(args: WriteBinary) -> Result:
             return await asyncio.to_thread(self.files.write_binary, args)
+
+        async def upload_begin(args: BeginUpload) -> Result:
+            return await asyncio.to_thread(self.uploads.begin, args)
+
+        async def upload_chunk(args: UploadChunk) -> Result:
+            return await asyncio.to_thread(self.uploads.chunk, args)
+
+        async def upload_status(args: TransferId) -> Result:
+            return await asyncio.to_thread(self.uploads.status, args)
+
+        async def upload_commit(args: TransferId) -> Result:
+            return await asyncio.to_thread(self.uploads.commit, args)
+
+        async def upload_abort(args: TransferId) -> Result:
+            return await asyncio.to_thread(self.uploads.abort, args)
+
+        async def upload_resolve(args: ResolveUpload) -> Result:
+            return await asyncio.to_thread(self.uploads.resolve, args)
 
         async def restore(args: RestoreFile) -> Result:
             return await asyncio.to_thread(self.files.restore, args)
@@ -232,12 +256,61 @@ class Engine:
             read_only=True,
         )
         self.register(
+            "upload_begin",
+            "Reserve an upload of up to 1 GiB to a new absolute destination. "
+            "Supply a fresh 32-hex transfer_id, final length and SHA-256; "
+            "retain the ID for resume.",
+            BeginUpload,
+            upload_begin,
+        )
+        self.register(
+            "upload_chunk",
+            "Persist a contiguous canonical-base64 chunk up to 256 KiB. "
+            "The same offset and identical bytes may be repeated safely.",
+            UploadChunk,
+            upload_chunk,
+            destructive=True,
+        )
+        self.register(
+            "upload_status",
+            "Read durable received length and transfer state by your transfer_id. "
+            "Unknown publication must be inspected, never automatically retried.",
+            TransferId,
+            upload_status,
+            read_only=True,
+        )
+        self.register(
+            "upload_commit",
+            "Stream-verify the complete upload and publish exclusively at its "
+            "new destination. Never overwrite. A lost publication outcome needs inspection.",
+            TransferId,
+            upload_commit,
+            destructive=True,
+        )
+        self.register(
+            "upload_abort",
+            "Discard chunks of a receiving upload; never delete its destination. "
+            "Published or uncertain uploads are not automatically aborted.",
+            TransferId,
+            upload_abort,
+            destructive=True,
+        )
+        self.register(
             "files_write_binary",
             "Write up to 256 KiB of canonical base64. Create, replace or append with "
             "expected_sha256 for existing files. Each chunk is atomic and backed up; "
             "total file limit is 16 MiB. Stage under a temporary path before publishing.",
             WriteBinary,
             write_binary,
+            destructive=True,
+        )
+        self.register(
+            "upload_resolve",
+            "Resolve unknown publication without publishing again: "
+            "confirm_published checks the destination; discard_staging frees database chunks "
+            "without deleting the destination or leftover staging_path files.",
+            ResolveUpload,
+            upload_resolve,
             destructive=True,
         )
         self.register(
@@ -395,6 +468,8 @@ class Engine:
             try:
                 result = await tool.handler(arguments)
                 reply = Reply(operation_id=request.operation_id, state="completed", data=result)
+            except UploadOutcomeUnknown as error:
+                reply = Reply(operation_id=request.operation_id, state="unknown", error=str(error))
             except Exception as error:
                 reply = Reply(operation_id=request.operation_id, state="failed", error=str(error))
             self.ledger.finish(reply)

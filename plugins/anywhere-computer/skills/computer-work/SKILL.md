@@ -18,6 +18,15 @@ filesystem. Each chunk is committed separately; the transfer is not atomic as a
 whole. After a lost response, inspect operations_get and the staged file hash and
 length before another append. files_restore can restore binary backups too.
 
+For larger uploads to new destinations, use upload_begin with a fresh 32-hex
+transfer_id, final byte length and SHA-256; keep this ID. Send contiguous upload_chunk
+requests, inspect upload_status after interruptions, then upload_commit. Declared
+limit is 1 GiB per upload. Unknown publication must not be retried automatically:
+upload_resolve confirm_published verifies the destination without publishing again.
+Use discard_staging only when discarding that transfer's database chunks is intended;
+it leaves destination and leftover staging_path files untouched. A new HTTP grant
+cannot resume an old grant's transfer. A completed record is not a live file check.
+
 Terminal sessions belong to the persistent agent. Preserve session IDs and output
 cursors. A client disconnect does not stop a process. Use terminal_stop only when
 stopping that work is intended. On an uncertain response, keep the operation ID

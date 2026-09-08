@@ -5,7 +5,7 @@
 ChatGPT・Codex などの MCP クライアントから、ファイル・検索・端末作業を行う
 独立エージェント。Linux、Windows、macOS に共通の Python コードを使います。
 
-開発中の **0.1.0 alpha** です。ローカルエージェントと 24 個の MCP ツールを
+開発中の **0.1.0 alpha** です。ローカルエージェントと 30 個の MCP ツールを
 実装しています。TLS リモート通信と HTTP MCP の内部実装・ループバック試験もあります。
 Word・Excel・PowerPoint の本文/セル読取を実装しています。
 一時 HTTPS 接続口を通るファイル読み書き・認可失効を macOS で実証しています。
@@ -109,6 +109,8 @@ HTTP は再認可が必要なら `authorization_required`、資格情報スト�
 
 ## 現在使えるもの
 
+- [永続転送 ID によるアップロード](docs/UPLOADS.md)。宣言上限1 GiB、チャンクを永続化し、
+  全体ハッシュを確認して未使用の保存先へ公開します。
 - バイナリの分割読み書きと復元。1ファイル16 MiB、1チャンク256 KiBまで。
   [中断後の確認・再開手順](docs/BINARY-TRANSFER.md)を用意しています。
 - Word 本文、Excel 保存済みセルと数式、PowerPoint スライド本文のページ読取。
