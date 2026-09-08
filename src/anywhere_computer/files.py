@@ -1,0 +1,161 @@
+"""Bounded file reads and conflict-aware atomic edits, implemented from scratch."""
+
+import hashlib
+import os
+import stat
+import tempfile
+from pathlib import Path
+
+from filelock import FileLock
+from pydantic import JsonValue
+
+from .models import EditFile, ListDirectory, MoveFile, ReadFile, WriteFile
+
+MAX_READ_BYTES = 16 * 1024 * 1024
+
+
+def absolute_path(value: str) -> Path:
+    candidate = Path(value).expanduser()
+    if not candidate.is_absolute():
+        raise ValueError("Use an absolute path to identify the target unambiguously")
+    return candidate
+
+
+def read_bytes(path: Path) -> bytes:
+    with path.open("rb") as source:
+        metadata = os.fstat(source.fileno())
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("Only regular files can be read")
+        content = source.read(MAX_READ_BYTES + 1)
+    if len(content) > MAX_READ_BYTES:
+        raise ValueError("File exceeds the 16 MiB read limit")
+    return content
+
+
+def sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+class Files:
+    def __init__(self, state: Path) -> None:
+        self.locks = state / "file-locks"
+        self.locks.mkdir(exist_ok=True, mode=0o700)
+        self.backups = state / "backups"
+        self.backups.mkdir(exist_ok=True, mode=0o700)
+
+    def read(self, args: ReadFile) -> dict[str, JsonValue]:
+        path = absolute_path(args.path)
+        content = read_bytes(path)
+        lines = content.decode("utf-8").splitlines(keepends=True)
+        start = max(0, len(lines) + args.offset) if args.offset < 0 else args.offset
+        stop = min(len(lines), start + args.limit)
+        return {
+            "path": str(path),
+            "text": "".join(lines[start:stop]),
+            "offset": start,
+            "next_offset": stop,
+            "total_lines": len(lines),
+            "sha256": sha256(content),
+            "truncated": stop < len(lines),
+        }
+
+    def write(self, args: WriteFile) -> dict[str, JsonValue]:
+        path = absolute_path(args.path)
+        lock_name = sha256(str(path.resolve()).encode())
+        with FileLock(self.locks / lock_name, timeout=5):
+            if path.is_symlink():
+                raise ValueError("Write to the real file path, not a symbolic link")
+            exists = path.exists()
+            if args.mode == "create" and exists:
+                raise FileExistsError("Target already exists; use a read hash for replacement")
+            original = read_bytes(path) if exists else b""
+            if exists and args.expected_sha256 != sha256(original):
+                raise ValueError("File changed or expected_sha256 is missing; read it again")
+            if not exists and args.expected_sha256 is not None:
+                raise ValueError("Target disappeared after it was read")
+            content = (original if args.mode == "append" else b"") + args.text.encode()
+            if len(content) > MAX_READ_BYTES:
+                raise ValueError("Result exceeds the file size limit")
+            backup_id = None
+            if exists:
+                backup_id = sha256(original)
+                backup_path = self.backups / backup_id
+                if not backup_path.exists():
+                    with backup_path.open("xb") as backup:
+                        backup.write(original)
+            temporary_fd, temporary_name = tempfile.mkstemp(dir=path.parent, prefix=".anywhere-")
+            try:
+                with os.fdopen(temporary_fd, "wb") as destination:
+                    destination.write(content)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+                if exists:
+                    os.chmod(temporary_name, stat.S_IMODE(path.stat().st_mode))
+                    if read_bytes(path) != original:
+                        raise ValueError("Concurrent modification detected before replacement")
+                    os.replace(temporary_name, path)
+                else:
+                    # Exclusive create: never overwrite a file created during this operation.
+                    os.link(temporary_name, path)
+            finally:
+                Path(temporary_name).unlink(missing_ok=True)
+            return {
+                "path": str(path),
+                "sha256": sha256(content),
+                "bytes": len(content),
+                "backup_id": backup_id,
+            }
+
+    def edit(self, args: EditFile) -> dict[str, JsonValue]:
+        original = read_bytes(absolute_path(args.path))
+        if sha256(original) != args.expected_sha256:
+            raise ValueError("File changed; read it again")
+        text = original.decode("utf-8")
+        if text.count(args.old_text) != args.expected_matches:
+            raise ValueError("Match count differs; no edit was applied")
+        return self.write(
+            WriteFile(
+                path=args.path,
+                mode="replace",
+                expected_sha256=args.expected_sha256,
+                text=text.replace(args.old_text, args.new_text),
+            )
+        )
+
+    def list_directory(self, args: ListDirectory) -> dict[str, JsonValue]:
+        root = absolute_path(args.path)
+        entries: list[JsonValue] = []
+        pending = [(root, 0)]
+        truncated = False
+        while pending:
+            directory, level = pending.pop()
+            with os.scandir(directory) as iterator:
+                for entry in iterator:
+                    if not args.include_hidden and entry.name.startswith("."):
+                        continue
+                    if len(entries) >= args.limit:
+                        truncated = True
+                        break
+                    is_directory = entry.is_dir(follow_symlinks=False)
+                    entries.append(
+                        {
+                            "path": entry.path,
+                            "directory": is_directory,
+                            "symlink": entry.is_symlink(),
+                        }
+                    )
+                    if is_directory and level + 1 < args.depth:
+                        pending.append((Path(entry.path), level + 1))
+            if truncated:
+                break
+        return {"entries": entries, "truncated": truncated}
+
+    def move(self, args: MoveFile) -> dict[str, JsonValue]:
+        source, destination = absolute_path(args.source), absolute_path(args.destination)
+        # Rename portability and external races need an OS-specific no-replace primitive.
+        # Until then, support only exclusive hard-link/unlink of regular files.
+        if source.is_symlink() or not source.is_file():
+            raise ValueError("This version moves regular files only")
+        os.link(source, destination)
+        source.unlink()
+        return {"path": str(destination)}

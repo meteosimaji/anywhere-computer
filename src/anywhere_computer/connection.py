@@ -1,0 +1,234 @@
+"""The same loopback protocol runs on Windows, Linux and macOS."""
+
+import asyncio
+import hmac
+import json
+import os
+import signal
+import subprocess
+import sys
+import time
+import uuid
+from pathlib import Path
+from typing import cast
+
+import psutil
+from filelock import FileLock
+from pydantic import JsonValue
+
+from .credentials import local_credential
+from .engine import Engine
+from .models import Reply, Request
+from .state import prepare_directory
+
+WIRE_LIMIT = 8 * 1024 * 1024
+
+
+def load_endpoint(directory: Path) -> dict[str, JsonValue]:
+    return cast(dict[str, JsonValue], json.loads((directory / "agent.json").read_text()))
+
+
+async def exchange(
+    directory: Path,
+    tool: str,
+    arguments: dict[str, JsonValue] | None = None,
+    *,
+    operation_id: str | None = None,
+    timeout: float = 30,
+    credential: str | None = None,
+) -> Reply:
+    endpoint = load_endpoint(directory)
+    port = endpoint.get("port")
+    if not isinstance(port, int) or isinstance(port, bool) or not 0 < port <= 65535:
+        raise ValueError("Invalid local agent endpoint")
+    request = Request(
+        operation_id=operation_id or uuid.uuid4().hex, tool=tool, arguments=arguments or {}
+    )
+    secret = credential if credential is not None else local_credential(directory)
+    reader, writer = await asyncio.wait_for(
+        asyncio.open_connection("127.0.0.1", port, limit=WIRE_LIMIT),
+        timeout=min(timeout, 5),
+    )
+    try:
+        message = json.dumps({"credential": secret, "request": request.model_dump()}) + "\n"
+        if len(message.encode()) > WIRE_LIMIT:
+            raise ValueError("Request exceeds local transport size limit")
+        writer.write(message.encode())
+        await writer.drain()
+        payload = await asyncio.wait_for(reader.readline(), timeout)
+        if not payload:
+            raise ConnectionError("Agent closed the connection before returning an outcome")
+        reply = Reply.model_validate_json(payload)
+        if reply.operation_id != request.operation_id:
+            raise ConnectionError("Agent returned a different operation ID")
+        return reply
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
+async def serve(
+    directory: Path, *, credential: str | None = None, shutdown: asyncio.Event | None = None
+) -> None:
+    prepare_directory(directory)
+    secret = credential if credential is not None else local_credential(directory)
+    stop = shutdown or asyncio.Event()
+    with FileLock(directory / "agent.lock", timeout=0):
+        engine = Engine(directory)
+        connections: set[asyncio.Task[None]] = set()
+
+        async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            current = asyncio.current_task()
+            if current:
+                connections.add(current)
+            try:
+                packet = json.loads(await asyncio.wait_for(reader.readline(), 10))
+                supplied = packet.get("credential")
+                if not isinstance(supplied, str) or not hmac.compare_digest(secret, supplied):
+                    return
+                request = Request.model_validate(packet.get("request"))
+                if request.tool == "__status":
+                    reply = Reply(
+                        operation_id=request.operation_id, state="completed", data=engine.status()
+                    )
+                elif request.tool == "__catalog":
+                    reply = Reply(
+                        operation_id=request.operation_id,
+                        state="completed",
+                        data={
+                            "tools": [
+                                {
+                                    "name": tool.name,
+                                    "description": tool.description,
+                                    "inputSchema": tool.schema.model_json_schema(),
+                                    "outputSchema": Reply.model_json_schema(),
+                                    "annotations": {
+                                        "readOnlyHint": tool.read_only,
+                                        "destructiveHint": tool.destructive,
+                                        "openWorldHint": tool.open_world,
+                                    },
+                                }
+                                for tool in engine.tools.values()
+                            ],
+                        },
+                    )
+                elif request.tool == "__stop":
+                    if engine.status()["active_sessions"] or engine.inflight:
+                        reply = Reply(
+                            operation_id=request.operation_id,
+                            state="failed",
+                            error="Active work exists; stop sessions before stopping agent",
+                        )
+                    else:
+                        reply = Reply(
+                            operation_id=request.operation_id,
+                            state="completed",
+                            data={"state": "stopping"},
+                        )
+                        stop.set()
+                else:
+                    reply = await engine.execute(request)
+                response = reply.model_dump_json().encode() + b"\n"
+                if len(response) > WIRE_LIMIT:
+                    response = (
+                        Reply(
+                            operation_id=request.operation_id,
+                            state="unknown",
+                            error="Result exceeded the transport limit; query operation "
+                            "status or request a smaller page",
+                        )
+                        .model_dump_json()
+                        .encode()
+                    )
+                    response += b"\n"
+                writer.write(response)
+                await writer.drain()
+            except (ValueError, OSError, TimeoutError):
+                # Do not log packet contents: they may contain credentials or private files.
+                pass
+            finally:
+                writer.close()
+                try:
+                    await writer.wait_closed()
+                except OSError:
+                    pass
+                if current:
+                    connections.discard(current)
+
+        server = await asyncio.start_server(handle, "127.0.0.1", 0, limit=WIRE_LIMIT)
+        port = server.sockets[0].getsockname()[1]
+        metadata = {
+            "port": port,
+            "pid": os.getpid(),
+            "process_started": psutil.Process().create_time(),
+            "instance_id": engine.instance_id,
+            "version": engine.status()["version"],
+        }
+        pending = directory / "agent.pending.json"
+        pending.write_text(json.dumps(metadata))
+        pending.replace(directory / "agent.json")
+        loop = asyncio.get_running_loop()
+        if os.name != "nt":
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, stop.set)
+        try:
+            async with server:
+                await stop.wait()
+        finally:
+            server.close()
+            await server.wait_closed()
+            if connections:
+                await asyncio.gather(*list(connections), return_exceptions=True)
+            await engine.close()
+            (directory / "agent.json").unlink(missing_ok=True)
+
+
+def ensure_agent(directory: Path) -> dict[str, JsonValue]:
+    prepare_directory(directory)
+    with FileLock(directory / "startup.lock", timeout=15):
+        credential = local_credential(directory, create=True)
+        try:
+            reply = asyncio.run(exchange(directory, "__status", timeout=2, credential=credential))
+            if reply.state == "completed":
+                return reply.data
+        except (OSError, ValueError, TimeoutError):
+            pass
+        try:
+            metadata = load_endpoint(directory)
+            pid, created = metadata.get("pid"), metadata.get("process_started")
+            if isinstance(pid, int) and psutil.pid_exists(pid):
+                if psutil.Process(pid).create_time() == created:
+                    raise RuntimeError(
+                        "Agent process exists but is not responding. "
+                        "Run anywhere doctor; active work has been left untouched."
+                    )
+        except (OSError, ValueError, psutil.NoSuchProcess):
+            pass
+        command = [
+            sys.executable,
+            "-m",
+            "anywhere_computer",
+            "serve",
+            "--state-dir",
+            str(directory),
+        ]
+        subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=os.name != "nt",
+            creationflags=(0x00000008 | 0x00000200) if os.name == "nt" else 0,
+        )
+        deadline = time.monotonic() + 12
+        while time.monotonic() < deadline:
+            try:
+                reply = asyncio.run(
+                    exchange(directory, "__status", timeout=1, credential=credential)
+                )
+                if reply.state == "completed":
+                    return reply.data
+            except (OSError, ValueError, TimeoutError):
+                pass
+            time.sleep(0.1)
+        raise RuntimeError("Agent did not become ready. Run anywhere serve to see startup errors.")

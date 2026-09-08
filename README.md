@@ -1,29 +1,59 @@
 # Anywhere Computer
 
-ChatGPT と Codex から自分のコンピューターを操作する、セルフホスト可能な MCP / プラグイン基盤。
+**Your computer, available through a dependable connection.**
 
-**現在は調査・要件定義段階です。動作するエージェント、サーバー、インストール可能なプラグインはまだ含まれていません。**
+ChatGPT・Codex などの MCP クライアントから、ファイル・検索・端末作業を行う
+独立エージェント。Linux、Windows、macOS に共通の Python コードを使います。
 
-Remote Desktop Commander の代替として、ファイル・検索・文書・端末操作、複数端末の管理、安定したリモート接続を実装し、画面・ブラウザ操作などへ拡張することを目指します。自前の中継経路には月間 tool-call 課金枠を設けない方針です。AI 製品やインフラの料金・利用枠は別に適用されます。
+開発中の **0.1.0 alpha** です。ローカルエージェントと 20 個の MCP ツールを
+実装しています。インターネット越しの接続、Office、GUI は今後の開発対象です。
 
-## 方針
+## 起動
 
-- private リポジトリで開発を開始し、自作部分は MIT ライセンスとする。
-- ChatGPT・Codex 共通の公式公開ディレクトリと GitHub 配布を目標にする。
-- 開発中の導入には、GitHub から追加できる Codex marketplace を用意する。
-- 元サービスへの依存を外し、標準 MCP と独自の端末エージェントを分離する。
-- 全 30 ツールに加え、文書・UI・接続・運用機能も互換性の対象にする。
-- ツール実行、端末への到達、ユーザーが利用できる UI の成功を別々に検証する。
+Python 3.12 と [uv](https://docs.astral.sh/uv/) を利用します。
 
-## 資料
+```sh
+uv sync --locked --python 3.12
+uv run anywhere start
+uv run anywhere status
+```
 
-- [機能と ChatGPT/Codex 仕様の調査](docs/research/2026-09-08-findings.md)
-- [30 ツールの提供契約](docs/research/2026-09-08-tool-catalog.json)
-- [公開ソース案内と Remote 接続の構造](docs/research/2026-09-08-source-map.md)
-- [製品要件・配布ロードマップ](docs/PRODUCT.md)
+MCP クライアントには、このリポジトリを作業ディレクトリにして
+`uv run --locked anywhere mcp` を設定します。エージェントが停止していれば起動します。
+資格情報は OS の保管機能を利用します。Linux では Secret Service/KWallet などの
+利用可能な保管機能が必要です。
 
-## ライセンス
+```sh
+uv run anywhere doctor
+uv run anywhere stop
+```
 
-[MIT](LICENSE)。GitHub の MIT ライセンステンプレートを使用しています。
+実行中の端末セッションがある場合、`stop` は停止せず理由を返します。
+ログイン時の自動起動はまだ設定しません。
 
-外部プロジェクトへのリンクは、そのコード・資料・ブランドを本プロジェクトの MIT ライセンスへ変更するものではありません。外部コードを取り込む場合は、元の著作権表示と依存関係のライセンスを保持します。
+## 現在使えるもの
+
+- テキストの部分読取・複数読取、内容 hash、競合検知つき書込・限定置換、バックアップ。
+- フォルダ一覧と作成、ファイル情報、同一 filesystem 内の通常ファイル移動。
+- 非同期のファイル名・テキスト検索、結果のページ取得とキャンセル。
+- 対話プロセスの起動、入力、出力 cursor、一覧、プロセス群の停止。
+- 操作 ID の重複検査、結果照会、内容を含まない履歴一覧。
+- クライアント切断に影響されないエージェントと端末セッション。
+- 認証したローカル通信、OS 資格情報保管、起動時の状態診断。
+
+## 開発
+
+```sh
+uv run ruff check src tests
+uv run mypy
+uv run pytest -q
+uv build
+```
+
+[共通ランタイムの構成と制限](docs/ARCHITECTURE.md) / [製品要件](docs/PRODUCT.md)
+
+## 配布
+
+private リポジトリで開発しています。GitHub 配布と ChatGPT/Codex の公式公開
+ディレクトリへの掲載を目標にしています。現時点では公開申請していません。
+自作コードは [MIT](LICENSE) です。
