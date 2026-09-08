@@ -1,14 +1,17 @@
-"""Progressive bounded literal search without blocking the agent event loop."""
+"""Progressive literal search with filters, limits and cooperative cancellation."""
 
 import asyncio
+import fnmatch
+import io
 import os
+import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import JsonValue
 
-from .files import MAX_READ_BYTES, absolute_path
+from .files import absolute_path, read_bytes
 from .models import SearchPage, StartSearch
 
 
@@ -19,6 +22,10 @@ class Search:
     state: str = "running"
     skipped: int = 0
     truncated: bool = False
+    visited_files: int = 0
+    directory_errors: int = 0
+    limit_reason: str | None = None
+    cancelled: threading.Event = field(default_factory=threading.Event)
     task: asyncio.Task[None] | None = None
 
 
@@ -44,24 +51,54 @@ class Searches:
 
     async def _run(self, search: Search, root: Path, args: StartSearch) -> None:
         pattern = args.pattern.casefold() if args.ignore_case else args.pattern
+        filename_glob = args.filename_glob.casefold() if args.ignore_case else args.filename_glob
+        excluded = [p.casefold() if args.ignore_case else p for p in args.excluded_directories]
+
+        def directory_error(_: OSError) -> None:
+            search.directory_errors += 1
+
         try:
-            for directory, folders, files in os.walk(root, followlinks=False):
+            for directory, folders, files in os.walk(
+                root,
+                followlinks=False,
+                onerror=directory_error,
+            ):
+                await asyncio.sleep(0)
                 folders[:] = [
                     name
                     for name in folders
                     if (args.include_hidden or not name.startswith("."))
                     and not (Path(directory) / name).is_symlink()
+                    and not any(
+                        fnmatch.fnmatchcase(
+                            name.casefold() if args.ignore_case else name,
+                            rule,
+                        )
+                        for rule in excluded
+                    )
                 ]
+                if len(Path(directory).relative_to(root).parts) >= args.max_depth and folders:
+                    folders.clear()
+                    search.truncated = True
+                    search.limit_reason = "max_depth"
                 for name in files:
                     await asyncio.sleep(0)
+                    if search.visited_files >= args.max_files:
+                        search.truncated = True
+                        search.limit_reason = "max_files"
+                        search.state = "completed"
+                        return
+                    search.visited_files += 1
                     if not args.include_hidden and name.startswith("."):
                         continue
                     path = Path(directory) / name
                     if path.is_symlink():
                         continue
+                    subject = name.casefold() if args.ignore_case else name
+                    if not fnmatch.fnmatchcase(subject, filename_glob):
+                        continue
                     if args.kind == "names":
-                        subject = name.casefold() if args.ignore_case else name
-                        if pattern in subject:
+                        if self._matches(subject, pattern, args.whole_word):
                             search.results.append({"path": str(path)})
                     else:
                         try:
@@ -71,12 +108,15 @@ class Searches:
                                 pattern,
                                 args.ignore_case,
                                 args.max_results - len(search.results),
+                                args.whole_word,
+                                search.cancelled,
                             )
                             search.results.extend(matches)
                         except (OSError, UnicodeError, ValueError):
                             search.skipped += 1
                     if len(search.results) >= args.max_results:
                         search.truncated = True
+                        search.limit_reason = "max_results"
                         search.state = "completed"
                         return
             search.state = "completed"
@@ -87,14 +127,39 @@ class Searches:
             search.state = "failed"
 
     @staticmethod
-    def _file_matches(path: Path, pattern: str, ignore_case: bool, limit: int) -> list[JsonValue]:
-        if not path.is_file() or path.stat().st_size > MAX_READ_BYTES:
-            raise ValueError("Unsupported search file")
+    def _matches(subject: str, pattern: str, whole_word: bool) -> bool:
+        offset = subject.find(pattern)
+        while offset >= 0:
+            end = offset + len(pattern)
+            if not whole_word or (
+                (offset == 0 or not (subject[offset - 1].isalnum() or subject[offset - 1] == "_"))
+                and (end == len(subject) or not (subject[end].isalnum() or subject[end] == "_"))
+            ):
+                return True
+            offset = subject.find(pattern, offset + 1)
+        return False
+
+    @staticmethod
+    def _file_matches(
+        path: Path,
+        pattern: str,
+        ignore_case: bool,
+        limit: int,
+        whole_word: bool,
+        cancelled: threading.Event,
+    ) -> list[JsonValue]:
+        if cancelled.is_set():
+            return []
+        # Bound actual bytes read, including when a file grows after stat. fstat
+        # and O_NONBLOCK also reject special files without blocking on a FIFO.
+        text = read_bytes(path).decode("utf-8")
         matches: list[JsonValue] = []
-        with path.open(encoding="utf-8") as stream:
+        with io.StringIO(text, newline=None) as stream:
             for number, line in enumerate(stream, 1):
+                if cancelled.is_set():
+                    break
                 subject = line.casefold() if ignore_case else line
-                if pattern in subject:
+                if Searches._matches(subject, pattern, whole_word):
                     matches.append({"path": str(path), "line": number, "text": line[:2000]})
                     if len(matches) >= limit:
                         break
@@ -116,10 +181,14 @@ class Searches:
             "total": len(search.results),
             "skipped": search.skipped,
             "truncated": search.truncated,
+            "visited_files": search.visited_files,
+            "directory_errors": search.directory_errors,
+            "limit_reason": search.limit_reason,
         }
 
     async def stop(self, search_id: str) -> dict[str, JsonValue]:
         search = self.get(search_id)
+        search.cancelled.set()
         if search.task and not search.task.done():
             search.task.cancel()
             await asyncio.gather(search.task, return_exceptions=True)

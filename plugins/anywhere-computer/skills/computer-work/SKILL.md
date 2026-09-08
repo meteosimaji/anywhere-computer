@@ -7,7 +7,10 @@ Check computer_status before acting. Use the reported capabilities and explicit
 absolute paths. Read before editing an existing file, then supply its SHA-256;
 if a conflict occurs, read again and reassess the intended edit.
 
-Use paginated reads and searches. documents_read inspects OOXML content; it does
+Use paginated reads and searches. search_start supports filename_glob,
+excluded_directories, whole_word, max_files and max_depth. Inspect truncated,
+limit_reason, skipped and directory_errors before claiming a complete search.
+Patterns are literal; filename/directory filters use basename globs, not regex. documents_read inspects OOXML content; it does
 not render pages or evaluate Excel formulas. Do not imply complete Office support.
 
 Use files_read_binary for binary files up to 1 GiB (a full hash scan per call),

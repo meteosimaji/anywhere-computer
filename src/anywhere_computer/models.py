@@ -1,6 +1,6 @@
 """Runtime-validated wire contracts shared by both sides of the local connection."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
@@ -103,12 +103,20 @@ class MoveFile(Contract):
     destination: str
 
 
+SearchGlob = Annotated[str, Field(min_length=1, max_length=256)]
+
+
 class StartSearch(FilePath):
     pattern: str = Field(min_length=1, max_length=500)
     kind: Literal["names", "text"] = "names"
     ignore_case: bool = True
     include_hidden: bool = False
     max_results: int = Field(default=1000, ge=1, le=10000)
+    filename_glob: SearchGlob = "*"
+    excluded_directories: list[SearchGlob] = Field(default_factory=list, max_length=32)
+    whole_word: bool = False
+    max_files: int = Field(default=10000, ge=1, le=100000)
+    max_depth: int = Field(default=32, ge=0, le=128)
 
 
 class SearchId(Contract):

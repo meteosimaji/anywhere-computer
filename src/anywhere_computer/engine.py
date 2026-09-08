@@ -383,7 +383,9 @@ class Engine:
             destructive=True,
         )
         self.register(
-            "search_start", "Start a bounded literal name or text search.", StartSearch, search
+            "search_start",
+            "Search literal names or UTF-8 text with filename glob, directory exclusions, "
+            "whole-word matching and explicit file/depth limits.", StartSearch, search
         )
         self.register(
             "search_results", "Read a search page by cursor.", SearchPage, page, read_only=True
