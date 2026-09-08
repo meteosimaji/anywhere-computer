@@ -112,7 +112,9 @@ class Ledger:
         ).fetchone()
         return str(row[0]) if row is not None else None
 
-    def recent(self, limit: int) -> list[dict[str, str | float]]:
+    def recent(
+        self, limit: int, *, tool_name: str | None = None, since: float | None = None,
+    ) -> list[dict[str, str | float]]:
         # Deliberately omit arguments and content from the diagnostic history.
         return [
             {
@@ -122,8 +124,10 @@ class Ledger:
                 "state": Reply.model_validate_json(row[3]).state,
             }
             for row in self.connection.execute(
-                "SELECT id, tool, started, reply FROM operations ORDER BY started DESC LIMIT ?",
-                (limit,),
+                "SELECT id, tool, started, reply FROM operations "
+                "WHERE (? IS NULL OR tool=?) AND (? IS NULL OR started>=?) "
+                "ORDER BY started DESC, id DESC LIMIT ?",
+                (tool_name, tool_name, since, since, limit),
             )
         ]
 

@@ -156,6 +156,8 @@ class OperationId(Contract):
 
 class History(Contract):
     limit: int = Field(default=30, ge=1, le=200)
+    tool_name: str | None = Field(default=None, min_length=1, max_length=200)
+    since: float | None = Field(default=None, ge=0, allow_inf_nan=False)
 
 
 class Request(Contract):

@@ -216,7 +216,9 @@ class Engine:
             return cast(Result, self.ledger.get(args.operation_id).model_dump(mode="json"))
 
         async def history(args: History) -> Result:
-            return {"operations": cast(list[JsonValue], self.ledger.recent(args.limit))}
+            return {"operations": cast(list[JsonValue], self.ledger.recent(
+                args.limit, tool_name=args.tool_name, since=args.since,
+            ))}
 
         self.register(
             "documents_read",

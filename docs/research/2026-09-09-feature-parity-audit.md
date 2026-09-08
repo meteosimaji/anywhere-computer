@@ -102,6 +102,8 @@
 
 ## 監査後の更新
 
+- DC24: operations_recent にツール名完全一致と開始時刻下限の絞込みを追加。
+  引数/結果プレビューは返さない方針を維持し、部分判定を維持。
 - DC16: terminal_output に末尾基準の負 byte cursor を追加。返却は絶対 next_cursor で
   継続可能。保持範囲外の欠落量も試験。wait_ms による出力待機も追加。
   verbose timing やプロンプト認識は未対応で部分判定を維持。
