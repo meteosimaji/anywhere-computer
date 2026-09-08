@@ -41,6 +41,7 @@ def main() -> None:
             "http-revoke",
             "devices",
             "device-add",
+            "device-add-http",
             "device-rename",
             "device-remove",
             "device-status",
@@ -48,7 +49,9 @@ def main() -> None:
     )
     parser.add_argument("--state-dir", type=Path, default=None)
     parser.add_argument("--ssh-host", help="An existing SSH host alias")
-    parser.add_argument("--device", help="Registered device ID")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--device", help="Registered device ID")
+    selection.add_argument("--device-name", help="Registered device display name")
     parser.add_argument("--name", help="Device display name")
     parser.add_argument("--resource", help="Authorized HTTPS /mcp resource")
     parser.add_argument("--client-id", help="Registered public OAuth client ID")
@@ -60,17 +63,24 @@ def main() -> None:
         "--profile", help="Authorized connection profile in the OS credential store"
     )
     args = parser.parse_args()
+    has_device = args.device is not None or args.device_name is not None
     if args.resource is not None and args.command not in {
         "http-mcp",
         "owner-init",
         "login",
         "http-configure",
+        "device-add-http",
     }:
         parser.error("--resource is only valid for HTTP connection setup")
-    if args.client_id is not None and args.command not in {"http-mcp", "login", "http-configure"}:
-        parser.error("--client-id is only valid for http-mcp, login and http-configure")
-    if args.profile is not None and args.command not in {"http-mcp", "login"}:
-        parser.error("--profile is only valid for http-mcp and login")
+    if args.client_id is not None and args.command not in {
+        "http-mcp",
+        "login",
+        "http-configure",
+        "device-add-http",
+    }:
+        parser.error("--client-id is only valid for HTTP connection setup")
+    if args.profile is not None and args.command not in {"http-mcp", "login", "device-add-http"}:
+        parser.error("--profile is only valid for HTTP client setup")
     if args.scope is not None and args.command not in {"login", "http-configure"}:
         parser.error("--scope is only valid for login and http-configure")
     if args.command == "login" and not args.scope:
@@ -87,40 +97,62 @@ def main() -> None:
         parser.error("http-configure requires --resource, --owner, --client-id and --scope")
     if args.command == "owner-init" and not all((args.resource, args.owner)):
         parser.error("owner-init requires --resource and --owner")
-    if args.command in {"http-mcp", "login"} and not all(
-        (args.resource, args.client_id, args.profile)
-    ):
-        parser.error("http-mcp and login require --resource, --client-id and --profile")
+    if args.command in {"http-mcp", "login"}:
+        metadata = (args.resource, args.client_id, args.profile)
+        if has_device and any(value is not None for value in metadata):
+            parser.error("Device selection cannot be combined with HTTP connection metadata")
+        if not has_device and not all(metadata):
+            parser.error("Select a device or supply --resource, --client-id and --profile")
     if args.ssh_host is not None and args.command not in {"remote-mcp", "device-add"}:
         parser.error("--ssh-host is only valid for remote-mcp and device-add")
-    if args.name is not None and args.command not in {"device-add", "device-rename"}:
-        parser.error("--name is only valid for device-add and device-rename")
-    if args.device is not None and args.command not in {
+    if args.name is not None and args.command not in {
+        "device-add",
+        "device-add-http",
+        "device-rename",
+    }:
+        parser.error("--name is only valid for device registration and rename")
+    if has_device and args.command not in {
         "remote-mcp",
+        "http-mcp",
+        "login",
         "device-rename",
         "device-remove",
         "device-status",
     }:
-        parser.error("--device is not valid for this command")
-    if args.command == "remote-mcp" and (bool(args.ssh_host) == bool(args.device)):
-        parser.error("remote-mcp requires exactly one of --ssh-host or --device")
+        parser.error("Device selection is not valid for this command")
+    if args.command == "remote-mcp" and (bool(args.ssh_host) == has_device):
+        parser.error("remote-mcp requires an SSH host or a registered device")
     if args.command == "device-add" and not (args.name and args.ssh_host):
         parser.error("device-add requires --name and --ssh-host")
-    if args.command in {"device-rename", "device-remove", "device-status"} and not args.device:
-        parser.error("This command requires --device")
+    if args.command == "device-add-http" and not all(
+        (args.name, args.resource, args.client_id, args.profile)
+    ):
+        parser.error("device-add-http requires --name, --resource, --client-id and --profile")
+    if args.command in {"device-rename", "device-remove", "device-status"} and not has_device:
+        parser.error("This command requires --device or --device-name")
     if args.command == "device-rename" and not args.name:
         parser.error("device-rename requires --name")
     directory = (args.state_dir or state_directory()).resolve()
     try:
-        if args.command.startswith("device") or (args.command == "remote-mcp" and args.device):
+        if args.command.startswith("device") or has_device:
             store = DeviceStore(directory)
             try:
+                if args.device_name is not None:
+                    args.device = store.named(args.device_name)["device_id"]
                 if args.command == "devices":
                     print(json.dumps({"devices": store.list()}, ensure_ascii=False, indent=2))
                 elif args.command == "device-add":
                     print(
                         json.dumps(
                             store.add(args.name, args.ssh_host), ensure_ascii=False, indent=2
+                        )
+                    )
+                elif args.command == "device-add-http":
+                    print(
+                        json.dumps(
+                            store.add_http(args.name, args.resource, args.client_id, args.profile),
+                            ensure_ascii=False,
+                            indent=2,
                         )
                     )
                 elif args.command == "device-rename":
@@ -133,15 +165,30 @@ def main() -> None:
                     store.remove(args.device)
                     print(json.dumps({"removed_device_id": args.device}))
                 elif args.command == "device-status":
-                    observation = store.probe(args.device)
+                    device = store.get(args.device)
+                    observation = (
+                        asyncio.run(store.probe_http(args.device))
+                        if device["transport"] == "http"
+                        else store.probe(args.device)
+                    )
                     print(json.dumps(observation, ensure_ascii=False, indent=2))
                     if observation["state"] != "ready":
                         raise SystemExit(1)
                 else:
-                    args.ssh_host = str(store.get(args.device)["ssh_host"])
+                    device = store.get(args.device)
+                    if args.command == "remote-mcp":
+                        if device["transport"] != "ssh":
+                            raise ValueError("remote-mcp requires an SSH device")
+                        args.ssh_host = device["ssh_host"]
+                    else:
+                        if device["transport"] != "http":
+                            raise ValueError("HTTP connections require an HTTP device")
+                        args.resource = device["resource"]
+                        args.client_id = device["client_id"]
+                        args.profile = device["profile"]
             finally:
                 store.close()
-            if args.command != "remote-mcp":
+            if args.command.startswith("device"):
                 return
         if args.command == "http-configure":
             config = asyncio.run(

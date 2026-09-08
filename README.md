@@ -70,24 +70,42 @@ HTTP 応答を失った操作は再送せず、既知の操作 ID と `unknown` 
 
 ## 複数端末
 
-既存の SSH 設定のホスト名を登録します。秘密鍵・パスワードは登録情報に含めません。
+既存の SSH 設定のホスト名、または HTTP の接続プロフィールを名前で登録します。
+秘密鍵・パスワード・トークンは登録情報に含めません。
 
 ```sh
 anywhere device-add --name "Windows Lab" --ssh-host windows-lab
 anywhere device-add --name "Linux Lab" --ssh-host linux-lab
+anywhere device-add-http --name "Home" --resource https://computer.example/mcp --client-id desktop-client --profile home
+anywhere login --device-name Home --scope files_read
+anywhere http-mcp --device-name Home
 anywhere devices
-anywhere device-status --device <登録時に返されたID>
+anywhere device-status --device-name Home
 anywhere remote-mcp --device <登録時に返されたID>
 anywhere device-rename --device <ID> --name "Windows Arm64"
 anywhere device-remove --device <ID>
 ```
 
-表示名を変更しても ID は維持されます。状態確認は明示的に実行します。
+表示名を変更しても ID と認証プロフィールは維持されます。`--device` は ID、
+`--device-name` は表示名を指定し、両方の同時指定はできません。
+HTTP 接続先を名前や ID で選ぶ場合、resource/client/profile の上書き指定は拒否します。
+同じ resource/client/profile の重複登録も拒否します。登録は接続プロフィール単位であり、
+登録件数が物理端末の台数を証明するものではありません。
+
+状態確認は明示的に実行します。HTTP は MCP の接続確立とツール一覧だけを確認し、
+端末操作ツールは実行しません。確認中に認証トークンを更新する場合は OS 資格情報ストアを更新します。
 `ready` は確認した時点での応答を意味し、60 秒後は現在の状態を `unknown` とし、
-最終確認結果と時刻を残します。失敗した確認は `unreachable` です。端末の電源断、
+最終確認結果と時刻を残します。時計が巻き戻った場合も `unknown` です。
+同時確認の表示は最後に完了した結果を採用します。
+SSH の失敗した確認は `unreachable` です。端末の電源断、
 SSH 認証失敗、リモートコマンド失敗のどれかは、この結果だけでは断定しません。
-`device-remove` はローカル登録の削除であり、SSH の認証権限の失効や
-リモートエージェントの停止は行いません。
+HTTP は再認可が必要なら `authorization_required`、資格情報ストアを使えなければ
+`credential_unavailable`、通信や応答を検証できなければ `not_ready` です。
+`authorization_required` には更新結果不明も含まれ、権限失効を断定する表示ではありません。
+`device-remove` はローカル登録の削除であり、認証権限の失効、資格情報の削除、
+リモートエージェントの停止は行いません。同じ resource/client/profile を同じ状態ディレクトリへ
+再登録すると、保存済み資格情報を再利用します。既存の SSH 登録 DB は初回起動時に
+トランザクション内で移行し、ID・名前・接続先・観測記録を保持します。
 
 ## 現在使えるもの
 

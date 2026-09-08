@@ -44,6 +44,21 @@ class CredentialVault(Protocol):
     def delete_password(self, service: str, account: str, /) -> None: ...
 
 
+def validate_client_profile(resource: str, client: str, profile: str) -> None:
+    """Validate public connection metadata without opening the credential store."""
+    validate_authorization_url(resource)
+    parsed = urlsplit(resource)
+    if parsed.path != "/mcp" or parsed.query:
+        raise ValueError("Client requires a canonical HTTPS /mcp resource")
+    for identifier in (client, profile):
+        if (
+            not identifier
+            or len(identifier) > 128
+            or any(ord(char) < 33 or ord(char) > 126 for char in identifier)
+        ):
+            raise ValueError("Invalid client or connection profile")
+
+
 class TokenReply(BaseModel):
     model_config = ConfigDict(
         strict=True, frozen=True, hide_input_in_errors=True, revalidate_instances="always"
@@ -144,17 +159,7 @@ class ClientTokens:
         refresh: Callable[[str, str, str], TokenReply] = https_refresh,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        validate_authorization_url(resource)
-        parsed = urlsplit(resource)
-        if parsed.path != "/mcp" or parsed.query:
-            raise ValueError("Client requires a canonical HTTPS /mcp resource")
-        for identifier in (client, profile):
-            if (
-                not identifier
-                or len(identifier) > 128
-                or any(ord(char) < 33 or ord(char) > 126 for char in identifier)
-            ):
-                raise ValueError("Invalid client or connection profile")
+        validate_client_profile(resource, client, profile)
         prepare_directory(directory)
         binding = json.dumps([str(directory.resolve()), resource, client, profile]).encode()
         self.account = "oauth-client-" + hashlib.sha256(binding).hexdigest()
