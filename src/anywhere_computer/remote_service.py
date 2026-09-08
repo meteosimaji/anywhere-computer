@@ -3,16 +3,19 @@
 import asyncio
 import json
 import os
+import signal
 import subprocess
 import sys
 from pathlib import Path
+from threading import Event
 
 import psutil
 
 from .cloudflare_tunnel import TunnelCredential, cloudflared_executable
-from .http_service import http_service
-from .http_supervisor import _stop_child
+from .http_service import http_service, load_http_config
+from .http_supervisor import _stop_child, supervise
 from .locking import ProcessLock
+from .owner_credentials import OwnerCredentials
 
 
 def stop_remote_connector(child: subprocess.Popen[bytes]) -> None:
@@ -25,6 +28,8 @@ def stop_remote_connector(child: subprocess.Popen[bytes]) -> None:
         pass
     finally:
         try:
+            if child.stdin is not None:
+                child.stdin.close()
             _stop_child(child)
         finally:
             failed = False
@@ -48,7 +53,7 @@ def stop_remote_connector(child: subprocess.Popen[bytes]) -> None:
                 raise RuntimeError("Owned connector descendants did not stop cleanly")
 
 
-async def serve_remote(directory: Path) -> int:
+async def serve_remote(directory: Path, *, stop: Event | None = None) -> int:
     """Bind HTTP before launching the connector; unwind both on every normal exit.
 
     The connector retains its own bounded restart policy. This process does not
@@ -75,8 +80,8 @@ async def serve_remote(directory: Path) -> int:
                 flags = subprocess.CREATE_NEW_PROCESS_GROUP
             child = subprocess.Popen(
                 [sys.executable, "-m", "anywhere_computer.cli", "tunnel-run",
-                 "--state-dir", str(directory.resolve())],
-                stdin=subprocess.DEVNULL,
+                 "--state-dir", str(directory.resolve()), "--watch-parent"],
+                stdin=subprocess.PIPE,
                 start_new_session=os.name != "nt",
                 creationflags=flags,
             )
@@ -84,6 +89,8 @@ async def serve_remote(directory: Path) -> int:
                 # Polling avoids an uncancellable executor thread blocked in
                 # wait(), which would otherwise delay asyncio.run shutdown.
                 while child.poll() is None:
+                    if stop is not None and stop.is_set():
+                        return 130
                     await asyncio.sleep(0.1)
                 code = child.returncode
                 assert code is not None
@@ -93,3 +100,25 @@ async def serve_remote(directory: Path) -> int:
                 # Connector shutdown precedes HTTP shutdown. SIGINT/Ctrl+Break
                 # lets the runner clean up its own cloudflared child first.
                 stop_remote_connector(child)
+
+
+def watch_remote(directory: Path) -> int:
+    """Restart a failed combined service with a bounded budget and owner pipe."""
+    config = load_http_config(directory)
+    OwnerCredentials(directory, resource=config.resource, owner=config.owner).ensure_initialized()
+    credential = TunnelCredential(directory)
+    cloudflared_executable()
+    with ProcessLock(directory / "remote-watch.lock"):
+        with ProcessLock(directory / "http-watch.lock"), ProcessLock(credential.lock):
+            credential.read()
+        with ProcessLock(directory / "http-server.lock"):
+            pass
+        prior = signal.signal(signal.SIGTERM, signal.default_int_handler)
+        try:
+            return supervise(
+                [sys.executable, "-m", "anywhere_computer.cli", "remote-serve",
+                 "--state-dir", str(directory.resolve()), "--watch-parent"],
+                parent_pipe=True,
+            )
+        finally:
+            signal.signal(signal.SIGTERM, prior)

@@ -236,3 +236,47 @@ async def test_remote_loses_tunnel_lock_after_preflight(remote_profile, monkeypa
             pass
     finally:
         winner.__exit__(None, None, None)
+
+
+async def test_parent_loss_stops_remote_service(remote_profile, monkeypatch):
+    from threading import Event
+
+    directory, _ = remote_profile
+    stop = Event()
+    original = subprocess.Popen
+    children = []
+
+    def launch(command, **options):
+        assert "--watch-parent" in command and options["stdin"] == subprocess.PIPE
+        child = original([sys.executable, "-c", "import time; time.sleep(60)"], **options)
+        children.append(child)
+        stop.set()
+        return child
+
+    monkeypatch.setattr(remote_service.subprocess, "Popen", launch)
+    assert await remote_service.serve_remote(directory, stop=stop) == 130
+    assert children[0].poll() is not None
+    assert children[0].stdin.closed
+    assert (await diagnose_http(directory))["state"] == "unreachable"
+
+
+async def test_remote_watch_preflight_and_parent_pipe(remote_profile, monkeypatch):
+    directory, _ = remote_profile
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(remote_service, "OwnerCredentials", lambda *args, **kwargs:
+                        SimpleNamespace(ensure_initialized=lambda: None))
+    calls = []
+
+    def supervise(command, **options):
+        calls.append((command, options))
+        with pytest.raises(TimeoutError), ProcessLock(directory / "remote-watch.lock"):
+            pass
+        return 7
+
+    monkeypatch.setattr(remote_service, "supervise", supervise)
+    assert remote_service.watch_remote(directory) == 7
+    assert len(calls) == 1 and calls[0][1] == {"parent_pipe": True}
+    assert "remote-serve" in calls[0][0] and "--watch-parent" in calls[0][0]
+    with ProcessLock(directory / "remote-watch.lock"):
+        pass

@@ -50,9 +50,10 @@ dependencies remain unchanged.
 The individual `http-watch` and `tunnel-run` commands remain available for
 separate supervision. `remote-serve` is a foreground lifecycle owner, not an
 OS service installer: it does not restart the HTTP process after a fatal crash,
-start at login, or guarantee descendant cleanup if the parent is forcibly killed
-or graceful connector shutdown times out. Those lifecycle cases still require
-implementation and OS-level verification. Windows virtualenv launchers may add
+start at login, or recover a hung runtime. A supervised connector now observes
+a private pipe owned by its parent and exits when that pipe closes, including
+a parent crash. Secret handoff and graceful child shutdown may delay this exit.
+This is cooperative child cleanup, not OS-enforced termination of a hung child. Windows virtualenv launchers may add
 an intermediate process; do not infer direct parentage from the launch PID.
 
 ## Credentials and process lifetime
@@ -152,3 +153,27 @@ An installed executable is not evidence that a connector is running; its process
 state remains `unverified`. Even matching metadata at both endpoints does not
 prove that an authenticated MCP operation will succeed or identify the connector
 that served it. Exit status is zero only when requested metadata probes match.
+
+
+## Restarting the combined service
+
+Use `uv run anywhere remote-watch --state-dir /absolute/path/to/state` when the
+foreground command should also restart a crashed HTTP runtime. It starts
+`remote-serve`, retaining a separate watcher lock, and retries failures at most
+five times with delays of 1, 2, 4, 8 and 16 seconds. Five minutes of stable child
+uptime resets that budget. Exit 0 or 130 stops supervision; Ctrl+C/SIGTERM stop
+the owned child. Initial owner, connector and lock checks fail before the retry
+loop, so missing initial credentials do not repeatedly launch a service.
+
+The watcher owns a private pipe to the HTTP child, which owns another to the
+tunnel runner. EOF tells a responsive child that its owner is gone without
+relying on potentially reused parent PIDs. The hidden `--watch-parent` switch is
+used only by these internal launches. No heartbeat traffic or third-party
+runtime library is required. A child crash may briefly leave the old connector
+lock held while it exits; a new child that loses the lock fails rather than
+reusing the old connector. Retries remain bounded.
+
+This does not install a login service, restore live terminal processes after a
+runtime crash, or automatically replay operations whose result is unknown.
+Clients must use operation status and the existing reconnection behavior. Hung
+children and OS login/logout behavior still require further lifecycle work.

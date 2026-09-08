@@ -203,3 +203,34 @@ def test_windows_real_console_input_is_accepted():
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, timeout=10)
     assert result.returncode == 0, result.stderr
     assert b"console-accepted" in result.stdout
+
+
+def test_parent_loss_stops_live_connector_after_token_handoff(monkeypatch, tmp_path):
+    from threading import Event, Timer
+
+    stop = Event()
+    original = subprocess.Popen
+    children = []
+    code = (
+        "import sys,time; from pathlib import Path; "
+        "Path(sys.argv[1]).read_bytes(); time.sleep(60)"
+    )
+
+    def child(command, **options):
+        process = original([sys.executable, "-c", code, command[-1]], **options)
+        children.append(process)
+        return process
+
+    monkeypatch.setattr(cloudflare_tunnel.subprocess, "Popen", child)
+    timer = Timer(0.5, stop.set)
+    timer.start()
+    try:
+        assert run_tunnel_child("fixture", TOKEN, stop=stop) == 130
+        assert len(children) == 1 and children[0].poll() is not None
+    finally:
+        timer.cancel()
+        timer.join()
+        for process in children:
+            if process.poll() is None:
+                process.kill()
+                process.wait(5)

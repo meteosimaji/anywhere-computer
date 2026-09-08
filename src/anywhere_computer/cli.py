@@ -28,7 +28,8 @@ from .http_supervisor import watch_http
 from .mcp_server import run_mcp
 from .native_login import login
 from .owner_credentials import OwnerCredentials
-from .remote_service import serve_remote
+from .parent_liveness import watch_parent_pipe
+from .remote_service import serve_remote, watch_remote
 from .ssh_transport import run_ssh_mcp
 from .state import state_directory
 from .transfer_admin import list_transfers, release_transfer
@@ -54,6 +55,7 @@ def main() -> None:
             "http-serve",
             "http-watch",
             "remote-serve",
+            "remote-watch",
             "remote-doctor",
             "http-show",
             "http-doctor",
@@ -95,7 +97,10 @@ def main() -> None:
     parser.add_argument("--limit", type=int, help="Transfer page size, 1–100")
     parser.add_argument("--probe-public", action="store_true",
                         help="Also probe configured HTTPS metadata (remote-doctor only)")
+    parser.add_argument("--watch-parent", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.watch_parent and args.command not in {"remote-serve", "tunnel-run"}:
+        parser.error("--watch-parent is only valid for supervised remote children")
     if args.probe_public and args.command != "remote-doctor":
         parser.error("--probe-public is only valid for remote-doctor")
     transfer_command = args.command in {"transfers", "transfer-release"}
@@ -266,7 +271,8 @@ def main() -> None:
         elif args.command == "tunnel-run":
             if sys.platform == "win32":
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)
-            raise SystemExit(run_tunnel(directory))
+            stop = watch_parent_pipe() if args.watch_parent else None
+            raise SystemExit(run_tunnel(directory, stop=stop))
         elif args.command == "http-configure":
             config = asyncio.run(
                 configure_http(
@@ -307,12 +313,17 @@ def main() -> None:
             print(json.dumps(http_authorization_status(directory)))
         elif args.command == "http-watch":
             raise SystemExit(watch_http(directory))
+        elif args.command == "remote-watch":
+            if sys.platform == "win32":
+                signal.signal(signal.SIGBREAK, signal.default_int_handler)
+            raise SystemExit(watch_remote(directory))
         elif args.command == "remote-serve":
             prior_terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
             try:
                 if sys.platform == "win32":
                     signal.signal(signal.SIGBREAK, signal.default_int_handler)
-                raise SystemExit(asyncio.run(serve_remote(directory)))
+                stop = watch_parent_pipe() if args.watch_parent else None
+                raise SystemExit(asyncio.run(serve_remote(directory, stop=stop)))
             finally:
                 signal.signal(signal.SIGTERM, prior_terminate)
         elif args.command == "http-serve":

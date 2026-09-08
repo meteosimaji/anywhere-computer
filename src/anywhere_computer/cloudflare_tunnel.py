@@ -12,6 +12,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from threading import Event
 
 from .client_tokens import ClientCredentialError, CredentialVault
 from .credentials import SERVICE, secure_backend
@@ -100,7 +101,9 @@ def cloudflared_executable() -> str:
     return executable
 
 
-def run_tunnel_child(executable: str, token: str, *, handoff_timeout: float = 15) -> int:
+def run_tunnel_child(
+    executable: str, token: str, *, handoff_timeout: float = 15, stop: Event | None = None
+) -> int:
     TunnelCredential.validate(token)
     with tempfile.TemporaryDirectory(prefix="anywhere-tunnel-") as raw:
         config_path = Path(raw) / "config.json"
@@ -141,12 +144,18 @@ def run_tunnel_child(executable: str, token: str, *, handoff_timeout: float = 15
                     ),
                     flush=True,
                 )
-                return child.wait()
+                if stop is None:
+                    return child.wait()
+                while child.poll() is None:
+                    if stop.wait(0.1):
+                        return 130
+                assert child.returncode is not None
+                return child.returncode
             finally:
                 _stop_child(child)
 
 
-def run_tunnel(directory: Path, *, restart_limit: int = 5) -> int:
+def run_tunnel(directory: Path, *, restart_limit: int = 5, stop: Event | None = None) -> int:
     if not 0 <= restart_limit <= 5:
         raise ValueError("Invalid tunnel restart limit")
     credential = TunnelCredential(directory)
@@ -162,9 +171,14 @@ def run_tunnel(directory: Path, *, restart_limit: int = 5) -> int:
         failures = 0
         try:
             while True:
+                if stop is not None and stop.is_set():
+                    return 130
                 started = time.monotonic()
                 try:
-                    code = run_tunnel_child(executable, credential.read())
+                    if stop is None:
+                        code = run_tunnel_child(executable, credential.read())
+                    else:
+                        code = run_tunnel_child(executable, credential.read(), stop=stop)
                 except (ClientCredentialError, SecretPipeCleanupError):
                     raise
                 except (OSError, TimeoutError, RuntimeError):
@@ -189,6 +203,9 @@ def run_tunnel(directory: Path, *, restart_limit: int = 5) -> int:
                     ),
                     flush=True,
                 )
-                time.sleep(delay)
+                if stop is None:
+                    time.sleep(delay)
+                elif stop.wait(delay):
+                    return 130
         finally:
             signal.signal(signal.SIGTERM, prior)

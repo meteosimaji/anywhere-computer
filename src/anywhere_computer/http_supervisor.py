@@ -35,6 +35,7 @@ def supervise(
     restart_limit: int = 5,
     initial_delay: float = 1,
     stable_seconds: float = 300,
+    parent_pipe: bool = False,
 ) -> int:
     if not command or not 0 <= restart_limit <= 5 or initial_delay < 0 or stable_seconds <= 0:
         raise ValueError("Invalid supervisor policy")
@@ -46,7 +47,7 @@ def supervise(
             flags = subprocess.CREATE_NEW_PROCESS_GROUP
         child = subprocess.Popen(
             command,
-            stdin=subprocess.DEVNULL,
+            stdin=subprocess.PIPE if parent_pipe else subprocess.DEVNULL,
             start_new_session=os.name != "nt",
             creationflags=flags,
         )
@@ -54,7 +55,11 @@ def supervise(
             print(json.dumps({"http_child_started": child.pid}), flush=True)
             code = child.wait()
         finally:
-            _stop_child(child)
+            try:
+                if child.stdin is not None:
+                    child.stdin.close()
+            finally:
+                _stop_child(child)
         lifetime = time.monotonic() - started
         if code in {0, 130}:
             return code
