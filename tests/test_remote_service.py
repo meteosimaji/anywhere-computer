@@ -276,7 +276,9 @@ async def test_remote_watch_preflight_and_parent_pipe(remote_profile, monkeypatc
 
     monkeypatch.setattr(remote_service, "supervise", supervise)
     assert remote_service.watch_remote(directory) == 7
-    assert len(calls) == 1 and calls[0][1] == {"parent_pipe": True}
+    assert len(calls) == 1 and calls[0][1] == {
+        "parent_pipe": True, "status_path": directory / "remote-watch-status.json",
+    }
     assert "remote-serve" in calls[0][0] and "--watch-parent" in calls[0][0]
     with ProcessLock(directory / "remote-watch.lock"):
         pass

@@ -147,6 +147,7 @@ def watch_remote(directory: Path, *, connector: str | None = None) -> int:
                 [sys.executable, "-m", "anywhere_computer.cli", "remote-serve",
                  "--state-dir", str(directory.resolve()), "--watch-parent", *connector_arguments],
                 parent_pipe=True,
+                status_path=directory / "remote-watch-status.json",
             )
         finally:
             signal.signal(signal.SIGTERM, prior)

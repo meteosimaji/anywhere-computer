@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 from pydantic import JsonValue
 
 from .http_service import load_http_config
+from .watch_status import read_watch_observation
 
 
 async def _metadata(port: int, *, resource: str | None = None) -> dict[str, JsonValue]:
@@ -68,6 +69,7 @@ async def diagnose_http(directory: Path) -> dict[str, JsonValue]:
             "changed": False,
             "public_reachability": "unverified",
             "authenticated": False,
+            "supervisor_history": read_watch_observation(directory / "http-watch-status.json"),
             **details,
         }
 
@@ -122,6 +124,7 @@ async def diagnose_remote(
     public: dict[str, JsonValue] = {"state": "not_requested"}
     result: dict[str, JsonValue] = {
         "loopback": local,
+        "supervisor_history": read_watch_observation(directory / "remote-watch-status.json"),
         "public": public,
         "connector": {
             "executable_available": shutil.which(connector or "cloudflared") is not None,
