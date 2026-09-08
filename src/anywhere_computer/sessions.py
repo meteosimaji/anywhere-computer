@@ -3,6 +3,7 @@
 import asyncio
 import os
 import signal
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -115,7 +116,7 @@ class Sessions:
         session = self.get(session_id)
         if session.process.returncode is None:
             try:
-                if os.name == "posix":
+                if sys.platform != "win32":
                     os.killpg(session.process.pid, signal.SIGTERM)
                 else:
                     await asyncio.to_thread(self._terminate_tree, session.process.pid)
@@ -125,7 +126,7 @@ class Sessions:
                 await asyncio.wait_for(session.process.wait(), 3)
             except TimeoutError:
                 try:
-                    if os.name == "posix":
+                    if sys.platform != "win32":
                         os.killpg(session.process.pid, signal.SIGKILL)
                     else:
                         session.process.kill()

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
@@ -21,7 +22,7 @@ def prepare_directory(directory: Path) -> None:
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("State directory must be a real directory")
-    if os.name == "posix":
+    if sys.platform != "win32":
         if directory.stat().st_uid != os.getuid():
             raise PermissionError("State directory belongs to another user")
         directory.chmod(0o700)
