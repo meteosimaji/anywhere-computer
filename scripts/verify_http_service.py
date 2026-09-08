@@ -97,6 +97,27 @@ async def verify(receipt):
                 if code != 130:
                     raise RuntimeError("Service did not exit cleanly after interruption")
 
+            async def administer(command):
+                child = await asyncio.create_subprocess_exec(
+                    sys.executable,
+                    "-m",
+                    "anywhere_computer.cli",
+                    command,
+                    "--state-dir",
+                    str(directory),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                try:
+                    output, _ = await asyncio.wait_for(child.communicate(), 15)
+                    if child.returncode != 0:
+                        raise RuntimeError("HTTP administration command failed")
+                    return json.loads(output)
+                finally:
+                    if child.returncode is None:
+                        child.kill()
+                        await child.wait()
+
             process = await launch()
             await ready(process)
             report["cli_started"] = True
@@ -115,25 +136,25 @@ async def verify(receipt):
             process = await launch()
             await ready(process)
             report["same_port_restart"] = True
-            revoker = await asyncio.create_subprocess_exec(
-                sys.executable,
-                "-m",
-                "anywhere_computer.cli",
-                "http-revoke",
-                "--state-dir",
-                str(directory),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-            )
-            try:
-                output, _ = await asyncio.wait_for(revoker.communicate(), 15)
-                if revoker.returncode != 0 or json.loads(output) != {"http_device_revoked": True}:
-                    raise RuntimeError("Live revoke command failed")
-            finally:
-                if revoker.returncode is None:
-                    revoker.kill()
-                    await revoker.wait()
+            if await administer("http-revoke") != {"http_device_revoked": True}:
+                raise RuntimeError("Live revoke command failed")
             report["live_revoke_command"] = True
+            expected = {"device_id": config.device, "device_enabled": False}
+            if await administer("http-auth-status") != expected:
+                raise RuntimeError("Revoked device status was not persisted")
+            if await administer("http-enable") != {"http_device_enabled": True, "changed": True}:
+                raise RuntimeError("Live enable command failed")
+            if await administer("http-enable") != {"http_device_enabled": True, "changed": False}:
+                raise RuntimeError("Repeated enable was not a no-op")
+            report["live_enable_command"] = True
+            report["repeated_enable_unchanged"] = True
+            await stop(process)
+            process = await launch()
+            await ready(process)
+            expected["device_enabled"] = True
+            if await administer("http-auth-status") != expected:
+                raise RuntimeError("Enabled device status did not survive restart")
+            report["enabled_status_after_restart"] = True
             await stop(process)
             report["completed"] = True
         finally:

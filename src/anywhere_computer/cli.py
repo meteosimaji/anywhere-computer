@@ -12,7 +12,14 @@ from .connection import ensure_agent, exchange, serve
 from .devices import DeviceStore
 from .diagnostics import diagnose
 from .http_client import run_http_mcp
-from .http_service import configure_http, load_http_config, revoke_http_device, serve_http
+from .http_service import (
+    configure_http,
+    enable_http_device,
+    http_authorization_status,
+    load_http_config,
+    revoke_http_device,
+    serve_http,
+)
 from .mcp_server import run_mcp
 from .native_login import login
 from .owner_credentials import OwnerCredentials
@@ -39,6 +46,8 @@ def main() -> None:
             "http-serve",
             "http-show",
             "http-revoke",
+            "http-enable",
+            "http-auth-status",
             "devices",
             "device-add",
             "device-add-http",
@@ -211,6 +220,11 @@ def main() -> None:
         elif args.command == "http-revoke":
             revoke_http_device(directory)
             print(json.dumps({"http_device_revoked": True}))
+        elif args.command == "http-enable":
+            changed = enable_http_device(directory)
+            print(json.dumps({"http_device_enabled": True, "changed": changed}))
+        elif args.command == "http-auth-status":
+            print(json.dumps(http_authorization_status(directory)))
         elif args.command == "http-serve":
             asyncio.run(serve_http(directory))
         elif args.command == "owner-init":

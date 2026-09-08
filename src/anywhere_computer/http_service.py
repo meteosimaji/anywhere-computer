@@ -5,8 +5,8 @@ import json
 import os
 import secrets
 import tempfile
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -212,19 +212,43 @@ async def http_service(
             await engine.close()
 
 
-def revoke_http_device(directory: Path) -> None:
-    """Trusted administration; usable while serving, and durable across restarts."""
+@contextmanager
+def _http_authority(directory: Path) -> Iterator[tuple[HTTPServiceConfig, AuthorizationStore]]:
     config = load_http_config(directory)
     authority_directory = directory / "http-server" / "authorization"
-    if not (authority_directory / "authorization.sqlite3").is_file():
-        raise ValueError("HTTP authorization database is missing")
+    database = authority_directory / "authorization.sqlite3"
+    if not database.is_file() or database.is_symlink() or authority_directory.is_symlink():
+        raise ValueError("HTTP authorization database is missing or is a symbolic link")
     store = AuthorizationStore(
         authority_directory, resource=config.resource, known_tools=config.scopes
     )
     try:
-        store.revoke_device(owner=config.owner, device=config.device)
+        yield config, store
     finally:
         store.close()
+
+
+def revoke_http_device(directory: Path) -> None:
+    """Trusted administration; usable while serving, and durable across restarts."""
+    with _http_authority(directory) as (config, store):
+        store.revoke_device(owner=config.owner, device=config.device)
+
+
+def enable_http_device(directory: Path) -> bool:
+    """Allow fresh consent after revocation; never restore existing credentials."""
+    with _http_authority(directory) as (config, store):
+        _check_enrollment(store, config)
+        return store.enable_device(owner=config.owner, device=config.device)
+
+
+def http_authorization_status(directory: Path) -> dict[str, str | bool]:
+    """Report persisted enrollment state, not network reachability or client login."""
+    with _http_authority(directory) as (config, store):
+        _check_enrollment(store, config)
+        return {
+            "device_id": config.device,
+            "device_enabled": store.device_enabled(owner=config.owner, device=config.device),
+        }
 
 
 async def serve_http(directory: Path) -> None:

@@ -16,6 +16,8 @@ from anywhere_computer.engine import Engine
 from anywhere_computer.files import sha256
 from anywhere_computer.http_service import (
     configure_http,
+    enable_http_device,
+    http_authorization_status,
     http_service,
     load_http_config,
     revoke_http_device,
@@ -140,6 +142,54 @@ async def test_server_restart_preserves_operations_and_revocation(configured, tm
     assert (tmp_path / "http-server/engine/operations.sqlite3").exists()
 
 
+async def test_live_reenable_requires_new_login_and_survives_restart(configured, tmp_path):
+    config, owner = configured
+    async with httpx.AsyncClient(
+        base_url=f"http://127.0.0.1:{config.port}", trust_env=False
+    ) as http:
+        async with http_service(tmp_path, credentials=owner):
+            old_token = await authenticate(http)
+            old_headers = await initialize(http, old_token)
+            revoke_http_device(tmp_path)
+            assert http_authorization_status(tmp_path) == {
+                "device_id": config.device,
+                "device_enabled": False,
+            }
+            assert enable_http_device(tmp_path)
+            assert http_authorization_status(tmp_path)["device_enabled"]
+            catalog = {"jsonrpc": "2.0", "id": "catalog", "method": "tools/list"}
+            assert (await http.post("/mcp", headers=old_headers, json=catalog)).status_code == 401
+            new_token = await authenticate(http)
+            mixed_headers = {**old_headers, "Authorization": "Bearer " + new_token}
+            assert (await http.post("/mcp", headers=mixed_headers, json=catalog)).status_code == 404
+            new_headers = await initialize(http, new_token)
+            assert not enable_http_device(tmp_path)
+            assert (await http.post("/mcp", headers=new_headers, json=catalog)).status_code == 200
+        async with http_service(tmp_path, credentials=owner):
+            assert (
+                await http.post("/mcp", headers=old_headers, json=INITIALIZE)
+            ).status_code == 401
+            await initialize(http, new_token)
+
+
+async def test_enable_and_status_refuse_missing_or_mismatched_database(configured, tmp_path):
+    config, _ = configured
+    path = tmp_path / "http-server/config.json"
+    data = config.model_dump(mode="json")
+    data["client"] = "unregistered"
+    path.write_text(json.dumps(data))
+    for operation in (enable_http_device, http_authorization_status):
+        with pytest.raises(ValueError, match="differs"):
+            operation(tmp_path)
+    path.write_text(config.model_dump_json())
+    database = tmp_path / "http-server/authorization/authorization.sqlite3"
+    database.unlink()
+    for operation in (enable_http_device, revoke_http_device, http_authorization_status):
+        with pytest.raises(ValueError, match="missing"):
+            operation(tmp_path)
+        assert not database.exists()
+
+
 async def test_service_lock_and_configuration_are_not_replaceable(configured, tmp_path):
     config, owner = configured
     async with http_service(tmp_path, credentials=owner):
@@ -230,6 +280,14 @@ def test_http_cli_configuration_show_and_revoke(tmp_path, unused_tcp_port, monke
     monkeypatch.setattr("sys.argv", ["anywhere", "http-revoke", "--state-dir", str(tmp_path)])
     cli.main()
     assert json.loads(capsys.readouterr().out) == {"http_device_revoked": True}
+    monkeypatch.setattr("sys.argv", ["anywhere", "http-auth-status", "--state-dir", str(tmp_path)])
+    cli.main()
+    assert json.loads(capsys.readouterr().out)["device_enabled"] is False
+    monkeypatch.setattr("sys.argv", ["anywhere", "http-enable", "--state-dir", str(tmp_path)])
+    cli.main()
+    assert json.loads(capsys.readouterr().out) == {"http_device_enabled": True, "changed": True}
+    cli.main()
+    assert json.loads(capsys.readouterr().out) == {"http_device_enabled": True, "changed": False}
 
 
 async def test_busy_port_releases_service_lock_for_retry(configured, tmp_path):

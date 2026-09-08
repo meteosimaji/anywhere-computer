@@ -1,5 +1,6 @@
 import asyncio
 import re
+import threading
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import pytest
@@ -94,6 +95,34 @@ async def test_revocation_between_form_and_decision_prevents_code(browser, autho
     status, _, response_headers = await decide(browser, fields, headers)
     assert status == 400
     assert "Location" not in response_headers
+
+
+@pytest.mark.parametrize("during_password", [False, True])
+async def test_reenable_rejects_old_form_even_during_password_verification(
+    browser, authority, monkeypatch, during_password
+):
+    fields, headers = await begin(browser)
+    entered, release = threading.Event(), threading.Event()
+
+    def paused_verify(password):
+        entered.set()
+        assert release.wait(5)
+        return True
+
+    if during_password:
+        monkeypatch.setattr(browser.credentials, "verify", paused_verify)
+        pending = asyncio.create_task(decide(browser, fields, headers))
+        assert await asyncio.to_thread(entered.wait, 5)
+    try:
+        authority.revoke_device(owner="owner", device="device")
+        assert authority.enable_device(owner="owner", device="device")
+    finally:
+        release.set()
+    result = await pending if during_password else await decide(browser, fields, headers)
+    assert result[0] == 400 and "Location" not in result[2]
+    assert authority.db.execute("SELECT count(*) FROM grants").fetchone()[0] == 0
+    new_fields, new_headers = await begin(browser)
+    assert (await decide(browser, new_fields, new_headers))[0] == 303
 
 
 async def test_deny_requires_browser_binding_but_no_password(browser):

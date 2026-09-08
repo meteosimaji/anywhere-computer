@@ -255,8 +255,89 @@ def test_version_one_upgrade_preserves_existing_access_tokens(authority, tmp_pat
         authority.db.execute("PRAGMA user_version=1")
     upgraded = AuthorizationStore(tmp_path, resource=RESOURCE, known_tools=TOOLS)
     try:
-        assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 3
         assert upgraded.verify(original.value, resource=RESOURCE) is not None
         assert upgraded.db.execute("SELECT count(*) FROM refresh_tokens").fetchone()[0] == 0
     finally:
         upgraded.close()
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_reenable_never_restores_codes_access_or_refresh(authority, tmp_path, legacy):
+    issued = redeem(authority, approve(authority))
+    pending = approve(authority)
+    if legacy:
+        with authority.db:
+            authority.db.execute("UPDATE authorized_devices SET active=0 WHERE id='device'")
+    else:
+        authority.revoke_device(owner="owner", device="device")
+        assert (
+            authority.db.execute("SELECT count(*) FROM grants WHERE revoked=0").fetchone()[0] == 0
+        )
+    assert not authority.device_enabled(owner="owner", device="device")
+    assert authority.enable_device(owner="owner", device="device")
+    assert authority.verify(issued.value, resource=RESOURCE) is None
+    with pytest.raises(AuthorizationError):
+        redeem(authority, pending)
+    with pytest.raises(AuthorizationError):
+        authority.refresh(refresh_token=issued.refresh_value, client="client", resource=RESOURCE)
+    fresh = redeem(authority, approve(authority))
+    assert not authority.enable_device(owner="owner", device="device")
+    assert authority.verify(fresh.value, resource=RESOURCE) is not None
+    reopened = AuthorizationStore(tmp_path, resource=RESOURCE, known_tools=TOOLS)
+    try:
+        assert reopened.device_enabled(owner="owner", device="device")
+        assert reopened.verify(issued.value, resource=RESOURCE) is None
+        assert reopened.verify(fresh.value, resource=RESOURCE) is not None
+    finally:
+        reopened.close()
+
+
+def test_enable_rejects_unknown_owner_and_rolls_back_failed_reactivation(authority):
+    issued = redeem(authority, approve(authority))
+    for operation in (authority.enable_device, authority.revoke_device, authority.device_enabled):
+        with pytest.raises(AuthorizationError):
+            operation(owner="other", device="device")
+        with pytest.raises(AuthorizationError):
+            operation(owner="owner", device="missing")
+    assert authority.verify(issued.value, resource=RESOURCE) is not None
+    with authority.db:
+        authority.db.execute("UPDATE authorized_devices SET active=0")
+        authority.db.execute(
+            "CREATE TRIGGER fail_enable BEFORE UPDATE OF active ON authorized_devices "
+            "WHEN NEW.active=1 BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END"
+        )
+    import sqlite3
+
+    with pytest.raises(sqlite3.IntegrityError):
+        authority.enable_device(owner="owner", device="device")
+    assert not authority.device_enabled(owner="owner", device="device")
+    assert authority.db.execute("SELECT revoked FROM grants").fetchone()[0] == 0
+    assert authority.verify(issued.value, resource=RESOURCE) is None
+
+
+def test_enabling_one_device_preserves_other_devices(authority):
+    authority.enroll_device("owner", "other-device", TOOLS)
+    other = redeem(authority, approve(authority, device="other-device"))
+    authority.revoke_device(owner="owner", device="device")
+    assert authority.enable_device(owner="owner", device="device")
+    assert authority.verify(other.value, resource=RESOURCE) is not None
+
+
+def test_v2_generation_upgrade_preserves_tokens_and_serializes_concurrent_open(authority, tmp_path):
+    token = redeem(authority, approve(authority))
+    with authority.db:
+        authority.db.execute("ALTER TABLE authorized_devices DROP COLUMN generation")
+        authority.db.execute("PRAGMA user_version=2")
+
+    def reopen():
+        store = AuthorizationStore(tmp_path, resource=RESOURCE, known_tools=TOOLS)
+        try:
+            assert store.db.execute("PRAGMA user_version").fetchone()[0] == 3
+            assert store.db.execute("SELECT generation FROM authorized_devices").fetchone()[0] == 0
+            return store.verify(token.value, resource=RESOURCE)
+        finally:
+            store.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        assert all(executor.map(lambda _: reopen(), range(2)))

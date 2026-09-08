@@ -34,6 +34,7 @@ class PendingConsent:
     browser_hash: str = field(repr=False)
     csrf_hash: str = field(repr=False)
     expires: float
+    generation: int
 
 
 def _digest(value: str) -> str:
@@ -187,7 +188,7 @@ class BrowserAuthorization:
         if {key for key, _ in parse_qsl(urlsplit(redirect).query)} & {"code", "state", "error"}:
             raise ValueError("Callback has reserved response fields")
         tools = frozenset(params["scope"].split())
-        self.store.validate_consent(
+        generation = self.store.validate_consent(
             owner=self.credentials.owner,
             device=self.device,
             client=params["client_id"],
@@ -211,6 +212,7 @@ class BrowserAuthorization:
             _digest(browser),
             _digest(csrf),
             now + 300,
+            generation,
         )
         self.pending[identity] = record
         headers = self._headers()
@@ -298,6 +300,7 @@ class BrowserAuthorization:
                 resource=record.resource,
                 tools=record.tools,
                 challenge=record.challenge,
+                generation=record.generation,
             )
         target = urlsplit(record.redirect)
         query = target.query + ("&" if target.query else "") + urlencode(result)

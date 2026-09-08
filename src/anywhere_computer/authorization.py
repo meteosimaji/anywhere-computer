@@ -112,13 +112,12 @@ class AuthorizationStore:
         prepare_directory(directory)
         self.db = sqlite3.connect(directory / "authorization.sqlite3", timeout=10)
         self.db.execute("PRAGMA foreign_keys=ON")
-        version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in {0, 1, 2}:
-            self.db.close()
-            raise ValueError("Unsupported authorization store version")
         try:
             with self.db:
                 self.db.execute("BEGIN IMMEDIATE")
+                version = self.db.execute("PRAGMA user_version").fetchone()[0]
+                if version not in {0, 1, 2, 3}:
+                    raise ValueError("Unsupported authorization store version")
                 self.db.execute("CREATE TABLE IF NOT EXISTS settings (resource TEXT PRIMARY KEY)")
                 resources = self.db.execute("SELECT resource FROM settings").fetchall()
                 if resources and resources != [(resource,)]:
@@ -131,8 +130,15 @@ class AuthorizationStore:
                 self.db.execute(
                     "CREATE TABLE IF NOT EXISTS authorized_devices ("
                     "id TEXT PRIMARY KEY, owner TEXT NOT NULL, tools TEXT NOT NULL, "
-                    "active INTEGER NOT NULL)"
+                    "active INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0)"
                 )
+                if version < 3 and "generation" not in {
+                    row[1] for row in self.db.execute("PRAGMA table_info(authorized_devices)")
+                }:
+                    self.db.execute(
+                        "ALTER TABLE authorized_devices ADD COLUMN generation INTEGER NOT NULL "
+                        "DEFAULT 0"
+                    )
                 self.db.execute(
                     "CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, owner TEXT NOT NULL, "
                     "device TEXT NOT NULL REFERENCES authorized_devices(id), "
@@ -154,7 +160,7 @@ class AuthorizationStore:
                     "grant_id TEXT NOT NULL REFERENCES grants(id), expires REAL NOT NULL, "
                     "consumed INTEGER NOT NULL DEFAULT 0)"
                 )
-                self.db.execute("PRAGMA user_version=2")
+                self.db.execute("PRAGMA user_version=3")
         except Exception:
             self.db.close()
             raise
@@ -181,7 +187,8 @@ class AuthorizationStore:
         encoded = self._tools(tools)
         with self.db:
             self.db.execute(
-                "INSERT INTO authorized_devices VALUES(?,?,?,1)", (device, owner, encoded)
+                "INSERT INTO authorized_devices(id,owner,tools,active) VALUES(?,?,?,1)",
+                (device, owner, encoded),
             )
 
     def approve(
@@ -194,6 +201,7 @@ class AuthorizationStore:
         resource: str,
         tools: frozenset[str],
         challenge: str,
+        generation: int | None = None,
     ) -> str:
         """Trusted consent boundary: never invoke directly from unverified HTTP inputs."""
         if resource != self.resource or re.fullmatch(r"[A-Za-z0-9_-]{43}", challenge) is None:
@@ -211,6 +219,7 @@ class AuthorizationStore:
                 resource=resource,
                 tools=tools,
                 challenge=challenge,
+                generation=generation,
             )
             grant = secrets.token_hex(16)
             self.db.execute(
@@ -233,7 +242,8 @@ class AuthorizationStore:
         resource: str,
         tools: frozenset[str],
         challenge: str,
-    ) -> None:
+        generation: int | None = None,
+    ) -> int:
         """Read-only validation for a consent page; approve checks again in its transaction."""
         if resource != self.resource or re.fullmatch(r"[A-Za-z0-9_-]{43}", challenge) is None:
             raise AuthorizationError("invalid_request")
@@ -242,7 +252,7 @@ class AuthorizationStore:
             "SELECT redirects FROM clients WHERE id=?", (client,)
         ).fetchone()
         target = self.db.execute(
-            "SELECT owner,tools,active FROM authorized_devices WHERE id=?", (device,)
+            "SELECT owner,tools,active,generation FROM authorized_devices WHERE id=?", (device,)
         ).fetchone()
         if (
             registered is None
@@ -251,8 +261,10 @@ class AuthorizationStore:
             or target[0] != owner
             or not target[2]
             or tools - frozenset(json.loads(target[1]))
+            or (generation is not None and generation != target[3])
         ):
             raise AuthorizationError("access_denied")
+        return int(target[3])
 
     def exchange_code(
         self,
@@ -399,11 +411,43 @@ class AuthorizationStore:
 
     def revoke_device(self, *, owner: str, device: str) -> None:
         with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
             changed = self.db.execute(
-                "UPDATE authorized_devices SET active=0 WHERE id=? AND owner=?", (device, owner)
+                "UPDATE authorized_devices SET active=0,generation=generation+1 "
+                "WHERE id=? AND owner=?",
+                (device, owner),
             )
             if changed.rowcount != 1:
                 raise AuthorizationError("access_denied")
+            self.db.execute("UPDATE grants SET revoked=1 WHERE device=?", (device,))
+
+    def device_enabled(self, *, owner: str, device: str) -> bool:
+        row = self.db.execute(
+            "SELECT active FROM authorized_devices WHERE id=? AND owner=?", (device, owner)
+        ).fetchone()
+        if row is None:
+            raise AuthorizationError("access_denied")
+        return bool(row[0])
+
+    def enable_device(self, *, owner: str, device: str) -> bool:
+        """Trusted administration: permit new consent without reviving old grants.
+
+        Return whether the disabled device changed state. Repeating this command
+        on an enabled device preserves its newly approved grants.
+        """
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            if self.device_enabled(owner=owner, device=device):
+                return False
+            # Older registries disabled devices without marking grants revoked.
+            # Invalidate every old code/access/refresh family before reenabling.
+            self.db.execute("UPDATE grants SET revoked=1 WHERE device=?", (device,))
+            self.db.execute(
+                "UPDATE authorized_devices SET active=1,generation=generation+1 "
+                "WHERE id=? AND owner=?",
+                (device, owner),
+            )
+        return True
 
     def close(self) -> None:
         self.db.close()
