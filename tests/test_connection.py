@@ -23,6 +23,11 @@ async def agent(tmp_path):
     yield tmp_path, credential
     shutdown.set()
     await asyncio.wait_for(task, 10)
+    # Windows mandatory locks prevent reading agent.lock while it is held.
+    # Inspect every file after shutdown, including the released lock file.
+    for path in tmp_path.rglob("*"):
+        if path.is_file():
+            assert credential.encode() not in path.read_bytes()
 
 
 async def test_authenticated_rpc_and_catalog(agent):
@@ -43,7 +48,7 @@ async def test_local_transport_does_not_persist_credential(agent):
     directory, credential = agent
     await exchange(directory, "computer_status", credential=credential)
     for path in Path(directory).rglob("*"):
-        if path.is_file():
+        if path.is_file() and path.name != "agent.lock":
             assert credential.encode() not in path.read_bytes()
 
 

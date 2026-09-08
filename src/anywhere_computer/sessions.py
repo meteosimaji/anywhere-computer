@@ -50,17 +50,28 @@ class Sessions:
         )
         if not Path(shell).is_absolute():
             raise ValueError("Shell must be an absolute executable path")
-        flags = ["/d", "/s", "/c"] if Path(shell).name.lower() == "cmd.exe" else ["-c"]
-        process = await asyncio.create_subprocess_exec(
-            shell,
-            *flags,
-            args.command,
-            cwd=cwd,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            start_new_session=os.name != "nt",
-        )
+        # cmd.exe uses its own command-line quoting, not argv quoting.
+        # asyncio's shell transport constructs /c "..." correctly on Windows.
+        if sys.platform == "win32" and Path(shell).name.lower() == "cmd.exe":
+            process = await asyncio.create_subprocess_shell(
+                args.command,
+                executable=shell,
+                cwd=cwd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        else:
+            process = await asyncio.create_subprocess_exec(
+                shell,
+                "-c",
+                args.command,
+                cwd=cwd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=os.name != "nt",
+            )
         session = Session(uuid.uuid4().hex, process, time.time())
         self.sessions[session.session_id] = session
         session.reader = asyncio.create_task(self._read(session))

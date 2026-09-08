@@ -127,7 +127,7 @@ async def test_terminal_survives_calls_and_interactive_input(engine, tmp_path):
             break
         await asyncio.sleep(0.02)
     else:
-        pytest.fail("Process never became ready")
+        pytest.fail(f"Process never became ready: {page.data}")
     assert (
         await engine.execute(request("terminal_input", session_id=session_id, text="hello\n"))
     ).state == "completed"
