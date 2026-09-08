@@ -1,0 +1,35 @@
+{
+  "completed": true,
+  "runtime_id": "9285aa28d8b16610d7263e725060a4123b584adf8889b6ec627c1bc4ac2b705c",
+  "script_sha256": "e5c2a58ef9ac766c7bee752f341420795e0af306a2b57788f20707e7ac4a10d8",
+  "platform": "Darwin",
+  "scope": "Local Files API, generated regular file, three sampled ranges; not full download",
+  "file_bytes": 1073741824,
+  "measurements": [
+    {
+      "offset": 0,
+      "returned_bytes": 262144,
+      "seconds": 0.40160404102061875,
+      "python_traced_peak_bytes": 1227435,
+      "rss_before_bytes": 39288832,
+      "rss_after_bytes": 41418752
+    },
+    {
+      "offset": 536871039,
+      "returned_bytes": 262144,
+      "seconds": 0.3932049169961829,
+      "python_traced_peak_bytes": 1259952,
+      "rss_before_bytes": 41418752,
+      "rss_after_bytes": 42729472
+    },
+    {
+      "offset": 1073479680,
+      "returned_bytes": 262144,
+      "seconds": 0.396691458998248,
+      "python_traced_peak_bytes": 1227147,
+      "rss_before_bytes": 42729472,
+      "rss_after_bytes": 42893312
+    }
+  ],
+  "temporary_directory_removed": true
+}
