@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import getpass
 import json
+import re
 import signal
 import sys
 from pathlib import Path
@@ -33,6 +34,7 @@ from .parent_liveness import watch_parent_pipe
 from .remote_service import serve_remote, watch_remote
 from .remote_setup import setup_remote
 from .ssh_transport import run_ssh_mcp
+from .startup_service import install_startup, startup_status, uninstall_startup
 from .state import state_directory
 from .transfer_admin import list_transfers, release_transfer
 
@@ -61,6 +63,9 @@ def main() -> None:
             "remote-setup",
             "remote-doctor",
             "autostart-preview",
+            "autostart-install",
+            "autostart-uninstall",
+            "autostart-status",
             "http-show",
             "http-doctor",
             "http-revoke",
@@ -103,9 +108,14 @@ def main() -> None:
     parser.add_argument("--probe-public", action="store_true",
                         help="Also probe configured HTTPS metadata (remote-doctor only)")
     parser.add_argument("--watch-parent", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--startup-id", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.startup_id is not None and (
+        args.command != "remote-watch" or not re.fullmatch(r"[a-f0-9]{32}", args.startup_id)
+    ):
+        parser.error("Invalid startup registration identifier")
     if args.connector is not None and args.command not in {
-        "remote-watch", "remote-serve", "tunnel-run", "autostart-preview",
+        "remote-watch", "remote-serve", "tunnel-run", "autostart-preview", "autostart-install",
     }:
         parser.error("--connector is only valid for remote startup and its preview")
     if args.watch_parent and args.command not in {"remote-serve", "tunnel-run"}:
@@ -260,6 +270,12 @@ def main() -> None:
         if args.command == "autostart-preview":
             print(json.dumps(preview_startup(directory, connector=args.connector),
                              ensure_ascii=True, indent=2))
+        elif args.command == "autostart-install":
+            print(json.dumps(install_startup(directory, connector=args.connector), indent=2))
+        elif args.command == "autostart-uninstall":
+            print(json.dumps(uninstall_startup(directory), indent=2))
+        elif args.command == "autostart-status":
+            print(json.dumps(startup_status(directory), indent=2))
         elif args.command == "transfers":
             print(json.dumps(list_transfers(
                 directory, area=args.transfer_area, kind=args.transfer_kind,

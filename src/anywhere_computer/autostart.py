@@ -3,6 +3,7 @@
 import hashlib
 import os
 import plistlib
+import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -41,6 +42,7 @@ def startup_definition(
     executable: str,
     user: str,
     connector: str | None = None,
+    startup_id: str | None = None,
 ) -> StartupDefinition:
     directory = directory.resolve()
     executable = _clean_argument(executable)
@@ -55,6 +57,10 @@ def startup_definition(
         if not Path(connector).is_absolute():
             raise ValueError("Startup connector requires an absolute path")
         arguments.extend(["--connector", connector])
+    if startup_id is not None:
+        if not re.fullmatch(r"[a-f0-9]{32}", startup_id):
+            raise ValueError("Invalid startup registration identifier")
+        arguments.extend(["--startup-id", startup_id])
     if platform == "darwin":
         content = plistlib.dumps({
             "Label": name,
@@ -124,7 +130,10 @@ def startup_definition(
     return StartupDefinition(platform, name, directory / "autostart" / (name + ".xml"), content)
 
 
-def current_definition(directory: Path, *, connector: str | None = None) -> StartupDefinition:
+def current_definition(
+    directory: Path, *, connector: str | None = None, startup_id: str | None = None,
+    executable: str | None = None,
+) -> StartupDefinition:
     import psutil
 
     if sys.platform not in {"darwin", "linux", "win32"}:
@@ -132,8 +141,8 @@ def current_definition(directory: Path, *, connector: str | None = None) -> Star
     # Keep the venv path: resolving an interpreter symlink would lose its environment.
     definition = startup_definition(
         directory, platform=cast(Platform, sys.platform), home=Path.home(),
-        executable=os.path.abspath(sys.executable), user=psutil.Process().username(),
-        connector=connector,
+        executable=executable or os.path.abspath(sys.executable), user=psutil.Process().username(),
+        connector=connector, startup_id=startup_id,
     )
     if sys.platform == "linux":
         configured = os.environ.get("XDG_CONFIG_HOME", "")
