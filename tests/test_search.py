@@ -143,3 +143,28 @@ async def test_large_context_pages_preserve_every_match(tmp_path):
         assert pages > 1
     finally:
         await searches.close()
+
+
+async def test_timeout_preserves_results_and_cancels_pending_search(tmp_path, monkeypatch):
+    cancelled = asyncio.Event()
+
+    async def slow_run(search, root, args):
+        search.results.append({"path": str(root / "found"), "line": 1, "text": "hit"})
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    searches = Searches()
+    monkeypatch.setattr(searches, "_run", slow_run)
+    try:
+        started = searches.start(StartSearch(path=str(tmp_path), pattern="hit", timeout_ms=20))
+        search = searches.get(started["search_id"])
+        await asyncio.wait_for(search.task, 2)
+        page = searches.page(SearchPage(search_id=search.search_id))
+        assert cancelled.is_set() and search.cancelled.is_set()
+        assert page["state"] == "completed"
+        assert page["truncated"] and page["limit_reason"] == "timeout"
+        assert len(page["results"]) == 1
+    finally:
+        await searches.close()

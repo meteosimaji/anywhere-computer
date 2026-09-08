@@ -1,6 +1,6 @@
 {
   "name": "anywhere-computer",
-  "version": "0.1.0-alpha.1+codex.20260908233339",
+  "version": "0.1.0-alpha.1+codex.20260908233539",
   "description": "Persistent computer tools with conflict-aware files, document inspection and terminal sessions.",
   "author": {
     "name": "\u3081\u3066\u304a",

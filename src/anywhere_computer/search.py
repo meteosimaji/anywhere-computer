@@ -48,8 +48,21 @@ class Searches:
                 raise ValueError("Too many active searches")
         search = Search(uuid.uuid4().hex)
         self.searches[search.search_id] = search
-        search.task = asyncio.create_task(self._run(search, root, args))
+        search.task = asyncio.create_task(self._run_with_deadline(search, root, args))
         return {"search_id": search.search_id, "state": search.state}
+
+    async def _run_with_deadline(self, search: Search, root: Path, args: StartSearch) -> None:
+        try:
+            await asyncio.wait_for(self._run(search, root, args), args.timeout_ms / 1000)
+        except TimeoutError:
+            search.cancelled.set()
+            search.truncated = True
+            search.limit_reason = "timeout"
+            search.state = "completed"
+        except asyncio.CancelledError:
+            search.cancelled.set()
+            search.state = "cancelled"
+            raise
 
     async def _run(self, search: Search, root: Path, args: StartSearch) -> None:
         pattern = args.pattern.casefold() if args.ignore_case else args.pattern
