@@ -23,6 +23,10 @@ class _PasswordRecord(BaseModel):
     digest: str = Field(pattern=r"^[a-f0-9]{64}$", repr=False)
 
 
+class OwnerPasswordChangeUnknown(ClientCredentialError):
+    """The credential store could not confirm which password is installed."""
+
+
 class OwnerCredentials:
     def __init__(
         self,
@@ -39,7 +43,7 @@ class OwnerCredentials:
         self.directory = directory.resolve()
         binding = json.dumps([str(self.directory), resource, owner]).encode()
         self.account = "oauth-owner-" + hashlib.sha256(binding).hexdigest()
-        self.lock_path = directory / (self.account + ".lock")
+        self.lock_path = self.directory / (self.account + ".lock")
         self.resource, self.owner = resource, owner
         self.vault = vault if vault is not None else secure_backend()
 
@@ -63,10 +67,7 @@ class OwnerCredentials:
 
     def initialize(self, password: str) -> None:
         """Trusted setup only; never replaces an existing owner password."""
-        if len(password) < 16 or len(password.encode("utf-8")) > 1024:
-            raise ValueError(
-                "Use an owner password of at least 16 characters and at most 1024 bytes"
-            )
+        self._validate_password(password)
         with ProcessLock(self.lock_path, timeout=30):
             if self._read() is not None:
                 raise ClientCredentialError(
@@ -78,6 +79,51 @@ class OwnerCredentials:
                 self.vault.set_password(SERVICE, self.account, record.model_dump_json())
             except Exception:
                 raise ClientCredentialError("Could not save owner verification data") from None
+
+    @staticmethod
+    def _validate_password(password: str) -> None:
+        if len(password) < 16 or len(password.encode("utf-8")) > 1024:
+            raise ValueError(
+                "Use an owner password of at least 16 characters and at most 1024 bytes"
+            )
+
+    def change_password(self, current: str, replacement: str) -> None:
+        """Replace the native verifier after authenticating under the writer lock.
+
+        One write, followed by readback; never roll back or retry an uncertain
+        write. This changes owner authentication only, not issued OAuth grants.
+        """
+        self._validate_password(replacement)
+        if not current or len(current.encode("utf-8")) > 1024:
+            raise ValueError("Current owner password is incorrect")
+        with ProcessLock(self.lock_path, timeout=30):
+            previous = self._record()
+            if not hmac.compare_digest(self._derive(current, previous.salt), previous.digest):
+                raise ValueError("Current owner password is incorrect")
+            if hmac.compare_digest(current.encode("utf-8"), replacement.encode("utf-8")):
+                raise ValueError("New owner password must differ from the current password")
+            salt = secrets.token_hex(32)
+            updated = _PasswordRecord(version=1, salt=salt, digest=self._derive(replacement, salt))
+            try:
+                self.vault.set_password(SERVICE, self.account, updated.model_dump_json())
+            except Exception:
+                # Some backends report an error after committing. Readback decides
+                # the outcome without issuing another credential write.
+                pass
+            try:
+                installed = self._record()
+            except ClientCredentialError:
+                raise OwnerPasswordChangeUnknown(
+                    "Password update outcome is unknown; restore credential store access "
+                    "before checking the current and new passwords"
+                ) from None
+            if installed == updated:
+                return
+            if installed == previous:
+                raise ClientCredentialError(
+                    "Password update was not saved; the previous password remains installed"
+                )
+            raise OwnerPasswordChangeUnknown("Password update outcome is unknown; do not retry")
 
     def _record(self) -> _PasswordRecord:
         raw = self._read()
@@ -98,8 +144,9 @@ class OwnerCredentials:
     def verify(self, password: str) -> bool:
         if not password or len(password.encode("utf-8")) > 1024:
             return False
-        record = self._record()
-        return hmac.compare_digest(self._derive(password, record.salt), record.digest)
+        with ProcessLock(self.lock_path, timeout=30):
+            record = self._record()
+            return hmac.compare_digest(self._derive(password, record.salt), record.digest)
 
     def forget(self) -> None:
         """Remove this verifier only; callers must separately revoke existing grants."""

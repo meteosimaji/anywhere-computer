@@ -62,7 +62,8 @@ async def verify(receipt):
                 ),
             )
             owner = OwnerCredentials(directory, resource=resource, owner=config.owner)
-            await asyncio.to_thread(owner.initialize, secrets.token_urlsafe(32))
+            initial_password = secrets.token_urlsafe(32)
+            await asyncio.to_thread(owner.initialize, initial_password)
 
             async def launch():
                 child = await asyncio.create_subprocess_exec(
@@ -121,6 +122,14 @@ async def verify(receipt):
             process = await launch()
             await ready(process)
             report["cli_started"] = True
+            replacement_password = secrets.token_urlsafe(32)
+            await asyncio.to_thread(owner.change_password, initial_password, replacement_password)
+            reopened_owner = OwnerCredentials(directory, resource=resource, owner=config.owner)
+            if not await asyncio.to_thread(reopened_owner.verify, replacement_password):
+                raise RuntimeError("Native credential store did not preserve password change")
+            if await asyncio.to_thread(reopened_owner.verify, initial_password):
+                raise RuntimeError("Previous owner password remained valid")
+            report["native_password_rotation"] = True
             duplicate = await launch()
             try:
                 duplicate_code = await asyncio.wait_for(duplicate.wait(), 15)

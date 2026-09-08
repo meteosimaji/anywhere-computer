@@ -208,9 +208,18 @@ Trusted initial setup uses `anywhere owner-init --resource https://HOST/mcp
 twice without echo; it accepts neither password arguments nor piped input. The
 password must contain at least 16 characters. Only a random salt and scrypt
 verification digest are saved in the native OS credential store. Existing owner
-credentials cannot be overwritten by initialization. Password rotation/recovery
-and a complete server setup command remain outstanding. Deleting a verifier
-alone does not revoke already issued grants.
+credentials cannot be overwritten by initialization. `anywhere owner-change` with
+the same resource, owner and state directory requests the current password and
+the replacement twice through hidden terminal input. It authenticates under the
+same resolved-path writer lock used by setup, verification and deletion, writes
+one new salted verifier, then reads it back to confirm the outcome. If the old
+record remains, the old password is preserved. If readback cannot establish the
+outcome, it reports an unknown result without retrying or rolling back the write.
+It does not revoke issued grants or undo already completed password checks; use
+`http-revoke` for existing connection revocation. Forgotten-password recovery is
+not implemented. See [HTTP service setup and password changes](HTTP-SERVER.md)
+for the available persistent service commands. Deleting a verifier alone does
+not revoke already issued grants.
 
 The form displays the registered client, exact callback, device, resource and
 requested tools. Each approval requires the owner password. Pending requests

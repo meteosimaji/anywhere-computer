@@ -41,6 +41,7 @@ def main() -> None:
             "remote-mcp",
             "http-mcp",
             "owner-init",
+            "owner-change",
             "login",
             "http-configure",
             "http-serve",
@@ -76,6 +77,7 @@ def main() -> None:
     if args.resource is not None and args.command not in {
         "http-mcp",
         "owner-init",
+        "owner-change",
         "login",
         "http-configure",
         "device-add-http",
@@ -94,8 +96,12 @@ def main() -> None:
         parser.error("--scope is only valid for login and http-configure")
     if args.command == "login" and not args.scope:
         parser.error("login requires at least one --scope tool")
-    if args.owner is not None and args.command not in {"owner-init", "http-configure"}:
-        parser.error("--owner is only valid for owner-init and http-configure")
+    if args.owner is not None and args.command not in {
+        "owner-init",
+        "owner-change",
+        "http-configure",
+    }:
+        parser.error("--owner is only valid for owner setup and HTTP configuration")
     if (
         args.port is not None or args.redirect_uri is not None
     ) and args.command != "http-configure":
@@ -104,8 +110,8 @@ def main() -> None:
         (args.resource, args.owner, args.client_id, args.scope)
     ):
         parser.error("http-configure requires --resource, --owner, --client-id and --scope")
-    if args.command == "owner-init" and not all((args.resource, args.owner)):
-        parser.error("owner-init requires --resource and --owner")
+    if args.command in {"owner-init", "owner-change"} and not all((args.resource, args.owner)):
+        parser.error("Owner setup requires --resource and --owner")
     if args.command in {"http-mcp", "login"}:
         metadata = (args.resource, args.client_id, args.profile)
         if has_device and any(value is not None for value in metadata):
@@ -227,17 +233,26 @@ def main() -> None:
             print(json.dumps(http_authorization_status(directory)))
         elif args.command == "http-serve":
             asyncio.run(serve_http(directory))
-        elif args.command == "owner-init":
+        elif args.command in {"owner-init", "owner-change"}:
             if not sys.stdin.isatty():
                 raise ValueError("Owner setup requires an interactive terminal")
             owner_credentials = OwnerCredentials(
                 directory, resource=args.resource, owner=args.owner
             )
+            current = (
+                getpass.getpass("Current owner password: ")
+                if args.command == "owner-change"
+                else None
+            )
             password = getpass.getpass("Owner password (at least 16 characters): ")
             if password != getpass.getpass("Confirm owner password: "):
                 raise ValueError("Owner passwords did not match")
-            owner_credentials.initialize(password)
-            print(json.dumps({"owner_initialized": True}))
+            if current is None:
+                owner_credentials.initialize(password)
+                print(json.dumps({"owner_initialized": True}))
+            else:
+                owner_credentials.change_password(current, password)
+                print(json.dumps({"owner_password_changed": True}))
         elif args.command in {"http-mcp", "login"}:
             tokens = ClientTokens(
                 directory, resource=args.resource, client=args.client_id, profile=args.profile
