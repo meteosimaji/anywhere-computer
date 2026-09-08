@@ -60,6 +60,9 @@ def test_systemd_escaping_does_not_expand_environment_or_specifiers(tmp_path):
     arguments = [part.replace("%%", "%") for part in shlex.split(command[1:])]
     assert arguments == [os.path.abspath(sys.executable), "-m", "anywhere_computer.cli",
                          "remote-watch", "--state-dir", str(state.resolve())]
+    working = next(line.removeprefix("WorkingDirectory=") for line in text.splitlines()
+                   if line.startswith("WorkingDirectory="))
+    assert working.replace("%%", "%") == str(state.resolve()) + "/."
     assert "Restart=no\n" in text and "KillMode=control-group\n" in text
     assert "User=" not in text and "After=default.target" not in text
 
@@ -110,7 +113,7 @@ def test_systemd_unit_passes_native_validator(tmp_path):
         pytest.skip("systemd-analyze is unavailable")
     interpreter = tmp_path / "python 日本語 $HOME 100%"
     interpreter.symlink_to(sys.executable)
-    definition = definition_for(tmp_path / "日本語 $HOME 100%", "linux",
+    definition = definition_for(tmp_path / '日本語 $HOME 100% "quoted" \\ tail ', "linux",
                                 executable=str(interpreter))
     exported = tmp_path / (definition.name + ".service")
     exported.write_bytes(definition.content)

@@ -64,10 +64,13 @@ def startup_definition(
     if platform == "linux":
         # ':' disables environment expansion, including literal '$' in paths.
         command = ":" + " ".join(_systemd_quote(value) for value in [executable, *arguments])
+        # WorkingDirectory is a scalar path, not a quoted command argument. The
+        # '/.' suffix preserves a final space or backslash through INI line parsing.
+        working_directory = str(directory).replace("%", "%%") + "/."
         content = (
             "[Unit]\nDescription=Anywhere Computer remote connection\n"
             "After=graphical-session.target\n\n[Service]\nType=simple\n"
-            f"ExecStart={command}\nWorkingDirectory={_systemd_quote(str(directory))}\n"
+            f"ExecStart={command}\nWorkingDirectory={working_directory}\n"
             "Restart=no\nUMask=0077\nKillMode=control-group\nTimeoutStopSec=30\n"
             "\n[Install]\nWantedBy=default.target\n"
         ).encode()
