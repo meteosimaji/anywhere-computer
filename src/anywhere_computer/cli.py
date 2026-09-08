@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import getpass
 import json
+import signal
 import sys
 from pathlib import Path
 
@@ -21,6 +22,7 @@ from .http_service import (
     revoke_http_device,
     serve_http,
 )
+from .http_supervisor import watch_http
 from .mcp_server import run_mcp
 from .native_login import login
 from .owner_credentials import OwnerCredentials
@@ -47,6 +49,7 @@ def main() -> None:
             "login",
             "http-configure",
             "http-serve",
+            "http-watch",
             "http-show",
             "http-doctor",
             "http-revoke",
@@ -269,7 +272,11 @@ def main() -> None:
             print(json.dumps({"http_device_enabled": True, "changed": changed}))
         elif args.command == "http-auth-status":
             print(json.dumps(http_authorization_status(directory)))
+        elif args.command == "http-watch":
+            raise SystemExit(watch_http(directory))
         elif args.command == "http-serve":
+            if sys.platform == "win32":
+                signal.signal(signal.SIGBREAK, signal.default_int_handler)
             asyncio.run(serve_http(directory))
         elif args.command in {"owner-init", "owner-change"}:
             if not sys.stdin.isatty():

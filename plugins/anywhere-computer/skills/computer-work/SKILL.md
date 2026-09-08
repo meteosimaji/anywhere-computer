@@ -50,7 +50,9 @@ missing response as proof that a write did not happen.
 This plugin connects to the local agent by default. The separate remote-mcp CLI
 can select an already configured SSH device. http-mcp can select an authorized
 HTTP profile. http-configure/http-serve support a persistent loopback HTTP server
-behind an owner-configured HTTPS proxy. These do not provision a public endpoint
+behind an owner-configured HTTPS proxy. http-watch can supervise a configured
+server in the foreground with bounded crash restarts; it does not repair hangs,
+network outages, or restore terminal sessions after a server crash. These do not provision a public endpoint
 or managed internet relay. http-doctor probes only configured loopback metadata;
 metadata_reachable does not prove authenticated readiness or public HTTPS reachability. GUI interaction and OCR are not implemented. Explain
 those limits when they affect the requested task.
