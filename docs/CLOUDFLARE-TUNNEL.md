@@ -177,3 +177,14 @@ This does not install a login service, restore live terminal processes after a
 runtime crash, or automatically replay operations whose result is unknown.
 Clients must use operation status and the existing reconnection behavior. Hung
 children and OS login/logout behavior still require further lifecycle work.
+
+The CLI lifecycle integration tests now launch the real `remote-watch →
+remote-serve → tunnel-run` chain with a disposable HTTP configuration. They kill
+the actual HTTP interpreter and verify replacement processes, reuse of a persisted
+OAuth grant with a fresh MCP session, and duplicate-operation suppression after
+a completed write. They also kill the watcher and check that the HTTP and
+connector processes stop and the loopback port closes. A subprocess-scoped test
+vault and a synthetic connector consuming the real secret pipe replace the OS
+credential service and external provider in these tests. This is process/HTTP
+integration evidence, not public-internet or native-vault qualification; the
+provider probe remains a separate test.
