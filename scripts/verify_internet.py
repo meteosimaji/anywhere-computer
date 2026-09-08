@@ -1,9 +1,10 @@
-"""Explicit, temporary public-HTTPS probe; requires an existing cloudflared binary.
+"""Explicit public-HTTPS probe; requires an existing cloudflared binary.
 
 Only a disposable text file and generated binary download are exposed. No terminal,
-owner files, production agent credentials, background service or permanent tunnel
-is used. A disposable
-OAuth pair is saved in the OS keyring and removed during cleanup.
+owner files or production agent credentials are exposed. By default a temporary
+tunnel is used. --tunnel-state-dir selects an existing dedicated constant tunnel
+and tests an owned connector crash; its saved token and provider route are retained.
+Disposable OAuth credentials, files and processes are removed during cleanup.
 """
 
 import argparse
@@ -12,6 +13,7 @@ import base64
 import dataclasses
 import functools
 import hashlib
+import hmac
 import http.client
 import ipaddress
 import json
@@ -20,6 +22,7 @@ import secrets
 import shutil
 import socket
 import ssl
+import sys
 import tempfile
 import time
 import urllib.error
@@ -27,14 +30,19 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import psutil
+
 from anywhere_computer.authorization import AuthorizationStore
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
 from anywhere_computer.browser_authorization import BrowserAuthorization
 from anywhere_computer.client_tokens import ClientAuthorizationRequired, ClientTokens, TokenReply
+from anywhere_computer.cloudflare_tunnel import TunnelCredential
 from anywhere_computer.downloads import DOWNLOAD_TOOLS
 from anywhere_computer.engine import Engine
+from anywhere_computer.files import read_bytes
 from anywhere_computer.http_client import HTTPBackend, HTTPResponse
 from anywhere_computer.http_mcp import HTTPMCP
+from anywhere_computer.http_service import load_http_config
 from anywhere_computer.models import BeginDownload, ReadFile, Request, WriteFile
 from anywhere_computer.native_login import login
 from anywhere_computer.oauth_endpoints import OAuthEndpoints
@@ -43,6 +51,58 @@ from anywhere_computer.owner_credentials import OwnerCredentials
 
 class DNSNotReady(RuntimeError):
     pass
+
+
+def require_no_store(headers):
+    values = [value for name, value in headers.items() if name.lower() == "cache-control"]
+    if not values or "no-store" not in {part.strip().lower() for part in values[0].split(",")}:
+        raise RuntimeError("Public authentication/MCP response lost its no-store header")
+
+
+def load_probe_tunnel(directory):
+    """Refuse ordinary service profiles before opening their credential store.
+
+    This owner-controlled marker prevents accidental profile selection, not a
+    malicious local owner. Provisioning must verify a newly dedicated provider
+    tunnel/route before recording this binding; a normal token is not sufficient.
+    """
+    config = load_http_config(directory)
+    marker = directory / "provisioning.json"
+    if not marker.is_file() or marker.is_symlink():
+        raise ValueError("Constant probe requires its dedicated provisioning marker")
+    data = read_bytes(marker)
+    if len(data) > 16384:
+        raise ValueError("Probe provisioning marker exceeds limit")
+    record = json.loads(data)
+    if (
+        not isinstance(record, dict)
+        or record.get("purpose") != "Anywhere Computer isolated constant HTTPS development probe"
+        or record.get("phase") != "route_ready_for_probe"
+        or record.get("hostname") != urllib.parse.urlsplit(config.resource).hostname
+        or record.get("port") != config.port
+        or not isinstance(record.get("probe_binding"), dict)
+    ):
+        raise ValueError("State directory is not an enrolled constant probe")
+    binding = record["probe_binding"]
+    expected = {
+        "state_directory": str(directory.resolve()),
+        "resource": config.resource,
+        "device": config.device,
+        "port": config.port,
+    }
+    if any(binding.get(name) != value for name, value in expected.items()):
+        raise ValueError("Probe configuration differs from its dedicated binding")
+    credential = TunnelCredential(directory)
+    digest = hashlib.sha256(credential.read().encode("ascii")).hexdigest()
+    fingerprint = binding.get("token_sha256")
+    if (
+        binding.get("credential_account") != credential.account
+        or not isinstance(fingerprint, str)
+        or not re.fullmatch(r"[a-f0-9]{64}", fingerprint)
+        or not hmac.compare_digest(fingerprint, digest)
+    ):
+        raise ValueError("Tunnel credential differs from the dedicated probe enrollment")
+    return config
 
 
 def resolve_public(host):
@@ -164,16 +224,107 @@ def restricted_engine(directory):
     return engine, target
 
 
-async def verify(receipt_path):
+async def stop_probe_tunnel(process, children, drain=None):
+    """Stop the owned runner and only child identities observed under that runner."""
+    if process and process.returncode is None:
+        try:
+            process.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(process.wait(), 20)
+        except TimeoutError:
+            process.kill()
+            await process.wait()
+    # The runner alone owns this stdout pipe; cloudflared uses DEVNULL. Drain its
+    # final lifecycle events before freezing the set of observed child identities.
+    observation_failed = False
+    if drain:
+        try:
+            await asyncio.wait_for(asyncio.shield(drain), 5)
+        except Exception:
+            observation_failed = True
+            drain.cancel()
+            await asyncio.gather(drain, return_exceptions=True)
+    for pid, created in list(children.items()):
+        try:
+            child = psutil.Process(pid)
+            if child.create_time() != created:
+                continue  # Never act on a reused PID.
+            child.terminate()
+            try:
+                await asyncio.to_thread(child.wait, 5)
+            except psutil.TimeoutExpired:
+                child.kill()
+                await asyncio.to_thread(child.wait, 5)
+        except psutil.NoSuchProcess:
+            pass
+    if observation_failed:
+        raise RuntimeError("Connector lifecycle observation did not finish cleanly")
+
+
+async def cleanup_probe(
+    report,
+    *,
+    remote_client,
+    tunnel,
+    children,
+    drain,
+    client_tokens,
+    owner_credentials,
+    adapter,
+    store,
+    engine,
+):
+    """Attempt every cleanup, retaining only error classes and success flags."""
+
+    async def attempt(name, action):
+        try:
+            await action()
+            report[name] = True
+        except Exception as error:
+            report[name] = False
+            report["completed"] = False
+            report.setdefault("cleanup_failures", {})[name] = type(error).__name__
+
+    if remote_client:
+        await attempt("client_closed", remote_client.close)
+    if store:
+
+        async def revoke_grants():
+            store.revoke_device(owner="probe-owner", device="probe-device")
+
+        await attempt("cleanup_grants_revoked", revoke_grants)
+    if client_tokens:
+        await attempt("client_keyring_removed", lambda: asyncio.to_thread(client_tokens.forget))
+    if owner_credentials:
+        await attempt("owner_keyring_removed", lambda: asyncio.to_thread(owner_credentials.forget))
+    await attempt(
+        "owned_connector_processes_stopped", lambda: stop_probe_tunnel(tunnel, children, drain)
+    )
+    if adapter:
+        await attempt("adapter_closed", adapter.close)
+    if store:
+        # SQLite's connection stays on its creating thread.
+        async def close_store():
+            store.close()
+
+        await attempt("authorization_store_closed", close_store)
+    if engine:
+        await attempt("engine_closed", engine.close)
+
+
+async def verify(receipt_path, *, tunnel_directory=None):
     executable = shutil.which("cloudflared")
     if executable is None:
         raise RuntimeError("Install an optional cloudflared test binary before running this probe")
     report = {
-        "kind": "temporary-public-https",
+        "kind": "constant-public-https" if tunnel_directory else "temporary-public-https",
         "started_at": time.time(),
         "completed": False,
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "scope": "Same Mac via public HTTPS edge; disposable file/owner; HTTP consent form test",
+        "scope": f"Same {sys.platform} host via public HTTPS edge; disposable file/owner; "
+        "HTTP consent form test",
     }
     tunnel = None
     drain = None
@@ -183,6 +334,8 @@ async def verify(receipt_path):
     client_tokens = None
     remote_client = None
     owner_credentials = None
+    owned_children = {}
+    constant = load_probe_tunnel(tunnel_directory) if tunnel_directory else None
     with tempfile.TemporaryDirectory(prefix="anywhere-internet-") as raw:
         directory = Path(raw).resolve()
         backend = None
@@ -199,10 +352,10 @@ async def verify(receipt_path):
                 return backend.session(owner)
 
             adapter = HTTPMCP(authenticate, session)
-            port = await adapter.start()
+            port = await adapter.start(constant.port if constant else 0)
             config = directory / "tunnel-config.yml"
             config.write_text("{}\n", encoding="utf-8")
-            tunnel = await asyncio.create_subprocess_exec(
+            command = [
                 executable,
                 "tunnel",
                 "--no-autoupdate",
@@ -214,6 +367,18 @@ async def verify(receipt_path):
                 f"127.0.0.1:{port}",
                 "--protocol",
                 "http2",
+            ]
+            if constant:
+                command = [
+                    sys.executable,
+                    "-m",
+                    "anywhere_computer.cli",
+                    "tunnel-run",
+                    "--state-dir",
+                    str(tunnel_directory.resolve()),
+                ]
+            tunnel = await asyncio.create_subprocess_exec(
+                *command,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
             )
@@ -222,18 +387,39 @@ async def verify(receipt_path):
             async def read_tunnel():
                 assert tunnel.stdout is not None
                 while line := await tunnel.stdout.readline():
+                    if constant:
+                        try:
+                            event = json.loads(line)
+                        except ValueError:
+                            continue
+                        if isinstance(event, dict) and "tunnel_child_started" in event:
+                            pid = event["tunnel_child_started"]
+                            if type(pid) is not int:
+                                continue
+                            try:
+                                child = psutil.Process(pid)
+                                if child.ppid() == tunnel.pid:
+                                    owned_children[pid] = child.create_time()
+                                    report["latest_tunnel_child"] = pid
+                            except psutil.NoSuchProcess:
+                                pass
+                        continue
                     if b"Registered tunnel connection" in line:
                         report["tunnel_connected"] = True
                     matched = re.search(rb"https://[a-z0-9-]+\.trycloudflare\.com", line)
                     if matched and not found.done():
                         found.set_result(matched.group().decode("ascii"))
-                if not found.done():
+                if not constant and not found.done():
                     found.set_exception(
                         RuntimeError("Temporary tunnel exited before publishing URL")
                     )
 
             drain = asyncio.create_task(read_tunnel())
-            public = await asyncio.wait_for(found, 60)
+            public = (
+                constant.resource.removesuffix("/mcp")
+                if constant
+                else (await asyncio.wait_for(found, 60))
+            )
             report["public_url"] = public
             print(json.dumps({"stage": "tunnel_created", "public_url": public}), flush=True)
             store = AuthorizationStore(
@@ -275,11 +461,12 @@ async def verify(receipt_path):
             deadline = time.monotonic() + 60
             while True:
                 try:
-                    status, _, body = await asyncio.to_thread(
+                    status, metadata_headers, body = await asyncio.to_thread(
                         public_request, public + "/.well-known/oauth-protected-resource"
                     )
                     report["last_metadata_status"] = status
                     if status == 200 and body and body.get("resource") == public + "/mcp":
+                        require_no_store(metadata_headers)
                         break
                 except (OSError, urllib.error.URLError) as error:
                     report["last_network_error"] = type(error).__name__
@@ -299,6 +486,7 @@ async def verify(receipt_path):
                 status, form_headers, page = public_request(url, html=True)
                 if status != 200 or not isinstance(page, str):
                     raise RuntimeError("Public consent page was unavailable")
+                require_no_store(form_headers)
                 hidden = dict(re.findall(r"name=(request_id|csrf) value='([^']+)'", page))
                 cookie_header = next(
                     value for key, value in form_headers.items() if key.lower() == "set-cookie"
@@ -311,6 +499,7 @@ async def verify(receipt_path):
                 )
                 if status != 303:
                     raise RuntimeError("Public owner authentication failed")
+                require_no_store(consent_headers)
                 location = next(
                     value for key, value in consent_headers.items() if key.lower() == "location"
                 )
@@ -340,7 +529,7 @@ async def verify(receipt_path):
 
             def exchange_code(resource, client, redirect, code, verifier):
                 nonlocal token_body
-                status, _, token_body = public_request(
+                status, response_headers, token_body = public_request(
                     public + "/oauth/token",
                     method="POST",
                     form={
@@ -354,10 +543,11 @@ async def verify(receipt_path):
                 )
                 if status != 200 or not token_body:
                     raise RuntimeError("Public token exchange failed")
+                require_no_store(response_headers)
                 return TokenReply.model_validate(token_body)
 
             def refresh_client(resource, client, refresh_token):
-                status, _, renewed = public_request(
+                status, response_headers, renewed = public_request(
                     public + "/oauth/token",
                     method="POST",
                     form={
@@ -369,6 +559,7 @@ async def verify(receipt_path):
                 )
                 if status != 200:
                     raise ClientAuthorizationRequired("Public client authorization was rejected")
+                require_no_store(response_headers)
                 return TokenReply.model_validate(renewed)
 
             client_tokens = ClientTokens(
@@ -406,6 +597,8 @@ async def verify(receipt_path):
                 status, response_headers, body = public_request(
                     resource, method=method, payload=packet, headers=headers
                 )
+                if status in {200, 401}:
+                    require_no_store(response_headers)
                 if status == 401:
                     rejected_after_revocation = True
                 if (
@@ -575,6 +768,52 @@ async def verify(receipt_path):
                 raise RuntimeError("Client did not recover an expired public MCP session")
             report["session_recovery_verified"] = True
             report["write_read_across_sessions"] = True
+            if constant:
+                previous_child = report.get("latest_tunnel_child")
+                if previous_child not in owned_children:
+                    raise RuntimeError("No owned connector identity for restart test")
+                child = psutil.Process(previous_child)
+                if (
+                    child.ppid() != tunnel.pid
+                    or child.create_time() != owned_children[previous_child]
+                ):
+                    raise RuntimeError("Connector ownership changed before restart test")
+                prior_session = remote_client.session_id
+                recovery_started = time.monotonic()
+                child.kill()  # Only this probe runner's observed, identity-checked child.
+                report["tunnel_child_crash_injected"] = True
+                deadline = time.monotonic() + 90
+                while True:
+                    if time.monotonic() >= deadline or tunnel.returncode is not None:
+                        raise RuntimeError("Constant tunnel did not recover its owned child")
+                    replacement = report.get("latest_tunnel_child")
+                    if replacement in owned_children and replacement != previous_child:
+                        try:
+                            status, _, body = await asyncio.to_thread(
+                                public_request, public + "/.well-known/oauth-protected-resource"
+                            )
+                            if status == 200 and body and body.get("resource") == public + "/mcp":
+                                break
+                        except (OSError, urllib.error.URLError):
+                            pass
+                    await asyncio.sleep(0.25)
+                read = await remote_client.execute(
+                    Request(
+                        operation_id=secrets.token_hex(16),
+                        tool="files_read",
+                        arguments={"path": str(target)},
+                    )
+                )
+                if (
+                    read.state != "completed"
+                    or read.data.get("text") != text
+                    or remote_client.session_id != prior_session
+                ):
+                    raise RuntimeError("Authenticated MCP session did not survive tunnel restart")
+                report["tunnel_child_crash_recovered"] = True
+                report["tunnel_recovery_seconds"] = time.monotonic() - recovery_started
+                report["same_authorized_session_after_tunnel_restart"] = True
+                print(json.dumps({"stage": "constant_tunnel_restart_verified"}), flush=True)
             store.revoke_device(owner="probe-owner", device="probe-device")
             denied = await remote_client.execute(
                 Request(
@@ -586,45 +825,24 @@ async def verify(receipt_path):
             if denied.state != "failed" or not rejected_after_revocation:
                 raise RuntimeError("Public request remained authorized after device revocation")
             report["revocation_verified"] = True
+            report["no_store_headers_verified"] = True
             report["completed"] = True
         except Exception as error:
             report["failure_type"] = type(error).__name__
             # Do not persist exception text, requests, tokens, codes, or tunnel logs.
-            raise
         finally:
-            if remote_client:
-                await remote_client.close()
-            if tunnel and tunnel.returncode is None:
-                tunnel.terminate()
-                try:
-                    await asyncio.wait_for(tunnel.wait(), 10)
-                except TimeoutError:
-                    tunnel.kill()
-                    await tunnel.wait()
-            if drain:
-                await asyncio.gather(drain, return_exceptions=True)
-            if client_tokens:
-                try:
-                    await asyncio.to_thread(client_tokens.forget)
-                    report["client_keyring_removed"] = True
-                except Exception:
-                    report["client_keyring_removed"] = False
-                    report["completed"] = False
-                    report["failure_type"] = "ClientCredentialCleanupFailed"
-            if owner_credentials:
-                try:
-                    await asyncio.to_thread(owner_credentials.forget)
-                    report["owner_keyring_removed"] = True
-                except Exception:
-                    report["owner_keyring_removed"] = False
-                    report["completed"] = False
-                    report["failure_type"] = "OwnerCredentialCleanupFailed"
-            if adapter:
-                await adapter.close()
-            if store:
-                store.close()
-            if engine:
-                await engine.close()
+            await cleanup_probe(
+                report,
+                remote_client=remote_client,
+                tunnel=tunnel,
+                children=owned_children,
+                drain=drain,
+                client_tokens=client_tokens,
+                owner_credentials=owner_credentials,
+                adapter=adapter,
+                store=store,
+                engine=engine,
+            )
             report["tunnel_stopped"] = tunnel is None or tunnel.returncode is not None
             report["finished_at"] = time.time()
             receipt_path.parent.mkdir(parents=True, exist_ok=True)
@@ -639,9 +857,14 @@ async def verify(receipt_path):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--receipt", type=Path, default=Path("dist/internet-verification.json"))
+    parser.add_argument(
+        "--tunnel-state-dir",
+        type=Path,
+        help="Use an existing dedicated constant tunnel; performs an owned child crash test",
+    )
     arguments = parser.parse_args()
     try:
-        asyncio.run(verify(arguments.receipt))
+        asyncio.run(verify(arguments.receipt, tunnel_directory=arguments.tunnel_state_dir))
     except Exception as error:
         print(json.dumps({"completed": False, "failure_type": type(error).__name__}), flush=True)
         raise SystemExit(1) from None

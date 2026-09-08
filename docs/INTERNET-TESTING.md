@@ -1,10 +1,11 @@
-# Temporary public HTTPS verification
+# Public HTTPS verification
 
 The integration runner `scripts/verify_internet.py` exercises the current HTTP
-MCP and OAuth code-redemption implementation through a temporary public HTTPS
-edge. It uses an already installed `cloudflared` binary as an optional testing
-tool. Cloudflared is not a runtime dependency, bundled component, permanent
-service, or the product's production relay implementation.
+MCP and OAuth implementation through a public HTTPS edge. The default mode uses
+a temporary tunnel; an explicit option uses an enrolled, dedicated constant
+tunnel. Both use an already installed `cloudflared` binary. It is an optional
+external adapter, not a Python dependency or bundled component. The probe does
+not install an OS service or configure provider routing.
 
 Run it explicitly from a checkout with the development environment installed:
 
@@ -17,7 +18,8 @@ exposes `files_read` and `files_write`, with handlers restricted to one specific
 disposable text file and a 1 KiB write limit, plus `operations_get` for this
 isolated grant's operation results. Four download tools are also exposed, with
 `download_begin` restricted to a generated 17 MiB binary file in the temporary directory. It does not use the normal agent,
-credentials, terminal tools, registered devices or existing files. The test
+OAuth credentials, terminal tools, registered devices or existing files. Constant
+mode uses only the explicitly selected native-keyring tunnel credential. The test
 creates its own authorization store and random short-lived credentials. Its
 disposable client pair and owner-password verifier are saved in separate OS
 keyring entries and deleted during cleanup; an unlocked native credential store
@@ -81,16 +83,73 @@ Linux internet test, or a ChatGPT browser connection. The initial receipt used
 internal approval and a placeholder authorization URL. The later browser-consent
 and native-login receipts below use the implemented authorization route and
 actual HTTP form submission. Their browser interaction is driven programmatically;
-visual rendering and a human browser login are not claimed. The URL is
-retired when the runner exits and should not be configured as a live connector.
+visual rendering and a human browser login are not claimed. In default temporary
+mode the URL is retired when the runner exits and should not be configured as a live connector.
 
-Production work remains: stable HTTPS hosting, a complete server provisioning
-workflow, public client registration policy, persistent outbound routing, network outage/sleep recovery,
+Production work remains: a complete server provisioning/installation
+workflow, public client registration policy, combined startup, network outage/sleep recovery,
 operational limits and platform-specific live validation. Client token renewal
 and explicit expired-session recovery are now implemented. `remote_ready` therefore remains
 false for the normal agent. Cloudflare describes Quick Tunnels as a testing
 facility, not a production service:
 [Quick Tunnels documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+
+## Dedicated constant tunnel mode
+
+```sh
+uv run python scripts/verify_internet.py --tunnel-state-dir /absolute/path/to/dedicated-probe-state --receipt dist/constant-internet-verification.json
+```
+
+This mode uses an existing dedicated provider route, its configured loopback port,
+and `anywhere tunnel-run`. It creates its own restricted engine, authorization
+database and short-lived owner/client credentials, as in temporary mode. It does
+not run the HTTP service configured in that state directory or enroll a permanent
+owner password. An already occupied loopback port fails before starting a connector.
+
+An ordinary HTTP service profile is rejected. The state must have its development
+`provisioning.json` marker with the dedicated-probe purpose and completed route
+phase. Its binding must match the resolved state directory, resource, device ID,
+port, native-keyring account and tunnel-token SHA-256. The fingerprint is not a
+usable token. This is protection against accidental profile selection, not a
+security boundary against a malicious local owner. Do not turn a production
+profile into a probe by editing its marker. Development provisioning must verify
+the dedicated provider tunnel identity, inactive connectors, ingress/Host rules,
+DNS target and provider-token/Keychain equality before recording this binding.
+The verifier checks the saved binding; it does not itself access the account API.
+A general provisioning/enrollment command is still pending.
+
+After the authenticated transfer and refresh checks, this mode checks the connector
+PID, parent PID and process creation time against the child observed under its
+own runner. It kills that child, waits for a different observed child and public
+metadata readiness, then requires an authenticated files_read with the same MCP
+session ID to succeed. If the target exits before fault injection succeeds, the
+run fails instead of claiming a crash was injected. This tests a connector process
+crash, not a physical network interruption, OS sleep or host reboot. The HTTP
+engine remains alive throughout this fault.
+
+The final run recorded **17 MiB / 68 chunks in 17.64 seconds**, full SHA-256
+agreement, and **6.60 seconds** from connector termination to the successful
+same-session read. It also verified no-store response headers for metadata,
+consent, token exchange/refresh and MCP responses. See the
+[constant-route receipt](research/2026-09-09-constant-internet-verification.json)
+for the exact runtime/script hashes and individual checks. These timings are one
+macOS observation, not a throughput or recovery-time guarantee.
+
+Cleanup revokes the disposable grants, removes both disposable OS-store entries,
+stops the owned runner/observed connector identities, and closes the adapter,
+authorization store and engine. Every cleanup is attempted even if another fails;
+failure classes and flags are recorded without credential values. Tests cover a
+late child-identity event, refusal to kill a reused PID, rejection of an unbound or
+changed profile, and credential cleanup despite connector-stop failure.
+
+The **constant DNS record, provider tunnel, development binding and tunnel token
+are retained** for subsequent work. The probe server and connector are stopped
+after the test, so this receipt is not evidence of a currently online production
+endpoint. OS autostart, health monitoring, full browser onboarding, two physical
+devices and live Windows/Linux internet paths remain unverified.
+The separate [post-test route readback](research/2026-09-09-constant-route-setup.json)
+confirms the retained DNS/ingress/native credential binding, zero provider
+connections, released loopback port, and absence of a permanent HTTP owner password.
 
 The subsequent [refresh verification receipt](research/2026-09-09-internet-refresh-verification.json)
 also records public token rotation and continuing the same MCP session. Each

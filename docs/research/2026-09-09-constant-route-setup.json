@@ -1,0 +1,15 @@
+{
+  "verified_at": 1788898836.64643,
+  "runtime_id": "e9904fa21e537e67021b676cd63008a369f69617854b02bd8e26e9d1aa62378c",
+  "resource": "https://anywhere.simajilord.com/mcp",
+  "provider_tunnel_status": "down",
+  "provider_connections": 0,
+  "dedicated_route_readback_verified": true,
+  "dns_readback_verified": true,
+  "native_tunnel_token_matches_provider": true,
+  "dedicated_probe_binding_matches": true,
+  "permanent_http_owner_initialized": false,
+  "loopback_port_released": true,
+  "provider_configuration_and_tunnel_credential_retained": true,
+  "scope": "Dedicated development route; disposable probe stopped; no production autostart or browser onboarding claim"
+}

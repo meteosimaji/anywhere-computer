@@ -102,8 +102,13 @@ temporary directory, verifies its SHA-256, runs its real token-file parser with
 an invalid synthetic token, and removes the binary. The token must be read to
 EOF and rejected as invalid. This proves compatibility of the tested binary's
 pipe input, **not** account authorization, NAT traversal, TLS, OAuth, or public
-MCP operation. The existing temporary HTTPS probe remains separate evidence;
-a constant hostname and full authenticated lifecycle still need a live test.
+MCP operation. Separately, the
+[constant-route internet probe](INTERNET-TESTING.md#dedicated-constant-tunnel-mode)
+has verified public HTTPS, OAuth, a 17 MiB complete download, refresh/revocation,
+and an authenticated session surviving an owned connector crash on macOS.
+That probe uses a dedicated provider route and restrictive temporary engine;
+it stops its server/connector after the run and does not prove production autostart,
+normal network outage/sleep recovery, or Windows/Linux internet behavior.
 
 Cloudflare documents `--token-file`, but does not explicitly guarantee named
 pipe/FIFO input. Keep the real-binary compatibility test when updating versions.
