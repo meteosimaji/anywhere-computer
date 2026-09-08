@@ -52,6 +52,48 @@ def sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def describe_metadata(metadata: os.stat_result) -> dict[str, JsonValue]:
+    kinds = ((stat.S_ISREG, "file"), (stat.S_ISDIR, "directory"),
+             (stat.S_ISLNK, "symlink"), (stat.S_ISFIFO, "fifo"),
+             (stat.S_ISSOCK, "socket"), (stat.S_ISCHR, "character_device"),
+             (stat.S_ISBLK, "block_device"))
+    return {
+        "kind": next((name for check, name in kinds if check(metadata.st_mode)), "unknown"),
+        "size": metadata.st_size,
+        "modified": metadata.st_mtime,
+        "accessed": metadata.st_atime,
+        "status_changed": metadata.st_ctime if os.name != "nt" else None,
+        "created": getattr(metadata, "st_birthtime", None),
+        "permissions": stat.filemode(metadata.st_mode),
+        "mode_octal": oct(stat.S_IMODE(metadata.st_mode)),
+        "permissions_scope": "mode_bits_not_effective_access_or_acl",
+        "directory": stat.S_ISDIR(metadata.st_mode),
+    }
+
+
+def inspect_file(path_value: str) -> dict[str, JsonValue]:
+    path = absolute_path(path_value)
+    link = path.lstat()
+    is_link = stat.S_ISLNK(link.st_mode)
+    result: dict[str, JsonValue] = {
+        "path": str(path), "symlink": is_link,
+        "entry": describe_metadata(link),
+    }
+    if not is_link:
+        return {**result, **describe_metadata(link), "metadata_subject": "entry"}
+    result["link_target"] = os.readlink(path)
+    try:
+        target = path.stat()
+    except FileNotFoundError:
+        return {**result, "target_state": "missing", "metadata_subject": "target",
+                "size": None, "modified": None, "directory": False}
+    except OSError:
+        return {**result, "target_state": "unavailable", "metadata_subject": "target",
+                "size": None, "modified": None, "directory": False}
+    return {**result, **describe_metadata(target), "target_state": "resolved",
+            "metadata_subject": "target"}
+
+
 class Files:
     def __init__(self, state: Path, *, locks: Path | None = None) -> None:
         self.locks = locks if locks is not None else state / "file-locks"

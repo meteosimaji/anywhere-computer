@@ -7,6 +7,7 @@ import os
 import stat
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Literal
 
@@ -22,6 +23,7 @@ class PublicMonitorSettings(BaseModel):
     version: Literal[1] = 1
     enabled: bool = False
     resource: str = Field(default="", max_length=2048)
+    generation: str = Field(default="", pattern=r"^(?:[a-f0-9]{32})?$")
 
 
 class PublicMonitorObservation(BaseModel):
@@ -83,8 +85,11 @@ def configure_public_monitor(directory: Path, *, enabled: bool) -> dict[str, Jso
         )
         destination = directory / "remote-health.json"
         previous = _read_monitor_file(destination, PublicMonitorSettings)
-        changed = previous != settings
+        changed = previous is None or (previous.enabled, previous.resource) != (
+            settings.enabled, settings.resource,
+        )
         if changed:
+            settings.generation = uuid.uuid4().hex
             _write_monitor_file(destination, settings)
     return {"enabled": enabled, "resource": settings.resource, "changed": changed,
             "interval_seconds": 30, "service_started": False}
@@ -122,14 +127,17 @@ async def monitor_public_health(directory: Path, *, interval: float = 30) -> Non
         raise ValueError("Invalid public monitor interval")
     failures = 0
     selected_resource = ""
+    selected_generation = ""
     while True:
         try:
             settings = _read_monitor_file(directory / "remote-health.json", PublicMonitorSettings)
             if settings is None or not settings.enabled:
-                failures, selected_resource = 0, ""
+                failures, selected_resource, selected_generation = 0, "", ""
             elif settings.resource == load_http_config(directory).resource:
-                if selected_resource != settings.resource:
+                if (selected_resource != settings.resource
+                        or selected_generation != settings.generation):
                     failures, selected_resource = 0, settings.resource
+                    selected_generation = settings.generation
                 report = await asyncio.wait_for(
                     diagnose_remote(directory, probe_public=True,
                                     expected_resource=settings.resource), 10,

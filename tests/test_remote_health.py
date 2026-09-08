@@ -118,6 +118,32 @@ async def test_disable_discards_inflight_result_and_cancellation_reaches_probe(
     assert cancelled.is_set()
 
 
+async def test_reenable_same_resource_discards_previous_generation(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        remote_health, "load_http_config", lambda _: SimpleNamespace(resource="same")
+    )
+    remote_health.configure_public_monitor(tmp_path, enabled=True)
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def probe(*args, **kwargs):
+        started.set()
+        await release.wait()
+        return {"loopback": {"state": "metadata_reachable"},
+                "public": {"state": "metadata_reachable"}}
+
+    monkeypatch.setattr(http_diagnostics, "diagnose_remote", probe)
+    task = asyncio.create_task(remote_health.monitor_public_health(tmp_path, interval=30))
+    try:
+        await asyncio.wait_for(started.wait(), 2)
+        remote_health.configure_public_monitor(tmp_path, enabled=False)
+        remote_health.configure_public_monitor(tmp_path, enabled=True)
+        release.set()
+        await asyncio.sleep(0.03)
+        assert not (tmp_path / "remote-health-observation.json").exists()
+    finally:
+        await cancel_monitor(task)
+
+
 def test_corrupt_monitor_history_is_not_disclosed(tmp_path):
     (tmp_path / "remote-health-observation.json").write_text("secret private malformed data")
     status = remote_health.public_monitor_status(tmp_path)

@@ -14,7 +14,7 @@ from pydantic import JsonValue
 from . import __version__
 from .documents import read_document
 from .downloads import Downloads
-from .files import Files, absolute_path
+from .files import Files, absolute_path, inspect_file
 from .models import (
     BeginDownload,
     BeginUpload,
@@ -177,15 +177,7 @@ class Engine:
             return {"path": str(path)}
 
         async def info(args: FilePath) -> Result:
-            path = absolute_path(args.path)
-            metadata = await asyncio.to_thread(path.stat)
-            return {
-                "path": str(path),
-                "size": metadata.st_size,
-                "modified": metadata.st_mtime,
-                "directory": path.is_dir(),
-                "symlink": path.is_symlink(),
-            }
+            return await asyncio.to_thread(inspect_file, args.path)
 
         async def move(args: MoveFile) -> Result:
             return await asyncio.to_thread(self.files.move, args)
