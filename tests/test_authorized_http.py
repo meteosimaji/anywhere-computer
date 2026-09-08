@@ -1,0 +1,139 @@
+import httpx
+
+from anywhere_computer.authorization import AuthorizationStore, pkce_s256
+from anywhere_computer.authorized_http import AuthorizedDeviceMCP
+from anywhere_computer.engine import Engine
+from anywhere_computer.http_mcp import HTTPMCP
+
+
+async def test_real_http_enforces_device_scope_and_revocation(tmp_path):
+    engine = Engine(tmp_path / "agent")
+    resource = "https://computer.example/mcp"
+    redirect = "https://client.example/callback"
+    authority = AuthorizationStore(
+        tmp_path / "auth", resource=resource, known_tools=frozenset(engine.tools)
+    )
+    authority.register_client("client", frozenset({redirect}))
+    permissions = frozenset({"computer_status", "files_read", "files_write", "operations_get"})
+    authority.enroll_device("owner", "device", permissions)
+    authority.enroll_device("owner", "other-device", permissions)
+
+    def issue(device, tools):
+        verifier = "x" * 43
+        code = authority.approve(
+            owner="owner",
+            device=device,
+            client="client",
+            redirect=redirect,
+            resource=resource,
+            tools=frozenset(tools),
+            challenge=pkce_s256(verifier),
+        )
+        return authority.exchange_code(
+            code=code,
+            verifier=verifier,
+            client="client",
+            redirect=redirect,
+            resource=resource,
+        ).value
+
+    read_token = issue("device", {"computer_status", "files_read", "operations_get"})
+    wrong_device_token = issue("other-device", permissions)
+    write_token = issue("device", permissions)
+    backend = AuthorizedDeviceMCP(authority, engine, owner="owner", device="device")
+    adapter = HTTPMCP(backend.authenticate, backend.session)
+    port = await adapter.start()
+    initialize = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1"},
+        },
+    }
+    try:
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{port}",
+            headers={
+                "Authorization": f"Bearer {read_token}",
+                "Accept": "application/json, text/event-stream",
+            },
+        ) as http:
+            denied = await http.post(
+                "/mcp",
+                json=initialize,
+                headers={
+                    "Authorization": f"Bearer {wrong_device_token}",
+                },
+            )
+            assert denied.status_code == 401
+            started = await http.post("/mcp", json=initialize)
+            read_session = started.headers["mcp-session-id"]
+            http.headers["MCP-Session-Id"] = read_session
+            await http.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+            catalog = (
+                await http.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "tools/list",
+                    },
+                )
+            ).json()
+            assert {tool["name"] for tool in catalog["result"]["tools"]} == {
+                "computer_status",
+                "files_read",
+                "operations_get",
+            }
+            target = tmp_path / "scope.txt"
+            write = {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "files_write",
+                    "arguments": {"path": str(target), "text": "approved"},
+                },
+            }
+            denied = (await http.post("/mcp", json=write)).json()
+            assert denied["error"]["code"] == -32602 and not target.exists()
+            http.headers.pop("MCP-Session-Id")
+            http.headers["Authorization"] = f"Bearer {write_token}"
+            started = await http.post("/mcp", json=initialize)
+            write_session = started.headers["mcp-session-id"]
+            http.headers["MCP-Session-Id"] = write_session
+            await http.post("/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+            written = (await http.post("/mcp", json=write)).json()["result"]["structuredContent"]
+            assert written["state"] == "completed" and target.read_text() == "approved"
+            # Another grant cannot inspect the writer's operation, even for the same owner.
+            http.headers["Authorization"] = f"Bearer {read_token}"
+            http.headers["MCP-Session-Id"] = read_session
+            lookup = (
+                await http.post(
+                    "/mcp",
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": 4,
+                        "method": "tools/call",
+                        "params": {
+                            "name": "operations_get",
+                            "arguments": {"operation_id": written["operation_id"]},
+                        },
+                    },
+                )
+            ).json()["result"]["structuredContent"]
+            assert lookup["state"] == "failed"
+            read_grant = authority.verify(read_token, resource=resource)
+            authority.revoke(owner="owner", grant=read_grant.grant_id)
+            assert (await http.post("/mcp", json=write)).status_code == 401
+            http.headers["Authorization"] = f"Bearer {write_token}"
+            http.headers["MCP-Session-Id"] = write_session
+            authority.revoke_device(owner="owner", device="device")
+            assert (await http.post("/mcp", json=write)).status_code == 401
+    finally:
+        await adapter.close()
+        authority.close()
+        await engine.close()

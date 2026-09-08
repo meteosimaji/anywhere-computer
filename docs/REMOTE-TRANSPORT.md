@@ -117,3 +117,7 @@ is deliberately no CLI command enabling this listener for public use yet.
 [2025-11-25 transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports);
 OAuth integration must also follow the
 [authorization specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization).
+
+The internal code/token grant store and authenticated device binding are now
+implemented; see [Device authorization](AUTHORIZATION.md). OAuth HTTP discovery,
+login/consent and token issuance endpoints remain unimplemented.

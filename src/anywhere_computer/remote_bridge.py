@@ -10,6 +10,7 @@ import ssl
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import JsonValue
 
@@ -20,8 +21,15 @@ from .remote_transport import remote_exchange
 
 
 class RemoteAgent:
-    def __init__(self, engine: Engine, grants: Mapping[str, frozenset[str]]) -> None:
+    def __init__(
+        self,
+        engine: Engine,
+        grants: Mapping[str, frozenset[str]],
+        *,
+        transport: Literal["mutual-tls", "http"] = "mutual-tls",
+    ) -> None:
         self.engine = engine
+        self.transport = transport
         self.grants: dict[str, frozenset[str]] = {}
         for identity, tools in grants.items():
             self.grant(identity, tools)
@@ -92,7 +100,7 @@ class RemoteAgent:
         if target_id is not None and result.state == "completed":
             data["operation_id"] = target_id
         if request.tool == "computer_status" and result.state == "completed":
-            data["transport"] = "mutual-tls"
+            data["transport"] = self.transport
             # This establishes this channel, not NAT/internet reachability or HTTP MCP.
             data["remote_channel_authenticated"] = True
         return result.model_copy(update={"operation_id": request.operation_id, "data": data})
