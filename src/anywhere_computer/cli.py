@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .connection import ensure_agent, exchange, serve
 from .devices import DeviceStore
+from .diagnostics import diagnose
 from .mcp_server import run_mcp
 from .ssh_transport import run_ssh_mcp
 from .state import state_directory
@@ -95,6 +96,11 @@ def main() -> None:
             asyncio.run(serve(directory))
         elif args.command == "start":
             print(json.dumps(ensure_agent(directory), indent=2))
+        elif args.command == "doctor":
+            diagnosis = asyncio.run(diagnose(directory))
+            print(json.dumps(diagnosis, ensure_ascii=False, indent=2))
+            if diagnosis["state"] != "ready":
+                raise SystemExit(1)
         elif args.command == "mcp":
             ensure_agent(directory)
             asyncio.run(run_mcp(directory))

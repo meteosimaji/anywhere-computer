@@ -26,9 +26,10 @@ WIRE_LIMIT = 8 * 1024 * 1024
 
 
 def load_endpoint(directory: Path) -> dict[str, JsonValue]:
-    return cast(
-        dict[str, JsonValue], json.loads((directory / "agent.json").read_text(encoding="utf-8"))
-    )
+    payload = json.loads((directory / "agent.json").read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid local agent endpoint")
+    return cast(dict[str, JsonValue], payload)
 
 
 async def exchange(
