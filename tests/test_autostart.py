@@ -170,13 +170,20 @@ def test_windows_scheduler_expansion_is_rejected(tmp_path, name):
 
 def test_preview_cli_has_no_state_side_effects(tmp_path):
     state = tmp_path / "not-created"
+    selected = str(tmp_path / "selected 日本語 connector")
     result = subprocess.run(
         [sys.executable, "-m", "anywhere_computer.cli", "autostart-preview",
-         "--state-dir", str(state)], check=True, capture_output=True, text=True,
+         "--state-dir", str(state), "--connector", selected],
+        check=True, capture_output=True, text=True,
     )
     preview = json.loads(result.stdout)
     assert preview["changed"] is False and preview["readiness_checked"] is False
     assert preview["registration_state"] == "unverified"
+    assert "--connector" in preview["definition"]
+    if sys.platform == "darwin":
+        assert plistlib.loads(preview["definition"].encode())["ProgramArguments"][-2:] == (
+            ["--connector", selected]
+        )
     assert str(state) in preview["definition"] or sys.platform == "win32"
     assert not state.exists()
 

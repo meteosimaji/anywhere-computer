@@ -53,14 +53,18 @@ def stop_remote_connector(child: subprocess.Popen[bytes]) -> None:
                 raise RuntimeError("Owned connector descendants did not stop cleanly")
 
 
-async def serve_remote(directory: Path, *, stop: Event | None = None) -> int:
+async def serve_remote(
+    directory: Path, *, stop: Event | None = None, connector: str | None = None,
+) -> int:
     """Bind HTTP before launching the connector; unwind both on every normal exit.
 
     The connector retains its own bounded restart policy. This process does not
     restart itself after a crash and is not an OS background service installer.
     """
     credential = TunnelCredential(directory)
-    cloudflared_executable()
+    executable = (cloudflared_executable() if connector is None
+                  else cloudflared_executable(connector))
+    connector_arguments = [] if connector is None else ["--connector", executable]
     # The HTTP watcher and combined owner are mutually exclusive. The service
     # context itself owns http-server.lock, also excluding standalone http-serve.
     with ProcessLock(directory / "http-watch.lock"):
@@ -80,7 +84,7 @@ async def serve_remote(directory: Path, *, stop: Event | None = None) -> int:
                 flags = subprocess.CREATE_NEW_PROCESS_GROUP
             child = subprocess.Popen(
                 [sys.executable, "-m", "anywhere_computer.cli", "tunnel-run",
-                 "--state-dir", str(directory.resolve()), "--watch-parent"],
+                 "--state-dir", str(directory.resolve()), "--watch-parent", *connector_arguments],
                 stdin=subprocess.PIPE,
                 start_new_session=os.name != "nt",
                 creationflags=flags,
@@ -102,12 +106,14 @@ async def serve_remote(directory: Path, *, stop: Event | None = None) -> int:
                 stop_remote_connector(child)
 
 
-def watch_remote(directory: Path) -> int:
+def watch_remote(directory: Path, *, connector: str | None = None) -> int:
     """Restart a failed combined service with a bounded budget and owner pipe."""
     config = load_http_config(directory)
     OwnerCredentials(directory, resource=config.resource, owner=config.owner).ensure_initialized()
     credential = TunnelCredential(directory)
-    cloudflared_executable()
+    executable = (cloudflared_executable() if connector is None
+                  else cloudflared_executable(connector))
+    connector_arguments = [] if connector is None else ["--connector", executable]
     with ProcessLock(directory / "remote-watch.lock"):
         with ProcessLock(directory / "http-watch.lock"), ProcessLock(credential.lock):
             credential.read()
@@ -117,7 +123,7 @@ def watch_remote(directory: Path) -> int:
         try:
             return supervise(
                 [sys.executable, "-m", "anywhere_computer.cli", "remote-serve",
-                 "--state-dir", str(directory.resolve()), "--watch-parent"],
+                 "--state-dir", str(directory.resolve()), "--watch-parent", *connector_arguments],
                 parent_pipe=True,
             )
         finally:

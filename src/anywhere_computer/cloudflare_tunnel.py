@@ -98,8 +98,13 @@ def _tunnel_environment() -> dict[str, str]:
     }
 
 
-def cloudflared_executable() -> str:
-    executable = shutil.which("cloudflared")
+def cloudflared_executable(executable: str | None = None) -> str:
+    if executable is None:
+        executable = shutil.which("cloudflared")
+    elif not Path(executable).is_absolute() or any(
+        ord(c) < 32 or ord(c) == 127 for c in executable
+    ):
+        raise ValueError("Connector executable must be an absolute path without control characters")
     if executable is None:
         raise RuntimeError("Install the optional cloudflared binary before running tunnel-run")
     completed = subprocess.run(
@@ -169,11 +174,15 @@ def run_tunnel_child(
                 _stop_child(child)
 
 
-def run_tunnel(directory: Path, *, restart_limit: int = 5, stop: Event | None = None) -> int:
+def run_tunnel(
+    directory: Path, *, restart_limit: int = 5, stop: Event | None = None,
+    connector: str | None = None,
+) -> int:
     if not 0 <= restart_limit <= 5:
         raise ValueError("Invalid tunnel restart limit")
     credential = TunnelCredential(directory)
-    executable = cloudflared_executable()
+    executable = (cloudflared_executable() if connector is None
+                  else cloudflared_executable(connector))
     with ProcessLock(credential.lock):
         credential.read()  # Fail before launching if native storage is unavailable.
         prior = signal.getsignal(signal.SIGTERM)

@@ -32,6 +32,8 @@ async def test_cli_chain_recovers_http_crash_and_cleans_up_owner_loss(
     TunnelCredential(state, vault=vault).install("synthetic_tunnel_token_12345")
     injections = tmp_path / "injections"
     injections.mkdir()
+    selected = (str(injections / "selected 日本語 connector")
+                if kill_stage == "remote-serve" else None)
     connector = injections / "connector.py"
     connector.write_text(
         "import sys,os,time,json\nfrom pathlib import Path\n"
@@ -53,18 +55,21 @@ class Vault:
 vault = Vault()
 owner_credentials.secure_backend = lambda: vault
 cloudflare_tunnel.secure_backend = lambda: vault
-cloudflare_tunnel.cloudflared_executable = lambda: "fixture-cloudflared"
+def selected_binary(value=None):
+    assert value == {selected!r}, "connector path was lost or changed"
+    return "fixture-cloudflared" if value is None else value
+cloudflare_tunnel.cloudflared_executable = selected_binary
 remote_service.cloudflared_executable = cloudflare_tunnel.cloudflared_executable
 original = subprocess.Popen
 def launch(command, *args, **options):
-    if command[0] == "fixture-cloudflared":
+    if command[0] == {selected!r} or command[0] == "fixture-cloudflared":
         command = [sys.executable, {str(connector)!r}, command[-1]]
     return original(command, *args, **options)
 subprocess.Popen = launch
 for stage in ("remote-watch", "remote-serve", "tunnel-run"):
     if stage in sys.argv:
         Path({str(tmp_path)!r}, stage + ".pid").write_text(json.dumps(os.getpid()))
-''')
+''', encoding="utf-8")
     environment = os.environ.copy()
     environment["PATH"] = str(injections)  # No installed provider binary may mask a missing stub.
     environment["PYTHONPATH"] = os.pathsep.join(
@@ -78,7 +83,7 @@ for stage in ("remote-watch", "remote-serve", "tunnel-run"):
     with log_path.open("wb") as log:
         process = subprocess.Popen(
             [sys.executable, "-m", "anywhere_computer.cli", "remote-watch",
-             "--state-dir", str(state)],
+             "--state-dir", str(state), *([] if selected is None else ["--connector", selected])],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
             start_new_session=sys.platform != "win32", env=environment, **options,
         )

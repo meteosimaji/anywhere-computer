@@ -17,6 +17,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
+from anywhere_computer.cloudflare_tunnel import cloudflared_executable
 from anywhere_computer.secret_pipe import SecretPipe
 
 VERSION = "2026.2.0"
@@ -80,6 +81,16 @@ def verify(download_for_test):
             if executable is None:
                 raise RuntimeError("No cloudflared binary; use --download-for-test explicitly")
             asset, digest = "installed", hashlib.sha256(Path(executable).read_bytes()).hexdigest()
+        # Exercise the product's explicit-path version gate without shell PATH.
+        prior_path = os.environ.get("PATH")
+        try:
+            os.environ["PATH"] = ""
+            assert cloudflared_executable(executable) == executable
+        finally:
+            if prior_path is None:
+                os.environ.pop("PATH", None)
+            else:
+                os.environ["PATH"] = prior_path
         config = directory / "config.json"
         config.write_text("{}\n", encoding="ascii")
         with SecretPipe(b"synthetic_tunnel_secret_0123456789") as pipe:
@@ -88,6 +99,7 @@ def verify(download_for_test):
                 for key, value in os.environ.items()
                 if not key.upper().startswith(("TUNNEL_", "CF_TUNNEL_"))
             }
+            environment["PATH"] = ""
             child = subprocess.Popen(
                 [
                     executable,

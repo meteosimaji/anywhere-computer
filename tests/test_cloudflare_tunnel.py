@@ -169,6 +169,30 @@ def test_binary_version_gate(monkeypatch, version, accepted):
             cloudflare_tunnel.cloudflared_executable()
 
 
+def test_explicit_connector_never_searches_path(tmp_path, monkeypatch):
+    selected = str(tmp_path / "selected 日本語 connector")
+    monkeypatch.setattr(cloudflare_tunnel.shutil, "which",
+                        lambda _: pytest.fail("Explicit connector must bypass PATH"))
+    calls = []
+
+    def check(command, **options):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, b"cloudflared version 2026.2.0")
+
+    monkeypatch.setattr(cloudflare_tunnel.subprocess, "run", check)
+    assert cloudflare_tunnel.cloudflared_executable(selected) == selected
+    assert calls == [[selected, "--version"]]
+    with pytest.raises(ValueError, match="absolute path"):
+        cloudflare_tunnel.cloudflared_executable("relative/connector")
+
+    def missing(*args, **options):
+        raise FileNotFoundError("synthetic missing connector")
+
+    monkeypatch.setattr(cloudflare_tunnel.subprocess, "run", missing)
+    with pytest.raises(FileNotFoundError):
+        cloudflare_tunnel.cloudflared_executable(selected)
+
+
 def test_lost_credential_after_child_exit_is_not_retried(tmp_path, monkeypatch, capsys):
     vault = MemoryVault()
     credential = configured(tmp_path, vault)

@@ -40,6 +40,7 @@ def startup_definition(
     home: Path,
     executable: str,
     user: str,
+    connector: str | None = None,
 ) -> StartupDefinition:
     directory = directory.resolve()
     executable = _clean_argument(executable)
@@ -49,6 +50,11 @@ def startup_definition(
     _clean_argument(user)
     name = "io.anywhere-computer." + hashlib.sha256(str(directory).encode()).hexdigest()[:20]
     arguments = ["-m", "anywhere_computer.cli", "remote-watch", "--state-dir", str(directory)]
+    if connector is not None:
+        _clean_argument(connector)
+        if not Path(connector).is_absolute():
+            raise ValueError("Startup connector requires an absolute path")
+        arguments.extend(["--connector", connector])
     if platform == "darwin":
         content = plistlib.dumps({
             "Label": name,
@@ -79,7 +85,7 @@ def startup_definition(
         )
     if platform != "win32":
         raise ValueError("Unsupported startup platform")
-    for path in (executable, str(directory)):
+    for path in (executable, str(directory), *([connector] if connector is not None else [])):
         if len(path.encode("utf-16-le")) // 2 > 260:
             raise ValueError("Windows startup paths must be at most 260 UTF-16 code units")
         if "%" in path:
@@ -118,7 +124,7 @@ def startup_definition(
     return StartupDefinition(platform, name, directory / "autostart" / (name + ".xml"), content)
 
 
-def current_definition(directory: Path) -> StartupDefinition:
+def current_definition(directory: Path, *, connector: str | None = None) -> StartupDefinition:
     import psutil
 
     if sys.platform not in {"darwin", "linux", "win32"}:
@@ -127,6 +133,7 @@ def current_definition(directory: Path) -> StartupDefinition:
     definition = startup_definition(
         directory, platform=cast(Platform, sys.platform), home=Path.home(),
         executable=os.path.abspath(sys.executable), user=psutil.Process().username(),
+        connector=connector,
     )
     if sys.platform == "linux":
         configured = os.environ.get("XDG_CONFIG_HOME", "")
@@ -141,9 +148,11 @@ def current_definition(directory: Path) -> StartupDefinition:
     return definition
 
 
-def preview_startup(directory: Path) -> dict[str, str | bool]:
+def preview_startup(
+    directory: Path, *, connector: str | None = None,
+) -> dict[str, str | bool]:
     """Render a definition without creating state or contacting a service manager."""
-    definition = current_definition(directory)
+    definition = current_definition(directory, connector=connector)
     return {
         "platform": definition.platform,
         "name": definition.name,

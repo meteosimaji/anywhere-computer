@@ -80,6 +80,7 @@ def main() -> None:
         ],
     )
     parser.add_argument("--state-dir", type=Path, default=None)
+    parser.add_argument("--connector", help="Absolute path to the optional tunnel executable")
     parser.add_argument("--ssh-host", help="An existing SSH host alias")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--device", help="Registered device ID")
@@ -103,6 +104,10 @@ def main() -> None:
                         help="Also probe configured HTTPS metadata (remote-doctor only)")
     parser.add_argument("--watch-parent", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.connector is not None and args.command not in {
+        "remote-watch", "remote-serve", "tunnel-run", "autostart-preview",
+    }:
+        parser.error("--connector is only valid for remote startup and its preview")
     if args.watch_parent and args.command not in {"remote-serve", "tunnel-run"}:
         parser.error("--watch-parent is only valid for supervised remote children")
     if args.probe_public and args.command != "remote-doctor":
@@ -253,7 +258,8 @@ def main() -> None:
             if args.command.startswith("device"):
                 return
         if args.command == "autostart-preview":
-            print(json.dumps(preview_startup(directory), ensure_ascii=False, indent=2))
+            print(json.dumps(preview_startup(directory, connector=args.connector),
+                             ensure_ascii=True, indent=2))
         elif args.command == "transfers":
             print(json.dumps(list_transfers(
                 directory, area=args.transfer_area, kind=args.transfer_kind,
@@ -278,7 +284,7 @@ def main() -> None:
             if sys.platform == "win32":
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)
             stop = watch_parent_pipe() if args.watch_parent else None
-            raise SystemExit(run_tunnel(directory, stop=stop))
+            raise SystemExit(run_tunnel(directory, stop=stop, connector=args.connector))
         elif args.command == "http-configure":
             config = asyncio.run(
                 configure_http(
@@ -324,14 +330,16 @@ def main() -> None:
         elif args.command == "remote-watch":
             if sys.platform == "win32":
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)
-            raise SystemExit(watch_remote(directory))
+            raise SystemExit(watch_remote(directory, connector=args.connector))
         elif args.command == "remote-serve":
             prior_terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
             try:
                 if sys.platform == "win32":
                     signal.signal(signal.SIGBREAK, signal.default_int_handler)
                 stop = watch_parent_pipe() if args.watch_parent else None
-                raise SystemExit(asyncio.run(serve_remote(directory, stop=stop)))
+                raise SystemExit(asyncio.run(
+                    serve_remote(directory, stop=stop, connector=args.connector)
+                ))
             finally:
                 signal.signal(signal.SIGTERM, prior_terminate)
         elif args.command == "http-serve":
