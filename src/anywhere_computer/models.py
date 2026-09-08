@@ -22,6 +22,12 @@ class ReadFile(FilePath):
     limit: int = Field(default=200, ge=1, le=5000)
 
 
+class ReadDocument(FilePath):
+    section: str | None = None
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=100, ge=1, le=100)
+
+
 class ReadFiles(Contract):
     paths: list[str] = Field(min_length=1, max_length=20)
     limit: int = Field(default=200, ge=1, le=1000)

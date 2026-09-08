@@ -22,7 +22,10 @@ def absolute_path(value: str) -> Path:
 
 
 def read_bytes(path: Path) -> bytes:
-    with path.open("rb") as source:
+    # O_NONBLOCK lets fstat reject FIFOs without waiting for a writer to connect.
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0)
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "rb") as source:
         metadata = os.fstat(source.fileno())
         if not stat.S_ISREG(metadata.st_mode):
             raise ValueError("Only regular files can be read")

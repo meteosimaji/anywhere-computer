@@ -12,6 +12,7 @@ from typing import TypeVar, cast
 from pydantic import JsonValue
 
 from . import __version__
+from .documents import read_document
 from .files import Files, absolute_path
 from .models import (
     Contract,
@@ -22,6 +23,7 @@ from .models import (
     ListDirectory,
     MoveFile,
     OperationId,
+    ReadDocument,
     ReadFile,
     ReadFiles,
     Reply,
@@ -90,6 +92,9 @@ class Engine:
     def _register_tools(self) -> None:
         async def status(_: Empty) -> Result:
             return self.status()
+
+        async def document(args: ReadDocument) -> Result:
+            return await asyncio.to_thread(read_document, args)
 
         async def read(args: ReadFile) -> Result:
             return await asyncio.to_thread(self.files.read, args)
@@ -167,6 +172,14 @@ class Engine:
         async def history(args: History) -> Result:
             return {"operations": cast(list[JsonValue], self.ledger.recent(args.limit))}
 
+        self.register(
+            "documents_read",
+            "Inspect Word body text, Excel stored cells/formulas, "
+            "or PowerPoint slide text without rendering or evaluating formulas.",
+            ReadDocument,
+            document,
+            read_only=True,
+        )
         self.register(
             "computer_status",
             "Check agent readiness, instance and active work.",
@@ -320,6 +333,7 @@ class Engine:
                 "literal_search": True,
                 "remote": False,
                 "office": False,
+                "office_text_read": True,
                 "gui": False,
             },
         }

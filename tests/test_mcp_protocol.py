@@ -88,7 +88,7 @@ asyncio.run(main())
                 initialized = await client.initialize()
                 assert initialized.serverInfo.name == "anywhere-computer"
                 tools = await client.list_tools()
-                assert len(tools.tools) == 20
+                assert len(tools.tools) == 21
                 path = str(tmp_path / "MCP 日本語.txt")
                 written = await client.call_tool("files_write", {"path": path, "text": "stdio"})
                 assert not written.isError

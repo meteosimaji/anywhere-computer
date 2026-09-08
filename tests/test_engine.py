@@ -160,7 +160,7 @@ async def test_literal_search_pagination(engine, tmp_path):
 async def test_registry_schemas_validation_and_duplicate_guard(engine):
     from anywhere_computer.models import Empty
 
-    assert len(engine.tools) == 20
+    assert len(engine.tools) == 21
     for name, tool in engine.tools.items():
         assert name == tool.name
         assert tool.schema.model_json_schema()["additionalProperties"] is False
@@ -179,3 +179,13 @@ async def test_recent_history_does_not_expose_content(engine, tmp_path):
     recent = await engine.execute(request("operations_recent"))
     assert "not-in-history" not in recent.model_dump_json()
     assert "private" not in recent.model_dump_json()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX named pipe test")
+def test_read_named_pipe_rejected_without_waiting(tmp_path):
+    from anywhere_computer.files import read_bytes
+
+    fifo = tmp_path / "pipe"
+    os.mkfifo(fifo)
+    with pytest.raises(ValueError, match="regular files"):
+        read_bytes(fifo)
