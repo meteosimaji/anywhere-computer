@@ -149,3 +149,50 @@ async def test_duplicate_malformed_and_oversized_form_rejected(oauth_server):
         )
     ).status_code == 403
     assert (await http.post("/oauth/token", data=form)).status_code == 200
+
+
+async def test_http_refresh_keeps_mcp_session_and_replay_invalidates_it(oauth_server, monkeypatch):
+    import time
+
+    store, http = oauth_server
+    first = (await http.post("/oauth/token", data=request_form(store))).json()
+    headers = {
+        "Authorization": f"Bearer {first['access_token']}",
+        "Accept": "application/json, text/event-stream",
+    }
+    init = await http.post(
+        "/mcp",
+        headers=headers,
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "refresh-test", "version": "1"},
+            },
+        },
+    )
+    headers["MCP-Session-Id"] = init.headers["mcp-session-id"]
+    await http.post(
+        "/mcp", headers=headers, json={"jsonrpc": "2.0", "method": "notifications/initialized"}
+    )
+    now = time.time()
+    monkeypatch.setattr("anywhere_computer.authorization.time.time", lambda: now + 901)
+    ping = {"jsonrpc": "2.0", "id": 2, "method": "ping"}
+    assert (await http.post("/mcp", headers=headers, json=ping)).status_code == 401
+    form = {
+        "grant_type": "refresh_token",
+        "refresh_token": first["refresh_token"],
+        "client_id": "client",
+        "resource": RESOURCE,
+    }
+    response = await http.post("/oauth/token", data=form)
+    assert response.status_code == 200 and response.headers["pragma"] == "no-cache"
+    renewed = response.json()
+    headers["Authorization"] = f"Bearer {renewed['access_token']}"
+    # Same MCP session ID, no reinitialization needed after ordinary renewal.
+    assert (await http.post("/mcp", headers=headers, json=ping)).json()["result"] == {}
+    assert (await http.post("/oauth/token", data=form)).json() == {"error": "invalid_grant"}
+    assert (await http.post("/mcp", headers=headers, json=ping)).status_code == 401

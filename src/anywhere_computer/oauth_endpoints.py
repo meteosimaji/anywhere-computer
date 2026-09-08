@@ -64,7 +64,7 @@ class OAuthEndpoints:
                 "authorization_endpoint": self.authorization_endpoint,
                 "token_endpoint": self.issuer + "/oauth/token",
                 "response_types_supported": ["code"],
-                "grant_types_supported": ["authorization_code"],
+                "grant_types_supported": ["authorization_code", "refresh_token"],
                 "token_endpoint_auth_methods_supported": ["none"],
                 "code_challenge_methods_supported": ["S256"],
                 "scopes_supported": list(sorted(self.store.known_tools)),
@@ -103,11 +103,15 @@ class OAuthEndpoints:
         except (ValueError, UnicodeError):
             return error("invalid_request")
         params = dict(pairs)
-        required = {"grant_type", "code", "code_verifier", "client_id", "redirect_uri", "resource"}
         if len(params) != len(pairs) or not params.get("grant_type"):
             return error("invalid_request")
-        if params["grant_type"] != "authorization_code":
+        if params["grant_type"] not in {"authorization_code", "refresh_token"}:
             return error("unsupported_grant_type")
+        required = {"client_id", "resource"}
+        if params["grant_type"] == "authorization_code":
+            required |= {"code", "code_verifier", "redirect_uri"}
+        else:
+            required.add("refresh_token")
         if not all(params.get(key) for key in required):
             return error("invalid_request")
         if "client_secret" in params:
@@ -115,19 +119,28 @@ class OAuthEndpoints:
         if params["resource"] != self.store.resource:
             return error("invalid_target")
         try:
-            issued = self.store.exchange_code(
-                code=params["code"],
-                verifier=params["code_verifier"],
-                client=params["client_id"],
-                redirect=params["redirect_uri"],
-                resource=params["resource"],
-            )
-        except AuthorizationError:
-            return error("invalid_grant")
+            if params["grant_type"] == "authorization_code":
+                issued = self.store.exchange_code(
+                    code=params["code"],
+                    verifier=params["code_verifier"],
+                    client=params["client_id"],
+                    redirect=params["redirect_uri"],
+                    resource=params["resource"],
+                )
+            else:
+                issued = self.store.refresh(
+                    refresh_token=params["refresh_token"],
+                    client=params["client_id"],
+                    resource=params["resource"],
+                    scope=frozenset(params["scope"].split()) if "scope" in params else None,
+                )
+        except AuthorizationError as failure:
+            return error("invalid_scope" if str(failure) == "invalid_scope" else "invalid_grant")
         result: dict[str, JsonValue] = {
             "access_token": issued.value,
             "token_type": "Bearer",
             "expires_in": issued.expires_in,
             "scope": issued.scope,
+            "refresh_token": issued.refresh_value,
         }
         return 200, result, no_cache

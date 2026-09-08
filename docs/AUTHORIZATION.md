@@ -26,7 +26,8 @@ revokes the original grant and its tokens. Invalid verifier/client/callback
 attempts never issue a token and do not consume a still-valid code.
 
 Opaque access tokens contain 32 random bytes before URL-safe encoding and last
-15 minutes. A grant lasts at most 24 hours; refresh tokens are not implemented.
+15 minutes. A grant lasts at most 24 hours. Rotating refresh tokens can renew
+access within that original deadline; renewal never extends the consent period.
 Only SHA-256 digests of codes and tokens are stored in SQLite. Raw codes, tokens
 and verifiers are not persisted. AccessToken's repr excludes the token value.
 The caller must also avoid logging response bodies or serializing secrets to
@@ -61,8 +62,8 @@ internet OAuth login or a ChatGPT account connection.
 
 Before public use, implement authenticated login and consent with request/CSRF
 binding, client registration/authentication policy, HTTPS,
-request throttling and data retention. Reconnect renewal and refresh-token
-rotation/reuse policy are also outstanding. Public clients are the only client
+request throttling and data retention. Client-side renewal scheduling and
+credential persistence are also outstanding. Public clients are the only client
 type in this internal store; it must not advertise confidential-client support.
 No public listener is enabled by this change.
 
@@ -83,8 +84,8 @@ set its `auth_challenge`. It provides:
 - `POST /oauth/token`, accepting UTF-8 form data with one each of grant_type,
   code, code_verifier, client_id, redirect_uri and resource. Duplicate/malformed
   parameters are rejected; unknown extension parameters are ignored. Responses
-  include no-store/no-cache headers. No refresh grant or confidential-client
-  authentication method is advertised.
+  include no-store/no-cache headers. The refresh_token grant is supported;
+  confidential-client authentication is not advertised.
 
 The caller supplies an actual authorization URL; this module does not implement
 that login/consent route or automatically redirect a user to an unverified URL.
@@ -106,3 +107,38 @@ a privileged route there without its own authentication and request protection.
 This adapter intentionally rejects resource URLs containing queries; RFC 8707
 permits such resources, but the current deployment contract fixes `/mcp` without
 a query.
+
+## Refresh rotation and connection continuity
+
+Code redemption now returns an access_token and refresh_token. The latter is
+32 random bytes before encoding; only its digest is stored. The token endpoint
+accepts grant_type=refresh_token with refresh_token, client_id and the exact
+resource URI. A valid exchange consumes the refresh token and atomically stores
+its replacement plus a new access token. The grant ID remains stable, so an
+existing MCP session can continue using the renewed access token.
+
+Every renewal rechecks the current grant, device and tool permissions. Tokens
+cannot outlive the original 24-hour grant deadline. Access tokens issued near
+that deadline have a shorter expires_in. A valid reuse of an already consumed
+refresh token revokes the entire grant, including all derived access and refresh
+tokens. Concurrent renewals through different SQLite connections therefore issue
+at most one pair, then invalidate that grant when reuse is detected. Clients
+must serialize refreshes and must not blindly retry a refresh after losing its
+response; renewed credentials need secure, atomic client-side storage. That
+client workflow is not implemented yet.
+
+Permissions are fixed for the lifetime of this grant. An omitted refresh scope
+uses the current grant's full tool set; an explicitly identical set is accepted.
+Any different set (including a reduction) returns invalid_scope without consuming
+the refresh token. Changing permissions requires fresh consent; this is an
+explicit policy restriction, not support for general OAuth scope reduction.
+Refreshes never expand permissions. Ordinary still-valid access tokens remain
+valid until their expiry unless the grant/device is revoked.
+
+Schema version 2 adds the refresh-token table transactionally. Existing version 1
+access tokens and grants remain usable; they do not acquire refresh tokens until
+a new authorization code is redeemed. Tests cover expiry/near-deadline renewal,
+secret-free persistence, concurrent rotation/reuse, migration and continuing the
+same HTTP MCP session after an expired access token is renewed.
+
+Reference: [OAuth security BCP, refresh token protection](https://www.rfc-editor.org/rfc/rfc9700.html#section-4.14).

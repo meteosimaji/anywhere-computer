@@ -166,3 +166,97 @@ def test_store_cannot_change_resource(authority, tmp_path):
 def test_registration_rejects_unsafe_callback_urls(authority, redirect):
     with pytest.raises(ValueError):
         authority.register_client("bad", frozenset({redirect}))
+
+
+def test_refresh_rotates_preserves_identity_and_revokes_family_on_reuse(authority, tmp_path):
+    first = redeem(authority, approve(authority))
+    before = authority.verify(first.value, resource=RESOURCE)
+    second = authority.refresh(
+        refresh_token=first.refresh_value, client="client", resource=RESOURCE
+    )
+    assert second.value != first.value and second.refresh_value != first.refresh_value
+    assert authority.verify(second.value, resource=RESOURCE) == before
+    assert first.refresh_value not in repr(first) and second.refresh_value not in repr(second)
+    for path in tmp_path.iterdir():
+        if path.is_file():
+            data = path.read_bytes()
+            assert first.refresh_value.encode() not in data
+            assert second.refresh_value.encode() not in data
+    with pytest.raises(AuthorizationError, match="invalid_grant"):
+        authority.refresh(refresh_token=first.refresh_value, client="client", resource=RESOURCE)
+    assert authority.verify(first.value, resource=RESOURCE) is None
+    assert authority.verify(second.value, resource=RESOURCE) is None
+    with pytest.raises(AuthorizationError):
+        authority.refresh(refresh_token=second.refresh_value, client="client", resource=RESOURCE)
+
+
+def test_refresh_binding_and_lifetime(authority, monkeypatch):
+    import time
+
+    issued = redeem(authority, approve(authority))
+    now = time.time()
+    for override in (
+        {"client": "other"},
+        {"resource": "https://other.example/mcp"},
+        {"scope": frozenset({"files_write"})},
+    ):
+        with pytest.raises(AuthorizationError):
+            authority.refresh(
+                **{
+                    "refresh_token": issued.refresh_value,
+                    "client": "client",
+                    "resource": RESOURCE,
+                    **override,
+                }
+            )
+    monkeypatch.setattr("anywhere_computer.authorization.time.time", lambda: now + 901)
+    assert authority.verify(issued.value, resource=RESOURCE) is None
+    renewed = authority.refresh(
+        refresh_token=issued.refresh_value, client="client", resource=RESOURCE
+    )
+    assert authority.verify(renewed.value, resource=RESOURCE) is not None
+    monkeypatch.setattr("anywhere_computer.authorization.time.time", lambda: now + 86390)
+    last = authority.refresh(
+        refresh_token=renewed.refresh_value, client="client", resource=RESOURCE
+    )
+    assert 0 < last.expires_in <= 10
+    monkeypatch.setattr("anywhere_computer.authorization.time.time", lambda: now + 86401)
+    with pytest.raises(AuthorizationError):
+        authority.refresh(refresh_token=last.refresh_value, client="client", resource=RESOURCE)
+
+
+def test_parallel_refreshes_issue_once_and_detect_reuse(authority, tmp_path):
+    original = redeem(authority, approve(authority))
+
+    def attempt():
+        store = AuthorizationStore(tmp_path, resource=RESOURCE, known_tools=TOOLS)
+        try:
+            try:
+                return store.refresh(
+                    refresh_token=original.refresh_value, client="client", resource=RESOURCE
+                )
+            except AuthorizationError:
+                return None
+        finally:
+            store.close()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: attempt(), range(2)))
+    issued = [token for token in results if token is not None]
+    assert len(issued) == 1
+    assert authority.verify(issued[0].value, resource=RESOURCE) is None
+
+
+def test_version_one_upgrade_preserves_existing_access_tokens(authority, tmp_path):
+    original = redeem(authority, approve(authority))
+    with authority.db:
+        # Version 1 had the same tables except refresh_tokens and did not issue refresh tokens.
+        authority.db.execute("DROP TABLE refresh_tokens")
+        authority.db.execute("PRAGMA user_version=1")
+    upgraded = AuthorizationStore(tmp_path, resource=RESOURCE, known_tools=TOOLS)
+    try:
+        assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert upgraded.verify(original.value, resource=RESOURCE) is not None
+        assert upgraded.db.execute("SELECT count(*) FROM refresh_tokens").fetchone()[0] == 0
+    finally:
+        upgraded.close()

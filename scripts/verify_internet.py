@@ -316,6 +316,28 @@ async def verify(receipt_path):
             )
             if status != 200 or written["result"]["structuredContent"]["state"] != "completed":
                 raise RuntimeError("Public file write failed")
+            status, _, renewed = await asyncio.to_thread(
+                public_request,
+                public + "/oauth/token",
+                method="POST",
+                form={
+                    "grant_type": "refresh_token",
+                    "refresh_token": token_body["refresh_token"],
+                    "client_id": "probe-client",
+                    "resource": public + "/mcp",
+                },
+            )
+            if (
+                status != 200
+                or not renewed
+                or renewed.get("access_token") == token
+                or renewed.get("refresh_token") == token_body["refresh_token"]
+            ):
+                raise RuntimeError("Public token rotation failed")
+            headers["Authorization"] = f"Bearer {renewed['access_token']}"
+            if (await rpc("ping"))[0] != 200:
+                raise RuntimeError("Public session did not survive token rotation")
+            report["refresh_rotation_verified"] = True
             # A new MCP session, same persistent engine and file; no write is retried.
             headers.pop("MCP-Session-Id")
             await initialize()

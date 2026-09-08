@@ -39,6 +39,7 @@ class AccessToken:
     value: str = field(repr=False)
     expires_in: int
     scope: str
+    refresh_value: str = field(repr=False)
 
 
 def pkce_s256(verifier: str) -> str:
@@ -96,7 +97,7 @@ class AuthorizationStore:
         self.db = sqlite3.connect(directory / "authorization.sqlite3", timeout=10)
         self.db.execute("PRAGMA foreign_keys=ON")
         version = self.db.execute("PRAGMA user_version").fetchone()[0]
-        if version not in {0, 1}:
+        if version not in {0, 1, 2}:
             self.db.close()
             raise ValueError("Unsupported authorization store version")
         try:
@@ -132,7 +133,12 @@ class AuthorizationStore:
                     "CREATE TABLE IF NOT EXISTS tokens (digest TEXT PRIMARY KEY, "
                     "grant_id TEXT NOT NULL REFERENCES grants(id), expires REAL NOT NULL)"
                 )
-                self.db.execute("PRAGMA user_version=1")
+                self.db.execute(
+                    "CREATE TABLE IF NOT EXISTS refresh_tokens (digest TEXT PRIMARY KEY, "
+                    "grant_id TEXT NOT NULL REFERENCES grants(id), expires REAL NOT NULL, "
+                    "consumed INTEGER NOT NULL DEFAULT 0)"
+                )
+                self.db.execute("PRAGMA user_version=2")
         except Exception:
             self.db.close()
             raise
@@ -219,14 +225,14 @@ class AuthorizationStore:
         if len(code) > 256 or resource != self.resource:
             raise AuthorizationError("invalid_grant")
         challenge = pkce_s256(verifier)
-        access = secrets.token_urlsafe(32)
         now = time.time()
         invalid = False
-        scopes = ""
+        issued: AccessToken | None = None
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
             row = self.db.execute(
-                "SELECT c.grant_id,c.redirect,c.challenge,c.expires,c.consumed,g.client,g.tools "
+                "SELECT c.grant_id,c.redirect,c.challenge,c.expires,c.consumed,g.client,g.tools,"
+                "g.expires "
                 "FROM codes c JOIN grants g ON g.id=c.grant_id WHERE c.digest=?",
                 (_secret_digest(code),),
             ).fetchone()
@@ -248,13 +254,71 @@ class AuthorizationStore:
                 self.db.execute(
                     "UPDATE codes SET consumed=1 WHERE digest=?", (_secret_digest(code),)
                 )
-                self.db.execute(
-                    "INSERT INTO tokens VALUES(?,?,?)", (_secret_digest(access), grant, now + 900)
+                issued = self._issue_tokens(
+                    grant, frozenset(json.loads(row[6])), float(row[7]), now
                 )
-                scopes = " ".join(json.loads(row[6]))
         if invalid:
             raise AuthorizationError("invalid_grant")
-        return AccessToken(access, 900, scopes)
+        assert issued is not None
+        return issued
+
+    def _issue_tokens(
+        self, grant: str, tools: frozenset[str], grant_expires: float, now: float
+    ) -> AccessToken:
+        """Called only inside a code/refresh redemption transaction."""
+        lifetime = min(900, int(grant_expires - now))
+        if lifetime < 1:
+            raise AuthorizationError("invalid_grant")
+        access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        self.db.execute(
+            "INSERT INTO tokens VALUES(?,?,?)", (_secret_digest(access), grant, now + lifetime)
+        )
+        self.db.execute(
+            "INSERT INTO refresh_tokens(digest,grant_id,expires) VALUES(?,?,?)",
+            (_secret_digest(refresh), grant, grant_expires),
+        )
+        return AccessToken(access, lifetime, " ".join(sorted(tools)), refresh)
+
+    def refresh(
+        self,
+        *,
+        refresh_token: str,
+        client: str,
+        resource: str,
+        scope: frozenset[str] | None = None,
+    ) -> AccessToken:
+        if len(refresh_token) > 256 or resource != self.resource:
+            raise AuthorizationError("invalid_grant")
+        now = time.time()
+        issued: AccessToken | None = None
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            row = self.db.execute(
+                "SELECT r.grant_id,r.expires,r.consumed,g.client,g.expires "
+                "FROM refresh_tokens r JOIN grants g ON g.id=r.grant_id WHERE r.digest=?",
+                (_secret_digest(refresh_token),),
+            ).fetchone()
+            if row is None or row[3] != client:
+                raise AuthorizationError("invalid_grant")
+            grant_id = str(row[0])
+            if row[2]:
+                self.db.execute("UPDATE grants SET revoked=1 WHERE id=?", (grant_id,))
+            else:
+                grant = self._grant(grant_id, now)
+                if row[1] <= now or grant is None:
+                    raise AuthorizationError("invalid_grant")
+                # This policy keeps one grant's permissions stable across refreshes.
+                # Permission changes require new consent; they are never silently expanded.
+                if scope is not None and scope != grant.tools:
+                    raise AuthorizationError("invalid_scope")
+                self.db.execute(
+                    "UPDATE refresh_tokens SET consumed=1 WHERE digest=?",
+                    (_secret_digest(refresh_token),),
+                )
+                issued = self._issue_tokens(grant_id, grant.tools, float(row[4]), now)
+        if issued is None:
+            raise AuthorizationError("invalid_grant")
+        return issued
 
     def _grant(self, grant: str, now: float) -> GrantIdentity | None:
         row = self.db.execute(

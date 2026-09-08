@@ -28,7 +28,8 @@ then performs:
 2. Public HTTP code redemption with PKCE (the test creates consent internally).
 3. MCP initialization and discovery of exactly the two restricted tools.
 4. File creation through the actual files_write handler.
-5. A new MCP session and files_read comparison with the generated content.
+5. Refresh-token rotation through the public token endpoint, a ping using the
+   same MCP session, then a new MCP session and files_read comparison.
 6. Device revocation followed by HTTP 401 on the already established session.
 7. Tunnel shutdown and temporary-state cleanup.
 
@@ -64,3 +65,8 @@ limits and platform-specific live validation. `remote_ready` therefore remains
 false for the normal agent. Cloudflare describes Quick Tunnels as a testing
 facility, not a production service:
 [Quick Tunnels documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
+
+The subsequent [refresh verification receipt](research/2026-09-09-internet-refresh-verification.json)
+also records public token rotation and continuing the same MCP session. Each
+receipt retains its tested implementation and script hashes; older receipts
+remain historical evidence and are not claims about newer revisions.
