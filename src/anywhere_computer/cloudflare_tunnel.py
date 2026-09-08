@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 from threading import Event
 
-from .client_tokens import ClientCredentialError, CredentialVault
+from .client_tokens import ClientCredentialError, CredentialStoreUnavailable, CredentialVault
 from .credentials import SERVICE, secure_backend
 from .http_service import load_http_config
 from .http_supervisor import _stop_child
@@ -42,7 +42,7 @@ class TunnelCredential:
         try:
             token = self.vault.get_password(SERVICE, self.account)
         except Exception:
-            raise ClientCredentialError("Tunnel credential store is unavailable") from None
+            raise CredentialStoreUnavailable("Tunnel credential store is unavailable") from None
         if token is None:
             raise ClientCredentialError("Tunnel credential is missing; run tunnel-token")
         self.validate(token)
@@ -52,7 +52,7 @@ class TunnelCredential:
         try:
             token = self.vault.get_password(SERVICE, self.account)
         except Exception:
-            raise ClientCredentialError("Tunnel credential store is unavailable") from None
+            raise CredentialStoreUnavailable("Tunnel credential store is unavailable") from None
         if token is None:
             return False
         self.validate(token)

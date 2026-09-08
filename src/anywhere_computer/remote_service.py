@@ -6,11 +6,13 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 from threading import Event
 
 import psutil
 
+from .client_tokens import CredentialStoreUnavailable
 from .cloudflare_tunnel import TunnelCredential, cloudflared_executable
 from .http_service import http_service, load_http_config
 from .http_supervisor import _stop_child, supervise
@@ -106,21 +108,41 @@ async def serve_remote(
                 stop_remote_connector(child)
 
 
+def wait_for_remote_credentials(owner: OwnerCredentials, credential: TunnelCredential) -> None:
+    """Retry failed reads on the selected stores; never initialize or switch stores."""
+    for attempt in range(6):
+        try:
+            owner.ensure_initialized()
+            credential.read()
+            return
+        except CredentialStoreUnavailable:
+            if attempt == 5:
+                raise
+            delay = 2**attempt
+            print(json.dumps({
+                "remote_startup_state": "credential_store_unavailable",
+                "retry_attempt": attempt + 1,
+                "retry_in_seconds": delay,
+            }), flush=True)
+            time.sleep(delay)
+
+
 def watch_remote(directory: Path, *, connector: str | None = None) -> int:
     """Restart a failed combined service with a bounded budget and owner pipe."""
     config = load_http_config(directory)
-    OwnerCredentials(directory, resource=config.resource, owner=config.owner).ensure_initialized()
+    owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner)
     credential = TunnelCredential(directory)
     executable = (cloudflared_executable() if connector is None
                   else cloudflared_executable(connector))
     connector_arguments = [] if connector is None else ["--connector", executable]
     with ProcessLock(directory / "remote-watch.lock"):
-        with ProcessLock(directory / "http-watch.lock"), ProcessLock(credential.lock):
-            credential.read()
-        with ProcessLock(directory / "http-server.lock"):
-            pass
         prior = signal.signal(signal.SIGTERM, signal.default_int_handler)
         try:
+            with (
+                ProcessLock(directory / "http-watch.lock"), ProcessLock(credential.lock),
+                ProcessLock(directory / "http-server.lock"),
+            ):
+                wait_for_remote_credentials(owner, credential)
             return supervise(
                 [sys.executable, "-m", "anywhere_computer.cli", "remote-serve",
                  "--state-dir", str(directory.resolve()), "--watch-parent", *connector_arguments],

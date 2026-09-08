@@ -32,6 +32,10 @@ class ClientCredentialError(RuntimeError):
     """The OS credential store could not safely read or persist a credential."""
 
 
+class CredentialStoreUnavailable(ClientCredentialError):
+    """A native store read failed; this does not mean a credential is missing."""
+
+
 class RefreshOutcomeUnknown(ClientAuthorizationRequired):
     """A refresh might have consumed its token. Never resend that token."""
 

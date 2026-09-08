@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from .authorization import validate_authorization_url
-from .client_tokens import ClientCredentialError, CredentialVault
+from .client_tokens import ClientCredentialError, CredentialStoreUnavailable, CredentialVault
 from .credentials import SERVICE, secure_backend
 from .locking import ProcessLock
 from .state import prepare_directory
@@ -63,7 +63,7 @@ class OwnerCredentials:
         try:
             return self.vault.get_password(SERVICE, self.account)
         except Exception:
-            raise ClientCredentialError("Owner credential store is unavailable") from None
+            raise CredentialStoreUnavailable("Owner credential store is unavailable") from None
 
     def initialize(self, password: str) -> None:
         """Trusted setup only; never replaces an existing owner password."""
