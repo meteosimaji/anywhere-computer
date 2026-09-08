@@ -7,10 +7,45 @@ import subprocess
 import sys
 from pathlib import Path
 
+import psutil
+
 from .cloudflare_tunnel import TunnelCredential, cloudflared_executable
 from .http_service import http_service
 from .http_supervisor import _stop_child
 from .locking import ProcessLock
+
+
+def stop_remote_connector(child: subprocess.Popen[bytes]) -> None:
+    """Observe descendants before stopping their launcher, then verify cleanup."""
+    descendants: list[psutil.Process] = []
+    try:
+        if child.poll() is None:
+            descendants = psutil.Process(child.pid).children(recursive=True)
+    except psutil.NoSuchProcess:
+        pass
+    finally:
+        try:
+            _stop_child(child)
+        finally:
+            failed = False
+            for descendant in reversed(descendants):
+                try:
+                    # psutil's Process retains its creation identity and checks
+                    # PID reuse before sending signals, including after reparenting.
+                    if not descendant.is_running():
+                        continue
+                    descendant.terminate()
+                    try:
+                        descendant.wait(timeout=5)
+                    except psutil.TimeoutExpired:
+                        descendant.kill()
+                        descendant.wait(timeout=5)
+                except psutil.NoSuchProcess:
+                    pass
+                except psutil.Error:
+                    failed = True
+            if failed:
+                raise RuntimeError("Owned connector descendants did not stop cleanly")
 
 
 async def serve_remote(directory: Path) -> int:
@@ -57,4 +92,4 @@ async def serve_remote(directory: Path) -> int:
             finally:
                 # Connector shutdown precedes HTTP shutdown. SIGINT/Ctrl+Break
                 # lets the runner clean up its own cloudflared child first.
-                _stop_child(child)
+                stop_remote_connector(child)

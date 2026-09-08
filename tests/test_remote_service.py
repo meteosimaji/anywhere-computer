@@ -167,3 +167,72 @@ async def test_remote_bind_failure_preserves_existing_listener(remote_profile, m
     finally:
         listener.close()
         await listener.wait_closed()
+
+
+async def test_remote_cleanup_includes_real_launcher_descendants(tmp_path):
+    import json
+
+    marker = tmp_path / "descendant.json"
+    # Use the actual venv executable: on Windows this includes its redirector.
+    # The nested process owns no application data or external credentials.
+    code = (
+        "import subprocess,sys,time,json,os,pathlib; "
+        "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],"
+        "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
+        f"pathlib.Path({str(marker)!r}).write_text(json.dumps([os.getpid(),child.pid])); "
+        "time.sleep(60)"
+    )
+    options = {}
+    if sys.platform == "win32":
+        options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    process = subprocess.Popen([sys.executable, "-c", code], stdin=subprocess.DEVNULL,
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               start_new_session=sys.platform != "win32", **options)
+    identities = []
+    try:
+        async with asyncio.timeout(10):
+            while not marker.exists():
+                await asyncio.sleep(0.01)
+            while True:
+                try:
+                    identities = [psutil.Process(pid) for pid in json.loads(marker.read_text())]
+                    break
+                except json.JSONDecodeError:
+                    await asyncio.sleep(0.01)
+        remote_service.stop_remote_connector(process)
+        assert process.poll() is not None
+        assert all(not identity.is_running() for identity in identities)
+    finally:
+        remote_service.stop_remote_connector(process)
+        for identity in identities:
+            if identity.is_running():
+                identity.kill()
+                identity.wait(5)
+
+
+async def test_remote_loses_tunnel_lock_after_preflight(remote_profile, monkeypatch):
+    directory, _ = remote_profile
+    original = subprocess.Popen
+    winner = ProcessLock(directory / "cloudflare-tunnel.lock")
+    claimed = False
+
+    def launch(command, **options):
+        nonlocal claimed
+        winner.__enter__()
+        claimed = True
+        # Exercise the actual runtime's kernel lock acquisition in the child.
+        return original(
+            [sys.executable, "-c",
+             "from pathlib import Path; from anywhere_computer.locking import ProcessLock; "
+             f"lock=ProcessLock(Path({str(winner.path)!r})); lock.__enter__()"], **options
+        )
+
+    monkeypatch.setattr(remote_service.subprocess, "Popen", launch)
+    try:
+        assert await remote_service.serve_remote(directory) != 0
+        assert claimed and winner.fd is not None
+        assert (await diagnose_http(directory))["state"] == "unreachable"
+        with pytest.raises(TimeoutError), ProcessLock(winner.path):
+            pass
+    finally:
+        winner.__exit__(None, None, None)
