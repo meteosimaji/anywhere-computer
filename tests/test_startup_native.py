@@ -111,3 +111,4 @@ def test_native_registration_runs_and_removes_only_its_fixture(tmp_path):
                 definition.path.unlink()
             backend.files_removed()
     assert not definition.path.exists()
+    assert not backend.query().present
