@@ -40,8 +40,8 @@ def sha256(content: bytes) -> str:
 
 
 class Files:
-    def __init__(self, state: Path) -> None:
-        self.locks = state / "file-locks"
+    def __init__(self, state: Path, *, locks: Path | None = None) -> None:
+        self.locks = locks if locks is not None else state / "file-locks"
         self.locks.mkdir(exist_ok=True, mode=0o700)
         self.backups = state / "backups"
         self.backups.mkdir(exist_ok=True, mode=0o700)

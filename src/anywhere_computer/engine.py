@@ -59,9 +59,9 @@ class Tool:
 
 
 class Engine:
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, *, file_locks: Path | None = None) -> None:
         self.ledger = Ledger(directory)
-        self.files = Files(directory)
+        self.files = Files(directory, locks=file_locks)
         self.sessions = Sessions()
         self.searches = Searches()
         self.instance_id = uuid.uuid4().hex

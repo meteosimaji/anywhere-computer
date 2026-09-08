@@ -171,7 +171,7 @@ async def http_service(
         database = service_directory / "authorization" / "authorization.sqlite3"
         if not database.is_file() or database.is_symlink():
             raise ValueError("HTTP authorization database is missing; refusing to recreate it")
-        engine = Engine(service_directory / "engine")
+        engine = Engine(service_directory / "engine", file_locks=directory / "file-locks")
         try:
             store = AuthorizationStore(
                 service_directory / "authorization",

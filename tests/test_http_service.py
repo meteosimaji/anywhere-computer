@@ -1,3 +1,4 @@
+import asyncio
 import json
 import re
 from urllib.parse import parse_qs, urlsplit
@@ -8,14 +9,18 @@ from test_client_tokens import MemoryVault
 from test_http_mcp import INITIALIZE
 
 from anywhere_computer import cli
+from anywhere_computer import http_service as service_module
 from anywhere_computer.authorization import pkce_s256
 from anywhere_computer.client_tokens import ClientCredentialError
+from anywhere_computer.engine import Engine
+from anywhere_computer.files import sha256
 from anywhere_computer.http_service import (
     configure_http,
     http_service,
     load_http_config,
     revoke_http_device,
 )
+from anywhere_computer.locking import ProcessLock
 from anywhere_computer.owner_credentials import OwnerCredentials
 
 RESOURCE = "https://computer.example/mcp"
@@ -228,8 +233,6 @@ def test_http_cli_configuration_show_and_revoke(tmp_path, unused_tcp_port, monke
 
 
 async def test_busy_port_releases_service_lock_for_retry(configured, tmp_path):
-    import asyncio
-
     config, owner = configured
     blocker = await asyncio.start_server(
         lambda reader, writer: writer.close(), "127.0.0.1", config.port
@@ -243,3 +246,30 @@ async def test_busy_port_releases_service_lock_for_retry(configured, tmp_path):
         await blocker.wait_closed()
     async with http_service(tmp_path, credentials=owner):
         pass
+
+
+async def test_http_and_local_engines_share_write_lock_without_sharing_ledger(
+    configured, tmp_path, monkeypatch
+):
+    _, owner = configured
+    local = Engine(tmp_path)
+    created = []
+
+    def create_engine(*args, **kwargs):
+        engine = Engine(*args, **kwargs)
+        created.append(engine)
+        return engine
+
+    monkeypatch.setattr(service_module, "Engine", create_engine)
+    try:
+        async with http_service(tmp_path, credentials=owner):
+            remote = created[0]
+            assert remote.ledger is not local.ledger
+            assert remote.files.backups != local.files.backups
+            name = sha256(str((tmp_path / "shared.txt").resolve()).encode())
+            with ProcessLock(local.files.locks / name):
+                with pytest.raises(TimeoutError):
+                    with ProcessLock(remote.files.locks / name):
+                        pytest.fail("HTTP and local writes did not share their lock")
+    finally:
+        await local.close()
