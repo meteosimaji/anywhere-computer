@@ -41,7 +41,7 @@ credentials, and are deleted at fixture teardown.
 Still required: production credential provisioning through OS storage,
 peer/device configuration, TLS CLI provisioning, outbound rendezvous for
 NAT, reconnect backoff/status, resource scopes, public HTTP MCP/OAuth,
-host-to-isolated-Windows tests and an actual internet path. No remote listener
+host-to-isolated-Windows tests and a stable production internet path. No remote listener
 is enabled by default, and computer_status continues to report remote_ready
 false until those integrations exist.
 
@@ -111,7 +111,7 @@ stdio, the caller must not blindly repeat an interrupted mutation.
 
 Still missing for a deployable ChatGPT connection: OAuth discovery and token
 issuance/verification, user-to-device authorization, public HTTPS gateway,
-trusted proxy handling, NAT/outbound routing and an actual internet path. There
+trusted proxy handling, NAT/outbound routing and a stable production internet path. There
 is deliberately no CLI command enabling this listener for public use yet.
 `computer_status.remote_ready` remains false. The adapter is based on the MCP
 [2025-11-25 transport specification](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports);
@@ -122,3 +122,8 @@ The internal code/token grant store and authenticated device binding are now
 implemented; see [Device authorization](AUTHORIZATION.md). OAuth HTTP discovery
 and code redemption endpoints are also implemented as optional HTTP routes.
 Login/consent, public HTTPS deployment and internet routing remain unimplemented.
+
+A temporary public HTTPS path has now been exercised on macOS with a restricted
+probe engine. See [Internet testing](INTERNET-TESTING.md) for the exact scope,
+DNS behavior, cleanup and remaining production requirements. This does not
+validate the independent custom mTLS transport over the internet.

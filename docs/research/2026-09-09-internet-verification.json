@@ -1,0 +1,22 @@
+{
+  "kind": "temporary-public-https",
+  "started_at": 1788881619.54002,
+  "completed": true,
+  "script_sha256": "e3491b086e71de97fc86cdf7e5047c1c32303d20f3ed252028814b6ffa3ef739",
+  "scope": "Same Mac via public HTTPS edge; one disposable file; no browser login",
+  "runtime_id": "2e4cf9a51d606a06923131b6a6e7295a1e385615875ed52004831fd79d11b16b",
+  "public_url": "https://cant-los-qld-settle.trycloudflare.com",
+  "tunnel_connected": true,
+  "public_addresses": [
+    "104.16.230.132",
+    "104.16.231.132"
+  ],
+  "dns_resolver": "dns-over-https",
+  "last_metadata_status": 200,
+  "metadata_verified": true,
+  "write_read_across_sessions": true,
+  "revocation_verified": true,
+  "tunnel_stopped": true,
+  "finished_at": 1788881632.284777,
+  "temporary_files_removed": true
+}
