@@ -9,7 +9,8 @@ ChatGPT・Codex などの MCP クライアントから、ファイル・検索�
 実装しています。TLS リモート通信と HTTP MCP の内部実装・ループバック試験もあります。
 Word・Excel・PowerPoint の本文/セル読取を実装しています。
 一時 HTTPS 接続口を通るファイル読み書き・認可失効を macOS で実証しています。
-認証の自動更新と OS 資格情報ストアへの保存も内部実装し、macOS で往復試験済みです。
+HTTP クライアントの認証更新・セッション再接続・応答喪失後の結果照会も
+macOS で公開 HTTPS 経由の試験を行っています。
 常用リモート接続、文書の編集/描画、GUI 操作は今後の開発対象です。
 
 ## 起動
@@ -46,6 +47,18 @@ JSON の `state` と `action` に結果と対処を返し、`ready` 以外は終
 ```sh
 anywhere remote-mcp --ssh-host windows-lab
 ```
+
+事前に認可済みの HTTP 接続プロフィールには、次の起動経路もあります。
+ブラウザーでのログイン・端末認可の設定手順は開発中です。認証情報を引数へ渡す
+オプションは設けず、OS の資格情報ストアから読み込みます。
+
+```sh
+anywhere http-mcp --resource https://your-agent.example/mcp --client-id registered-client --profile laptop
+```
+
+HTTP 応答を失った操作は再送せず、既知の操作 ID と `unknown` 状態を返します。
+接続を作り直して `operations_get` で結果を照会できます。詳しい前提と制限は
+[HTTP クライアント](docs/REMOTE-TRANSPORT.md#http-client-and-stdio-connector)を参照してください。
 
 ## 複数端末
 

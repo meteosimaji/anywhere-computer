@@ -14,7 +14,8 @@ uv run python scripts/verify_internet.py --receipt dist/internet-verification.js
 
 This command temporarily publishes an isolated test endpoint. Its engine only
 exposes `files_read` and `files_write`, with handlers restricted to one specific
-disposable text file and a 1 KiB write limit. It does not use the normal agent,
+disposable text file and a 1 KiB write limit, plus `operations_get` for this
+isolated grant's operation results. It does not use the normal agent,
 credentials, terminal tools, registered devices or existing files. The test
 creates its own authorization store and random short-lived credentials. Its
 disposable client pair is saved in a separate OS keyring entry and deleted during
@@ -28,14 +29,18 @@ then performs:
 
 1. Protected-resource metadata retrieval through the public HTTPS hostname.
 2. Public HTTP code redemption with PKCE (the test creates consent internally).
-3. MCP initialization and discovery of exactly the two restricted tools.
-4. File creation through the actual files_write handler.
+3. MCP initialization and discovery of exactly the three restricted tools.
+4. File creation through the actual files_write handler, dropping the received
+   response inside the test client, then recovering the result with operations_get.
+   The write POST count must remain one; the lost response is an injected fault.
 5. Automatic client refresh through the public token endpoint, OS keyring
    persistence and reopening the client, a ping using the same MCP session,
-   then a new MCP session and files_read comparison. The initial client expiry
+   then explicit server-side session removal, automatic recovery after HTTP 404,
+   and files_read comparison. The initial client expiry
    is deliberately aged by 845 seconds; this tests renewal without claiming
    a 15-minute endurance run.
-6. Device revocation followed by HTTP 401 on the already established session.
+6. Device revocation followed by HTTP 401 on the already established session
+   and a rejected refresh; the tool operation is reported as not executed.
 7. Tunnel shutdown, disposable OS keyring credential deletion and temporary-state cleanup.
 
 Each HTTPS request verifies the CA chain and the original hostname. Redirects
@@ -45,7 +50,9 @@ that returned IPs are public, and connects to one of those IPs while retaining
 TLS hostname verification. This fallback is confined to the probe; it does not
 change the system resolver or the product's networking configuration. The
 receipt identifies which resolver was used. Only readiness GET/DNS requests are
-retried; mutation/token requests are not automatically repeated.
+retried for readiness. Lost/malformed operation responses and token refresh
+requests are not retried. The product HTTP client can recover once from an
+explicit pre-dispatch HTTP 401/404; this probe records its write POST count.
 
 ## Observed result and limits
 
@@ -65,8 +72,9 @@ placeholder; actual browser login and consent are not claimed. The URL is
 retired when the runner exits and should not be configured as a live connector.
 
 Production work remains: stable HTTPS hosting, owner authentication and consent,
-client onboarding, persistent outbound routing, reconnection/renewal, operational
-limits and platform-specific live validation. `remote_ready` therefore remains
+client onboarding, persistent outbound routing, network outage/sleep recovery,
+operational limits and platform-specific live validation. Client token renewal
+and explicit expired-session recovery are now implemented. `remote_ready` therefore remains
 false for the normal agent. Cloudflare describes Quick Tunnels as a testing
 facility, not a production service:
 [Quick Tunnels documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
@@ -82,3 +90,9 @@ HTTPS, continued MCP session, and deletion of the disposable credential. This
 probe supplies its DNS-resolved, hostname-verified HTTPS callback to the client;
 the default client HTTPS transport is exercised separately against a local TLS
 server. Neither test establishes a production connector or browser login.
+
+The [HTTP client verification receipt](research/2026-09-09-internet-http-client-verification.json)
+uses `HTTPBackend` itself for tool calls. Its injected lost write response is
+recovered by operation ID without replay (one write POST); automatic token renewal
+and explicit HTTP-session-expiry recovery are also verified. This test does not
+claim a naturally occurring network outage or a browser authorization flow.

@@ -18,7 +18,7 @@ async def test_internet_probe_only_exposes_disposable_file(tmp_path):
         )
 
     try:
-        assert set(engine.tools) == {"files_read", "files_write"}
+        assert set(engine.tools) == {"files_read", "files_write", "operations_get"}
         for tool, args in [
             ("files_read", {"path": str(outside)}),
             ("files_write", {"path": str(outside), "text": "bad"}),

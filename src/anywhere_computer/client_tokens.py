@@ -209,8 +209,12 @@ class ClientTokens:
         with ProcessLock(self.lock_path, timeout=30):
             self._save(record)
 
-    def access_token(self) -> str:
-        """Get access for a NEW request; never retry a previous MCP mutation here."""
+    def access_token(self, *, rejected_token: str | None = None) -> str:
+        """Get access for a new request, or renew the exact token rejected by HTTP 401.
+
+        If another process already replaced the rejected token, use that pair.
+        This method never retries an MCP operation itself.
+        """
         with ProcessLock(self.lock_path, timeout=30):
             record = self._load()
             if record.phase == "refresh_pending":
@@ -219,7 +223,10 @@ class ClientTokens:
                 )
             # Short-lived responses near grant expiry must not cause a refresh on every call.
             margin = min(60.0, record.tokens.expires_in / 10)
-            if self.clock() < record.expires_at - margin:
+            if (
+                record.tokens.access_token != rejected_token
+                and self.clock() < record.expires_at - margin
+            ):
                 return record.tokens.access_token
             self._save(record.model_copy(update={"phase": "refresh_pending"}))
             started = self.clock()

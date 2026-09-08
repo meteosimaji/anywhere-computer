@@ -122,11 +122,71 @@ OAuth integration must also follow the
 The internal code/token grant store and authenticated device binding are now
 implemented; see [Device authorization](AUTHORIZATION.md). OAuth HTTP discovery
 and code redemption/refresh endpoints are implemented as optional HTTP routes.
-The internal client manager saves rotating credentials in the OS keyring and
-serializes updates across processes. Login/consent and integration into a
-production HTTP connector, HTTPS deployment and internet routing remain unimplemented.
+The client manager saves rotating credentials in the OS keyring and serializes
+updates across processes. The HTTP connector below now uses it. Browser
+login/consent, production HTTPS deployment and persistent internet routing remain
+unimplemented.
 
 A temporary public HTTPS path has now been exercised on macOS with a restricted
 probe engine. See [Internet testing](INTERNET-TESTING.md) for the exact scope,
 DNS behavior, cleanup and remaining production requirements. This does not
 validate the independent custom mTLS transport over the internet.
+
+## HTTP client and stdio connector
+
+`http_client.py` connects the same stdio MCP interface to an authorized HTTPS
+agent. The CLI entry point is:
+
+```sh
+anywhere http-mcp --resource https://your-agent.example/mcp --client-id registered-client --profile laptop
+```
+
+These arguments contain no credentials. The selected state directory must already
+have a matching profile installed through `ClientTokens.install()` after trusted
+code redemption. There is not yet a browser onboarding command, and this CLI does
+not enroll devices, obtain consent, or accept tokens in arguments/config files.
+For recovery, the remote grant must include `operations_get` as well as the tools
+whose results need to be inspected. Startup checks the actual remote catalog;
+missing authorization or an unavailable endpoint fails with an error on stderr.
+
+The connector verifies TLS, uses the negotiated protocol-version/session headers,
+accepts bounded JSON and SSE response messages, and closes unused sessions with
+DELETE on a best-effort basis. Redirects are not followed. It targets the current
+Anywhere Computer agent contract, not arbitrary third-party MCP servers. SSE
+priming/progress events and LF/CRLF/CR line endings are handled; server-initiated
+requests and SSE replay/Last-Event-ID reconnection are not offered. Unexpected or
+interrupted messages return an unknown operation result without a POST retry.
+
+Operation IDs cross the MCP boundary using the nonstandard, explicitly negotiated
+`params._meta["io.github.meteosimaji.anywhere-computer/operation_id"]` extension.
+Initialization advertises `capabilities.experimental` support; a peer without it
+is rejected before tool dispatch. IDs are 32 lowercase hexadecimal characters.
+The remote grant namespace, tool/argument digest checks and existing ledger bind
+each ID to its actual operation. The JSON-RPC request ID remains separate. An
+ordinary MCP client can omit this extension and receive a server-generated ID.
+If that ordinary client's entire response is lost, it still does not know the
+server-generated ID; the connector solves this specifically by choosing it first.
+
+The client serializes actual HTTP work in a thread-owned lock, so cancellation
+of an asyncio observer cannot release the lock while its HTTP call continues.
+Credential refresh also uses the existing cross-process lock. A late HTTP 401
+for an access token that another process has already replaced uses the saved new
+pair instead of refreshing it again.
+
+Automatic recovery is limited to explicit pre-dispatch rejections by this agent:
+HTTP 401 can renew the exact rejected token once, and HTTP 404 can initialize a
+new session once. A session removed between the initialization response and
+its completion notification also gets one fresh handshake, before any tool is
+sent. The rejected request can then be sent with the same operation ID. This is an application contract with this server, not a blanket guarantee
+that retrying a write against any HTTP service is safe. Timeouts, HTTP 408/500,
+connection loss, malformed JSON/SSE, and mismatched request/operation IDs never
+retry the tool call. They return `unknown` with the caller's known operation ID.
+The caller can reconnect and query `operations_get`, without repeating the write.
+
+Tests exercise explicit session expiry, access expiry, revocation, observer
+cancellation, dropped and malformed write responses, same-ID duplicate/conflict
+handling, and a stdio proxy whose lost write result is recovered over HTTP.
+Real TLS tests cover JSON/SSE parsing, redirects and hostname validation. The
+[public HTTPS client receipt](research/2026-09-09-internet-http-client-verification.json)
+records one file-write POST, an injected lost response followed by result lookup,
+automatic renewal, session recovery, Keychain persistence and cleanup on macOS.

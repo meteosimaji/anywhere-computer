@@ -367,3 +367,18 @@ def test_https_refresh_real_tls_and_bounded_responses(certificates, monkeypatch)
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
+
+
+def test_rejected_access_token_refreshes_once_and_stale_401_uses_saved_pair(tmp_path):
+    vault = MemoryVault()
+    calls = []
+
+    def refresh(*args):
+        calls.append(args)
+        return pair("new")
+
+    current = manager(tmp_path, vault, refresh=refresh)
+    current.install(pair(), requested_at=1000)
+    assert current.access_token(rejected_token=pair().access_token) == pair("new").access_token
+    assert current.access_token(rejected_token=pair().access_token) == pair("new").access_token
+    assert len(calls) == 1

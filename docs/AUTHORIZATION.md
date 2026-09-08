@@ -63,8 +63,8 @@ internet OAuth login or a ChatGPT account connection.
 Before public use, implement authenticated login and consent with request/CSRF
 binding, client registration/authentication policy, HTTPS,
 request throttling and data retention. The internal client credential manager
-now supports renewal and persistence; wiring it into browser onboarding and the
-production remote connector is still outstanding. Public clients are the only client
+now supports renewal and persistence, and the HTTP connector uses it. Browser
+onboarding and production deployment are still outstanding. Public clients are the only client
 type in this internal store; it must not advertise confidential-client support.
 No public listener is enabled by this change.
 
@@ -178,9 +178,12 @@ hostname checks, a 16 KiB response bound, no redirect following and no automatic
 retry. It supports this server's colocated issuer at `/oauth/token`, `/mcp`
 resource, public clients and 900-second maximum access lifetime. General OAuth
 providers and discovery-selected external issuers are not supported by this
-internal adapter. Token renewal never replays an MCP operation. A production
-HTTP connector, browser login, and handling a revoked token's MCP 401 remain
-integration work; the local stdio plugin does not yet invoke this manager.
+internal adapter. Token renewal itself never replays an MCP operation. The
+`http-mcp` connector now invokes the manager and handles an explicit HTTP 401 by
+renewing the exact rejected access token once. A late rejection for an already
+replaced token uses the current pair instead of rotating again. Browser login and
+production deployment remain integration work; the normal local `mcp` command
+continues to use local agent credentials.
 
 Tests cover separate-process contention, process death during refresh, response
 loss, save failures before and after dispatch, profile separation, real server

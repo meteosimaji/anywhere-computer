@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import sys
 import uuid
 from collections.abc import Awaitable, Callable
@@ -17,6 +18,8 @@ from .models import Reply, Request
 Catalog = Callable[[], Awaitable[list[JsonValue]]]
 Execute = Callable[[Request], Awaitable[Reply]]
 PROTOCOL_VERSION = "2025-11-25"
+OPERATION_CAPABILITY = "io.github.meteosimaji.anywhere-computer"
+OPERATION_META = OPERATION_CAPABILITY + "/operation_id"
 INSTRUCTIONS = (
     "Check computer_status before operating. Use absolute paths. Existing writes require "
     "the SHA-256 from a recent read. Terminal sessions survive this connection. After a "
@@ -73,7 +76,10 @@ class MCPSession:
             self.initialized = True
             result = {
                 "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {"tools": {"listChanged": False}},
+                "capabilities": {
+                    "tools": {"listChanged": False},
+                    "experimental": {OPERATION_CAPABILITY: {"operationId": True}},
+                },
                 "serverInfo": {"name": "anywhere-computer", "version": __version__},
                 "instructions": INSTRUCTIONS,
             }
@@ -94,7 +100,16 @@ class MCPSession:
             }
             if name not in names:
                 return rpc_error(identity, -32602, "Unknown tool")
-            operation = Request(operation_id=uuid.uuid4().hex, tool=name, arguments=arguments)
+            metadata = params.get("_meta", {})
+            if not isinstance(metadata, dict):
+                return rpc_error(identity, -32602, "Invalid tool metadata")
+            operation_id = metadata.get(OPERATION_META, uuid.uuid4().hex)
+            if (
+                not isinstance(operation_id, str)
+                or re.fullmatch(r"[a-f0-9]{32}", operation_id) is None
+            ):
+                return rpc_error(identity, -32602, "Invalid operation ID")
+            operation = Request(operation_id=operation_id, tool=name, arguments=arguments)
             try:
                 reply = await self.execute(operation)
             except (OSError, ValueError, RuntimeError, TimeoutError):

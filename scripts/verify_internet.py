@@ -27,10 +27,11 @@ from pathlib import Path
 
 from anywhere_computer.authorization import AuthorizationStore, pkce_s256
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
-from anywhere_computer.client_tokens import ClientTokens, TokenReply
+from anywhere_computer.client_tokens import ClientAuthorizationRequired, ClientTokens, TokenReply
 from anywhere_computer.engine import Engine
+from anywhere_computer.http_client import HTTPBackend, HTTPResponse
 from anywhere_computer.http_mcp import HTTPMCP
-from anywhere_computer.models import ReadFile, WriteFile
+from anywhere_computer.models import ReadFile, Request, WriteFile
 from anywhere_computer.oauth_endpoints import OAuthEndpoints
 
 
@@ -112,7 +113,9 @@ def request(url, *, address, method="GET", payload=None, headers=None, form=None
 def restricted_engine(directory):
     engine = Engine(directory / "agent")
     target = directory / "probe.txt"
-    original = {name: engine.tools[name] for name in ("files_read", "files_write")}
+    original = {
+        name: engine.tools[name] for name in ("files_read", "files_write", "operations_get")
+    }
 
     async def read(args):
         if not isinstance(args, ReadFile) or args.path != str(target) or target.is_symlink():
@@ -132,6 +135,7 @@ def restricted_engine(directory):
     engine.tools = {
         "files_read": dataclasses.replace(original["files_read"], handler=read),
         "files_write": dataclasses.replace(original["files_write"], handler=write),
+        "operations_get": original["operations_get"],
     }
     return engine, target
 
@@ -153,6 +157,7 @@ async def verify(receipt_path):
     engine = None
     store = None
     client_tokens = None
+    remote_client = None
     with tempfile.TemporaryDirectory(prefix="anywhere-internet-") as raw:
         directory = Path(raw).resolve()
         backend = None
@@ -259,6 +264,7 @@ async def verify(receipt_path):
                 tools=frozenset(engine.tools),
                 challenge=pkce_s256(verifier),
             )
+            code_requested_at = time.time()
             status, _, token_body = await asyncio.to_thread(
                 public_request,
                 public + "/oauth/token",
@@ -287,7 +293,7 @@ async def verify(receipt_path):
                     },
                 )
                 if status != 200:
-                    raise RuntimeError("Public client renewal failed")
+                    raise ClientAuthorizationRequired("Public client authorization was rejected")
                 return TokenReply.model_validate(renewed)
 
             client_tokens = ClientTokens(
@@ -297,60 +303,81 @@ async def verify(receipt_path):
                 profile="disposable-probe",
                 refresh=refresh_client,
             )
-            # Simulate an aged access token to exercise automatic renewal without
-            # waiting 15 minutes. Both HTTP exchanges still use real server tokens.
+            await asyncio.to_thread(
+                client_tokens.install, token_body, requested_at=code_requested_at
+            )
+            dropped_write = False
+            write_posts = 0
+            rejected_after_revocation = False
+
+            def public_wire(resource, method, packet, headers):
+                nonlocal dropped_write, write_posts, rejected_after_revocation
+                status, response_headers, body = public_request(
+                    resource, method=method, payload=packet, headers=headers
+                )
+                if status == 401:
+                    rejected_after_revocation = True
+                if (
+                    packet
+                    and packet.get("method") == "tools/call"
+                    and packet.get("params", {}).get("name") == "files_write"
+                ):
+                    write_posts += 1
+                    if not dropped_write and status == 200:
+                        dropped_write = True
+                        # The server's response arrived over HTTPS. Drop it here to
+                        # exercise the same client's unknown-result recovery path.
+                        raise ConnectionError("Injected loss of a completed write response")
+                return HTTPResponse(
+                    status, {key.lower(): value for key, value in response_headers.items()}, body
+                )
+
+            remote_client = HTTPBackend(client_tokens, wire=public_wire)
+            catalog = await remote_client.catalog()
+            if {tool["name"] for tool in catalog} != set(engine.tools):
+                raise RuntimeError("Unexpected public tool exposure")
+            text = "Anywhere Computer インターネット接続試験 " + secrets.token_hex(8)
+            write = Request(
+                operation_id=secrets.token_hex(16),
+                tool="files_write",
+                arguments={"path": str(target), "text": text},
+            )
+            unknown = await remote_client.execute(write)
+            if unknown.state != "unknown" or write_posts != 1:
+                raise RuntimeError("Client did not preserve an unknown write without replay")
+            recovered = await remote_client.execute(
+                Request(
+                    operation_id=secrets.token_hex(16),
+                    tool="operations_get",
+                    arguments={"operation_id": write.operation_id},
+                )
+            )
+            if recovered.state != "completed" or recovered.data.get("state") != "completed":
+                raise RuntimeError("Client could not recover the lost public write result")
+            report["lost_write_response_recovered"] = True
+            report["write_dispatch_count"] = write_posts
+
+            # Age the client deadline to test renewal without claiming a 15-minute soak.
             await asyncio.to_thread(
                 client_tokens.install, token_body, requested_at=time.time() - 845
             )
             report["client_expiry_age_simulated_seconds"] = 845
-            token = token_body["access_token"]
-            headers = {
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json, text/event-stream",
-            }
-
-            async def rpc(method, params=None, identity=1):
-                packet = {"jsonrpc": "2.0", "method": method}
-                if identity is not None:
-                    packet["id"] = identity
-                if params is not None:
-                    packet["params"] = params
-                return await asyncio.to_thread(
-                    public_request, public + "/mcp", method="POST", payload=packet, headers=headers
+            previous_session = remote_client.session_id
+            read = await remote_client.execute(
+                Request(
+                    operation_id=secrets.token_hex(16),
+                    tool="files_read",
+                    arguments={"path": str(target)},
                 )
-
-            async def initialize():
-                status, response_headers, response = await rpc(
-                    "initialize",
-                    {
-                        "protocolVersion": "2025-11-25",
-                        "capabilities": {},
-                        "clientInfo": {"name": "internet-probe", "version": "1"},
-                    },
-                )
-                if status != 200 or not response or "result" not in response:
-                    raise RuntimeError("Public MCP initialization failed")
-                normalized = {key.lower(): value for key, value in response_headers.items()}
-                headers["MCP-Session-Id"] = normalized["mcp-session-id"]
-                if (await rpc("notifications/initialized", identity=None))[0] != 202:
-                    raise RuntimeError("Public MCP notification failed")
-
-            await initialize()
-            status, _, catalog = await rpc("tools/list")
-            if status != 200 or {tool["name"] for tool in catalog["result"]["tools"]} != set(
-                engine.tools
-            ):
-                raise RuntimeError("Unexpected public tool exposure")
-            text = "Anywhere Computer インターネット接続試験 " + secrets.token_hex(8)
-            status, _, written = await rpc(
-                "tools/call",
-                {"name": "files_write", "arguments": {"path": str(target), "text": text}},
             )
-            if status != 200 or written["result"]["structuredContent"]["state"] != "completed":
-                raise RuntimeError("Public file write failed")
             renewed_access = await asyncio.to_thread(client_tokens.access_token)
-            if renewed_access == token:
-                raise RuntimeError("Public client did not rotate its access token")
+            if (
+                read.state != "completed"
+                or read.data.get("text") != text
+                or renewed_access == token_body["access_token"]
+                or remote_client.session_id != previous_session
+            ):
+                raise RuntimeError("Public session did not survive automatic token renewal")
             reopened_tokens = ClientTokens(
                 directory / "client",
                 resource=public + "/mcp",
@@ -361,21 +388,34 @@ async def verify(receipt_path):
             if await asyncio.to_thread(reopened_tokens.access_token) != renewed_access:
                 raise RuntimeError("OS credential store did not preserve the renewed pair")
             report["client_keyring_reopen_verified"] = True
-            headers["Authorization"] = f"Bearer {renewed_access}"
-            if (await rpc("ping"))[0] != 200:
-                raise RuntimeError("Public session did not survive token rotation")
             report["refresh_rotation_verified"] = True
-            # A new MCP session, same persistent engine and file; no write is retried.
-            headers.pop("MCP-Session-Id")
-            await initialize()
-            status, _, read = await rpc(
-                "tools/call", {"name": "files_read", "arguments": {"path": str(target)}}
+
+            # Explicit server-side session expiry: client observes 404 and reinitializes.
+            adapter.sessions.clear()
+            read = await remote_client.execute(
+                Request(
+                    operation_id=secrets.token_hex(16),
+                    tool="files_read",
+                    arguments={"path": str(target)},
+                )
             )
-            if status != 200 or read["result"]["structuredContent"]["data"]["text"] != text:
-                raise RuntimeError("Public file read did not match the written content")
+            if (
+                read.state != "completed"
+                or read.data.get("text") != text
+                or remote_client.session_id == previous_session
+            ):
+                raise RuntimeError("Client did not recover an expired public MCP session")
+            report["session_recovery_verified"] = True
             report["write_read_across_sessions"] = True
             store.revoke_device(owner="probe-owner", device="probe-device")
-            if (await rpc("tools/list"))[0] != 401:
+            denied = await remote_client.execute(
+                Request(
+                    operation_id=secrets.token_hex(16),
+                    tool="files_read",
+                    arguments={"path": str(target)},
+                )
+            )
+            if denied.state != "failed" or not rejected_after_revocation:
                 raise RuntimeError("Public request remained authorized after device revocation")
             report["revocation_verified"] = True
             report["completed"] = True
@@ -384,6 +424,8 @@ async def verify(receipt_path):
             # Do not persist exception text, requests, tokens, codes, or tunnel logs.
             raise
         finally:
+            if remote_client:
+                await remote_client.close()
             if tunnel and tunnel.returncode is None:
                 tunnel.terminate()
                 try:
