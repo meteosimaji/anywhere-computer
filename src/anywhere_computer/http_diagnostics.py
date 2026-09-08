@@ -127,6 +127,7 @@ async def diagnose_remote(
         "supervisor_history": read_watch_observation(directory / "remote-watch-status.json"),
         "public": public,
         "connector": {
+            "history": read_watch_observation(directory / "tunnel-watch-status.json"),
             "executable_available": shutil.which(connector or "cloudflared") is not None,
             "selection": "explicit_path" if connector is not None else "PATH",
             "version_state": "unverified",

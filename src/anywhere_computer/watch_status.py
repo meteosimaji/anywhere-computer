@@ -15,7 +15,9 @@ WatchEvent = Literal[
     "child_started", "restart_wait", "restart_limit", "exited", "interrupted", "launch_error",
     "credential_check", "credentials_ready", "credential_store_unavailable", "credential_rejected",
     "configuration_error", "credential_backend_error", "connector_check_error", "startup_conflict",
+    "connector_starting", "connector_cleanup_error",
 ]
+WatchFailureKind = Literal["child_exit", "connector_error"]
 
 
 class WatchObservation(BaseModel):
@@ -28,15 +30,18 @@ class WatchObservation(BaseModel):
     restart_limit: int = Field(ge=0, le=5)
     last_exit_code: int | None = None
     startup_attempt: int | None = Field(default=None, ge=1, le=6)
+    last_failure_kind: WatchFailureKind | None = None
 
 
 def save_watch_observation(
     path: Path, event: WatchEvent, attempts: int, limit: int, exit_code: int | None,
     *, startup_attempt: int | None = None,
+    failure_kind: WatchFailureKind | None = None,
 ) -> None:
     observation = WatchObservation(event=event, updated_at=time.time(), supervisor_pid=os.getpid(),
                                    restart_attempts=attempts, restart_limit=limit,
-                                   last_exit_code=exit_code, startup_attempt=startup_attempt)
+                                   last_exit_code=exit_code, startup_attempt=startup_attempt,
+                                   last_failure_kind=failure_kind)
     prepare_directory(path.parent)
     descriptor, raw = tempfile.mkstemp(prefix=".watch-status-", dir=path.parent)
     temporary = Path(raw)

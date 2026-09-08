@@ -20,6 +20,7 @@ from .http_service import load_http_config
 from .http_supervisor import _stop_child
 from .locking import ProcessLock
 from .secret_pipe import SecretPipe, SecretPipeCleanupError
+from .watch_status import WatchEvent, WatchFailureKind, save_watch_observation
 
 
 class TunnelCredential:
@@ -184,7 +185,6 @@ def run_tunnel(
     executable = (cloudflared_executable() if connector is None
                   else cloudflared_executable(connector))
     with ProcessLock(credential.lock):
-        credential.read()  # Fail before launching if native storage is unavailable.
         prior = signal.getsignal(signal.SIGTERM)
 
         def interrupted(signum: int, frame: object) -> None:
@@ -192,30 +192,48 @@ def run_tunnel(
 
         signal.signal(signal.SIGTERM, interrupted)
         failures = 0
+        failure_kind: WatchFailureKind | None = None
+
+        def observe_tunnel(event: WatchEvent, code: int | None = None) -> None:
+            try:
+                save_watch_observation(directory / "tunnel-watch-status.json", event,
+                                       failures, restart_limit, code, failure_kind=failure_kind)
+            except (OSError, ValueError):
+                print(json.dumps({"tunnel_observation_saved": False}), flush=True)
+
         try:
+            credential.read()  # Fail before launching if native storage is unavailable.
             while True:
                 if stop is not None and stop.is_set():
+                    observe_tunnel("interrupted", 130)
                     return 130
                 started = time.monotonic()
+                failure_kind = None
+                observe_tunnel("connector_starting")
                 try:
                     if stop is None:
                         code = run_tunnel_child(executable, credential.read())
                     else:
                         code = run_tunnel_child(executable, credential.read(), stop=stop)
+                    failure_kind = "child_exit" if code not in {0, 130} else None
                 except (ClientCredentialError, SecretPipeCleanupError):
                     raise
                 except (OSError, TimeoutError, RuntimeError):
                     # No provider output or secret-containing exception is forwarded.
                     code = 1
+                    failure_kind = "connector_error"
                 if code in {0, 130}:
+                    observe_tunnel("exited" if code == 0 else "interrupted", code)
                     return code
                 if time.monotonic() - started >= 300:
                     failures = 0
                 if failures >= restart_limit:
+                    observe_tunnel("restart_limit", code)
                     print(json.dumps({"tunnel_stopped": "restart_limit"}), flush=True)
                     return 1
                 delay = min(2**failures, 30)
                 failures += 1
+                observe_tunnel("restart_wait", code)
                 print(
                     json.dumps(
                         {
@@ -229,6 +247,19 @@ def run_tunnel(
                 if stop is None:
                     time.sleep(delay)
                 elif stop.wait(delay):
+                    observe_tunnel("interrupted", 130)
                     return 130
+        except CredentialStoreUnavailable:
+            observe_tunnel("credential_store_unavailable")
+            raise
+        except (ClientCredentialError, ValueError):
+            observe_tunnel("credential_rejected")
+            raise
+        except SecretPipeCleanupError:
+            observe_tunnel("connector_cleanup_error")
+            raise
+        except KeyboardInterrupt:
+            observe_tunnel("interrupted")
+            raise
         finally:
             signal.signal(signal.SIGTERM, prior)

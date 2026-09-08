@@ -147,6 +147,11 @@ def test_restart_rereads_vault_and_budget_is_bounded(tmp_path, monkeypatch, caps
     assert cloudflare_tunnel.run_tunnel(tmp_path, restart_limit=2) == 1
     assert received == [TOKEN, TOKEN + "next", TOKEN + "next"]
     assert delays == [1, 2]
+    observation = json.loads((tmp_path / "tunnel-watch-status.json").read_text())
+    assert observation["event"] == "restart_limit"
+    assert observation["restart_attempts"] == 2
+    assert observation["last_exit_code"] == 7
+    assert observation["last_failure_kind"] == "child_exit"
     assert TOKEN not in capsys.readouterr().out
     with ProcessLock(credential.lock):
         pass
@@ -212,7 +217,70 @@ def test_lost_credential_after_child_exit_is_not_retried(tmp_path, monkeypatch, 
         cloudflare_tunnel.run_tunnel(tmp_path)
     assert starts == [True]
     assert delays == [1]  # The actual child exit; missing credentials cause no further retry.
+    observation = json.loads((tmp_path / "tunnel-watch-status.json").read_text())
+    assert observation["event"] == "credential_rejected"
+    assert observation["last_failure_kind"] is None
     assert TOKEN not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("fault,event", [
+    (RuntimeError, "restart_limit"),
+    (cloudflare_tunnel.SecretPipeCleanupError, "connector_cleanup_error"),
+    (cloudflare_tunnel.CredentialStoreUnavailable, "credential_store_unavailable"),
+    (KeyboardInterrupt, "interrupted"),
+])
+def test_connector_failure_history_is_readable_without_provider_output(
+    tmp_path, monkeypatch, fault, event,
+):
+    from anywhere_computer import http_diagnostics
+
+    vault = MemoryVault()
+    credential = configured(tmp_path, vault)
+    credential.install(TOKEN)
+    monkeypatch.setattr(cloudflare_tunnel, "secure_backend", lambda: vault)
+    monkeypatch.setattr(cloudflare_tunnel, "cloudflared_executable", lambda: "fake")
+
+    def fail(*args):
+        raise fault("synthetic secret provider exception")
+
+    monkeypatch.setattr(cloudflare_tunnel, "run_tunnel_child", fail)
+    if fault is RuntimeError:
+        assert cloudflare_tunnel.run_tunnel(tmp_path, restart_limit=0) == 1
+    else:
+        with pytest.raises(fault):
+            cloudflare_tunnel.run_tunnel(tmp_path, restart_limit=0)
+
+    async def disconnected(*args, **kwargs):
+        raise ConnectionError("synthetic unavailable loopback")
+
+    monkeypatch.setattr(http_diagnostics, "_metadata", disconnected)
+    report = asyncio.run(http_diagnostics.diagnose_remote(tmp_path))
+    history = report["connector"]["history"]
+    assert history["current_process_state"] == "unverified"
+    assert history["last_observation"]["event"] == event
+    assert history["last_observation"]["last_failure_kind"] == (
+        "connector_error" if fault is RuntimeError else None
+    )
+    raw = (tmp_path / "tunnel-watch-status.json").read_text()
+    assert "synthetic" not in raw and TOKEN not in json.dumps(report)
+    with ProcessLock(credential.lock):
+        pass
+
+
+@pytest.mark.parametrize("exit_code,event", [(0, "exited"), (130, "interrupted")])
+def test_connector_intentional_exit_is_not_recorded_as_failure(
+    tmp_path, monkeypatch, exit_code, event,
+):
+    vault = MemoryVault()
+    credential = configured(tmp_path, vault)
+    credential.install(TOKEN)
+    monkeypatch.setattr(cloudflare_tunnel, "secure_backend", lambda: vault)
+    monkeypatch.setattr(cloudflare_tunnel, "cloudflared_executable", lambda: "fake")
+    monkeypatch.setattr(cloudflare_tunnel, "run_tunnel_child", lambda *a: exit_code)
+    assert cloudflare_tunnel.run_tunnel(tmp_path) == exit_code
+    observation = json.loads((tmp_path / "tunnel-watch-status.json").read_text())
+    assert observation["event"] == event and observation["last_failure_kind"] is None
+    assert observation["restart_attempts"] == 0
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows console handle integration")

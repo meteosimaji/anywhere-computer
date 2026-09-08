@@ -148,6 +148,7 @@ async def test_remote_doctor_inspects_only_selected_connector(tmp_path, monkeypa
     report = await diagnostic.diagnose_remote(tmp_path, connector=selected)
     assert calls == [selected]
     assert report["connector"] == {
+        "history": {"state": "unavailable", "current_process_state": "unverified"},
         "executable_available": available, "selection": "explicit_path",
         "version_state": "unverified", "process_state": "unverified",
     }
