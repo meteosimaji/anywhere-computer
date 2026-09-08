@@ -187,21 +187,15 @@ class AuthorizationStore:
         now = time.time()
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
-            registered = self.db.execute(
-                "SELECT redirects FROM clients WHERE id=?", (client,)
-            ).fetchone()
-            target = self.db.execute(
-                "SELECT owner,tools,active FROM authorized_devices WHERE id=?", (device,)
-            ).fetchone()
-            if (
-                registered is None
-                or redirect not in json.loads(registered[0])
-                or target is None
-                or target[0] != owner
-                or not target[2]
-                or tools - frozenset(json.loads(target[1]))
-            ):
-                raise AuthorizationError("access_denied")
+            self.validate_consent(
+                owner=owner,
+                device=device,
+                client=client,
+                redirect=redirect,
+                resource=resource,
+                tools=tools,
+                challenge=challenge,
+            )
             grant = secrets.token_hex(16)
             self.db.execute(
                 "INSERT INTO grants(id,owner,device,client,tools,expires) VALUES(?,?,?,?,?,?)",
@@ -212,6 +206,37 @@ class AuthorizationStore:
                 (_secret_digest(code), grant, redirect, challenge, now + 120),
             )
         return code
+
+    def validate_consent(
+        self,
+        *,
+        owner: str,
+        device: str,
+        client: str,
+        redirect: str,
+        resource: str,
+        tools: frozenset[str],
+        challenge: str,
+    ) -> None:
+        """Read-only validation for a consent page; approve checks again in its transaction."""
+        if resource != self.resource or re.fullmatch(r"[A-Za-z0-9_-]{43}", challenge) is None:
+            raise AuthorizationError("invalid_request")
+        self._tools(tools)
+        registered = self.db.execute(
+            "SELECT redirects FROM clients WHERE id=?", (client,)
+        ).fetchone()
+        target = self.db.execute(
+            "SELECT owner,tools,active FROM authorized_devices WHERE id=?", (device,)
+        ).fetchone()
+        if (
+            registered is None
+            or redirect not in json.loads(registered[0])
+            or target is None
+            or target[0] != owner
+            or not target[2]
+            or tools - frozenset(json.loads(target[1]))
+        ):
+            raise AuthorizationError("access_denied")
 
     def exchange_code(
         self,

@@ -43,7 +43,8 @@ problem, distinct from network reachability.
 Authenticated TLS and HTTP MCP adapters, OAuth grant/rotation endpoints and an
 OS-keyring client renewal manager are implemented internally. A temporary public
 HTTPS probe verifies a restricted file roundtrip and credential renewal on macOS.
-Production routing, browser login/consent, device pairing, graphical UI, screen and
+An embedded browser password/consent route is implemented with native-keyring
+owner verification. Production routing, complete browser onboarding, device pairing, graphical UI, screen and
 browser operations, service installation and standalone installers remain planned.
 The normal local agent therefore still advertises remote readiness as unavailable.
 Its local endpoint is not a public MCP HTTP endpoint. Office support currently

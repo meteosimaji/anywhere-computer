@@ -37,7 +37,7 @@ class OAuthEndpoints:
         }
 
     async def resource_metadata(
-        self, method: str, headers: dict[str, str], body: bytes
+        self, method: str, headers: dict[str, str], body: bytes, query: str = ""
     ) -> HTTPResult:
         if method != "GET":
             return 405, None, {"Allow": "GET"}
@@ -53,7 +53,7 @@ class OAuthEndpoints:
         )
 
     async def server_metadata(
-        self, method: str, headers: dict[str, str], body: bytes
+        self, method: str, headers: dict[str, str], body: bytes, query: str = ""
     ) -> HTTPResult:
         if method != "GET":
             return 405, None, {"Allow": "GET"}
@@ -72,7 +72,9 @@ class OAuthEndpoints:
             {},
         )
 
-    async def token(self, method: str, headers: dict[str, str], body: bytes) -> HTTPResult:
+    async def token(
+        self, method: str, headers: dict[str, str], body: bytes, query: str = ""
+    ) -> HTTPResult:
         no_cache = {"Cache-Control": "no-store", "Pragma": "no-cache"}
 
         def error(code: str, status: int = 400) -> HTTPResult:
@@ -80,6 +82,8 @@ class OAuthEndpoints:
 
         if method != "POST":
             return 405, None, {**no_cache, "Allow": "POST"}
+        if query:
+            return error("invalid_request")
         if len(body) > 16384:
             return error("invalid_request", 413)
         content_type = headers.get("content-type", "").split(";")[0].strip().lower()

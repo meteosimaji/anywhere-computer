@@ -2,6 +2,7 @@
 
 import argparse
 import asyncio
+import getpass
 import json
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from .devices import DeviceStore
 from .diagnostics import diagnose
 from .http_client import run_http_mcp
 from .mcp_server import run_mcp
+from .owner_credentials import OwnerCredentials
 from .ssh_transport import run_ssh_mcp
 from .state import state_directory
 
@@ -29,6 +31,7 @@ def main() -> None:
             "stop",
             "remote-mcp",
             "http-mcp",
+            "owner-init",
             "devices",
             "device-add",
             "device-rename",
@@ -42,13 +45,20 @@ def main() -> None:
     parser.add_argument("--name", help="Device display name")
     parser.add_argument("--resource", help="Authorized HTTPS /mcp resource")
     parser.add_argument("--client-id", help="Registered public OAuth client ID")
+    parser.add_argument("--owner", help="Owner identifier for initial authentication setup")
     parser.add_argument(
         "--profile", help="Authorized connection profile in the OS credential store"
     )
     args = parser.parse_args()
-    if any(value is not None for value in (args.resource, args.client_id, args.profile)):
+    if args.resource is not None and args.command not in {"http-mcp", "owner-init"}:
+        parser.error("--resource is only valid for http-mcp and owner-init")
+    if any(value is not None for value in (args.client_id, args.profile)):
         if args.command != "http-mcp":
-            parser.error("--resource, --client-id and --profile are only valid for http-mcp")
+            parser.error("--client-id and --profile are only valid for http-mcp")
+    if args.owner is not None and args.command != "owner-init":
+        parser.error("--owner is only valid for owner-init")
+    if args.command == "owner-init" and not all((args.resource, args.owner)):
+        parser.error("owner-init requires --resource and --owner")
     if args.command == "http-mcp" and not all((args.resource, args.client_id, args.profile)):
         parser.error("http-mcp requires --resource, --client-id and --profile")
     if args.ssh_host is not None and args.command not in {"remote-mcp", "device-add"}:
@@ -103,7 +113,18 @@ def main() -> None:
                 store.close()
             if args.command != "remote-mcp":
                 return
-        if args.command == "http-mcp":
+        if args.command == "owner-init":
+            if not sys.stdin.isatty():
+                raise ValueError("Owner setup requires an interactive terminal")
+            owner_credentials = OwnerCredentials(
+                directory, resource=args.resource, owner=args.owner
+            )
+            password = getpass.getpass("Owner password (at least 16 characters): ")
+            if password != getpass.getpass("Confirm owner password: "):
+                raise ValueError("Owner passwords did not match")
+            owner_credentials.initialize(password)
+            print(json.dumps({"owner_initialized": True}))
+        elif args.command == "http-mcp":
             tokens = ClientTokens(
                 directory, resource=args.resource, client=args.client_id, profile=args.profile
             )

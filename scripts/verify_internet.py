@@ -27,12 +27,14 @@ from pathlib import Path
 
 from anywhere_computer.authorization import AuthorizationStore, pkce_s256
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
+from anywhere_computer.browser_authorization import BrowserAuthorization
 from anywhere_computer.client_tokens import ClientAuthorizationRequired, ClientTokens, TokenReply
 from anywhere_computer.engine import Engine
 from anywhere_computer.http_client import HTTPBackend, HTTPResponse
 from anywhere_computer.http_mcp import HTTPMCP
 from anywhere_computer.models import ReadFile, Request, WriteFile
 from anywhere_computer.oauth_endpoints import OAuthEndpoints
+from anywhere_computer.owner_credentials import OwnerCredentials
 
 
 class DNSNotReady(RuntimeError):
@@ -82,7 +84,7 @@ class ResolvedHTTPSConnection(http.client.HTTPSConnection):
             raise
 
 
-def request(url, *, address, method="GET", payload=None, headers=None, form=None):
+def request(url, *, address, method="GET", payload=None, headers=None, form=None, html=False):
     data = None
     headers = dict(headers or {})
     if payload is not None:
@@ -96,13 +98,14 @@ def request(url, *, address, method="GET", payload=None, headers=None, form=None
         raise ValueError("Probe requires an HTTPS URL")
     connection = ResolvedHTTPSConnection(parsed.hostname, address)
     try:
-        connection.request(method, parsed.path, body=data, headers=headers)
+        target = parsed.path + ("?" + parsed.query if parsed.query else "")
+        connection.request(method, target, body=data, headers=headers)
         response = connection.getresponse()
         raw = response.read(8 * 1024 * 1024 + 1)
         if len(raw) > 8 * 1024 * 1024:
             raise RuntimeError("Probe response exceeded limit")
         try:
-            body = json.loads(raw) if raw else None
+            body = raw.decode("utf-8") if html else (json.loads(raw) if raw else None)
         except ValueError:
             body = None
         return response.status, dict(response.headers.items()), body
@@ -149,7 +152,7 @@ async def verify(receipt_path):
         "started_at": time.time(),
         "completed": False,
         "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "scope": "Same Mac via public HTTPS edge; one disposable file; no browser login",
+        "scope": "Same Mac via public HTTPS edge; disposable file/owner; HTTP consent form test",
     }
     tunnel = None
     drain = None
@@ -158,6 +161,7 @@ async def verify(receipt_path):
     store = None
     client_tokens = None
     remote_client = None
+    owner_credentials = None
     with tempfile.TemporaryDirectory(prefix="anywhere-internet-") as raw:
         directory = Path(raw).resolve()
         backend = None
@@ -220,8 +224,15 @@ async def verify(receipt_path):
             store.register_client("probe-client", frozenset({callback}))
             store.enroll_device("probe-owner", "probe-device", frozenset(engine.tools))
             backend = AuthorizedDeviceMCP(store, engine, owner="probe-owner", device="probe-device")
-            oauth = OAuthEndpoints(store, authorization_endpoint=public + "/not-implemented")
-            adapter.public_routes = oauth.routes()
+            owner_credentials = OwnerCredentials(
+                directory / "owner", resource=public + "/mcp", owner="probe-owner"
+            )
+            owner_password = secrets.token_urlsafe(32)
+            await asyncio.to_thread(owner_credentials.initialize, owner_password)
+            consent = BrowserAuthorization(store, owner_credentials, device="probe-device")
+            oauth = OAuthEndpoints(store, authorization_endpoint=consent.authorization_endpoint)
+            adapter.public_routes = {**oauth.routes(), **consent.routes()}
+            adapter.origins = frozenset({public})
             adapter.auth_challenge = oauth.challenge
             dns_deadline = time.monotonic() + 120
             while True:
@@ -255,15 +266,47 @@ async def verify(receipt_path):
             report["metadata_verified"] = True
             print(json.dumps({"stage": "public_metadata_verified"}), flush=True)
             verifier = secrets.token_urlsafe(32)
-            code = store.approve(
-                owner="probe-owner",
-                device="probe-device",
-                client="probe-client",
-                redirect=callback,
-                resource=public + "/mcp",
-                tools=frozenset(engine.tools),
-                challenge=pkce_s256(verifier),
+            state = secrets.token_urlsafe(32)
+            query = urllib.parse.urlencode(
+                {
+                    "response_type": "code",
+                    "client_id": "probe-client",
+                    "redirect_uri": callback,
+                    "resource": public + "/mcp",
+                    "scope": " ".join(sorted(engine.tools)),
+                    "state": state,
+                    "code_challenge": pkce_s256(verifier),
+                    "code_challenge_method": "S256",
+                }
             )
+            status, form_headers, page = await asyncio.to_thread(
+                public_request, public + "/authorize?" + query, html=True
+            )
+            if status != 200 or not isinstance(page, str):
+                raise RuntimeError("Public consent page was unavailable")
+            hidden = dict(re.findall(r"name=(request_id|csrf) value='([^']+)'", page))
+            cookie_header = next(
+                value for key, value in form_headers.items() if key.lower() == "set-cookie"
+            ).split(";", 1)[0]
+            status, consent_headers, _ = await asyncio.to_thread(
+                public_request,
+                public + "/authorize",
+                method="POST",
+                headers={"Origin": public, "Cookie": cookie_header},
+                form={**hidden, "approve": "yes", "password": owner_password},
+            )
+            if status != 303:
+                raise RuntimeError("Public owner authentication failed")
+            location = next(
+                value for key, value in consent_headers.items() if key.lower() == "location"
+            )
+            returned = urllib.parse.urlsplit(location)
+            fields = urllib.parse.parse_qs(returned.query)
+            if returned._replace(query="").geturl() != callback or fields.get("state") != [state]:
+                raise RuntimeError("Public consent callback binding failed")
+            code = fields["code"][0]
+            report["owner_password_consent_verified"] = True
+            report["browser_rendering_tested"] = False
             code_requested_at = time.time()
             status, _, token_body = await asyncio.to_thread(
                 public_request,
@@ -443,6 +486,14 @@ async def verify(receipt_path):
                     report["client_keyring_removed"] = False
                     report["completed"] = False
                     report["failure_type"] = "ClientCredentialCleanupFailed"
+            if owner_credentials:
+                try:
+                    await asyncio.to_thread(owner_credentials.forget)
+                    report["owner_keyring_removed"] = True
+                except Exception:
+                    report["owner_keyring_removed"] = False
+                    report["completed"] = False
+                    report["failure_type"] = "OwnerCredentialCleanupFailed"
             if adapter:
                 await adapter.close()
             if store:

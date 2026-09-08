@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import cast
+from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
@@ -21,8 +22,8 @@ from .mcp_server import PROTOCOL_VERSION, MCPSession, rpc_error
 
 Authenticate = Callable[[str], Awaitable[str | None]]
 SessionFactory = Callable[[str], MCPSession]
-HTTPResult = tuple[int, dict[str, JsonValue] | None, dict[str, str]]
-HTTPRoute = Callable[[str, dict[str, str], bytes], Awaitable[HTTPResult]]
+HTTPResult = tuple[int, dict[str, JsonValue] | bytes | None, dict[str, str]]
+HTTPRoute = Callable[[str, dict[str, str], bytes, str], Awaitable[HTTPResult]]
 HEADER_LIMIT = 16384
 
 
@@ -102,8 +103,13 @@ class HTTPMCP:
         if len(request_line) != 3 or request_line[2] != "HTTP/1.1":
             raise HTTPFailure(400)
         method, target, _ = request_line
-        if target != "/mcp" and target not in self.public_routes:
+        parsed = urlsplit(target)
+        if parsed.scheme or parsed.netloc or parsed.fragment or not target.startswith("/"):
+            raise HTTPFailure(400)
+        if parsed.path != "/mcp" and parsed.path not in self.public_routes:
             raise HTTPFailure(404)
+        if parsed.path == "/mcp" and parsed.query:
+            raise HTTPFailure(400)
         headers: dict[str, str] = {}
         for line in lines:
             name, separator, value = line.partition(":")
@@ -222,9 +228,10 @@ class HTTPMCP:
                 async with asyncio.timeout(10):
                     method, target, headers, body = await self._read(reader)
                 async with asyncio.timeout(30):
-                    if target in self.public_routes:
-                        status, response, extra = await self.public_routes[target](
-                            method, headers, body
+                    parsed = urlsplit(target)
+                    if parsed.path in self.public_routes:
+                        status, response, extra = await self.public_routes[parsed.path](
+                            method, headers, body, parsed.query
                         )
                     else:
                         status, response, extra = await self._dispatch(method, headers, body)
@@ -239,9 +246,13 @@ class HTTPMCP:
             except Exception:
                 status, response, extra = 500, None, {}
             payload = (
-                json.dumps(response, ensure_ascii=False, allow_nan=False).encode()
-                if response is not None
-                else b""
+                response
+                if isinstance(response, bytes)
+                else (
+                    json.dumps(response, ensure_ascii=False, allow_nan=False).encode()
+                    if response is not None
+                    else b""
+                )
             )
             if len(payload) > WIRE_LIMIT:
                 status, payload, extra = 500, b"", {}
@@ -251,7 +262,7 @@ class HTTPMCP:
                 "Cache-Control": "no-store",
                 **extra,
             }
-            if payload:
+            if payload and not isinstance(response, bytes):
                 response_headers["Content-Type"] = "application/json"
             head = f"HTTP/1.1 {status} {HTTPStatus(status).phrase}\r\n"
             head += "".join(f"{name}: {value}\r\n" for name, value in response_headers.items())

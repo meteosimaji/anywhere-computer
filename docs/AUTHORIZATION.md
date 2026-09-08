@@ -3,8 +3,9 @@
 `authorization.py` and `authorized_http.py` provide the internal authorization
 store and the binding between verified HTTP tokens and one device's MCP tools.
 OAuth discovery and token redemption HTTP endpoints are implemented in
-`oauth_endpoints.py`. A browser login, consent page and production service are
-not yet provided. There is no authentication bypass
+`oauth_endpoints.py`. Browser owner-password verification and explicit consent
+are implemented as embedding routes; production service setup is not yet provided.
+There is no authentication bypass
 or anonymous mode in the HTTP binding.
 
 ## What is implemented
@@ -60,9 +61,9 @@ that cannot write, an approved write grant, operation lookup across grants, and
 immediate grant/device revocation. These are local integration tests, not an
 internet OAuth login or a ChatGPT account connection.
 
-Before public use, implement authenticated login and consent with request/CSRF
-binding, client registration/authentication policy, HTTPS,
-request throttling and data retention. The internal client credential manager
+Before public use, implement the production client registration/authentication
+policy, stable HTTPS hosting, deployment-level abuse controls and data retention.
+The internal client credential manager
 now supports renewal and persistence, and the HTTP connector uses it. Browser
 onboarding and production deployment are still outstanding. Public clients are the only client
 type in this internal store; it must not advertise confidential-client support.
@@ -191,3 +192,49 @@ grant continuity, and real TLS response validation (including hostname rejection
 before sending credentials). Test vaults hold synthetic tokens only. The explicit
 internet probe additionally uses the native macOS Keychain for its disposable
 pair, reopens the client after renewal, and removes the entry on completion.
+
+## Browser owner authentication and consent
+
+`BrowserAuthorization` exposes GET/POST `/authorize` on the resource's HTTPS
+origin. Build discovery with its `authorization_endpoint` property, mount its
+routes alongside `OAuthEndpoints.routes()`, and allow that exact origin in
+`HTTPMCP.origins`. This adapter supports colocated authorization only; an external
+authorization origin or a different authorize path is not supported. The generic
+OAuth endpoint class can still be embedded with a different authentication provider.
+
+Trusted initial setup uses `anywhere owner-init --resource https://HOST/mcp
+--owner OWNER` from an interactive terminal. The command asks for the password
+twice without echo; it accepts neither password arguments nor piped input. The
+password must contain at least 16 characters. Only a random salt and scrypt
+verification digest are saved in the native OS credential store. Existing owner
+credentials cannot be overwritten by initialization. Password rotation/recovery
+and a complete server setup command remain outstanding. Deleting a verifier
+alone does not revoke already issued grants.
+
+The form displays the registered client, exact callback, device, resource and
+requested tools. Each approval requires the owner password. Pending requests
+expire after five minutes and are lost on restart. A per-request Secure,
+HttpOnly, SameSite=Strict `__Host-` cookie, random CSRF value and exact POST Origin
+bind the decision to its browser. Only digests of the cookie and CSRF values are
+retained. Invalid requests never redirect to an unverified callback. Concurrent
+approve/deny submissions consume a request only once; current device/client/tool
+bindings are checked again inside the grant transaction. Denial returns the
+original state and `access_denied` without requiring a password.
+
+HTML has no external assets or scripts and uses no-store, a restrictive CSP and
+no-referrer headers. Wrong passwords are never echoed. Each pending request has
+a ten-attempt/60-second limit; failed attempts do not lock other pending requests.
+Only two actual password workers can run at once, and excess work returns busy
+instead of queueing. At most 64 pending requests are retained. These are bounded
+resource protections, not complete public abuse prevention: attackers who can
+start new requests can bypass a per-request rate limit or exhaust capacity.
+Production edge/account throttling and recovery policy still need implementation.
+
+Tests cover correct/wrong passwords, native-verifier format and secret-free state,
+interactive CLI setup, Origin/cookie/CSRF mismatch, concurrent approval, denial,
+revocation between form and decision, isolated attempt budgets and busy workers.
+The disposable internet probe submits the real HTML form over public HTTPS using
+a synthetic owner password in macOS Keychain, then exchanges the code, operates
+on its single disposable file and verifies revocation and cleanup. It is an HTTP
+form integration test, not visual browser testing, ChatGPT onboarding or a second
+physical device test. See the dated browser-authorization receipt in `research/`.
