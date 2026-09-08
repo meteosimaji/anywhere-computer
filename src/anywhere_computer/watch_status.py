@@ -13,6 +13,7 @@ from .state import prepare_directory
 
 WatchEvent = Literal[
     "child_started", "restart_wait", "restart_limit", "exited", "interrupted", "launch_error",
+    "credential_check", "credentials_ready", "credential_store_unavailable", "credential_rejected",
 ]
 
 
@@ -25,14 +26,16 @@ class WatchObservation(BaseModel):
     restart_attempts: int = Field(ge=0, le=5)
     restart_limit: int = Field(ge=0, le=5)
     last_exit_code: int | None = None
+    startup_attempt: int | None = Field(default=None, ge=1, le=6)
 
 
 def save_watch_observation(
     path: Path, event: WatchEvent, attempts: int, limit: int, exit_code: int | None,
+    *, startup_attempt: int | None = None,
 ) -> None:
     observation = WatchObservation(event=event, updated_at=time.time(), supervisor_pid=os.getpid(),
                                    restart_attempts=attempts, restart_limit=limit,
-                                   last_exit_code=exit_code)
+                                   last_exit_code=exit_code, startup_attempt=startup_attempt)
     prepare_directory(path.parent)
     descriptor, raw = tempfile.mkstemp(prefix=".watch-status-", dir=path.parent)
     temporary = Path(raw)

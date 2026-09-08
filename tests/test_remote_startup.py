@@ -57,6 +57,10 @@ def test_startup_waits_before_spawning_and_preserves_credentials(
 
     def wait(delay):
         delays.append(delay)
+        observation = json.loads((directory / "remote-watch-status.json").read_text())
+        assert observation["event"] == "credential_store_unavailable"
+        assert observation["startup_attempt"] == len(delays)
+        assert observation["restart_attempts"] == 0
         assert not launches
         for name in ("remote-watch.lock", "http-watch.lock", "http-server.lock",
                      "cloudflare-tunnel.lock"):
@@ -69,6 +73,10 @@ def test_startup_waits_before_spawning_and_preserves_credentials(
     assert remote_service.watch_remote(directory) == 0
     assert delays == [1, 2] and len(launches) == 1 and vault.failed_reads == 2
     assert vault.data == before and vault.writes == writes
+    saved = (directory / "remote-watch-status.json").read_text()
+    assert json.loads(saved)["event"] == "credentials_ready"
+    assert json.loads(saved)["startup_attempt"] == 3
+    assert "synthetic" not in saved
     output = capsys.readouterr().out
     assert "synthetic" not in output
     assert [json.loads(line)["retry_attempt"] for line in output.splitlines()] == [1, 2]
@@ -92,6 +100,10 @@ def test_missing_or_corrupt_credentials_are_not_retried(
         remote_service.watch_remote(directory)
     assert not isinstance(error.value, CredentialStoreUnavailable)
     assert vault.data == before
+    saved = (directory / "remote-watch-status.json").read_text()
+    assert json.loads(saved)["event"] == "credential_rejected"
+    assert json.loads(saved)["startup_attempt"] == 1
+    assert "invalid record" not in saved and "synthetic" not in saved
 
 
 def test_startup_retry_budget_and_interrupt_release_locks(startup_profile, monkeypatch):
@@ -104,6 +116,9 @@ def test_startup_retry_budget_and_interrupt_release_locks(startup_profile, monke
     with pytest.raises(CredentialStoreUnavailable):
         remote_service.watch_remote(directory)
     assert delays == [1, 2, 4, 8, 16] and vault.failed_reads == 6
+    observation = json.loads((directory / "remote-watch-status.json").read_text())
+    assert observation["event"] == "credential_store_unavailable"
+    assert observation["startup_attempt"] == 6
     assert signal.getsignal(signal.SIGTERM) == previous
 
     def interrupt(_):
@@ -117,6 +132,19 @@ def test_startup_retry_budget_and_interrupt_release_locks(startup_profile, monke
                  "cloudflare-tunnel.lock"):
         with ProcessLock(directory / name):
             pass
+    observation = json.loads((directory / "remote-watch-status.json").read_text())
+    assert observation["event"] == "interrupted"
+
+
+def test_competing_watcher_does_not_overwrite_history(startup_profile):
+    directory, _, _, _ = startup_profile
+    path = directory / "remote-watch-status.json"
+    previous = b'{"owned-by-running-watcher":true}'
+    path.write_bytes(previous)
+    with ProcessLock(directory / "remote-watch.lock"):
+        with pytest.raises(TimeoutError):
+            remote_service.watch_remote(directory)
+    assert path.read_bytes() == previous
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX SIGTERM/SIGKILL integration")
@@ -156,6 +184,13 @@ except KeyboardInterrupt:
                     pass
             process.send_signal(signal.SIGKILL if hard_kill else signal.SIGTERM)
             assert process.wait(timeout=10) == (-signal.SIGKILL if hard_kill else 130)
+            from anywhere_computer.watch_status import read_watch_observation
+
+            history = read_watch_observation(tmp_path / "remote-watch-status.json")
+            assert history["current_process_state"] == "unverified"
+            assert history["last_observation"]["event"] == (
+                "credential_store_unavailable" if hard_kill else "interrupted"
+            )
         finally:
             if process.poll() is None:
                 process.kill()

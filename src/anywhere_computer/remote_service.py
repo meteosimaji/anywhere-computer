@@ -12,12 +12,13 @@ from threading import Event
 
 import psutil
 
-from .client_tokens import CredentialStoreUnavailable
+from .client_tokens import ClientCredentialError, CredentialStoreUnavailable
 from .cloudflare_tunnel import TunnelCredential, cloudflared_executable
 from .http_service import http_service, load_http_config
 from .http_supervisor import _stop_child, supervise
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
+from .watch_status import WatchEvent, save_watch_observation
 
 
 def stop_remote_connector(child: subprocess.Popen[bytes]) -> None:
@@ -108,14 +109,26 @@ async def serve_remote(
                 stop_remote_connector(child)
 
 
-def wait_for_remote_credentials(owner: OwnerCredentials, credential: TunnelCredential) -> None:
+def wait_for_remote_credentials(
+    owner: OwnerCredentials, credential: TunnelCredential, *, status_path: Path | None = None,
+) -> None:
     """Retry failed reads on the selected stores; never initialize or switch stores."""
+    def observe_credentials(event: WatchEvent, attempt: int) -> None:
+        if status_path is not None:
+            try:
+                save_watch_observation(status_path, event, 0, 5, None, startup_attempt=attempt)
+            except (OSError, ValueError):
+                print(json.dumps({"watch_observation_saved": False}), flush=True)
+
     for attempt in range(6):
+        observe_credentials("credential_check", attempt + 1)
         try:
             owner.ensure_initialized()
             credential.read()
+            observe_credentials("credentials_ready", attempt + 1)
             return
         except CredentialStoreUnavailable:
+            observe_credentials("credential_store_unavailable", attempt + 1)
             if attempt == 5:
                 raise
             delay = 2**attempt
@@ -124,7 +137,17 @@ def wait_for_remote_credentials(owner: OwnerCredentials, credential: TunnelCrede
                 "retry_attempt": attempt + 1,
                 "retry_in_seconds": delay,
             }), flush=True)
-            time.sleep(delay)
+            try:
+                time.sleep(delay)
+            except KeyboardInterrupt:
+                observe_credentials("interrupted", attempt + 1)
+                raise
+        except (ClientCredentialError, ValueError):
+            observe_credentials("credential_rejected", attempt + 1)
+            raise
+        except KeyboardInterrupt:
+            observe_credentials("interrupted", attempt + 1)
+            raise
 
 
 def watch_remote(directory: Path, *, connector: str | None = None) -> int:
@@ -142,7 +165,9 @@ def watch_remote(directory: Path, *, connector: str | None = None) -> int:
                 ProcessLock(directory / "http-watch.lock"), ProcessLock(credential.lock),
                 ProcessLock(directory / "http-server.lock"),
             ):
-                wait_for_remote_credentials(owner, credential)
+                wait_for_remote_credentials(
+                    owner, credential, status_path=directory / "remote-watch-status.json",
+                )
             return supervise(
                 [sys.executable, "-m", "anywhere_computer.cli", "remote-serve",
                  "--state-dir", str(directory.resolve()), "--watch-parent", *connector_arguments],
