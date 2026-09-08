@@ -18,8 +18,9 @@ disposable text file and a 1 KiB write limit, plus `operations_get` for this
 isolated grant's operation results. It does not use the normal agent,
 credentials, terminal tools, registered devices or existing files. The test
 creates its own authorization store and random short-lived credentials. Its
-disposable client pair is saved in a separate OS keyring entry and deleted during
-cleanup; an unlocked native credential store is required. The runner keeps
+disposable client pair and owner-password verifier are saved in separate OS
+keyring entries and deleted during cleanup; an unlocked native credential store
+is required. The owner password is generated in memory for this test. The runner keeps
 secrets out of arguments/output/receipts, and removes its temporary state on
 completion. A unit test verifies that other paths, terminal operations and
 symlink targets are rejected by this particular probe.
@@ -28,7 +29,11 @@ The runner obtains a temporary URL, waits for DNS and metadata readiness, and
 then performs:
 
 1. Protected-resource metadata retrieval through the public HTTPS hostname.
-2. Public HTTP code redemption with PKCE (the test creates consent internally).
+2. Native client login: the actual client creates state/PKCE and a temporary
+   loopback callback. An HTTP form driver retrieves the public consent page,
+   submits the synthetic owner's password with its bound Cookie/CSRF/Origin,
+   and delivers the redirect to that callback. The client redeems the code over
+   public HTTPS, saves its pair and closes the local callback listener.
 3. MCP initialization and discovery of exactly the three restricted tools.
 4. File creation through the actual files_write handler, dropping the received
    response inside the test client, then recovering the result with operations_get.
@@ -41,7 +46,7 @@ then performs:
    a 15-minute endurance run.
 6. Device revocation followed by HTTP 401 on the already established session
    and a rejected refresh; the tool operation is reported as not executed.
-7. Tunnel shutdown, disposable OS keyring credential deletion and temporary-state cleanup.
+7. Tunnel shutdown, disposable client/owner OS keyring deletion and temporary-state cleanup.
 
 Each HTTPS request verifies the CA chain and the original hostname. Redirects
 are not followed. When the OS resolver cannot resolve the freshly issued tunnel
@@ -66,13 +71,15 @@ See the sanitized [verification receipt](research/2026-09-09-internet-verificati
 The requesting client and agent ran on the **same Mac**, with requests leaving
 through the public HTTPS edge and returning through the outbound tunnel. This
 is evidence of that internet path, not a second physical device, a Windows or
-Linux internet test, a ChatGPT browser connection, or an end-to-end OAuth login.
-The public metadata's authorization URL is an explicitly unimplemented test
-placeholder; actual browser login and consent are not claimed. The URL is
+Linux internet test, or a ChatGPT browser connection. The initial receipt used
+internal approval and a placeholder authorization URL. The later browser-consent
+and native-login receipts below use the implemented authorization route and
+actual HTTP form submission. Their browser interaction is driven programmatically;
+visual rendering and a human browser login are not claimed. The URL is
 retired when the runner exits and should not be configured as a live connector.
 
-Production work remains: stable HTTPS hosting, owner authentication and consent,
-client onboarding, persistent outbound routing, network outage/sleep recovery,
+Production work remains: stable HTTPS hosting, a complete server provisioning
+workflow, public client registration policy, persistent outbound routing, network outage/sleep recovery,
 operational limits and platform-specific live validation. Client token renewal
 and explicit expired-session recovery are now implemented. `remote_ready` therefore remains
 false for the normal agent. Cloudflare describes Quick Tunnels as a testing
@@ -90,6 +97,15 @@ HTTPS, continued MCP session, and deletion of the disposable credential. This
 probe supplies its DNS-resolved, hostname-verified HTTPS callback to the client;
 the default client HTTPS transport is exercised separately against a local TLS
 server. Neither test establishes a production connector or browser login.
+
+The [native login receipt](research/2026-09-09-internet-native-login-verification.json)
+uses `native_login.login` to obtain and install the credentials used by `HTTPBackend`.
+It records the owner-password consent flow and closure of the dynamically assigned
+loopback callback. Browser rendering remains explicitly false. The injected code
+exchange transport performs public HTTPS with the DNS resolution described above;
+the default code exchange transport separately has real TLS tests for hostname
+verification, bounded responses, and no redirects or retries. On success, the
+same probe continues through file operations, refresh, reconnect and revocation.
 
 The [HTTP client verification receipt](research/2026-09-09-internet-http-client-verification.json)
 uses `HTTPBackend` itself for tool calls. Its injected lost write response is
