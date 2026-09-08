@@ -71,8 +71,11 @@ async def test_probe_cleanup_drains_final_child_identity_before_stopping_it():
         "stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); "
         "print(json.dumps({'child':child.pid}),flush=True); time.sleep(60)"
     )
+    # This fixture tests a direct runner/child relationship. Windows virtualenv
+    # python.exe is a redirector, so use the base interpreter for this stdlib-only
+    # fixture; otherwise the redirector introduces an unobserved extra process.
     parent = await asyncio.create_subprocess_exec(
-        sys.executable,
+        getattr(sys, "_base_executable", sys.executable),
         "-c",
         parent_code,
         stdout=asyncio.subprocess.PIPE,
