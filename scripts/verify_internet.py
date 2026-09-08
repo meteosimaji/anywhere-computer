@@ -1,12 +1,14 @@
 """Explicit, temporary public-HTTPS probe; requires an existing cloudflared binary.
 
-Only one disposable text file is exposed. No terminal, owner files, production
-agent credentials, background service or permanent tunnel is used. A disposable
+Only a disposable text file and generated binary download are exposed. No terminal,
+owner files, production agent credentials, background service or permanent tunnel
+is used. A disposable
 OAuth pair is saved in the OS keyring and removed during cleanup.
 """
 
 import argparse
 import asyncio
+import base64
 import dataclasses
 import functools
 import hashlib
@@ -29,10 +31,11 @@ from anywhere_computer.authorization import AuthorizationStore
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
 from anywhere_computer.browser_authorization import BrowserAuthorization
 from anywhere_computer.client_tokens import ClientAuthorizationRequired, ClientTokens, TokenReply
+from anywhere_computer.downloads import DOWNLOAD_TOOLS
 from anywhere_computer.engine import Engine
 from anywhere_computer.http_client import HTTPBackend, HTTPResponse
 from anywhere_computer.http_mcp import HTTPMCP
-from anywhere_computer.models import ReadFile, Request, WriteFile
+from anywhere_computer.models import BeginDownload, ReadFile, Request, WriteFile
 from anywhere_computer.native_login import login
 from anywhere_computer.oauth_endpoints import OAuthEndpoints
 from anywhere_computer.owner_credentials import OwnerCredentials
@@ -117,9 +120,24 @@ def request(url, *, address, method="GET", payload=None, headers=None, form=None
 def restricted_engine(directory):
     engine = Engine(directory / "agent")
     target = directory / "probe.txt"
+    binary_source = directory / "download.bin"
+    with binary_source.open("wb") as output:
+        block = bytes(range(256)) * 1024
+        for _ in range(68):
+            output.write(block)
     original = {
-        name: engine.tools[name] for name in ("files_read", "files_write", "operations_get")
+        name: engine.tools[name]
+        for name in {"files_read", "files_write", "operations_get"} | DOWNLOAD_TOOLS
     }
+
+    async def download(args):
+        if (
+            not isinstance(args, BeginDownload)
+            or args.path != str(binary_source)
+            or binary_source.is_symlink()
+        ):
+            raise ValueError("Probe only permits its generated binary file")
+        return await original["download_begin"].handler(args)
 
     async def read(args):
         if not isinstance(args, ReadFile) or args.path != str(target) or target.is_symlink():
@@ -140,6 +158,8 @@ def restricted_engine(directory):
         "files_read": dataclasses.replace(original["files_read"], handler=read),
         "files_write": dataclasses.replace(original["files_write"], handler=write),
         "operations_get": original["operations_get"],
+        **{name: original[name] for name in DOWNLOAD_TOOLS},
+        "download_begin": dataclasses.replace(original["download_begin"], handler=download),
     }
     return engine, target
 
@@ -427,6 +447,83 @@ async def verify(receipt_path):
                 raise RuntimeError("Client could not recover the lost public write result")
             report["lost_write_response_recovered"] = True
             report["write_dispatch_count"] = write_posts
+
+            # Exercise the durable copy via the same public HTTPS client and grant.
+            binary_source = directory / "download.bin"
+            expected = hashlib.sha256()
+            for _ in range(68):
+                expected.update(bytes(range(256)) * 1024)
+            transfer_id = secrets.token_hex(16)
+            prepared = await remote_client.execute(
+                Request(
+                    operation_id=secrets.token_hex(16),
+                    tool="download_begin",
+                    arguments={
+                        "transfer_id": transfer_id,
+                        "path": str(binary_source),
+                        "expected_sha256": expected.hexdigest(),
+                    },
+                )
+            )
+            if prepared.state != "completed" or prepared.data.get("total_bytes") != 17 * 1024**2:
+                raise RuntimeError("Public download preparation failed")
+            binary_source.unlink()
+            received = hashlib.sha256()
+            offset = 0
+            download_started = time.monotonic()
+            for index in range(68):
+                if index == 34:
+                    await remote_client.close()
+                    remote_client = HTTPBackend(client_tokens, wire=public_wire)
+                    resumed = await remote_client.execute(
+                        Request(
+                            operation_id=secrets.token_hex(16),
+                            tool="download_status",
+                            arguments={"transfer_id": transfer_id},
+                        )
+                    )
+                    if resumed.state != "completed" or resumed.data.get("state") != "ready":
+                        raise RuntimeError("Public client replacement could not resume download")
+                    report["download_client_recreated"] = True
+                chunk = await remote_client.execute(
+                    Request(
+                        operation_id=secrets.token_hex(16),
+                        tool="download_read",
+                        arguments={"transfer_id": transfer_id, "offset": offset},
+                    )
+                )
+                if chunk.state != "completed":
+                    raise RuntimeError("Public download chunk failed")
+                data = base64.b64decode(chunk.data["data_base64"], validate=True)
+                if (
+                    len(data) != 262144
+                    or hashlib.sha256(data).hexdigest() != chunk.data["chunk_sha256"]
+                    or chunk.data["next_offset"] != offset + len(data)
+                    or chunk.data["sha256"] != expected.hexdigest()
+                ):
+                    raise RuntimeError("Public download range or hash mismatch")
+                received.update(data)
+                offset += len(data)
+                if index % 16 == 15:
+                    print(
+                        json.dumps({"stage": "public_download", "received_bytes": offset}),
+                        flush=True,
+                    )
+            if offset != 17 * 1024**2 or received.hexdigest() != expected.hexdigest():
+                raise RuntimeError("Public complete download hash mismatch")
+            closed = await remote_client.execute(
+                Request(
+                    operation_id=secrets.token_hex(16),
+                    tool="download_close",
+                    arguments={"transfer_id": transfer_id},
+                )
+            )
+            if closed.state != "completed" or closed.data.get("state") != "closed":
+                raise RuntimeError("Public download close failed")
+            report["public_download_bytes"] = offset
+            report["public_download_seconds"] = time.monotonic() - download_started
+            report["public_download_sha256_verified"] = True
+            report["public_download_closed"] = True
 
             # Age the client deadline to test renewal without claiming a 15-minute soak.
             await asyncio.to_thread(

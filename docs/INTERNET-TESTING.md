@@ -15,7 +15,8 @@ uv run python scripts/verify_internet.py --receipt dist/internet-verification.js
 This command temporarily publishes an isolated test endpoint. Its engine only
 exposes `files_read` and `files_write`, with handlers restricted to one specific
 disposable text file and a 1 KiB write limit, plus `operations_get` for this
-isolated grant's operation results. It does not use the normal agent,
+isolated grant's operation results. Four download tools are also exposed, with
+`download_begin` restricted to a generated 17 MiB binary file in the temporary directory. It does not use the normal agent,
 credentials, terminal tools, registered devices or existing files. The test
 creates its own authorization store and random short-lived credentials. Its
 disposable client pair and owner-password verifier are saved in separate OS
@@ -34,19 +35,24 @@ then performs:
    submits the synthetic owner's password with its bound Cookie/CSRF/Origin,
    and delivers the redirect to that callback. The client redeems the code over
    public HTTPS, saves its pair and closes the local callback listener.
-3. MCP initialization and discovery of exactly the three restricted tools.
+3. MCP initialization and discovery of exactly the seven restricted tools.
 4. File creation through the actual files_write handler, dropping the received
    response inside the test client, then recovering the result with operations_get.
    The write POST count must remain one; the lost response is an injected fault.
-5. Automatic client refresh through the public token endpoint, OS keyring
+5. Prepare the generated binary download, delete its source, and fetch all 68
+   chunks through public HTTPS. After 34 chunks, close and recreate HTTPBackend
+   with the same credentials and resume by transfer ID. Verify each chunk and
+   the full SHA-256, then close the stored copy. Client replacement is explicit,
+   not a naturally occurring connection outage.
+6. Automatic client refresh through the public token endpoint, OS keyring
    persistence and reopening the client, a ping using the same MCP session,
    then explicit server-side session removal, automatic recovery after HTTP 404,
    and files_read comparison. The initial client expiry
    is deliberately aged by 845 seconds; this tests renewal without claiming
    a 15-minute endurance run.
-6. Device revocation followed by HTTP 401 on the already established session
+7. Device revocation followed by HTTP 401 on the already established session
    and a rejected refresh; the tool operation is reported as not executed.
-7. Tunnel shutdown, disposable client/owner OS keyring deletion and temporary-state cleanup.
+8. Tunnel shutdown, disposable client/owner OS keyring deletion and temporary-state cleanup.
 
 Each HTTPS request verifies the CA chain and the original hostname. Redirects
 are not followed. When the OS resolver cannot resolve the freshly issued tunnel
@@ -112,3 +118,12 @@ uses `HTTPBackend` itself for tool calls. Its injected lost write response is
 recovered by operation ID without replay (one write POST); automatic token renewal
 and explicit HTTP-session-expiry recovery are also verified. This test does not
 claim a naturally occurring network outage or a browser authorization flow.
+
+
+The [public download receipt](research/2026-09-09-internet-download-verification.json)
+adds a complete 17 MiB transfer and midpoint client recreation through the same
+public edge. Download time includes range retrieval, client recreation and close,
+not initial authorization or copy preparation. It verifies Engine operation
+recording and the HTTP transport path in addition to the local copy API tests.
+It retains the same single-Mac, synthetic consent-driver and temporary-route
+limitations described above. The published endpoint is stopped after testing.
