@@ -34,6 +34,13 @@ Use discard_staging only when discarding that transfer's database chunks is inte
 it leaves destination and leftover staging_path files untouched. A new HTTP grant
 cannot resume an old grant's transfer. A completed record is not a live file check.
 
+For owner maintenance on the local host, the transfers CLI lists stored transfers
+with explicit --transfer-area local/http and --transfer-kind upload/download.
+transfer-release uses the listed --storage-id to close a download or abort a receiving
+upload. This interrupts the selected transfer; inspect its metadata first. It never
+resolves uncertain publication or deletes the source/destination. These commands
+are local administration, not remote MCP tools.
+
 Terminal sessions belong to the persistent agent. Preserve session IDs and output
 cursors. A client disconnect does not stop a process. Use terminal_stop only when
 stopping that work is intended. On an uncertain response, keep the operation ID

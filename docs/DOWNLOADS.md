@@ -50,3 +50,5 @@ Windows互換性では、Python 3.12のパスstatとfd fstatでctimeの意味が
 ctimeはfdの前後だけで比較します。パスとfdの同一性・サイズ・mtimeの比較は維持します。
 参照: [CPythonのパスstat処理](https://github.com/python/cpython/blob/3.12/Modules/posixmodule.c)、
 [fd情報の取得処理](https://github.com/python/cpython/blob/3.12/Python/fileutils.c)。
+
+旧認可の保存データは [所有者のローカル転送管理](TRANSFER-MANAGEMENT.md) で一覧・解放できます。

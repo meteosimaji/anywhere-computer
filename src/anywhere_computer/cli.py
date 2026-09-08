@@ -25,6 +25,7 @@ from .native_login import login
 from .owner_credentials import OwnerCredentials
 from .ssh_transport import run_ssh_mcp
 from .state import state_directory
+from .transfer_admin import list_transfers, release_transfer
 
 
 def main() -> None:
@@ -49,6 +50,8 @@ def main() -> None:
             "http-revoke",
             "http-enable",
             "http-auth-status",
+            "transfers",
+            "transfer-release",
             "devices",
             "device-add",
             "device-add-http",
@@ -72,7 +75,25 @@ def main() -> None:
     parser.add_argument(
         "--profile", help="Authorized connection profile in the OS credential store"
     )
+    parser.add_argument("--transfer-area", choices=["local", "http"])
+    parser.add_argument("--transfer-kind", choices=["upload", "download"])
+    parser.add_argument("--storage-id", help="Local storage ID returned by transfers")
+    parser.add_argument("--after", help="Pagination cursor returned by transfers")
+    parser.add_argument("--limit", type=int, help="Transfer page size, 1–100")
     args = parser.parse_args()
+    transfer_command = args.command in {"transfers", "transfer-release"}
+    if not transfer_command and any(value is not None for value in (
+        args.transfer_area, args.transfer_kind, args.storage_id, args.after, args.limit,
+    )):
+        parser.error("Transfer options are only valid for transfers and transfer-release")
+    if transfer_command and not all((args.transfer_area, args.transfer_kind)):
+        parser.error("Specify --transfer-area and --transfer-kind explicitly")
+    if args.command == "transfer-release" and (
+        not args.storage_id or args.after is not None or args.limit is not None
+    ):
+        parser.error("transfer-release requires --storage-id and does not accept pagination")
+    if args.command == "transfers" and args.storage_id is not None:
+        parser.error("Use --after for transfers pagination, not --storage-id")
     has_device = args.device is not None or args.device_name is not None
     if args.resource is not None and args.command not in {
         "http-mcp",
@@ -205,7 +226,17 @@ def main() -> None:
                 store.close()
             if args.command.startswith("device"):
                 return
-        if args.command == "http-configure":
+        if args.command == "transfers":
+            print(json.dumps(list_transfers(
+                directory, area=args.transfer_area, kind=args.transfer_kind,
+                after=args.after, limit=args.limit if args.limit is not None else 100,
+            ), ensure_ascii=False, indent=2))
+        elif args.command == "transfer-release":
+            print(json.dumps(release_transfer(
+                directory, area=args.transfer_area, kind=args.transfer_kind,
+                storage_id=args.storage_id,
+            ), ensure_ascii=False, indent=2))
+        elif args.command == "http-configure":
             config = asyncio.run(
                 configure_http(
                     directory,
