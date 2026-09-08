@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from .client_tokens import ClientTokens
+from .cloudflare_tunnel import TunnelCredential, run_tunnel
 from .connection import ensure_agent, exchange, serve
 from .devices import DeviceStore
 from .diagnostics import diagnose
@@ -55,6 +56,9 @@ def main() -> None:
             "http-revoke",
             "http-enable",
             "http-auth-status",
+            "tunnel-token",
+            "tunnel-run",
+            "tunnel-forget",
             "transfers",
             "transfer-release",
             "devices",
@@ -241,6 +245,20 @@ def main() -> None:
                 directory, area=args.transfer_area, kind=args.transfer_kind,
                 storage_id=args.storage_id,
             ), ensure_ascii=False, indent=2))
+        elif args.command == "tunnel-token":
+            if not sys.stdin.isatty():
+                raise ValueError("Tunnel token setup requires an interactive terminal")
+            tunnel_credential = TunnelCredential(directory)
+            tunnel_credential.install(getpass.getpass("Tunnel token (hidden): ").strip())
+            print(json.dumps({"tunnel_credential_saved": True}))
+        elif args.command == "tunnel-forget":
+            TunnelCredential(directory).forget()
+            print(json.dumps({"local_tunnel_credential_removed": True,
+                              "provider_token_revoked": False}))
+        elif args.command == "tunnel-run":
+            if sys.platform == "win32":
+                signal.signal(signal.SIGBREAK, signal.default_int_handler)
+            raise SystemExit(run_tunnel(directory))
         elif args.command == "http-configure":
             config = asyncio.run(
                 configure_http(

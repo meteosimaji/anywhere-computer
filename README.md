@@ -126,6 +126,11 @@ HTTP は再認可が必要なら `authorization_required`、資格情報スト�
 [端末認可の実装範囲](docs/AUTHORIZATION.md) /
 [公開 HTTPS 経由の試験と制限](docs/INTERNET-TESTING.md)
 
+既存の常設トンネルを使うための [任意の Cloudflare 接続アダプター](docs/CLOUDFLARE-TUNNEL.md)
+も用意しています。認証情報を OS の資格情報ストアからパイプで渡し、子プロセスの
+異常終了時に上限付きで再起動します。トンネルや DNS の作成、自動起動の設定、
+公開経路の正常性確認は別途必要です。
+
 ## 依存方針
 
 実行時の直接依存は現在 pydantic・psutil・keyring の3つです。

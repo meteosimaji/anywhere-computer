@@ -55,7 +55,13 @@ can select an already configured SSH device. http-mcp can select an authorized
 HTTP profile. http-configure/http-serve support a persistent loopback HTTP server
 behind an owner-configured HTTPS proxy. http-watch can supervise a configured
 server in the foreground with bounded crash restarts; it does not repair hangs,
-network outages, or restore terminal sessions after a server crash. These do not provision a public endpoint
+network outages, or restore terminal sessions after a server crash. Optional
+tunnel-token/tunnel-run commands use an already configured cloudflared tunnel,
+with native-keyring credentials handed to a child through an OS pipe and bounded
+child crash restarts. Setup accepts a token only in a hidden interactive prompt.
+Never put it in arguments, environment, files or chat. A token-sent event is not
+public connectivity evidence. tunnel-forget removes local credentials only;
+provider revocation and DNS are separate. These commands do not provision a public endpoint
 or managed internet relay. http-doctor probes only configured loopback metadata;
 metadata_reachable does not prove authenticated readiness or public HTTPS reachability. GUI interaction and OCR are not implemented. Explain
 those limits when they affect the requested task.

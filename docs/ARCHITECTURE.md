@@ -44,7 +44,9 @@ Authenticated TLS and HTTP MCP adapters, OAuth grant/rotation endpoints and an
 OS-keyring client renewal manager are implemented internally. A temporary public
 HTTPS probe verifies a restricted file roundtrip and credential renewal on macOS.
 An embedded browser password/consent route is implemented with native-keyring
-owner verification. Production routing, complete browser onboarding, device pairing, graphical UI, screen and
+owner verification. An optional cloudflared child adapter can use an owner-provisioned
+constant tunnel with native-keyring/OS-pipe credential handoff and bounded restarts;
+it does not provision or certify the public route. Production routing, complete browser onboarding, device pairing, graphical UI, screen and
 browser operations, service installation and standalone installers remain planned.
 The normal local agent therefore still advertises remote readiness as unavailable.
 Its local endpoint is not a public MCP HTTP endpoint. Office support currently
