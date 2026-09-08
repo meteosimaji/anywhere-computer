@@ -44,6 +44,13 @@ uv run anywhere stop
 
 [リモート通信の実装範囲と残作業](docs/REMOTE-TRANSPORT.md)
 
+## 依存方針
+
+実行時の直接依存は現在 pydantic・psutil・keyring の3つです。
+MCP の stdio 接続、TLS 通信、プロセス間ロック、保存先判定は独自実装です。
+公式 MCP SDK は互換性試験用の開発依存にのみ含めます。起動時に自動更新せず、
+uv.lock の固定した組合せで検証します。残る依存の削減も段階的に進めます。
+
 ## 開発
 
 ```sh

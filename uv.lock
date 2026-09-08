@@ -38,7 +38,6 @@ version = "0.1.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "keyring" },
-    { name = "mcp" },
     { name = "psutil" },
     { name = "pydantic" },
 ]
@@ -46,6 +45,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "build" },
+    { name = "mcp" },
     { name = "mypy" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -56,7 +56,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "keyring", specifier = ">=25,<26" },
-    { name = "mcp", specifier = ">=1.12,<2" },
     { name = "psutil", specifier = ">=7,<8" },
     { name = "pydantic", specifier = ">=2.11,<3" },
 ]
@@ -64,6 +63,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "build", specifier = ">=1" },
+    { name = "mcp", specifier = ">=1.12,<2" },
     { name = "mypy", specifier = ">=1.15" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=1" },
