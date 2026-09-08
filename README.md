@@ -39,6 +39,27 @@ uv run anywhere stop
 anywhere remote-mcp --ssh-host windows-lab
 ```
 
+## 複数端末
+
+既存の SSH 設定のホスト名を登録します。秘密鍵・パスワードは登録情報に含めません。
+
+```sh
+anywhere device-add --name "Windows Lab" --ssh-host windows-lab
+anywhere device-add --name "Linux Lab" --ssh-host linux-lab
+anywhere devices
+anywhere device-status --device <登録時に返されたID>
+anywhere remote-mcp --device <登録時に返されたID>
+anywhere device-rename --device <ID> --name "Windows Arm64"
+anywhere device-remove --device <ID>
+```
+
+表示名を変更しても ID は維持されます。状態確認は明示的に実行します。
+`ready` は確認した時点での応答を意味し、60 秒後は現在の状態を `unknown` とし、
+最終確認結果と時刻を残します。失敗した確認は `unreachable` です。端末の電源断、
+SSH 認証失敗、リモートコマンド失敗のどれかは、この結果だけでは断定しません。
+`device-remove` はローカル登録の削除であり、SSH の認証権限の失効や
+リモートエージェントの停止は行いません。
+
 ## 現在使えるもの
 
 - テキストの部分読取・複数読取、内容 hash、競合検知つき書込・限定置換、バックアップ。

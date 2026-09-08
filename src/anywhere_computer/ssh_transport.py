@@ -5,10 +5,16 @@ import shutil
 import subprocess
 
 
-def ssh_command(host: str) -> list[str]:
+def validate_ssh_host(host: str) -> None:
     # Host aliases only: options, user@host, remote paths and shell syntax are not accepted.
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,252}", host) is None:
         raise ValueError("Use a configured SSH host alias, without options or shell syntax")
+
+
+def ssh_command(host: str, command: str = "mcp") -> list[str]:
+    validate_ssh_host(host)
+    if command not in {"mcp", "status"}:
+        raise ValueError("Unsupported remote entry point")
     executable = shutil.which("ssh")
     if executable is None:
         raise RuntimeError("System SSH is not installed; configure OpenSSH before using this mode")
@@ -35,7 +41,7 @@ def ssh_command(host: str) -> list[str]:
         "PermitLocalCommand=no",
         host,
         "anywhere",
-        "mcp",
+        command,
     ]
 
 
