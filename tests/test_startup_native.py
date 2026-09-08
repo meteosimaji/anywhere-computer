@@ -13,6 +13,27 @@ from anywhere_computer import startup_native as native
 from anywhere_computer.autostart import _systemd_quote, current_definition, startup_definition
 
 
+@pytest.mark.parametrize("run_level, matches", [(None, True), ("HighestAvailable", False)])
+def test_windows_readback_accepts_omitted_default_but_rejects_elevation(
+    tmp_path, monkeypatch, run_level, matches,
+):
+    definition = startup_definition(tmp_path, platform="win32", home=tmp_path,
+                                    executable=str(tmp_path / "python"), user="fixture")
+    root = ET.fromstring(definition.content)
+    ns = {"t": native.TASK_NAMESPACE}
+    principal = root.find("t:Principals/t:Principal", ns)
+    level = root.find("t:Principals/t:Principal/t:RunLevel", ns)
+    assert principal is not None and level is not None
+    if run_level is None:
+        principal.remove(level)
+    else:
+        level.text = run_level
+    value = {"present": True, "xml": ET.tostring(root, encoding="unicode"),
+             "sid": "S-1-5-21-123", "user": "fixture", "running": True, "enabled": True}
+    monkeypatch.setattr(native.NativeStartup, "_windows", lambda *a, **k: value)
+    assert native.NativeStartup(definition).query().matches is matches
+
+
 @pytest.mark.parametrize("override", [
     {}, {"ActiveState": "active"}, {"SubState": "running"}, {"Transient": "yes"},
     {"DropInPaths": "/foreign.conf"}, {"UnitFileState": "masked"}, {"ActiveState": ""},

@@ -42,6 +42,10 @@
     "fixture_started": true,
     "native_running": true,
     "identity_matches": false,
-    "removal_confirmed": false
+    "removal_confirmed": false,
+    "diagnostic_ci_run": 34286640688,
+    "cause": "Task Scheduler omitted default RunLevel=LeastPrivilege in XML readback",
+    "fix": "Compare absent RunLevel as LeastPrivilege; continue rejecting HighestAvailable",
+    "fix_native_verification": "pending"
   }
 }

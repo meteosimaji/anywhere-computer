@@ -179,7 +179,9 @@ class NativeStartup:
         ns = {"t": TASK_NAMESPACE}
 
         def field(root: ET.Element, path: str) -> str:
-            return root.findtext(path, default="", namespaces=ns)
+            # Task Scheduler omits this default from its stored XML (MS-TSCH).
+            default = "LeastPrivilege" if path == "t:Principals/t:Principal/t:RunLevel" else ""
+            return root.findtext(path, default=default, namespaces=ns)
 
         paths = ("t:Actions/t:Exec/t:Command", "t:Actions/t:Exec/t:Arguments",
                  "t:Actions/t:Exec/t:WorkingDirectory", "t:Principals/t:Principal/t:LogonType",
