@@ -1,0 +1,20 @@
+{
+  "mcpServers": {
+    "anywhere-computer": {
+      "command": "uv",
+      "args": [
+        "tool",
+        "run",
+        "--python",
+        "3.12",
+        "--from",
+        "./bundled/anywhere_computer-0.1.0a1-py3-none-any.whl",
+        "--with-requirements",
+        "./bundled/dependencies.txt",
+        "anywhere",
+        "mcp"
+      ],
+      "cwd": "."
+    }
+  }
+}

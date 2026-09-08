@@ -5,6 +5,7 @@
 ## 決定事項
 
 - 製品名: Anywhere Computer（現段階の名称）。
+- Windows-for-Mac の HVCI/VRC 成功は本 goal の達成条件ではない。追加支援は区切り、プラグイン開発を優先する。
 - GitHub: `meteosimaji/anywhere-computer`、private で開始。
 - 自作部分は MIT。GitHub の MIT テンプレートを使用。
 - 目標の配布先は ChatGPT/Codex 共通公式公開ディレクトリと GitHub。
@@ -65,4 +66,4 @@
 - 本番の秘密、個人ファイル、開発ログを配布物に入れない。
 - 認証情報/ドメイン/公開接続先など不足情報は、申請用の具体的な成果物が整った段階で確認する。
 
-現時点では配布 manifest や marketplace を作成していない。動作しないパッケージをインストール可能な完成品として表示しないため、engine と接続の検証後に生成する。
+配布 manifest と GitHub 用 marketplace を生成し、同梱 wheel の移動後の MCP 接続を検証済み。ローカル Codex に開発 alpha をインストール済み。公式公開、一般公開、全機能の完成を意味しない。

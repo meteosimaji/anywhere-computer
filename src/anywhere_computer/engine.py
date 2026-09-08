@@ -37,6 +37,7 @@ from .models import (
     StartSession,
     WriteFile,
 )
+from .runtime_identity import runtime_identity
 from .search import Searches
 from .sessions import Sessions
 from .state import Ledger
@@ -63,6 +64,7 @@ class Engine:
         self.sessions = Sessions()
         self.searches = Searches()
         self.instance_id = uuid.uuid4().hex
+        self.runtime_id = runtime_identity()
         self.started = time.monotonic()
         self.tools: dict[str, Tool] = {}
         self.inflight: dict[str, asyncio.Task[Reply]] = {}
@@ -318,6 +320,7 @@ class Engine:
             "state": "ready",
             "version": __version__,
             "instance_id": self.instance_id,
+            "runtime_id": self.runtime_id,
             "uptime_seconds": time.monotonic() - self.started,
             "platform": platform.system(),
             "active_sessions": sum(

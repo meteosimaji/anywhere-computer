@@ -36,4 +36,4 @@ select = ["E", "F", "I", "B", "UP"]
 packages = ["src/anywhere_computer"]
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/pyproject.toml", "/uv.lock", "/README.md", "/LICENSE", "/docs/ARCHITECTURE.md"]
+include = ["/src", "/tests", "/plugins", "/scripts", "/pyproject.toml", "/uv.lock", "/README.md", "/LICENSE", "/docs/ARCHITECTURE.md"]

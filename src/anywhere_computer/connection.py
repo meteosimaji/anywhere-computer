@@ -19,6 +19,7 @@ from .credentials import local_credential
 from .engine import Engine
 from .locking import ProcessLock
 from .models import Reply, Request
+from .runtime_identity import runtime_identity
 from .state import prepare_directory
 
 WIRE_LIMIT = 8 * 1024 * 1024
@@ -170,12 +171,27 @@ async def serve(
 
 def ensure_agent(directory: Path) -> dict[str, JsonValue]:
     prepare_directory(directory)
+    expected_runtime = runtime_identity()
     with ProcessLock(directory / "startup.lock", timeout=15):
         credential = local_credential(directory, create=True)
         try:
             reply = asyncio.run(exchange(directory, "__status", timeout=2, credential=credential))
             if reply.state == "completed":
-                return reply.data
+                if reply.data.get("runtime_id") == expected_runtime:
+                    return reply.data
+                if reply.data.get("active_sessions") or reply.data.get("active_operations"):
+                    raise RuntimeError(
+                        "A different agent build has active work. Finish it with the previous "
+                        "installation before upgrading; no process was stopped."
+                    )
+                stopped = asyncio.run(exchange(directory, "__stop", credential=credential))
+                if stopped.state != "completed":
+                    raise RuntimeError("Agent became busy during upgrade; no restart performed")
+                deadline = time.monotonic() + 5
+                while (directory / "agent.json").exists() and time.monotonic() < deadline:
+                    time.sleep(0.05)
+                if (directory / "agent.json").exists():
+                    raise RuntimeError("Previous agent has not finished shutdown; retry later")
         except (OSError, ValueError, TimeoutError):
             pass
         try:
