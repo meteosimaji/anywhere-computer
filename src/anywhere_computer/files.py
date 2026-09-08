@@ -22,6 +22,7 @@ from .models import (
     WriteBinary,
     WriteFile,
 )
+from .move_native import move_exclusive
 
 MAX_READ_BYTES = 16 * 1024 * 1024
 MAX_BINARY_READ_BYTES = 1024 * 1024 * 1024
@@ -301,10 +302,5 @@ class Files:
 
     def move(self, args: MoveFile) -> dict[str, JsonValue]:
         source, destination = absolute_path(args.source), absolute_path(args.destination)
-        # Rename portability and external races need an OS-specific no-replace primitive.
-        # Until then, support only exclusive hard-link/unlink of regular files.
-        if source.is_symlink() or not source.is_file():
-            raise ValueError("This version moves regular files only")
-        os.link(source, destination)
-        source.unlink()
+        move_exclusive(source, destination)
         return {"path": str(destination)}

@@ -133,3 +133,12 @@ class Ledger:
 
     def close(self) -> None:
         self.connection.close()
+
+    def usage(self) -> list[dict[str, str | int]]:
+        return [
+            {"tool": tool, "state": state, "count": count}
+            for tool, state, count in self.connection.execute(
+                "SELECT tool,json_extract(reply,'$.state'),count(*) FROM operations "
+                "GROUP BY tool,json_extract(reply,'$.state') ORDER BY tool,2"
+            )
+        ]

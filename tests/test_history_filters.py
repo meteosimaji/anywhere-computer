@@ -27,6 +27,9 @@ async def test_history_filters_before_limit_and_hides_arguments(tmp_path):
         assert reply.data["operations"][0]["operation_id"] == f"{3:032x}"
         assert "private-input" not in reply.model_dump_json()
         assert engine.ledger.recent(10, tool_name="' OR 1=1 --") == []
+        stats = engine.ledger.usage()
+        assert {"tool": "files_read", "state": "failed", "count": 2} in stats
+        assert {"tool": "computer_status", "state": "completed", "count": 1} in stats
     finally:
         await engine.close()
 

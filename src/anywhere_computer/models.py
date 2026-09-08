@@ -13,6 +13,28 @@ class Empty(Contract):
     pass
 
 
+class RuntimeSettings(Contract):
+    default_shell: str | None = None
+    file_read_line_limit: int = Field(default=5000, ge=1, le=5000)
+    file_write_line_limit: int = Field(default=10000, ge=1, le=100000)
+
+
+class UpdateSetting(Contract):
+    key: Literal["default_shell", "file_read_line_limit", "file_write_line_limit"]
+    value: str | int | None
+
+
+class ListProcesses(Contract):
+    limit: int = Field(default=200, ge=1, le=2000)
+    after_pid: int = Field(default=0, ge=0)
+
+
+class StopProcess(Contract):
+    pid: int = Field(ge=1)
+    created: float = Field(gt=0, allow_inf_nan=False)
+    force: bool = False
+
+
 class FilePath(Contract):
     path: str = Field(min_length=1)
 

@@ -25,6 +25,7 @@ from .models import (
     FilePath,
     History,
     ListDirectory,
+    ListProcesses,
     MoveFile,
     OperationId,
     ReadBinary,
@@ -35,6 +36,7 @@ from .models import (
     Request,
     ResolveUpload,
     RestoreFile,
+    RuntimeSettings,
     SearchId,
     SearchPage,
     SessionId,
@@ -42,11 +44,14 @@ from .models import (
     SessionOutput,
     StartSearch,
     StartSession,
+    StopProcess,
     TransferId,
+    UpdateSetting,
     UploadChunk,
     WriteBinary,
     WriteFile,
 )
+from .processes import list_processes, stop_process
 from .runtime_identity import runtime_identity
 from .search import Searches
 from .sessions import Sessions
@@ -71,6 +76,10 @@ class Tool:
 class Engine:
     def __init__(self, directory: Path, *, file_locks: Path | None = None) -> None:
         self.ledger = Ledger(directory)
+        self.ledger.connection.execute(
+            "CREATE TABLE IF NOT EXISTS runtime_settings (id INTEGER PRIMARY KEY CHECK(id=1), "
+            "value TEXT NOT NULL)"
+        )
         self.files = Files(directory, locks=file_locks)
         self.uploads = Uploads(directory, file_locks=self.files.locks)
         self.downloads = Downloads(directory)
@@ -105,6 +114,73 @@ class Engine:
         )
 
     def _register_tools(self) -> None:
+        async def settings_get(_: Empty) -> Result:
+            return cast(Result, self.settings().model_dump(mode="json"))
+
+        async def settings_update(args: UpdateSetting) -> Result:
+            with self.ledger.connection:
+                self.ledger.connection.execute("BEGIN IMMEDIATE")
+                values = self.settings().model_dump()
+                values[args.key] = args.value
+                updated = RuntimeSettings.model_validate(values, strict=True)
+                if (
+                    updated.default_shell is not None
+                    and not Path(updated.default_shell).is_absolute()
+                ):
+                    raise ValueError("Default shell must be an absolute path")
+                self.ledger.connection.execute(
+                    "INSERT INTO runtime_settings VALUES(1,?) "
+                    "ON CONFLICT(id) DO UPDATE SET value=excluded.value",
+                    (updated.model_dump_json(),),
+                )
+            return cast(Result, updated.model_dump(mode="json"))
+
+        self.register(
+            "settings_get",
+            "Read persisted engine defaults and line limits.",
+            Empty,
+            settings_get,
+            read_only=True,
+        )
+        self.register(
+            "settings_update",
+            "Update one validated engine setting persistently.",
+            UpdateSetting,
+            settings_update,
+            destructive=True,
+        )
+
+        async def processes(args: ListProcesses) -> Result:
+            return await asyncio.to_thread(list_processes, args)
+
+        async def terminate(args: StopProcess) -> Result:
+            return await asyncio.to_thread(stop_process, args)
+
+        async def usage(_: Empty) -> Result:
+            return {"groups": cast(list[JsonValue], self.ledger.usage())}
+
+        self.register(
+            "processes_list",
+            "List OS processes with identity and resource counters.",
+            ListProcesses,
+            processes,
+            read_only=True,
+        )
+        self.register(
+            "processes_stop",
+            "Terminate a PID after verifying its creation timestamp.",
+            StopProcess,
+            terminate,
+            destructive=True,
+        )
+        self.register(
+            "usage_stats",
+            "Count recorded operations by tool and outcome state.",
+            Empty,
+            usage,
+            read_only=True,
+        )
+
         async def status(_: Empty) -> Result:
             return self.status()
 
@@ -112,6 +188,9 @@ class Engine:
             return await asyncio.to_thread(read_document, args)
 
         async def read(args: ReadFile) -> Result:
+            args = args.model_copy(
+                update={"limit": min(args.limit, self.settings().file_read_line_limit)}
+            )
             return await asyncio.to_thread(self.files.read, args)
 
         async def read_many(args: ReadFiles) -> Result:
@@ -124,6 +203,8 @@ class Engine:
             return {"files": results}
 
         async def write(args: WriteFile) -> Result:
+            if len(args.text.splitlines()) > self.settings().file_write_line_limit:
+                raise ValueError("Write exceeds configured line limit")
             return await asyncio.to_thread(self.files.write, args)
 
         async def read_binary(args: ReadBinary) -> Result:
@@ -212,13 +293,25 @@ class Engine:
         async def stop(args: SessionId) -> Result:
             return await self.sessions.stop(args.session_id)
 
+        async def start_terminal(args: StartSession) -> Result:
+            if args.shell is None:
+                args = args.model_copy(update={"shell": self.settings().default_shell})
+            return await self.sessions.start(args)
+
         async def operation(args: OperationId) -> Result:
             return cast(Result, self.ledger.get(args.operation_id).model_dump(mode="json"))
 
         async def history(args: History) -> Result:
-            return {"operations": cast(list[JsonValue], self.ledger.recent(
-                args.limit, tool_name=args.tool_name, since=args.since,
-            ))}
+            return {
+                "operations": cast(
+                    list[JsonValue],
+                    self.ledger.recent(
+                        args.limit,
+                        tool_name=args.tool_name,
+                        since=args.since,
+                    ),
+                )
+            }
 
         self.register(
             "documents_read",
@@ -269,23 +362,30 @@ class Engine:
             "download_begin",
             "Save a durable copy of a regular file up to 1 GiB. Supply a fresh 32-hex "
             "transfer_id and optionally expected_sha256. Hash once; retain the ID for resume.",
-            BeginDownload, download_begin,
+            BeginDownload,
+            download_begin,
         )
         self.register(
             "download_read",
             "Read up to 256 KiB from your durable download copy without rescanning the source. "
             "Verify chunk and final SHA-256 at the receiver.",
-            DownloadRange, download_read, read_only=True,
+            DownloadRange,
+            download_read,
+            read_only=True,
         )
         self.register(
             "download_status",
             "Read durable download metadata by your transfer_id, including after restart.",
-            TransferId, download_status, read_only=True,
+            TransferId,
+            download_status,
+            read_only=True,
         )
         self.register(
             "download_close",
             "Release stored download chunks. Retain closed metadata; never delete the source.",
-            TransferId, download_close, destructive=True,
+            TransferId,
+            download_close,
+            destructive=True,
         )
         self.register(
             "upload_begin",
@@ -371,7 +471,7 @@ class Engine:
         self.register("files_info", "Inspect file metadata.", FilePath, info, read_only=True)
         self.register(
             "files_move",
-            "Move a regular file on the same filesystem; never overwrite.",
+            "Move a file, directory or symbolic link on the same filesystem; never overwrite.",
             MoveFile,
             move,
             destructive=True,
@@ -379,7 +479,9 @@ class Engine:
         self.register(
             "search_start",
             "Search literal names or UTF-8 text with filename glob, directory exclusions, "
-            "whole-word matching and explicit file/depth limits.", StartSearch, search
+            "whole-word matching and explicit file/depth limits.",
+            StartSearch,
+            search,
         )
         self.register(
             "search_results", "Read a search page by cursor.", SearchPage, page, read_only=True
@@ -393,7 +495,7 @@ class Engine:
             "Start a shell command in an absolute working directory. "
             "It continues when an MCP client disconnects.",
             StartSession,
-            self.sessions.start,
+            start_terminal,
             destructive=True,
             open_world=True,
         )
@@ -442,6 +544,12 @@ class Engine:
             history,
             read_only=True,
         )
+
+    def settings(self) -> RuntimeSettings:
+        row = self.ledger.connection.execute(
+            "SELECT value FROM runtime_settings WHERE id=1"
+        ).fetchone()
+        return RuntimeSettings.model_validate_json(row[0]) if row else RuntimeSettings()
 
     def catalog(self, allowed: frozenset[str] | None = None) -> list[JsonValue]:
         return [
