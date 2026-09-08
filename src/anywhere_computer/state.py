@@ -106,6 +106,12 @@ class Ledger:
             raise ValueError("Unknown operation ID")
         return Reply.model_validate_json(row[0])
 
+    def tool_for(self, operation_id: str) -> str | None:
+        row = self.connection.execute(
+            "SELECT tool FROM operations WHERE id=?", (operation_id,)
+        ).fetchone()
+        return str(row[0]) if row is not None else None
+
     def recent(self, limit: int) -> list[dict[str, str | float]]:
         # Deliberately omit arguments and content from the diagnostic history.
         return [

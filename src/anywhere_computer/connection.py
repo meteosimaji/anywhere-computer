@@ -95,22 +95,7 @@ async def serve(
                     reply = Reply(
                         operation_id=request.operation_id,
                         state="completed",
-                        data={
-                            "tools": [
-                                {
-                                    "name": tool.name,
-                                    "description": tool.description,
-                                    "inputSchema": tool.schema.model_json_schema(),
-                                    "outputSchema": Reply.model_json_schema(),
-                                    "annotations": {
-                                        "readOnlyHint": tool.read_only,
-                                        "destructiveHint": tool.destructive,
-                                        "openWorldHint": tool.open_world,
-                                    },
-                                }
-                                for tool in engine.tools.values()
-                            ],
-                        },
+                        data={"tools": engine.catalog()},
                     )
                 elif request.tool == "__stop":
                     if engine.status()["active_sessions"] or engine.inflight:

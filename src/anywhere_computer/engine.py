@@ -283,6 +283,23 @@ class Engine:
             read_only=True,
         )
 
+    def catalog(self, allowed: frozenset[str] | None = None) -> list[JsonValue]:
+        return [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "inputSchema": tool.schema.model_json_schema(),
+                "outputSchema": Reply.model_json_schema(),
+                "annotations": {
+                    "readOnlyHint": tool.read_only,
+                    "destructiveHint": tool.destructive,
+                    "openWorldHint": tool.open_world,
+                },
+            }
+            for tool in self.tools.values()
+            if allowed is None or tool.name in allowed
+        ]
+
     def status(self) -> Result:
         return {
             "state": "ready",

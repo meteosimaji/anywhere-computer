@@ -217,3 +217,101 @@ def test_unverified_tls_context_is_rejected():
     client.check_hostname = False
     with pytest.raises(ValueError, match="hostname"):
         check_tls(client, client=True)
+
+
+async def test_mcp_session_routes_tools_through_tls(certificates, tmp_path):
+    from anywhere_computer.remote_bridge import RemoteAgent, RemoteBackend
+
+    context, fingerprint = certificates
+    engine = Engine(tmp_path / "remote")
+    grants = frozenset({"files_write", "files_read", "computer_status", "operations_get"})
+    bridge = RemoteAgent(engine, {"owner-device": grants})
+    listener = RemoteListener(
+        context("server", False), {fingerprint("client"): "owner-device"}, bridge.dispatch
+    )
+    port = await listener.start("127.0.0.1", 0)
+    backend = RemoteBackend(
+        "127.0.0.1", port, "localhost", fingerprint("server"), context("client", True)
+    )
+    try:
+        session = backend.mcp_session()
+        await session.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-11-25",
+                    "capabilities": {},
+                    "clientInfo": {"name": "integration", "version": "1"},
+                },
+            }
+        )
+        await session.handle({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        catalog = await session.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        assert {item["name"] for item in catalog["result"]["tools"]} == grants
+        target = tmp_path / "remote-write.txt"
+        written = await session.handle(
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/call",
+                "params": {
+                    "name": "files_write",
+                    "arguments": {
+                        "path": str(target),
+                        "text": "through TLS",
+                    },
+                },
+            }
+        )
+        outcome = written["result"]["structuredContent"]
+        assert outcome["state"] == "completed" and target.read_text() == "through TLS"
+        restored = await backend.execute(
+            request("operations_get", operation_id=outcome["operation_id"])
+        )
+        assert restored.data["operation_id"] == outcome["operation_id"]
+        assert restored.data["state"] == "completed"
+        bridge.grant("owner-device", frozenset({"operations_get", "files_read"}))
+        denied = await backend.execute(
+            request("files_write", path=str(tmp_path / "denied"), text="x")
+        )
+        assert denied.state == "failed" and not (tmp_path / "denied").exists()
+        old = await backend.execute(request("operations_get", operation_id=outcome["operation_id"]))
+        assert old.state == "failed"
+        bridge.revoke("owner-device")
+        with pytest.raises(ConnectionError):
+            await backend.catalog()
+    finally:
+        await listener.close()
+        await engine.close()
+
+
+async def test_remote_operation_ids_are_separate_per_peer(tmp_path):
+    from anywhere_computer.remote_bridge import RemoteAgent
+
+    engine = Engine(tmp_path / "engine")
+    grants = frozenset({"files_write", "operations_get"})
+    bridge = RemoteAgent(engine, {"first": grants, "second": grants})
+    try:
+        operation = request("files_write", path=str(tmp_path / "first"), text="first")
+        first = Reply.model_validate_json(
+            await bridge.dispatch("first", operation.model_dump_json().encode())
+        )
+        assert first.state == "completed"
+        lookup = request("operations_get", operation_id=operation.operation_id)
+        denied = Reply.model_validate_json(
+            await bridge.dispatch("second", lookup.model_dump_json().encode())
+        )
+        assert denied.state == "failed"
+        other = operation.model_copy(
+            update={"arguments": {"path": str(tmp_path / "second"), "text": "second"}}
+        )
+        second = Reply.model_validate_json(
+            await bridge.dispatch("second", other.model_dump_json().encode())
+        )
+        assert second.state == "completed"
+        assert (tmp_path / "first").read_text() == "first"
+        assert (tmp_path / "second").read_text() == "second"
+    finally:
+        await engine.close()

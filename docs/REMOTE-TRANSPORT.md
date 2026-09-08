@@ -16,8 +16,11 @@ an operation dispatched before removal.
 
 An enrollment currently grants the owner access to the handler attached to the
 listener. It is not multi-user isolation or a filesystem sandbox. The transport
-passes the enrolled identity to the handler. Per-tool scopes and ownership of
-sessions/results must be enforced by the future provisioning/routing layer.
+passes the enrolled identity to the handler. The bridge now filters the tool catalog and enforces per-peer tool grants.
+Operation identifiers are namespaced per peer, and result lookup checks the
+current grant for the originating tool. Global history is not remotely exposed.
+Session and filesystem isolation between different users is not provided; the
+current enrollment model is explicitly one device owner with several clients.
 
 Frames are bounded to 8 MiB. Reads/requests/handshakes/shutdown have timeouts.
 Application handlers have an active-connection limit; the OS/TLS handshake
@@ -36,8 +39,8 @@ contexts. The test certificates are temporary test material, never enrollment
 credentials, and are deleted at fixture teardown.
 
 Still required: production credential provisioning through OS storage,
-peer/device configuration, CLI and MCP integration, outbound rendezvous for
-NAT, reconnect backoff/status, capability scopes, public HTTP MCP/OAuth,
+peer/device configuration, TLS CLI provisioning, outbound rendezvous for
+NAT, reconnect backoff/status, resource scopes, public HTTP MCP/OAuth,
 host-to-isolated-Windows tests and an actual internet path. No remote listener
 is enabled by default, and computer_status continues to report remote_ready
 false until those integrations exist.
@@ -45,3 +48,30 @@ false until those integrations exist.
 References for the standard runtime APIs:
 - https://docs.python.org/3/library/ssl.html
 - https://docs.python.org/3/library/asyncio-stream.html
+
+## Usable CLI path through existing SSH
+
+Where a verified SSH host alias already exists, configure MCP with:
+
+```sh
+anywhere remote-mcp --ssh-host windows-lab
+```
+
+On the remote host install this exact release and ensure `anywhere` is on the
+noninteractive SSH PATH. The remote OS credential store must be available to the
+SSH login session. A locked GUI-only store will fail clearly; this command does
+not export local credentials to work around that condition. No Python SSH
+library is required. System OpenSSH is an optional prerequisite.
+
+This mode streams MCP stdio over SSH, requires an already trusted host key and
+noninteractive authentication, disables forwarding, and uses keepalives. It does
+not set up SSH servers, open firewall ports or register host keys. A disconnect
+ends the connection; reconnect by launching another MCP session. The remote
+agent and terminal work persist, and operations_get retrieves known results.
+
+The independent mTLS bridge can also construct an MCPSession from a RemoteBackend
+with a provisioned SSLContext. Integration tests exercise MCP listing, writing,
+lookup and grant revocation across real loopback TLS. Production provisioning
+and an external network test remain outstanding. The SSH wrapper's argument,
+host validation and no-retry behavior are tested; a real SSH peer has not yet
+been assigned, so internet operation is not claimed.
