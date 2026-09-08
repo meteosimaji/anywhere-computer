@@ -12,6 +12,7 @@ from .connection import ensure_agent, exchange, serve
 from .devices import DeviceStore
 from .diagnostics import diagnose
 from .http_client import run_http_mcp
+from .http_diagnostics import diagnose_http
 from .http_service import (
     configure_http,
     enable_http_device,
@@ -47,6 +48,7 @@ def main() -> None:
             "http-configure",
             "http-serve",
             "http-show",
+            "http-doctor",
             "http-revoke",
             "http-enable",
             "http-auth-status",
@@ -252,6 +254,11 @@ def main() -> None:
                 )
             )
             print(config.model_dump_json(indent=2))
+        elif args.command == "http-doctor":
+            diagnosis = asyncio.run(diagnose_http(directory))
+            print(json.dumps(diagnosis, ensure_ascii=False, indent=2))
+            if diagnosis["state"] != "metadata_reachable":
+                raise SystemExit(1)
         elif args.command == "http-show":
             print(load_http_config(directory).model_dump_json(indent=2))
         elif args.command == "http-revoke":

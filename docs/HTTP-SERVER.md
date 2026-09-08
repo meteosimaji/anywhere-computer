@@ -143,3 +143,23 @@ CLI プロセス試験は現在 POSIX 用で、macOS での
 [実行記録](research/2026-09-09-http-service-reauthorization-verification.json)も保存しています。
 Windows/Linux の実機上の資格情報ストアとサービス管理、自動起動、公開 HTTPS との一体化、
 スリープ復帰・長時間運用は別の検証項目です。
+
+## HTTP の診断
+
+`anywhere http-doctor` は設定済みの127.0.0.1ポートに、認証情報なしでメタデータGETを1回送ります。
+`--state-dir` で対象を指定できます。設定作成、エージェント起動、プロセス停止、認証・認可の変更は
+行いません。リダイレクトを追わず、3秒の全体期限、8 KiBのヘッダー、16 KiBの本文上限を設けます。
+
+|state|意味|
+|---|---|
+|configuration_unavailable|設定がない、読めない、または形式が不正|
+|unreachable|接続失敗または期限超過。プロセスが停止したという断定ではない|
+|unexpected_response|接続先が想定した形式のHTTPメタデータを返さない|
+|resource_mismatch|応答のresourceが設定と違う|
+|metadata_reachable|ループバックから設定と同じresourceのメタデータを取得できた|
+
+終了コード0はmetadata_reachableの場合だけです。それ以外はJSON診断結果と終了コード1を返します。
+`authenticated: false`、`public_reachability: unverified` を常に明示します。
+同じメタデータを返す別サービスとの暗号学的な識別、稼働中ビルドの一致、公開HTTPSの証明書や経路、
+ユーザーのログイン・許可済みツールの動作はこの診断では検証していません。
+これらは実際の接続プロファイルの `device-status` と、接続元での認可・ツール実行で別途確認します。
