@@ -30,6 +30,7 @@ from .native_login import login
 from .owner_credentials import OwnerCredentials
 from .parent_liveness import watch_parent_pipe
 from .remote_service import serve_remote, watch_remote
+from .remote_setup import setup_remote
 from .ssh_transport import run_ssh_mcp
 from .state import state_directory
 from .transfer_admin import list_transfers, release_transfer
@@ -56,6 +57,7 @@ def main() -> None:
             "http-watch",
             "remote-serve",
             "remote-watch",
+            "remote-setup",
             "remote-doctor",
             "http-show",
             "http-doctor",
@@ -313,6 +315,8 @@ def main() -> None:
             print(json.dumps(http_authorization_status(directory)))
         elif args.command == "http-watch":
             raise SystemExit(watch_http(directory))
+        elif args.command == "remote-setup":
+            print(json.dumps(setup_remote(directory), ensure_ascii=False, indent=2))
         elif args.command == "remote-watch":
             if sys.platform == "win32":
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)
@@ -382,7 +386,7 @@ def main() -> None:
         else:
             reply = asyncio.run(exchange(directory, "__status", timeout=3))
             print(reply.model_dump_json(indent=2))
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, EOFError):
         raise SystemExit(130) from None
     except (OSError, ValueError, RuntimeError, TimeoutError) as error:
         print(f"Anywhere Computer: {error}", file=sys.stderr)

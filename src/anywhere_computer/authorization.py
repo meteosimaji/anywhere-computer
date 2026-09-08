@@ -19,6 +19,8 @@ from urllib.parse import urlsplit
 
 from .state import prepare_directory
 
+LOCAL_ONLY_TOOLS = frozenset({"operations_recent"})
+
 
 class AuthorizationError(ValueError):
     """Intentionally excludes request secrets from the public error message."""
@@ -108,7 +110,7 @@ class AuthorizationStore:
         if urlsplit(resource).query:
             raise ValueError("Resource URL must not contain a query")
         self.resource = resource
-        self.known_tools = known_tools - {"operations_recent"}
+        self.known_tools = known_tools - LOCAL_ONLY_TOOLS
         prepare_directory(directory)
         self.db = sqlite3.connect(directory / "authorization.sqlite3", timeout=10)
         self.db.execute("PRAGMA foreign_keys=ON")

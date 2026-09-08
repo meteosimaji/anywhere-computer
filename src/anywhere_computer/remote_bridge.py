@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import JsonValue
 
+from .authorization import LOCAL_ONLY_TOOLS
 from .downloads import DOWNLOAD_TOOLS
 from .engine import Engine
 from .mcp_server import MCPSession
@@ -41,7 +42,7 @@ class RemoteAgent:
             raise ValueError("Invalid enrolled identity")
         if tools - self.engine.tools.keys():
             raise ValueError("Grant contains unknown tools")
-        if "operations_recent" in tools:
+        if tools & LOCAL_ONLY_TOOLS:
             raise ValueError("Global history is not exposed to remote peers")
         self.grants[identity] = tools
 

@@ -141,6 +141,13 @@ class OwnerCredentials:
         """Check readiness without asking for or deriving a password."""
         self._record()
 
+    def is_initialized(self) -> bool:
+        """Missing is resumable; unreadable or corrupt records remain errors."""
+        if self._read() is None:
+            return False
+        self.ensure_initialized()
+        return True
+
     def verify(self, password: str) -> bool:
         if not password or len(password.encode("utf-8")) > 1024:
             return False

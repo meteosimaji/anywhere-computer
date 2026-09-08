@@ -54,6 +54,7 @@ vault = Vault()
 owner_credentials.secure_backend = lambda: vault
 cloudflare_tunnel.secure_backend = lambda: vault
 cloudflare_tunnel.cloudflared_executable = lambda: "fixture-cloudflared"
+remote_service.cloudflared_executable = cloudflare_tunnel.cloudflared_executable
 original = subprocess.Popen
 def launch(command, *args, **options):
     if command[0] == "fixture-cloudflared":
@@ -65,6 +66,7 @@ for stage in ("remote-watch", "remote-serve", "tunnel-run"):
         Path({str(tmp_path)!r}, stage + ".pid").write_text(json.dumps(os.getpid()))
 ''')
     environment = os.environ.copy()
+    environment["PATH"] = str(injections)  # No installed provider binary may mask a missing stub.
     environment["PYTHONPATH"] = os.pathsep.join(
         [str(injections), str(Path(__file__).parents[1] / "src")]
     )
@@ -137,7 +139,7 @@ for stage in ("remote-watch", "remote-serve", "tunnel-run"):
                 replacement_connector = await observed(
                     "connector", different=original_connector.pid
                 )
-                await observed("tunnel-run", different=runner.pid)
+                replacement_runner = await observed("tunnel-run", different=runner.pid)
                 assert replacement_http.is_running() and replacement_connector.is_running()
                 assert watcher.is_running()
                 assert (await diagnose_http(state))["state"] == "metadata_reachable"
@@ -153,6 +155,7 @@ for stage in ("remote-watch", "remote-serve", "tunnel-run"):
                 watcher.kill()
                 await asyncio.to_thread(watcher.wait, 10)
                 await asyncio.to_thread(replacement_connector.wait, 30)
+                await asyncio.to_thread(replacement_runner.wait, 30)
                 await asyncio.to_thread(replacement_http.wait, 30)
             else:
                 await asyncio.to_thread(http.wait, 30)

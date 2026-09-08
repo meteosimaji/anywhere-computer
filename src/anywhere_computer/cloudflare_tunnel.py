@@ -48,9 +48,23 @@ class TunnelCredential:
         self.validate(token)
         return token
 
-    def install(self, token: str) -> None:
+    def is_installed(self) -> bool:
+        try:
+            token = self.vault.get_password(SERVICE, self.account)
+        except Exception:
+            raise ClientCredentialError("Tunnel credential store is unavailable") from None
+        if token is None:
+            return False
+        self.validate(token)
+        return True
+
+    def install(self, token: str, *, replace: bool = True) -> None:
         self.validate(token)
         with ProcessLock(self.lock):
+            if not replace and self.is_installed():
+                raise ClientCredentialError(
+                    "Tunnel credentials already exist; setup preserves them"
+                )
             try:
                 self.vault.set_password(SERVICE, self.account, token)
             except Exception:

@@ -7,7 +7,34 @@ It does not create a Cloudflare account, tunnel, DNS record, or paid service.
 No tunnel binary is bundled or automatically installed. The three Python runtime
 dependencies remain unchanged.
 
-## Setup
+## Interactive setup
+
+Run `uv run anywhere remote-setup --state-dir /absolute/path/to/state` in an
+interactive terminal. It asks for the public HTTPS `/mcp` address, owner and OAuth
+client identifiers, loopback port, access level and registered callback URLs.
+Empty callback input selects the native loopback callbacks; browser clients need
+their exact registered HTTPS callback URLs. The address and provider route must
+be provisioned separately as described below.
+
+Access choices are `read-only`, `files` (including modifications and transfers),
+and `all` (including terminal commands). The exact current remotely eligible tool
+names are stored in the grant configuration; later updates do not automatically
+expand the grant. Global operation history remains local-only.
+
+Passwords and tunnel tokens use hidden prompts and native credential storage.
+The token can be left blank and added later. Rerunning resumes missing steps and
+preserves existing configuration, authorization and credentials. Corrupt or
+unreadable credential records are errors, not permission to replace them. Setup
+is staged: a saved HTTP configuration remains available if password entry is
+cancelled or credential storage fails. Password changes still use `owner-change`;
+intentional token replacement still uses `tunnel-token`.
+
+The command reports local setup state and a next step. It does not provision DNS,
+install the connector, start a service, or claim public reachability. Once the
+route and connector are ready, use `remote-watch`, followed by
+`remote-doctor --probe-public` with the same state directory.
+
+## Individual setup commands
 
 1. Configure the loopback service and owner authentication using the
    [HTTP server instructions](HTTP-SERVER.md). Its resource must be the stable

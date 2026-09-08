@@ -171,7 +171,15 @@ uv と利用可能な OS 資格情報ストアが必要です。初回は Python
 
 検索の絞り込み・上限・中断の仕様は [検索ガイド](docs/SEARCH.md) を参照してください。
 
-The configured public HTTP service and outbound connector can now run together
-with `uv run anywhere remote-serve --state-dir /absolute/path/to/state`. See
-[the tunnel setup and lifecycle limits](docs/CLOUDFLARE-TUNNEL.md) for required
-credentials, route configuration, shutdown behavior, and remaining service work.
+リモート接続の初期設定は対話コマンドで進められます。公開 HTTPS アドレスと
+トンネル経路を用意したうえで、同じ state directory を使います。
+
+```sh
+uv run anywhere remote-setup --state-dir /absolute/path/to/state
+uv run anywhere remote-watch --state-dir /absolute/path/to/state
+uv run anywhere remote-doctor --state-dir /absolute/path/to/state --probe-public
+```
+
+初期設定は中断後に再開でき、保存済みの設定・認可・資格情報を保持します。
+設定、起動、公開経路の診断はそれぞれ結果を確認できます。
+[接続手順とライフサイクルの制限](docs/CLOUDFLARE-TUNNEL.md)を参照してください。
