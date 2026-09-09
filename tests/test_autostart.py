@@ -181,9 +181,8 @@ def test_preview_cli_has_no_state_side_effects(tmp_path):
     assert preview["registration_state"] == "unverified"
     assert "--connector" in preview["definition"]
     if sys.platform == "darwin":
-        assert plistlib.loads(preview["definition"].encode())["ProgramArguments"][-2:] == (
-            ["--connector", selected]
-        )
+        arguments = plistlib.loads(preview["definition"].encode())["ProgramArguments"]
+        assert arguments[arguments.index("--connector") + 1] == selected
     assert str(state) in preview["definition"] or sys.platform == "win32"
     assert not state.exists()
 

@@ -46,6 +46,7 @@ def startup_definition(
     connector: str | None = None,
     startup_id: str | None = None,
     isolated_python: bool = True,
+    codex_executable: str | None = None,
 ) -> StartupDefinition:
     directory = directory.resolve()
     executable = _clean_argument(executable)
@@ -67,6 +68,11 @@ def startup_definition(
         if not Path(connector).is_absolute():
             raise ValueError("Startup connector requires an absolute path")
         arguments.extend(["--connector", connector])
+    if codex_executable is not None:
+        _clean_argument(codex_executable)
+        if not Path(codex_executable).is_absolute():
+            raise ValueError("Startup Codex executable requires an absolute path")
+        arguments.extend(["--codex-executable", codex_executable])
     if startup_id is not None:
         if not re.fullmatch(r"[a-f0-9]{32}", startup_id):
             raise ValueError("Invalid startup registration identifier")
@@ -101,7 +107,8 @@ def startup_definition(
         )
     if platform != "win32":
         raise ValueError("Unsupported startup platform")
-    for path in (executable, str(directory), *([connector] if connector is not None else [])):
+    for path in (executable, str(directory), *([connector] if connector is not None else []),
+                 *([codex_executable] if codex_executable is not None else [])):
         if len(path.encode("utf-16-le")) // 2 > 260:
             raise ValueError("Windows startup paths must be at most 260 UTF-16 code units")
         if "%" in path:
@@ -144,6 +151,7 @@ def current_definition(
     directory: Path, *, connector: str | None = None, startup_id: str | None = None,
     executable: str | None = None,
     isolated_python: bool = True,
+    codex_executable: str | None = None,
 ) -> StartupDefinition:
     import psutil
 
@@ -154,6 +162,7 @@ def current_definition(
         directory, platform=cast(Platform, sys.platform), home=Path.home(),
         executable=executable or os.path.abspath(sys.executable), user=psutil.Process().username(),
         connector=connector, startup_id=startup_id, isolated_python=isolated_python,
+        codex_executable=codex_executable,
     )
     if sys.platform == "linux":
         configured = os.environ.get("XDG_CONFIG_HOME", "")
@@ -172,7 +181,13 @@ def preview_startup(
     directory: Path, *, connector: str | None = None,
 ) -> dict[str, str | bool]:
     """Render a definition without creating state or contacting a service manager."""
-    definition = current_definition(directory, connector=connector)
+    from .codex_context import _executable
+
+    try:
+        pinned_codex = str(_executable(None))
+    except FileNotFoundError:
+        pinned_codex = None
+    definition = current_definition(directory, connector=connector, codex_executable=pinned_codex)
     return {
         "platform": definition.platform,
         "name": definition.name,

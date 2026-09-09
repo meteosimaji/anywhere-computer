@@ -9,6 +9,9 @@ from anywhere_computer.startup_native import StartupSnapshot
 
 @pytest.fixture
 def registration(tmp_path, monkeypatch):
+    def missing_codex(_):
+        raise FileNotFoundError("fixture has no Codex installation")
+    monkeypatch.setattr(service, "codex_executable", missing_codex)
     original = service.current_definition
     state = tmp_path / "state"
     calls = []
@@ -257,3 +260,19 @@ def test_foreign_registration_race_removes_only_pending_definition(
     assert len(created_paths) == 1 and not created_paths[0].exists()
     assert service._record(directory).native_fingerprint == ""
     assert native["snapshot"].present and calls == []
+
+
+def test_startup_pins_codex_path_and_preserves_it_when_path_changes(registration, monkeypatch):
+    directory, _, _, _ = registration
+    selected = directory.parent / "Codex app" / "codex"
+    monkeypatch.setattr(service, "codex_executable", lambda _: selected)
+    service.install_startup(directory)
+    record = service._record(directory)
+    assert record.codex_executable == str(selected)
+    content = service._definition(directory, record).content
+    encoding = "utf-16" if record.platform == "win32" else "utf-8"
+    assert "--codex-executable" in content.decode(encoding)
+    monkeypatch.setattr(service, "codex_executable", lambda _: directory.parent / "different")
+    service.install_startup(directory)
+    assert service._record(directory).codex_executable == str(selected)
+    assert service._definition(directory, service._record(directory)).content == content

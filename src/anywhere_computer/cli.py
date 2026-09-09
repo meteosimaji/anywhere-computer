@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import getpass
 import json
+import os
 import re
 import signal
 import sys
@@ -113,7 +114,14 @@ def main() -> None:
                         help="Also probe configured HTTPS metadata (remote-doctor only)")
     parser.add_argument("--watch-parent", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--startup-id", help=argparse.SUPPRESS)
+    parser.add_argument("--codex-executable", help="Pinned Codex CLI for remote services")
     args = parser.parse_args()
+    if args.codex_executable is not None:
+        if args.command not in {"remote-watch", "remote-serve"}:
+            parser.error("--codex-executable is only valid for remote services")
+        if not Path(args.codex_executable).is_absolute():
+            parser.error("--codex-executable must be absolute")
+        os.environ["ANYWHERE_CODEX_EXECUTABLE"] = args.codex_executable
     if args.startup_id is not None and (
         args.command != "remote-watch" or not re.fullmatch(r"[a-f0-9]{32}", args.startup_id)
     ):

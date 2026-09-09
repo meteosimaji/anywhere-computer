@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .autostart import Platform, StartupDefinition, current_definition
 from .cloudflare_tunnel import TunnelCredential, cloudflared_executable
+from .codex_context import _executable as codex_executable
 from .http_service import load_http_config
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
@@ -32,6 +33,7 @@ class StartupRecord(BaseModel):
     connector: str
     startup_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     native_fingerprint: str = Field(default="", pattern=r"^(?:[a-f0-9]{64})?$")
+    codex_executable: str | None = None
     isolated_python: bool = False  # Missing field identifies a pre-isolation receipt.
 
 
@@ -85,7 +87,8 @@ def _record(directory: Path) -> StartupRecord | None:
 
 def _definition(directory: Path, record: StartupRecord) -> StartupDefinition:
     return current_definition(directory, connector=record.connector, startup_id=record.startup_id,
-                              executable=record.interpreter, isolated_python=record.isolated_python)
+                              executable=record.interpreter, isolated_python=record.isolated_python,
+                              codex_executable=record.codex_executable)
 
 
 def _check_file(definition: StartupDefinition) -> bool:
@@ -164,12 +167,16 @@ def install_startup(directory: Path, *, connector: str | None = None) -> dict[st
         owner.ensure_initialized()
         TunnelCredential(directory).read()
         if record is None:
+            try:
+                pinned_codex = str(codex_executable(None))
+            except FileNotFoundError:
+                pinned_codex = None
             record = StartupRecord(
                 platform=cast(Platform, sys.platform), user=psutil.Process().username(),
                 directory=str(directory),
                 interpreter=os.path.abspath(sys.executable), connector=executable,
                 startup_id=secrets.token_hex(16),
-                isolated_python=True,
+                isolated_python=True, codex_executable=pinned_codex,
             )
             definition = _definition(directory, record)
             backend = NativeStartup(definition)

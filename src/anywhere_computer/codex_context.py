@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -17,6 +18,8 @@ AllowedMethod = Literal["thread/list", "thread/turns/list", "skills/list"]
 
 
 def _executable(explicit: Path | None) -> Path:
+    if explicit is None and os.environ.get("ANYWHERE_CODEX_EXECUTABLE"):
+        explicit = Path(os.environ["ANYWHERE_CODEX_EXECUTABLE"])
     if explicit is not None:
         if not explicit.is_absolute() or explicit.parent == Path.cwd():
             raise ValueError("Codex executable must be an absolute path outside the cwd")

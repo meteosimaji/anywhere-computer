@@ -144,3 +144,20 @@ async def test_multiple_unicode_messages_have_aggregate_byte_bound(monkeypatch):
     assert result["truncated"] is True
     assert len(result["messages"]) == 2
     assert sum(len(item["text"].encode()) for item in result["messages"]) <= 65536
+
+
+def test_pinned_codex_survives_minimal_path_and_fails_closed(tmp_path, monkeypatch):
+    from anywhere_computer.codex_context import _executable
+
+    executable = tmp_path / "app" / "codex"
+    executable.parent.mkdir()
+    executable.write_bytes(b"fixture")
+    monkeypatch.setenv("PATH", "/nonexistent")
+    monkeypatch.setenv("ANYWHERE_CODEX_EXECUTABLE", str(executable))
+    assert _executable(None) == executable.resolve()
+    executable.unlink()
+    with pytest.raises(ValueError, match="regular file"):
+        _executable(None)
+    monkeypatch.setenv("ANYWHERE_CODEX_EXECUTABLE", "relative-codex")
+    with pytest.raises(ValueError, match="absolute path"):
+        _executable(None)
