@@ -70,3 +70,21 @@ The browser fixture was exercised after this record. See [browser verification](
 See [Codex context](../CODEX-CONTEXT.md) for supported behavior and limits. The repository
 remains private; this update does not publish an official-directory listing or supply
 one-command installation or production internet hosting.
+
+## Installed transport versus existing conversation transport
+
+2026-09-09: The current long-running conversation's existing MCP connection reported
+40 engine tools and runtime ID `824bd098c25504cb5c73b50f478c6f3770b6f796cc7e96b4f691466d4ae4fd2a`.
+Its registered device list contained only `local`. This does not verify a Windows connection.
+
+Independently launched the installed `0.1.0-alpha.1+codex.20260909030721` plugin using
+its actual `.mcp.json` command, arguments and cwd, with a disposable ANYWHERE_STATE_DIR
+and offline uv. The official MCP Python client completed initialize, tools/list and
+computer_status. It returned 53 connector tools, including all six Codex context/plugin
+bridge tools, and runtime ID `6efefa2ea387858b1431fe842c7d2b4064463c720397d4a8e272f2477cfbc211`.
+The dedicated agent stopped, endpoint disappeared and its native Keychain entry was
+removed and checked absent. No existing conversation was resumed or replaced.
+
+An existing conversation's tool catalog is not proof that the newly installed manifest
+has been loaded. This test verifies the installed launch path, not ChatGPT UI acceptance
+or automatic refresh of the original conversation's MCP connection.
