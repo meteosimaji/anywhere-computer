@@ -3,9 +3,12 @@
 import asyncio
 import json
 import os
+import site
 import subprocess
 import sys
+import sysconfig
 import time
+import venv
 from pathlib import Path
 
 import httpx
@@ -41,9 +44,23 @@ async def test_cli_chain_recovers_http_crash_and_cleans_up_owner_loss(
         f"Path({str(tmp_path / 'connector.pid')!r}).write_text(json.dumps(os.getpid()))\n"
         "time.sleep(90)\n"
     )
-    # This file is scoped to this subprocess environment. Production code has no
-    # fixture switch or fallback credential backend. Every value below is synthetic.
-    (injections / "sitecustomize.py").write_text(f'''
+    # Install fixture hooks into an owned disposable interpreter's trusted site,
+    # never PYTHONPATH. Production -I must stay enabled for every child. No live
+    # credential backend or source installation is changed; all values are synthetic.
+    fixture_environment = tmp_path / "fixture-venv"
+    venv.EnvBuilder(with_pip=False, symlinks=sys.platform != "win32").create(fixture_environment)
+    fixture_site = Path(sysconfig.get_path(
+        "purelib", vars={"base": str(fixture_environment), "platbase": str(fixture_environment)},
+    ))
+    fixture_site.mkdir(parents=True, exist_ok=True)
+    (fixture_site / "test-dependencies.pth").write_text(
+        "\n".join([str(Path(__file__).parents[1] / "src"), *site.getsitepackages()]) + "\n",
+        encoding="utf-8",
+    )
+    interpreter = fixture_environment / (
+        "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+    )
+    (fixture_site / "sitecustomize.py").write_text(f'''
 import os, sys, json, subprocess
 from pathlib import Path
 from anywhere_computer import owner_credentials, cloudflare_tunnel, remote_service
@@ -72,9 +89,6 @@ for stage in ("remote-watch", "remote-serve", "tunnel-run"):
 ''', encoding="utf-8")
     environment = os.environ.copy()
     environment["PATH"] = str(injections)  # No installed provider binary may mask a missing stub.
-    environment["PYTHONPATH"] = os.pathsep.join(
-        [str(injections), str(Path(__file__).parents[1] / "src")]
-    )
     options = {}
     if sys.platform == "win32":
         options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
@@ -82,7 +96,7 @@ for stage in ("remote-watch", "remote-serve", "tunnel-run"):
     identities = []
     with log_path.open("wb") as log:
         process = subprocess.Popen(
-            [sys.executable, "-m", "anywhere_computer.cli", "remote-watch",
+            [str(interpreter), "-I", "-m", "anywhere_computer.cli", "remote-watch",
              "--state-dir", str(state), *([] if selected is None else ["--connector", selected])],
             stdin=subprocess.DEVNULL, stdout=log, stderr=log,
             start_new_session=sys.platform != "win32", env=environment, **options,

@@ -149,7 +149,7 @@ SearchGlob = Annotated[str, Field(min_length=1, max_length=256)]
 class StartSearch(FilePath):
     pattern: str = Field(min_length=1, max_length=500)
     mode: Literal["literal", "regex"] = "literal"
-    kind: Literal["names", "text"] = "names"
+    kind: Literal["names", "text", "documents"] = "names"
     ignore_case: bool = True
     include_hidden: bool = False
     max_results: int = Field(default=1000, ge=1, le=10000)

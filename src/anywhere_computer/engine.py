@@ -146,10 +146,12 @@ class Engine:
         )
         self.register(
             "settings_update",
-            "Update one validated engine setting persistently.",
+            "Update shared engine defaults persistently. Changing default_shell affects "
+            "future terminal execution for every client using this engine.",
             UpdateSetting,
             settings_update,
             destructive=True,
+            open_world=True,
         )
 
         async def processes(args: ListProcesses) -> Result:
@@ -490,8 +492,8 @@ class Engine:
         )
         self.register(
             "search_start",
-            "Search literal names or UTF-8 text with filename glob, directory exclusions, "
-            "whole-word matching and explicit file/depth limits.",
+            "Search names, UTF-8 text or bounded DOCX/XLSX/PPTX extracted content, "
+            "using literal or regex matching with file, depth, result and time limits.",
             StartSearch,
             search,
         )

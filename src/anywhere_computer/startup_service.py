@@ -32,6 +32,7 @@ class StartupRecord(BaseModel):
     connector: str
     startup_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     native_fingerprint: str = Field(default="", pattern=r"^(?:[a-f0-9]{64})?$")
+    isolated_python: bool = False  # Missing field identifies a pre-isolation receipt.
 
 
 def _read_file(path: Path) -> bytes | None:
@@ -84,7 +85,7 @@ def _record(directory: Path) -> StartupRecord | None:
 
 def _definition(directory: Path, record: StartupRecord) -> StartupDefinition:
     return current_definition(directory, connector=record.connector, startup_id=record.startup_id,
-                              executable=record.interpreter)
+                              executable=record.interpreter, isolated_python=record.isolated_python)
 
 
 def _check_file(definition: StartupDefinition) -> bool:
@@ -140,6 +141,7 @@ def startup_status(directory: Path) -> dict[str, str | bool]:
     snapshot = NativeStartup(definition).query()
     _check_snapshot(record, snapshot)
     return {**_result(definition, snapshot), "definition_exists": file_exists,
+            "python_isolation_upgrade_required": not record.isolated_python,
             "receipt_confirmed": bool(record.native_fingerprint), "changed": False}
 
 
@@ -148,6 +150,11 @@ def install_startup(directory: Path, *, connector: str | None = None) -> dict[st
     prepare_directory(directory)
     with ProcessLock(directory / "autostart.lock"):
         record = _record(directory)
+        if record is not None and not record.isolated_python:
+            raise ValueError(
+                "Legacy startup must be removed with autostart-uninstall before "
+                "autostart-install can register isolated Python; credentials are preserved"
+            )
         if record is not None and connector is not None and connector != record.connector:
             raise ValueError("Startup connector differs; uninstall before changing it")
         selected = connector if record is None else record.connector
@@ -162,6 +169,7 @@ def install_startup(directory: Path, *, connector: str | None = None) -> dict[st
                 directory=str(directory),
                 interpreter=os.path.abspath(sys.executable), connector=executable,
                 startup_id=secrets.token_hex(16),
+                isolated_python=True,
             )
             definition = _definition(directory, record)
             backend = NativeStartup(definition)

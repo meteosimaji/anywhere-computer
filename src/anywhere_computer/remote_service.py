@@ -20,6 +20,7 @@ from .http_supervisor import _stop_child, supervise
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
 from .remote_health import monitor_public_health
+from .runtime_launch import python_module_command
 from .state import prepare_directory
 from .watch_status import WatchEvent, save_watch_observation
 
@@ -89,8 +90,10 @@ async def serve_remote(
             if sys.platform == "win32":
                 flags = subprocess.CREATE_NEW_PROCESS_GROUP
             child = subprocess.Popen(
-                [sys.executable, "-m", "anywhere_computer.cli", "tunnel-run",
-                 "--state-dir", str(directory.resolve()), "--watch-parent", *connector_arguments],
+                python_module_command(
+                    "anywhere_computer.cli", "tunnel-run", "--state-dir",
+                    str(directory.resolve()), "--watch-parent", *connector_arguments,
+                ),
                 stdin=subprocess.PIPE,
                 start_new_session=os.name != "nt",
                 creationflags=flags,
@@ -200,8 +203,10 @@ def watch_remote(directory: Path, *, connector: str | None = None) -> int:
                     owner, credential, status_path=directory / "remote-watch-status.json",
                 )
             return supervise(
-                [sys.executable, "-m", "anywhere_computer.cli", "remote-serve",
-                 "--state-dir", str(directory.resolve()), "--watch-parent", *connector_arguments],
+                python_module_command(
+                    "anywhere_computer.cli", "remote-serve", "--state-dir",
+                    str(directory.resolve()), "--watch-parent", *connector_arguments,
+                ),
                 parent_pipe=True,
                 status_path=directory / "remote-watch-status.json",
             )

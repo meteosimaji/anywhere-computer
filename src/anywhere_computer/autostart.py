@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
 
+from .runtime_launch import python_module_command
+
 Platform = Literal["darwin", "linux", "win32"]
 TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 
@@ -43,6 +45,7 @@ def startup_definition(
     user: str,
     connector: str | None = None,
     startup_id: str | None = None,
+    isolated_python: bool = True,
 ) -> StartupDefinition:
     directory = directory.resolve()
     executable = _clean_argument(executable)
@@ -51,7 +54,14 @@ def startup_definition(
     _clean_argument(str(directory))
     _clean_argument(user)
     name = "io.anywhere-computer." + hashlib.sha256(str(directory).encode()).hexdigest()[:20]
-    arguments = ["-m", "anywhere_computer.cli", "remote-watch", "--state-dir", str(directory)]
+    arguments = python_module_command(
+        "anywhere_computer.cli", "remote-watch", "--state-dir", str(directory),
+        executable=executable,
+    )[1:]
+    if not isolated_python:
+        # Reconstruct old receipts for inspection/removal only. New registration
+        # always uses isolated Python and refuses to reactivate legacy receipts.
+        arguments.remove("-I")
     if connector is not None:
         _clean_argument(connector)
         if not Path(connector).is_absolute():
@@ -133,6 +143,7 @@ def startup_definition(
 def current_definition(
     directory: Path, *, connector: str | None = None, startup_id: str | None = None,
     executable: str | None = None,
+    isolated_python: bool = True,
 ) -> StartupDefinition:
     import psutil
 
@@ -142,7 +153,7 @@ def current_definition(
     definition = startup_definition(
         directory, platform=cast(Platform, sys.platform), home=Path.home(),
         executable=executable or os.path.abspath(sys.executable), user=psutil.Process().username(),
-        connector=connector, startup_id=startup_id,
+        connector=connector, startup_id=startup_id, isolated_python=isolated_python,
     )
     if sys.platform == "linux":
         configured = os.environ.get("XDG_CONFIG_HOME", "")

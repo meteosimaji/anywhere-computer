@@ -12,6 +12,7 @@ from pathlib import Path
 from .http_service import load_http_config
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
+from .runtime_launch import python_module_command
 from .watch_status import WatchEvent, save_watch_observation
 
 
@@ -126,14 +127,9 @@ def watch_http(directory: Path) -> int:
         signal.signal(signal.SIGTERM, interrupted)
         try:
             return supervise(
-                [
-                    sys.executable,
-                    "-m",
-                    "anywhere_computer.cli",
-                    "http-serve",
-                    "--state-dir",
-                    str(directory.resolve()),
-                ],
+                python_module_command(
+                    "anywhere_computer.cli", "http-serve", "--state-dir", str(directory.resolve()),
+                ),
                 status_path=directory / "http-watch-status.json",
             )
         finally:

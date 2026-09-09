@@ -6,7 +6,6 @@ import json
 import os
 import signal
 import subprocess
-import sys
 import time
 import uuid
 from pathlib import Path
@@ -20,6 +19,7 @@ from .engine import Engine
 from .locking import ProcessLock
 from .models import Reply, Request
 from .runtime_identity import runtime_identity
+from .runtime_launch import python_module_command
 from .state import prepare_directory
 
 WIRE_LIMIT = 8 * 1024 * 1024
@@ -208,14 +208,7 @@ def ensure_agent(directory: Path) -> dict[str, JsonValue]:
                     )
         except (OSError, ValueError, psutil.NoSuchProcess):
             pass
-        command = [
-            sys.executable,
-            "-m",
-            "anywhere_computer",
-            "serve",
-            "--state-dir",
-            str(directory),
-        ]
+        command = python_module_command("anywhere_computer", "serve", "--state-dir", str(directory))
         subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,

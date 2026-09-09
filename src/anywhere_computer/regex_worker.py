@@ -7,6 +7,8 @@ import math
 import re
 import sys
 
+from .runtime_launch import python_module_command
+
 MAX_REGEX_INPUT = 32 * 1024 * 1024
 
 
@@ -53,7 +55,7 @@ async def regex_line_numbers(
     if len(payload) > MAX_REGEX_INPUT:
         raise ValueError("Regex input exceeds limit")
     process = await asyncio.create_subprocess_exec(
-        sys.executable, "-m", "anywhere_computer.regex_worker",
+        *python_module_command("anywhere_computer.regex_worker"),
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL,
     )

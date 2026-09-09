@@ -38,7 +38,7 @@ def test_launch_agent_preserves_argv_and_venv_identity(tmp_path):
     definition = definition_for(state, "darwin", executable=executable)
     document = plistlib.loads(definition.content)
     assert document["ProgramArguments"] == [
-        executable, "-m", "anywhere_computer.cli", "remote-watch", "--state-dir", str(state),
+        executable, "-I", "-m", "anywhere_computer.cli", "remote-watch", "--state-dir", str(state),
     ]
     assert document["WorkingDirectory"] == str(state)
     assert document["RunAtLoad"] is True
@@ -58,7 +58,7 @@ def test_systemd_escaping_does_not_expand_environment_or_specifiers(tmp_path):
     # ':' disables environment expansion; the percent specifier escape still applies.
     assert command.startswith(":")
     arguments = [part.replace("%%", "%") for part in shlex.split(command[1:])]
-    assert arguments == [os.path.abspath(sys.executable), "-m", "anywhere_computer.cli",
+    assert arguments == [os.path.abspath(sys.executable), "-I", "-m", "anywhere_computer.cli",
                          "remote-watch", "--state-dir", str(state.resolve())]
     working = next(line.removeprefix("WorkingDirectory=") for line in text.splitlines()
                    if line.startswith("WorkingDirectory="))

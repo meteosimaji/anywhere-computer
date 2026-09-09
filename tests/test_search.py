@@ -237,3 +237,46 @@ async def test_search_stop_reaps_live_regex_worker(tmp_path, monkeypatch):
         assert children and all(child.returncode is not None for child in children)
     finally:
         await searches.close()
+
+
+async def test_document_search_finds_word_paragraph_and_second_worksheet(tmp_path):
+    from anywhere_computer.document_writer import create_word, create_workbooks
+
+    (tmp_path / "word.docx").write_bytes(create_word("first\nneedle paragraph"))
+    (tmp_path / "book.xlsx").write_bytes(create_workbooks(
+        {"First": [["absent"]], "Second": [["needle cell"]]},
+    ))
+    (tmp_path / "plain.txt").write_text("needle")
+    page = await results(tmp_path, pattern="needle", kind="documents")
+    assert page["state"] == "completed" and len(page["results"]) == 2
+    locations = [entry["document_location"] for entry in page["results"]]
+    assert any(location.get("paragraph") == 2 for location in locations)
+    assert any(location.get("sheet") == "Second" and location.get("cell") == "A1"
+               for location in locations)
+    limited = await results(tmp_path, pattern="needle", kind="documents", max_results=1)
+    assert len(limited["results"]) == 1 and limited["limit_reason"] == "max_results"
+
+
+async def test_document_search_reports_partial_text_and_malformed_package(tmp_path):
+    from anywhere_computer.document_writer import create_word
+
+    (tmp_path / "long.docx").write_bytes(create_word("x" * 32768 + "needle"))
+    (tmp_path / "broken.docx").write_bytes(b"not a zip")
+    page = await results(tmp_path, pattern="needle", kind="documents")
+    assert not page["results"] and page["skipped"] == 1
+    assert page["truncated"] and page["limit_reason"] == "document_text_limit"
+    with pytest.raises(ValueError, match="context lines"):
+        Searches().start(StartSearch(path=str(tmp_path), pattern="x", kind="documents",
+                                    context_lines=1))
+
+
+async def test_document_regex_worker_failure_is_not_a_skipped_file(tmp_path, monkeypatch):
+    from anywhere_computer.document_writer import create_word
+
+    async def fail(*args, **kwargs):
+        raise OSError("synthetic unavailable worker")
+
+    (tmp_path / "word.docx").write_bytes(create_word("needle"))
+    monkeypatch.setattr("anywhere_computer.search.regex_line_numbers", fail)
+    page = await results(tmp_path, pattern="needle", kind="documents", mode="regex")
+    assert page["state"] == "failed" and page["skipped"] == 0

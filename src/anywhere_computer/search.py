@@ -8,14 +8,16 @@ import os
 import re
 import threading
 import uuid
+import zipfile
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from pydantic import JsonValue
 
+from .documents import read_document
 from .files import absolute_path, read_bytes
-from .models import SearchPage, StartSearch
+from .models import ReadDocument, SearchPage, StartSearch
 from .regex_worker import regex_line_numbers
 
 SEARCH_OUTPUT_LIMIT = 16 * 1024 * 1024
@@ -41,6 +43,8 @@ class Searches:
         self.searches: dict[str, Search] = {}
 
     def start(self, args: StartSearch) -> dict[str, JsonValue]:
+        if args.kind == "documents" and args.context_lines:
+            raise ValueError("Document search returns entry locations, not context lines")
         if args.mode == "regex":
             try:
                 re.compile(args.pattern)
@@ -141,7 +145,13 @@ class Searches:
                             return
                     else:
                         try:
-                            if args.mode == "regex":
+                            if args.kind == "documents":
+                                if path.suffix.lower() not in {".docx", ".xlsx", ".pptx"}:
+                                    continue
+                                await self._document_file(search, path, args)
+                                if search.state != "running":
+                                    return
+                            elif args.mode == "regex":
                                 text = (await asyncio.to_thread(read_bytes, path)).decode("utf-8")
                                 try:
                                     selected = await regex_line_numbers(
@@ -181,7 +191,7 @@ class Searches:
                                 await self._literal_file(search, path, pattern, args)
                                 if search.limit_reason == "output_bytes":
                                     return
-                        except (OSError, UnicodeError, ValueError):
+                        except (OSError, UnicodeError, ValueError, zipfile.BadZipFile):
                             search.skipped += 1
                     if len(search.results) >= args.max_results:
                         search.truncated = True
@@ -211,6 +221,64 @@ class Searches:
         for entry in matches:
             if not self._append_result(search, entry):
                 break
+
+    async def _document_file(self, search: Search, path: Path, args: StartSearch) -> None:
+        first = await asyncio.to_thread(read_document, ReadDocument(path=str(path)))
+        sections: list[str | None] = [None]
+        if first["format"] == "xlsx":
+            raw_sections = first["sections"]
+            assert isinstance(raw_sections, list)
+            sections = [str(item["name"]) for item in raw_sections if isinstance(item, dict)]
+        for section in sections:
+            offset = 0
+            while True:
+                page = await asyncio.to_thread(read_document, ReadDocument(
+                    path=str(path), section=section, offset=offset, limit=100,
+                ))
+                if page["sha256"] != first["sha256"]:
+                    raise ValueError("Document changed during search")
+                entries = page["entries"]
+                assert isinstance(entries, list)
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    if entry.get("text_truncated"):
+                        search.truncated = True
+                        search.limit_reason = "document_text_limit"
+                    text = " ".join(str(entry[key]) for key in ("text", "value", "formula")
+                                    if entry.get(key) is not None)
+                    if args.mode == "regex":
+                        try:
+                            matched = bool(await regex_line_numbers(
+                                text, args.pattern, ignore_case=args.ignore_case,
+                                whole_word=args.whole_word, limit=1, timeout=600,
+                            ))
+                        except (OSError, ValueError):
+                            search.state = "failed"
+                            return
+                    else:
+                        matched = self._matches(
+                            text.casefold() if args.ignore_case else text,
+                            args.pattern.casefold() if args.ignore_case else args.pattern,
+                            args.whole_word,
+                        )
+                    if matched:
+                        result: dict[str, JsonValue] = {"path": str(path), "text": text[:2000],
+                            "document_location": entry, "source_sha256": first["sha256"]}
+                        if not self._append_result(search, result):
+                            return
+                        if len(search.results) >= args.max_results:
+                            search.state = "completed"
+                            search.truncated = True
+                            search.limit_reason = "max_results"
+                            return
+                    await asyncio.sleep(0)
+                if not page["truncated"]:
+                    break
+                next_offset = page["next_offset"]
+                if not isinstance(next_offset, int) or next_offset <= offset:
+                    raise ValueError("Document cursor did not advance")
+                offset = next_offset
 
     @staticmethod
     def _append_result(search: Search, entry: JsonValue) -> bool:

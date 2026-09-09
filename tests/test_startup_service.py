@@ -146,6 +146,31 @@ def test_status_without_receipt_does_not_create_state(tmp_path):
     assert not directory.exists()
 
 
+def test_legacy_startup_can_be_removed_but_not_reenabled(registration):
+    import json
+
+    directory, native, calls, definition = registration
+    service.install_startup(directory)
+    receipt = directory / "autostart.json"
+    values = json.loads(receipt.read_text())
+    values.pop("isolated_python")  # Exact old schema, not just a new False value.
+    receipt.write_text(json.dumps(values))
+    record = service._record(directory)
+    legacy = definition(directory, connector=record.connector, startup_id=record.startup_id,
+                        executable=record.interpreter, isolated_python=False)
+    legacy.path.write_bytes(legacy.content)
+    before = receipt.read_bytes()
+    assert service.startup_status(directory)["python_isolation_upgrade_required"] is True
+    with pytest.raises(ValueError, match="Legacy startup"):
+        service.install_startup(directory)
+    assert calls == ["install"] and receipt.read_bytes() == before
+    assert legacy.path.read_bytes() == legacy.content
+    assert service.uninstall_startup(directory)["state"] == "uninstalled"
+    service.install_startup(directory)
+    assert service._record(directory).isolated_python is True
+    assert service.startup_status(directory)["python_isolation_upgrade_required"] is False
+
+
 def test_initial_publication_preserves_racing_file(tmp_path, monkeypatch):
     destination = tmp_path / "receipt"
     original = service.os.link

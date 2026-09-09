@@ -1,8 +1,46 @@
 import asyncio
+import subprocess
+from pathlib import Path
 
 import pytest
 
 from anywhere_computer.regex_worker import regex_line_numbers
+from anywhere_computer.runtime_launch import python_module_command
+
+
+@pytest.mark.parametrize("placement", ["cwd", "pythonpath"])
+async def test_worker_and_cli_ignore_workspace_python(tmp_path, monkeypatch, placement):
+    untrusted = tmp_path / "untrusted"
+    untrusted.mkdir()
+    package = untrusted / "anywhere_computer"
+    package.mkdir()
+    marker = tmp_path / "unexpected-code-execution"
+    planted = f"from pathlib import Path\nPath({str(marker)!r}).write_text('fixture-only')\n"
+    (package / "__init__.py").write_text(planted)
+    (package / "regex_worker.py").write_text("print('{\"lines\": [999]}')\n")
+    (package / "cli.py").write_text(planted)
+    (untrusted / "sitecustomize.py").write_text(planted)
+    safe = tmp_path / "safe"
+    safe.mkdir()
+    monkeypatch.chdir(untrusted if placement == "cwd" else safe)
+    monkeypatch.setenv("PYTHONPATH", str(untrusted))
+    monkeypatch.setenv("PYTHONHOME", str(tmp_path / "not-a-python-home"))
+    assert await regex_line_numbers(
+        "first\nneedle", "needle", ignore_case=False, whole_word=False, limit=1, timeout=5,
+    ) == [2]
+    for module in ("anywhere_computer", "anywhere_computer.cli"):
+        result = subprocess.run(
+            python_module_command(module, "--help"), capture_output=True, timeout=10,
+        )
+        assert result.returncode == 0
+        assert b"usage: anywhere" in result.stdout
+    assert not marker.exists()
+
+
+def test_internal_launch_isolation_keeps_selected_venv():
+    executable = str(Path("/trusted/venv/bin/python"))
+    command = python_module_command("anywhere_computer.cli", "--help", executable=executable)
+    assert command == [executable, "-I", "-m", "anywhere_computer.cli", "--help"]
 
 
 async def test_regex_real_worker_handles_syntax_and_word_boundaries():
