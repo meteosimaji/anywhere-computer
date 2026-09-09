@@ -38,7 +38,7 @@ async def exchange(
     arguments: dict[str, JsonValue] | None = None,
     *,
     operation_id: str | None = None,
-    timeout: float = 30,
+    timeout: float = 65,
     credential: str | None = None,
 ) -> Reply:
     endpoint = load_endpoint(directory)

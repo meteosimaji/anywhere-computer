@@ -67,7 +67,7 @@ async def remote_exchange(
     context: ssl.SSLContext,
     server_name: str,
     expected_fingerprint: str,
-    timeout: float = 30,
+    timeout: float = 65,
 ) -> bytes:
     """One attempt only. Caller retains operation identity after uncertain delivery."""
     check_tls(context, client=True)
@@ -97,7 +97,7 @@ class RemoteListener:
         handler: MessageHandler,
         *,
         max_connections: int = 32,
-        request_timeout: float = 30,
+        request_timeout: float = 65,
     ) -> None:
         check_tls(context, client=False)
         if max_connections < 1 or request_timeout <= 0:

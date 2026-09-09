@@ -227,8 +227,8 @@ class HTTPMCP:
             try:
                 async with asyncio.timeout(10):
                     method, target, headers, body = await self._read(reader)
-                async with asyncio.timeout(30):
-                    parsed = urlsplit(target)
+                parsed = urlsplit(target)
+                async with asyncio.timeout(30 if parsed.path in self.public_routes else 60):
                     if parsed.path in self.public_routes:
                         status, response, extra = await self.public_routes[parsed.path](
                             method, headers, body, parsed.query

@@ -516,7 +516,9 @@ class Engine:
         self.register(
             "terminal_input",
             "Send exact input to an existing terminal session. "
-            "Include a newline when a command needs one.",
+            "Include a newline when a command needs one. Optionally wait up to wait_ms for "
+            "new output or a literal wait_for_prompt; returns bounded output and a wait_reason. "
+            "Timeout does not terminate the process. Concurrent inputs are serialized.",
             SessionInput,
             self.sessions.send,
             destructive=True,

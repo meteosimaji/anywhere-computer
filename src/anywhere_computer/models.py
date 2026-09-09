@@ -183,6 +183,9 @@ class SessionId(Contract):
 
 class SessionInput(SessionId):
     text: str = Field(max_length=100000)
+    wait_ms: int = Field(default=0, ge=0, le=30000)
+    wait_for_prompt: str | None = Field(default=None, min_length=1, max_length=1000)
+    output_limit: int = Field(default=16000, ge=1, le=100000)
 
 
 class SessionOutput(SessionId):

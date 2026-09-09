@@ -229,3 +229,32 @@ def test_invalid_authentication_challenge_rejected(challenge):
 
     with pytest.raises(ValueError, match="authentication challenge"):
         HTTPMCP(authenticate, lambda owner: None, auth_challenge=challenge)
+
+
+async def test_terminal_maximum_wait_returns_result_over_http(http_agent, tmp_path):
+    import shlex
+    import sys
+
+    from anywhere_computer.models import StartSession
+
+    _, engine, _, port = http_agent
+    executable = f'"{sys.executable}"' if sys.platform == 'win32' else shlex.quote(sys.executable)
+    started = await engine.sessions.start(StartSession(
+        command=executable + ' -u -c "import time; input(); time.sleep(45)"',
+        cwd=str(tmp_path),
+    ))
+    async with httpx.AsyncClient(headers=HEADERS, timeout=65) as http:
+        async with streamable_http_client(f'http://127.0.0.1:{port}/mcp', http_client=http) as (
+            reader, writer, _,
+        ):
+            async with ClientSession(reader, writer) as client:
+                await client.initialize()
+                response = await client.call_tool('terminal_input', {
+                    'session_id': started['session_id'], 'text': 'go\n',
+                    'wait_ms': 30000, 'wait_for_prompt': 'never printed>',
+                })
+                assert not response.isError
+                data = response.structuredContent['data']
+                assert data['wait_reason'] == 'timeout'
+                assert data['state'] == 'running'
+                assert data['bytes_sent'] == 3

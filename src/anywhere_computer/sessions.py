@@ -26,6 +26,7 @@ class Session:
     output: bytearray = field(default_factory=bytearray)
     first_cursor: int = 0
     reader: asyncio.Task[None] | None = None
+    input_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
 class Sessions:
@@ -105,11 +106,61 @@ class Sessions:
 
     async def send(self, args: SessionInput) -> dict[str, JsonValue]:
         session = self.get(args.session_id)
-        if session.process.returncode is not None or session.process.stdin is None:
-            raise ValueError("Session is not accepting input")
-        session.process.stdin.write(args.text.encode())
-        await asyncio.wait_for(session.process.stdin.drain(), 10)
-        return {"session_id": args.session_id, "bytes_sent": len(args.text.encode())}
+        try:
+            await asyncio.wait_for(session.input_lock.acquire(), 10)
+        except TimeoutError as error:
+            raise ValueError("Session input is busy; no input was sent") from error
+        try:
+            if session.process.returncode is not None or session.process.stdin is None:
+                raise ValueError("Session is not accepting input")
+            cursor = session.first_cursor + len(session.output)
+            encoded = args.text.encode()
+            session.process.stdin.write(encoded)
+            await asyncio.wait_for(session.process.stdin.drain(), 10)
+            sent: dict[str, JsonValue] = {
+                "session_id": args.session_id, "bytes_sent": len(encoded),
+            }
+            if not args.wait_ms and args.wait_for_prompt is None:
+                return sent
+            return {**sent, **await self._wait_response(session, args, cursor)}
+        finally:
+            session.input_lock.release()
+
+    async def _wait_response(
+        self, session: Session, args: SessionInput, cursor: int,
+    ) -> dict[str, JsonValue]:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        deadline = started + args.wait_ms / 1000
+        prompt = args.wait_for_prompt.encode() if args.wait_for_prompt is not None else None
+        while True:
+            page = self.output(SessionOutput(
+                session_id=args.session_id, cursor=cursor, limit=args.output_limit,
+            ))
+            position = max(0, cursor - session.first_cursor)
+            raw = bytes(session.output[position:position + args.output_limit])
+            # Match bytes across reader chunks, before decoding potentially split UTF-8.
+            matched = prompt is not None and prompt in raw
+            remaining = deadline - loop.time()
+            reason = None
+            if page["dropped_bytes"]:
+                reason = "output_dropped"
+            elif matched:
+                reason = "prompt"
+            elif prompt is None and raw:
+                reason = "output"
+            elif len(raw) >= args.output_limit:
+                reason = "output_limit"
+            elif session.reader is not None and session.reader.done():
+                reason = "exited" if session.process.returncode is not None else "output_closed"
+            elif remaining <= 0:
+                reason = "timeout"
+            if reason is not None:
+                return {
+                    **page, "start_cursor": cursor, "wait_reason": reason,
+                    "prompt_matched": matched, "elapsed_ms": round((loop.time() - started) * 1000),
+                }
+            await asyncio.sleep(min(0.02, remaining))
 
     async def wait_output(self, args: SessionOutput) -> dict[str, JsonValue]:
         session = self.get(args.session_id)

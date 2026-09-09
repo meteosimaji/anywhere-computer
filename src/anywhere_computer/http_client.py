@@ -113,7 +113,7 @@ def https_mcp_request(
     if body is not None and len(body) > WIRE_LIMIT:
         raise ValueError("HTTP request exceeds limit")
     connection = http.client.HTTPSConnection(
-        parsed.hostname or "", port=parsed.port, timeout=35, context=ssl.create_default_context()
+        parsed.hostname or "", port=parsed.port, timeout=65, context=ssl.create_default_context()
     )
     try:
         connection.request(method, parsed.path, body=body, headers=headers)

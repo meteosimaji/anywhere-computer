@@ -1,6 +1,7 @@
 # Desktop Commander 機能充足監査
 
-監査日: 2026-09-09。実装照合点: Anywhere Computer `a65083afee69759cc08931a4b9432379c54d0060`。
+監査日: 2026-09-09。実装照合点: Anywhere Computer `a65083afee69759cc08931a4b9432379c54d0060` を基準に、
+端末入力/プロンプト待機の追加をDC15/EX07へ統合（検証は [TERMINAL](../TERMINAL.md)）。
 
 **結論: 全機能は満たしていない。40 ツールという数は互換性の証拠にならない。**
 標準ツールの入力・処理・出力を照合した。terminal から外部ソフトや自作スクリプトを呼べること、
@@ -36,7 +37,7 @@
 |DC12|stop_search|対応|search_stop と協調的 worker 中断。|
 |DC13|list_searches|対応|search_list の ID/状態一覧。agent instance 内の検索のみ。|
 |DC14|start_process|部分|terminal_start: shell/cwd・非同期開始・長時間実行。timeout/対話可能判定/verbose timing なし。|
-|DC15|interact_with_process|部分|terminal_inputで入力、terminal_outputのwait_msで出力待機。別ツール契約で、wait_for_promptなし。|
+|DC15|interact_with_process|部分|terminal_inputで入力と最大30秒の応答待機、literal wait_for_promptを提供。容量/欠落/終了/timeoutを区別。PTY・プロンプト自動判定なし。|
 |DC16|read_process_output|部分|絶対byte cursor、負cursorによる末尾取得、欠落量、終了コード、最大30秒のwait_ms。verbose timing/プロンプト認識なし。|
 |DC17|force_terminate|対応|terminal_stop: 管理中セッションと process group/tree の終了処理。任意 PID 用ではない。|
 |DC18|list_sessions|対応|terminal_list: 管理中セッション ID/PID/状態/終了コード/cursor。|
@@ -66,7 +67,7 @@
 |EX04|DOCX|部分|本文と表内段落の文字抽出、プレーンテキストからDOCX生成。表構造・outline・画像・header/footer・書式保持編集・Markdown生成なし。|
 |EX05|PDF|未対応|形式としての読取/作成/ページ操作なし。|
 |EX06|検索|部分|DC10に記載。DOCX/XLSX/PPTXの限定内容検索を実装。PDF非対応、長いフィールドは切詰めを明示。文書モードの文脈行は拒否。|
-|EX07|端末|部分|実プロセスの入出力試験あり。PIPE 方式、PTY なし。各 REPL/SSH/DB CLI の個別互換、プロンプト待機は未検証/未対応。agent 再起動を越えたセッション復元なし。|
+|EX07|端末|部分|実プロセスの入出力試験あり。PIPE 方式、PTY なし。各 REPL/SSH/DB CLI の個別互換、指定文字列のプロンプト待機は実装・実プロセス試験済み。自動認識は未対応。agent 再起動を越えたセッション復元なし。|
 |EX08|プレビュー UI|未対応|MCP は tools-only。Markdown/画像/HTML/Office の UI resource なし。|
 |EX09|編集 UI|未対応|編集・undo・選択文脈・部分読取マージの UI なし。ファイル backup は UI undo と別。|
 |EX10|フォルダ UI|未対応|ツリー・遅延ロード・追加読込・OS file manager で開く UI なし。|
@@ -94,7 +95,7 @@
 
 ## 未達を解消する順序
 
-1. URL/画像/PDF、Office書式保持編集、端末のPTY/プロンプト待機、独自ヘルプと設定の残不足を埋める。実装済みのフォルダ移動・プロセス管理・統計・検索拡張を未実装扱いに戻さない。形式別の fixture と失敗時保全を受け入れ条件にする。
+1. URL/画像/PDF、Office書式保持編集、端末のPTY/プロンプト自動認識、独自ヘルプと設定の残不足を埋める。実装済みのフォルダ移動・プロセス管理・統計・検索拡張を未実装扱いに戻さない。形式別の fixture と失敗時保全を受け入れ条件にする。
 2. 会話からの端末管理/選択・identity・agent停止、pairing と dashboard、プレビュー/編集/設定 UI を作る。
 3. 実装済み公開メタデータ監視の限界を踏まえ、認証付き経路とネットワーク断/sleep/再起動/ログイン/更新の障害試験を行い、macOS/Windows/Linux と二台の実機で証拠を残す。
 4. 完成した候補で Codex/ChatGPT 実利用と配布を検証し、公式申請を行う。現在は private alpha であり、全機能代替として公開しない。
