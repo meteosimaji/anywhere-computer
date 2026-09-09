@@ -18,11 +18,12 @@ header{display:flex;align-items:center;justify-content:space-between;gap:20px;pa
 .work-card{background:var(--card);border-radius:22px;box-shadow:var(--shadow);padding:24px}.toolbar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:18px}.toolbar strong{font-size:20px;font-weight:650;letter-spacing:-.5px}.toolbar button{font-size:12px;padding:8px 14px}.toolbar #undo{color:var(--muted)}textarea{display:block;width:100%;min-height:310px;resize:vertical;border:1px solid var(--line);border-radius:12px;padding:20px;white-space:pre;tab-size:4;background:var(--card);font:13px/1.8 ui-monospace,SFMono-Regular,Consolas,monospace}#file-meta{margin:14px 0 0;font-size:11px}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.7 ui-monospace,monospace}img{display:block;max-width:100%;max-height:440px;object-fit:contain;margin:24px auto}
 .settings-intro{margin:0 0 24px;max-width:480px;line-height:1.65}.settings-grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.setting{padding:26px;background:var(--card);border-radius:22px;box-shadow:var(--shadow)}.setting.wide{grid-column:1/-1}.setting label{display:block;font-size:18px;font-weight:600;letter-spacing:-.4px;margin-bottom:6px}.setting p{margin:0 0 24px;font-size:12px;line-height:1.6;color:var(--muted)}.setting-control{display:flex;gap:10px;align-items:center}.setting input{width:100%;flex:1;font-size:14px}.setting button{font-size:13px;color:var(--accent);white-space:nowrap;padding:10px 12px}
 footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;line-height:1.6;overflow-wrap:anywhere}#notice[data-error=true]{color:var(--danger)}#recovery{margin-top:15px;padding:20px;background:var(--card);border-radius:18px;border:1px solid var(--line);font-size:13px}#resolve{color:var(--accent)}#operation{font:11px ui-monospace,monospace;overflow-wrap:anywhere}dialog{max-width:min(420px,90vw);border:0;border-radius:24px;padding:30px;background:var(--card);color:var(--ink);box-shadow:0 24px 80px #0003}dialog h2{font-size:24px}dialog p{font-size:14px;color:var(--muted)}dialog::backdrop{background:#0005;backdrop-filter:blur(5px)}.dialog-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:25px}.dialog-actions button{font-size:13px}#discard-go{color:var(--danger)}
+.setup-label{margin-top:24px}.setting select{width:100%;font-size:14px}.setup-options{display:grid;gap:10px;padding-top:18px}.setup-options label{font-size:13px;margin:0}#setup-options{margin-top:24px}summary{cursor:pointer;font-size:13px;color:var(--muted)}.setup-actions{margin-top:26px}.setting button.primary{color:#fff;padding:11px 20px}#setup-summary,#setup-technical{margin:24px 0;overflow-wrap:anywhere}#setup-summary dt,#setup-technical dt{font-size:12px;color:var(--muted);margin-top:16px}#setup-summary dd,#setup-technical dd{margin:4px 0 0;font-size:14px}#setup-scopes{font:12px/1.8 ui-monospace,monospace;overflow-wrap:anywhere;padding-left:20px}.setting .setup-explanation{margin:24px 0 18px}#setup-status[data-error=true]{color:var(--danger)}
 @media(prefers-color-scheme:dark){:root:not([data-theme=light]){color-scheme:dark;--paper:#161617;--card:#222224;--ink:#f5f5f7;--muted:#a0a0a6;--line:#3b3b40;--accent:#0a84ff;--soft:#333336;--danger:#ff958b;--connected:#79cc98;--shadow:0 8px 28px #0002}}:root[data-theme=dark]{color-scheme:dark;--paper:#161617;--card:#222224;--ink:#f5f5f7;--muted:#a0a0a6;--line:#3b3b40;--accent:#0a84ff;--soft:#333336;--danger:#ff958b;--connected:#79cc98;--shadow:0 8px 28px #0002}
 @media(max-width:580px){header{padding:16px 20px;gap:8px}.brand{font-size:15px}.brand span{display:none}nav button{padding:7px 11px}.hero{padding:32px 20px 24px;gap:16px;flex-direction:column}.hero h1{font-size:33px;letter-spacing:-1.2px}.hero-side{text-align:left;display:flex;align-items:center;flex-wrap:wrap;gap:12px;padding:0}#device-label{display:flex;align-items:center;gap:7px;margin:0}#device{margin:0;max-width:150px}.bar{margin:0 20px 25px;gap:2px}.bar #back{padding:10px}.bar .primary{padding:10px 16px}.surface{padding:0 20px 25px}.file-list{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.file-list button{padding:18px 15px;min-height:227px;border-radius:18px}.file-name{font-size:16px}.file-visual{transform:rotate(-7deg) scale(.83);margin-top:16px;margin-bottom:6px}.file-visual[data-kind=image],.file-visual[data-kind=folder]{transform:rotate(-5deg) scale(.83);margin-top:37px}.kind{font-size:9px}.file-open{width:22px;height:22px;right:13px;bottom:13px;font-size:18px}.section-heading{margin-bottom:16px}h2{font-size:23px}.settings-grid{grid-template-columns:1fr}.setting{padding:22px}.work-card{padding:18px}.toolbar{gap:7px}.toolbar strong{font-size:18px}.toolbar .caption{font-size:10px}textarea{min-height:290px;padding:15px}.empty{grid-template-columns:1fr;padding:28px;gap:0}.empty h2{font-size:26px}.empty .file-visual{margin:35px auto 20px}.empty p{font-size:13px}footer{padding:0 20px 20px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important}.file-list button:hover:not(:disabled){transform:none}}
 </style>
-<header><div class="brand">Anywhere <span>Computer</span></div><nav aria-label="作業画面"><button id="files-tab" aria-pressed="true">ファイル</button><button id="settings-tab" aria-pressed="false">設定</button></nav></header>
+<header><div class="brand">Anywhere <span>Computer</span></div><nav aria-label="作業画面"><button id="files-tab" aria-pressed="true">ファイル</button><button id="settings-tab" aria-pressed="false">設定</button><button id="setup-tab" aria-pressed="false" hidden>接続</button></nav></header>
 <div class="hero"><h1 id="workspace-heading">ワークスペース。<br><span>いつもの作業を、<span class="keep">ここから。</span></span></h1><div class="hero-side"><span id="connection" class="pill">接続確認中</span><label id="device-label" hidden>端末<select id="device" aria-label="操作する端末"><option value="local">この接続先</option></select></label><button id="devices" hidden>端末一覧を更新</button></div></div>
 <div id="path-form" class="bar" role="group" aria-label="パスを開く"><button id="back" type="button" disabled>戻る</button><input id="path" aria-label="絶対パス" placeholder="ファイルやフォルダーのパスを入力" autocomplete="off" spellcheck="false"><button class="primary" id="open" type="button" disabled>開く</button></div>
 <main class="surface">
@@ -31,6 +32,16 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
 <section id="text-panel" class="work-card" hidden><div class="toolbar"><strong>テキスト</strong><span id="read-status" class="caption"></span><span class="spacer"></span><button id="more-text" hidden>続きを読み込む</button><button id="undo" disabled>編集を戻す</button><button class="primary" id="save" disabled>保存</button></div><textarea id="editor" aria-label="ファイルの内容" spellcheck="false" readonly></textarea><p id="file-meta" class="caption"></p></section>
 <section id="preview" class="work-card" hidden><div class="toolbar"><strong id="preview-title">プレビュー</strong><button id="more-document" hidden>続きを読み込む</button></div><img id="image" alt="選択した画像のプレビュー" hidden><pre id="document"></pre></section>
 <section id="settings" hidden><p class="settings-intro caption">この接続先の設定です。同じエージェントに接続するクライアントで共有されます。</p><div class="settings-grid"><div class="setting wide"><label for="default-shell">既定のシェル</label><p>次回の端末実行に使う実行ファイルのパス。空欄ならOSの既定を使います。</p><div class="setting-control"><input id="default-shell" placeholder="OSの既定を使用" autocomplete="off"><button id="set-shell">適用</button></div></div><div class="setting"><label for="read-limit">読込み</label><p>一度に読み込む行数の上限。</p><div class="setting-control"><input id="read-limit" aria-label="読込行数の上限" type="number" min="1" max="5000"><button id="set-read">適用</button></div></div><div class="setting"><label for="write-limit">書込み</label><p>一度に書き込む行数の上限。</p><div class="setting-control"><input id="write-limit" aria-label="書込行数の上限" type="number" min="1" max="100000"><button id="set-write">適用</button></div></div></div></section>
+<section id="setup" hidden>
+<p class="settings-intro caption">このコンピューターを、ほかの場所から使うための接続設定です。</p>
+<div class="settings-grid">
+<div class="setting wide"><div class="section-heading"><h2 id="setup-title">接続の準備。</h2><button id="setup-reload">状態を確認</button></div><p id="setup-status" role="status" aria-live="polite">現在の設定を確認します。</p>
+<label for="setup-resource">接続先のURL</label><p>用意した公開URLを入力してください。</p><input id="setup-resource" type="url" placeholder="https://computer.example.com/mcp" autocomplete="off" spellcheck="false" maxlength="2048">
+<label for="setup-mode" class="setup-label">許可する操作</label><select id="setup-mode"><option value="read-only">見る・調べる</option><option value="files">ファイルを編集する</option><option value="all">すべての操作（コマンド実行を含む）</option></select>
+<details id="setup-options"><summary>詳細設定</summary><div class="setup-options"><label for="setup-owner">所有者名</label><input id="setup-owner" value="owner" maxlength="128" autocomplete="off"><label for="setup-client">接続アプリ名</label><input id="setup-client" value="anywhere-native" maxlength="128" autocomplete="off"><label for="setup-port">このコンピューターの待受ポート</label><input id="setup-port" type="number" value="8768" min="1" max="65535"></div></details>
+<div class="setup-actions"><button id="setup-plan" class="primary">内容を確認</button></div></div>
+<div id="setup-review" class="setting wide" hidden><h2 id="setup-review-title">この内容で保存します。</h2><dl id="setup-summary"></dl><details><summary>接続設定の詳細</summary><dl id="setup-technical"></dl></details><details><summary>許可する操作の一覧</summary><ul id="setup-scopes"></ul></details><p class="setup-explanation">保存するのは接続の設定です。認証とサービスの起動は、このあと別途必要です。</p><button id="setup-confirm" class="primary">この内容を保存</button></div>
+</div></section>
 </main>
 <footer><p id="notice" role="status" aria-live="polite">ホストとの接続を待っています。</p><div id="recovery" hidden><p>操作結果が未確認です。再送せず、結果を照会してください。</p><p id="operation"></p><button id="resolve">結果を照会</button></div></footer>
 <dialog id="discard"><h2>編集中の内容があります</h2><p>移動すると、保存していない編集内容は失われます。</p><div class="dialog-actions"><button id="keep">編集を続ける</button><button id="discard-go">破棄して移動</button></div></dialog>
@@ -41,8 +52,8 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
   const pending = new Map();
   const MAX_TEXT = 1024 * 1024, MAX_IMAGE = 5 * 1024 * 1024;
   const operationMeta = "io.github.meteosimaji.anywhere-computer/operation_id";
-  const state = {ready:false, busy:false, target:"local", rootTools:new Set(), tools:new Set(), current:null, dirty:false, history:[], limit:200, mutation:null, objectUrl:null, pendingNavigation:null, hostOrigin:null};
-  const ids = ["welcome","folder","text-panel","preview","settings"];
+  const state = {ready:false, busy:false, target:"local", rootTools:new Set(), tools:new Set(), current:null, dirty:false, history:[], limit:200, mutation:null, objectUrl:null, pendingNavigation:null, hostOrigin:null, setup:null, setupUncertain:false};
+  const ids = ["welcome","folder","text-panel","preview","settings","setup"];
   const id32 = () => crypto.randomUUID().replaceAll("-", "");
   const normalize = text => text.replace(/\r\n?/g, "\n");
   const byteLength = text => new TextEncoder().encode(text).length;
@@ -63,6 +74,13 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     $("back").disabled=blocked || !state.history.length;
     $("open").disabled=blocked || !state.tools.has("files_info");
     $("settings-tab").disabled=blocked || !state.tools.has("settings_get");
+    const setupAllowed=state.target==="local" && state.rootTools.has("connection_setup_status");
+    $("setup-tab").hidden=!setupAllowed;$("setup-tab").disabled=blocked || !setupAllowed;
+    $("setup-reload").disabled=blocked || !setupAllowed;
+    const setupEditable=setupAllowed && !state.setupUncertain && ["new","review"].includes(state.setup?.phase);
+    for(const id of ["setup-resource","setup-mode","setup-owner","setup-client","setup-port"]) $(id).disabled=blocked || !setupEditable;
+    $("setup-plan").disabled=blocked || !setupEditable || !state.rootTools.has("connection_setup_plan");
+    $("setup-confirm").disabled=blocked || !setupEditable || state.setup?.phase!=="review" || !state.setup?.plan_id || !state.rootTools.has("connection_setup_confirm");
     const writable = state.current?.kind==="text" && state.current.complete && !state.current.mixed;
     $("editor").readOnly=blocked || !writable || !!state.mutation || (!state.tools.has("files_write") || !state.tools.has("operations_get"));
     $("save").disabled=blocked || !writable || !state.dirty || !!state.mutation || (!state.tools.has("files_write") || !state.tools.has("operations_get"));
@@ -75,10 +93,16 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     try {await action();} catch(error) {message(error.message || "操作を完了できませんでした。",true);}
     finally {state.busy=false;controls();}
   }
-  function show(panel) {for(const id of ids) $(id).hidden=id!==panel;$("files-tab").setAttribute("aria-pressed",String(panel!=="settings"));$("settings-tab").setAttribute("aria-pressed",String(panel==="settings"));$("path-form").hidden=panel==="settings";
-    const heading=$("workspace-heading"),lead=document.createTextNode(panel==="settings"?"設定。":"ワークスペース。"),line=document.createElement("br"),sub=document.createElement("span");
-    sub.textContent=panel==="settings"?"使い方に合わせて。":"いつもの作業を、";
-    if(panel!=="settings"){const ending=document.createElement("span");ending.className="keep";ending.textContent="ここから。";sub.append(ending);}
+  function show(panel) {
+    for(const id of ids) $(id).hidden=id!==panel;
+    const settings=panel==="settings",setup=panel==="setup";
+    $("files-tab").setAttribute("aria-pressed",String(!settings&&!setup));
+    $("settings-tab").setAttribute("aria-pressed",String(settings));$("setup-tab").setAttribute("aria-pressed",String(setup));
+    $("path-form").hidden=settings||setup;
+    const heading=$("workspace-heading"),lead=document.createTextNode(setup?"接続。":settings?"設定。":"ワークスペース。"),line=document.createElement("br"),sub=document.createElement("span");
+    sub.textContent=setup?"どこからでも、":settings?"使い方に合わせて。":"いつもの作業を、";
+    if(setup){const ending=document.createElement("span");ending.className="keep";ending.textContent="この一台へ。";sub.append(ending);}
+    if(!settings&&!setup){const ending=document.createElement("span");ending.className="keep";ending.textContent="ここから。";sub.append(ending);}
     heading.replaceChildren(lead,line,sub);
   }
   function changed() {state.dirty=!!state.current && $("editor").value!==normalize(state.current.text || "");controls();}
@@ -250,6 +274,68 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     $("default-shell").value=values.default_shell || "";$("read-limit").value=values.file_read_line_limit;$("write-limit").value=values.file_write_line_limit;
     message("現在の共有設定を読み込みました。");
   }
+  function validSetupProgress(data) {
+    if(!data || !["new","review","saving","configured","conflict","invalid"].includes(data.phase)) return false;
+    if(data.plan_id!==null && (typeof data.plan_id!=="string" || !/^[a-f0-9]{64}$/.test(data.plan_id))) return false;
+    const config=data.configuration;
+    if(["review","saving","configured","conflict"].includes(data.phase)) {
+      if(!config || typeof config!=="object" || !["resource","owner","client","device"].every(key=>typeof config[key]==="string") ||
+         !Number.isInteger(config.port) || config.port<1 || config.port>65535 ||
+         !Array.isArray(config.scopes) || !config.scopes.length || !config.scopes.every(item=>typeof item==="string") ||
+         !Array.isArray(config.redirects) || !config.redirects.length || !config.redirects.every(item=>typeof item==="string")) return false;
+      if(["review","saving"].includes(data.phase) && !data.plan_id) return false;
+    }
+    return true;
+  }
+  function renderSetup(progress) {
+    state.setup=progress;
+    const labels={new:"接続先と許可する操作を選んでください。",review:"内容を確認してから保存してください。",saving:"保存中です。少し待ってから状態を確認してください。",configured:"接続設定を保存済みです。認証・起動・接続確認は、まだこの画面では行っていません。",conflict:"別の設定が保存されています。保存済みの内容を表示しています。",invalid:"保存済みの設定を読み取れません。設定ファイルの確認が必要です。"};
+    $("setup-status").textContent=progress.error ? labels[progress.phase]+" 保存結果を確認し、必要に応じてもう一度操作してください。" : labels[progress.phase];
+    $("setup-status").dataset.error=String(["conflict","invalid"].includes(progress.phase)||!!progress.error);
+    $("setup-review").hidden=!progress.configuration;
+    $("setup-confirm").hidden=progress.phase!=="review";
+    $("setup-review-title").textContent=progress.phase==="review"?"この内容で保存します。":"保存済みの接続設定。";
+    $("setup-summary").replaceChildren();$("setup-technical").replaceChildren();$("setup-scopes").replaceChildren();
+    const config=progress.configuration;
+    if(config) {
+      $("setup-mode").value=config.scopes.includes("terminal_start")?"all":config.scopes.includes("files_write")?"files":"read-only";
+      $("setup-resource").value=config.resource;$("setup-owner").value=config.owner;$("setup-client").value=config.client;$("setup-port").value=config.port;
+      for(const [label,value] of [["接続先",config.resource],["所有者",config.owner],["接続アプリ",config.client],["待受ポート",String(config.port)],["端末ID",config.device],["認証後の戻り先",config.redirects.join("\n")]]) {
+        const term=document.createElement("dt"),description=document.createElement("dd");term.textContent=label;description.textContent=value;$(label==="接続先"?"setup-summary":"setup-technical").append(term,description);
+      }
+      for(const scope of config.scopes){const entry=document.createElement("li");entry.textContent=scope;$("setup-scopes").append(entry);}
+    }
+    controls();
+  }
+  async function setupCall(name,args={}) {
+    if(!state.ready || state.target!=="local" || !state.rootTools.has(name)) throw new Error("接続設定は、このコンピューターのローカル接続から開いてください。");
+    const changes=name!=="connection_setup_status";
+    if(changes && state.setupUncertain) throw new Error("先に状態を確認してください。保存は再送していません。");
+    const operationId=id32();
+    if(changes) state.setupUncertain=true;
+    try {
+      const response=await rpc("tools/call",{name,arguments:args,_meta:{[operationMeta]:operationId}});
+      const reply=response?.structuredContent;
+      if(reply?.operation_id!==operationId || reply.state!=="completed" || !validSetupProgress(reply.data)) throw new Error("接続設定の結果を確認できません。状態を確認してください。");
+      state.setupUncertain=false;renderSetup(reply.data);return reply.data;
+    } catch(error) {
+      $("setup-status").textContent="応答を確認できません。状態を確認してから続けてください。";$("setup-status").dataset.error="true";
+      controls();throw error;
+    }
+  }
+  async function setupView() {
+    if(state.target!=="local" || !state.rootTools.has("connection_setup_status")) throw new Error("ローカル接続から開いてください。");
+    clearFile();show("setup");await setupCall("connection_setup_status");message("このコンピューターの接続設定です。");
+  }
+  async function planSetup() {
+    const raw=$("setup-port").value,port=Number(raw);
+    if(!raw || !Number.isInteger(port) || port<1 || port>65535) throw new Error("待受ポートは1〜65535の整数で入力してください。");
+    await setupCall("connection_setup_plan",{resource:$("setup-resource").value.trim(),mode:$("setup-mode").value,owner:$("setup-owner").value,client:$("setup-client").value,port});
+  }
+  async function confirmSetup() {
+    if(state.setup?.phase!=="review" || !state.setup.plan_id) throw new Error("保存する内容を確認してください。");
+    await setupCall("connection_setup_confirm",{plan_id:state.setup.plan_id});
+  }
   async function applySetting(key,element,numeric=false) {
     const raw=$(element).value,value=numeric?Number(raw):(raw || null);
     if(numeric && (!raw || !Number.isSafeInteger(value))) throw new Error("整数を入力してください。");
@@ -284,7 +370,8 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     $("path").value=reply.data.workspace.path || "";
     await job(async()=>{
       if(routing) await listDevices();
-      if(reply.data.workspace.view==="settings") await settingsView();
+      if(reply.data.workspace.view==="connection") await setupView();
+      else if(reply.data.workspace.view==="settings") await settingsView();
       else if($("path").value) await openPath($("path").value);
       else {show("welcome");message("接続しました。絶対パスを指定してください。");}
     });
@@ -319,6 +406,10 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
   $("discard-go").onclick=()=>{const action=state.pendingNavigation;state.pendingNavigation=null;state.dirty=false;$("discard").close();action?.();};
   $("devices").onclick=()=>job(listDevices);
   $("device").onchange=()=>{const target=$("device").value;$("device").value=state.target;navigate(()=>job(()=>selectDevice(target)));};
+  $("setup-tab").onclick=()=>navigate(()=>job(setupView));
+  $("setup-reload").onclick=()=>job(()=>setupCall("connection_setup_status"));
+  $("setup-plan").onclick=()=>job(planSetup);$("setup-confirm").onclick=()=>job(confirmSetup);
+  for(const id of ["setup-resource","setup-mode","setup-owner","setup-client","setup-port"]) $(id).oninput=()=>{if(state.setup?.phase==="review"){state.setup={phase:"new",plan_id:null,configuration:null};$("setup-review").hidden=true;}controls();};
   $("settings-tab").onclick=()=>navigate(()=>job(settingsView));
   $("files-tab").onclick=()=>navigate(()=>{clearFile();show("welcome");message("絶対パスを指定してください。");controls();});
   $("set-shell").onclick=()=>job(()=>applySetting("default_shell","default-shell"));

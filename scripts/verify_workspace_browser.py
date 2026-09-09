@@ -15,6 +15,7 @@ from pydantic import JsonValue
 from anywhere_computer.engine import Engine
 from anywhere_computer.mcp_server import MCPSession
 from anywhere_computer.models import Reply, Request
+from anywhere_computer.setup_connector import SetupConnector
 from anywhere_computer.workspace_ui import UI_EXTENSION, UI_MIME, workspace_resource
 
 FIXTURE_TOOLS = frozenset(
@@ -95,7 +96,8 @@ async def main() -> None:
                 raise ValueError("Path is outside this disposable fixture")
             return await engine.execute(request)
 
-        session = MCPSession(catalog, execute)
+        setup = SetupConnector(root / "connector", catalog, execute)
+        session = MCPSession(setup.catalog, setup.execute)
         await session.handle(
             {
                 "jsonrpc": "2.0",
@@ -184,6 +186,7 @@ async def main() -> None:
             async with server:
                 await server.serve_forever()
         finally:
+            setup.close()
             await engine.close()
 
 

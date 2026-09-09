@@ -12,6 +12,7 @@ UI_ACTIONS = frozenset({
     "files_read", "files_write", "files_info", "files_read_binary", "documents_read",
     "directories_list", "settings_get", "settings_update", "operations_get",
     "devices_list", "devices_tools", "devices_call",
+    "connection_setup_status", "connection_setup_plan", "connection_setup_confirm",
 })
 
 

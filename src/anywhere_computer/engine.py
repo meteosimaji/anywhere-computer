@@ -128,7 +128,8 @@ class Engine:
 
         self.register(
             "workspace_open", "Use this when the user wants an interactive file browser, "
-            "preview, text editor or settings view. Provide an absolute path when known. "
+            "preview, text editor, settings or local connection setup view. "
+            "Provide an absolute path when known. "
             "The view calls separately authorized tools; opening it does not read or write files.",
             OpenWorkspace, workspace_open, read_only=True,
         )

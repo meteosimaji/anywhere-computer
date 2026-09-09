@@ -15,7 +15,7 @@ class Empty(Contract):
 
 class OpenWorkspace(Contract):
     path: str = Field(default="", max_length=4096)
-    view: Literal["files", "settings"] = "files"
+    view: Literal["files", "settings", "connection"] = "files"
 
 
 class RuntimeSettings(Contract):

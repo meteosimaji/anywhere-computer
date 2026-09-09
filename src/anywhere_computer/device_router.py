@@ -97,7 +97,7 @@ class DeviceRouter:
             if name in names:
                 raise ValueError("Remote tool catalog contains duplicate names")
             names.add(name)
-            if not name.startswith(("devices_", "__")):
+            if not name.startswith(("devices_", "connection_setup_", "__")):
                 visible.append(tool)
         return visible
 
@@ -150,7 +150,9 @@ class DeviceRouter:
             args = (DeviceCall.model_validate(request.arguments) if request.tool == "devices_call"
                     else DeviceTarget.model_validate(request.arguments))
             target = args.device_id
-            if isinstance(args, DeviceCall) and args.tool.startswith(("devices_", "__")):
+            if isinstance(args, DeviceCall) and args.tool.startswith(
+                ("devices_", "connection_setup_", "__")
+            ):
                 raise ValueError("Nested device routing is not allowed")
             # Read the saved endpoint for each call; removal or re-registration cannot reuse an ID.
             device = self.store.get(args.device_id) if args.device_id != "local" else None
