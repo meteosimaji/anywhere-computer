@@ -73,6 +73,27 @@ async def exercise(directory: Path) -> dict[str, bool]:
             "terminal_reconnected": True, "busy_stop_refused": True}
 
 
+def runtime_worker() -> None:
+    from anywhere_computer.files import Files
+    from anywhere_computer.models import ReadFile, WriteFile
+    from anywhere_computer.regex_worker import regex_line_numbers
+    from anywhere_computer.state import prepare_directory
+
+    with tempfile.TemporaryDirectory(prefix="portable-core-") as raw:
+        directory = Path(raw)
+        prepare_directory(directory / "state")
+        files = Files(directory / "state")
+        path = directory / "日本語.txt"
+        files.write(WriteFile(path=str(path), text="runtime-only"))
+        assert files.read(ReadFile(path=str(path)))["text"] == "runtime-only"
+        assert asyncio.run(regex_line_numbers(
+            "first\nneedle", "needle", ignore_case=False,
+            whole_word=False, limit=1, timeout=5,
+        )) == [2]
+    print(json.dumps({"files_roundtrip": True, "regex_child": True,
+                      "native_agent_tested": False}))
+
+
 def worker() -> None:
     from anywhere_computer.credentials import SERVICE, local_credential, secure_backend
 
@@ -110,9 +131,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("app", nargs="?", type=Path)
     parser.add_argument("--worker", action="store_true")
+    parser.add_argument("--runtime-only", action="store_true",
+                        help="Check files and child interpreter without accessing an OS vault")
     args = parser.parse_args()
     if args.worker:
-        worker()
+        if args.runtime_only:
+            runtime_worker()
+        else:
+            worker()
         return
     if args.app is None:
         parser.error("app directory is required")
@@ -124,7 +150,8 @@ def main() -> None:
     env["PATH"] = (str(Path(os.environ["SystemRoot"]) / "System32")
                    if os.name == "nt" else "/usr/bin:/bin")
     with tempfile.TemporaryDirectory(prefix="unrelated-cwd-") as cwd:
-        run = subprocess.run([str(interpreter), "-I", str(Path(__file__).resolve()), "--worker"],
+        run = subprocess.run([str(interpreter), "-I", str(Path(__file__).resolve()), "--worker",
+                              *(["--runtime-only"] if args.runtime_only else [])],
                              cwd=cwd, env=env, check=True, text=True, capture_output=True,
                              timeout=60)
     result = json.loads(run.stdout)

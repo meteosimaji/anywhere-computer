@@ -66,3 +66,11 @@ OS 別規則で決めた場所の `chatgpt` サブディレクトリで、配布
 macOS で空白・日本語パスへ再展開し、この入口から `--help` を実行できることと、
 新しい配布物のエージェント起動・ファイル操作・端末再接続・後片付けを検証した。
 Finder のダブルクリック動作・Gatekeeper/公証・Windows の実起動は未確認。
+
+Quality CI では三 OS のそれぞれで同梱 ZIP を生成し、日本語・空白パスへ展開した後に
+`verify_portable.py --runtime-only` を実行する。このモードはファイル操作と分離した
+子 Python の実行を検査し、`native_agent_tested: false` を明示する。CI の資格情報ストア
+可用性に依存せず配布構造を検査するためのモードであり、通常モードの実エージェント・
+Keychain/Windows Vault/Secret Service 検証を代替しない。成功した ZIP は private repo の
+Actions artifact として 14 日保持する。ジョブ定義の追加だけでは Windows/Linux の成功
+実績としない。実際のジョブ結果は別途確認する。
