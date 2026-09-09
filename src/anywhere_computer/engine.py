@@ -12,6 +12,7 @@ from typing import TypeVar, cast
 from pydantic import JsonValue
 
 from . import __version__
+from .document_writer import write_document
 from .documents import read_document
 from .downloads import Downloads
 from .files import Files, absolute_path, inspect_file
@@ -49,6 +50,7 @@ from .models import (
     UpdateSetting,
     UploadChunk,
     WriteBinary,
+    WriteDocument,
     WriteFile,
 )
 from .processes import list_processes, stop_process
@@ -187,6 +189,9 @@ class Engine:
         async def document(args: ReadDocument) -> Result:
             return await asyncio.to_thread(read_document, args)
 
+        async def document_write(args: WriteDocument) -> Result:
+            return await asyncio.to_thread(write_document, self.files, args)
+
         async def read(args: ReadFile) -> Result:
             args = args.model_copy(
                 update={"limit": min(args.limit, self.settings().file_read_line_limit)}
@@ -320,6 +325,13 @@ class Engine:
             ReadDocument,
             document,
             read_only=True,
+        )
+        self.register(
+            "documents_write",
+            "Generate a simple Word text document or single-sheet string workbook. "
+            "Replace regenerates the entire document, requires its current hash, "
+            "and retains backup.",
+            WriteDocument, document_write, destructive=True,
         )
         self.register(
             "computer_status",

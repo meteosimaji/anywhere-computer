@@ -61,8 +61,24 @@ def test_xlsx_shared_inline_formula_and_sheet_selection(tmp_path):
     assert [entry["value"] for entry in result["entries"]] == ["shared", "inline", "3"]
     assert result["entries"][2]["formula"] == "1+2"
     assert result["formulas_evaluated"] is False
+    original = path.read_bytes()
+    selected = read_document(ReadDocument(path=str(path), section="Data", cell_range="$B$1:C1"))
+    assert [entry["cell"] for entry in selected["entries"]] == ["B1", "C1"]
+    assert selected["total_entries"] == 2
+    page = read_document(ReadDocument(path=str(path), cell_range="B1:C1", offset=1, limit=1))
+    assert page["entries"][0]["formula"] == "1+2"
+    assert read_document(ReadDocument(path=str(path), cell_range="A2:C2"))["entries"] == []
+    assert path.read_bytes() == original
     with pytest.raises(ValueError, match="not found"):
         read_document(ReadDocument(path=str(path), section="Missing"))
+
+
+@pytest.mark.parametrize("value", ["A0", "B2:A1", "A1:B2:C3", "Sheet!A1", "XFE1"])
+def test_invalid_cell_ranges(value):
+    from anywhere_computer.documents import cell_bounds
+
+    with pytest.raises(ValueError):
+        cell_bounds(value)
 
 
 def test_pptx_follows_presentation_order_not_filenames(tmp_path):

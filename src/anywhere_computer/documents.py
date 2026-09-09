@@ -3,6 +3,7 @@
 import io
 import json
 import posixpath
+import re
 import zipfile
 from urllib.parse import unquote
 from xml.etree import ElementTree as ET
@@ -19,6 +20,29 @@ SHEET = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 PRESENT = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 DRAW = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 XML_LIMIT = 4 * 1024 * 1024
+
+
+def cell_position(reference: str) -> tuple[int, int]:
+    match = re.fullmatch(r"\$?([A-Za-z]{1,3})\$?([1-9][0-9]{0,6})", reference)
+    if match is None:
+        raise ValueError("Invalid A1 cell reference")
+    column = 0
+    for letter in match[1].upper():
+        column = column * 26 + ord(letter) - ord("A") + 1
+    row = int(match[2])
+    if column > 16384 or row > 1048576:
+        raise ValueError("Cell reference exceeds supported worksheet bounds")
+    return row, column
+
+
+def cell_bounds(value: str) -> tuple[int, int, int, int]:
+    parts = value.split(":")
+    if len(parts) not in (1, 2):
+        raise ValueError("Use one cell or a rectangular A1 range")
+    first, last = cell_position(parts[0]), cell_position(parts[-1])
+    if first[0] > last[0] or first[1] > last[1]:
+        raise ValueError("Cell range endpoints are reversed")
+    return first[0], first[1], last[0], last[1]
 
 
 class OfficePackage:
@@ -98,6 +122,9 @@ def read_document(args: ReadDocument) -> dict[str, JsonValue]:
     try:
         part = package.main_part()
         root = package.xml(part)
+        bounds = cell_bounds(args.cell_range) if args.cell_range is not None else None
+        if bounds is not None and root.tag != SHEET + "workbook":
+            raise ValueError("Cell ranges apply only to spreadsheets")
         entries: list[JsonValue] = []
         sections: list[JsonValue] = []
         kind: str
@@ -139,6 +166,11 @@ def read_document(args: ReadDocument) -> dict[str, JsonValue]:
             if data is not None:
                 for row in data:
                     for cell in row.findall(SHEET + "c"):
+                        if bounds is not None:
+                            cell_row, cell_column = cell_position(cell.get("r", ""))
+                            if not (bounds[0] <= cell_row <= bounds[2]
+                                    and bounds[1] <= cell_column <= bounds[3]):
+                                continue
                         value = cell.findtext(SHEET + "v")
                         cell_type = cell.get("t", "n")
                         if cell_type == "s":

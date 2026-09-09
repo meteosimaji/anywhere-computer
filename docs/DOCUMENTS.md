@@ -1,5 +1,14 @@
 # Document inspection
 
+`documents_write` creates a simple DOCX from `text`, or a single-sheet XLSX from
+`rows` (arrays of strings) and optional `sheet_name`. Specify `format: docx/xlsx`
+and a matching file extension. `mode: create` refuses existing destinations;
+`mode: replace` regenerates the entire document and requires `expected_sha256`.
+Replacement retains a backup usable by `files_restore`. This is not formatting-preserving
+editing. Markdown interpretation, formulas, numeric cell types, images and multiple-sheet
+creation are not yet implemented. Generated packages are tested with the internal reader;
+Microsoft Office rendering remains unverified.
+
 `documents_read` reads the main-body text of Word OOXML documents, stored Excel
 worksheet cells and formulas, and PowerPoint slide paragraphs. It uses Python
 ZIP and XML support without Office format libraries. It is a content inspector,
@@ -38,3 +47,11 @@ Format references:
 - https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-shared-string-table
 - https://learn.microsoft.com/ja-jp/dotnet/api/documentformat.openxml.spreadsheet.cell
 - https://learn.microsoft.com/en-us/office/open-xml/word/how-to-open-and-add-text-to-a-word-processing-document
+# Excel の範囲指定
+
+`documents_read` の `cell_range` に `B2:D10` や `$B$2:$D$10` を指定すると、選択した
+シートの矩形範囲内に保存されているセルだけを返す。単一セルも指定可能。
+範囲で絞り込んでから offset/limit を適用する。空セルを二次元配列に補完する機能ではない。
+シート名は section で指定し、範囲に `Sheet!` を混ぜない。
+逆向き範囲、不正なセル番地、Word/PowerPoint への cell_range は拒否する。
+数式は保存文字列を返し、再計算・書換えは行わない。
