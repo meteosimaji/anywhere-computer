@@ -33,7 +33,7 @@ async def setup_scopes(mode: str) -> frozenset[str]:
                     mode == "all" or (mode == "read-only" and tool.read_only)
                     or (mode == "files" and name.startswith((
                         "files_", "directories_", "documents_", "upload_", "download_",
-                        "search_", "operations_", "computer_status",
+                        "search_", "operations_", "computer_status", "workspace_open",
                     )))
                 )
             )

@@ -109,6 +109,8 @@ def test_setup_scopes_are_current_explicit_tool_names():
     assert "terminal_start" in all_tools and "files_write" in all_tools
     assert "operations_recent" not in all_tools
     assert "terminal_start" not in files and "files_write" not in read
+    assert "workspace_open" in files & read & all_tools
+    assert "settings_update" not in files
     with pytest.raises(ValueError):
         asyncio.run(remote_setup.setup_scopes("wildcard"))
 

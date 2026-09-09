@@ -14,3 +14,6 @@ coverage/
 runtime/
 local-state/
 research-sources/
+
+.playwright-cli/
+output/playwright/
