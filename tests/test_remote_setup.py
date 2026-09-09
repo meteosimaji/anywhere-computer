@@ -172,3 +172,42 @@ def test_setup_resume_preserves_issued_and_revoked_grants(tmp_path, wizard):
         assert store.verify(renewed.value, resource=config.resource) is not None
     finally:
         store.close()
+
+
+async def test_screen_setup_plan_commits_exact_reviewed_fields(tmp_path, monkeypatch):
+    from anywhere_computer.http_service import HTTPServiceConfig, save_http_config
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Planning must not request terminal input or credentials")
+
+    monkeypatch.setattr("builtins.input", forbidden)
+    monkeypatch.setattr(remote_setup.getpass, "getpass", forbidden)
+    monkeypatch.setattr(owner_credentials, "secure_backend", forbidden)
+    target = tmp_path / "new-setup"
+    plan = await remote_setup.plan_remote_setup(
+        resource="https://computer.example/mcp", mode="files",
+    )
+    assert not target.exists()
+    assert "workspace_open" in plan.scopes and "terminal_start" not in plan.scopes
+    # A setup screen can serialize its public draft; frozen concrete permissions
+    # remain unchanged when the user later confirms it.
+    restored = HTTPServiceConfig.model_validate_json(plan.model_dump_json())
+    monkeypatch.setattr(remote_setup, "setup_scopes", forbidden)
+    saved = await save_http_config(target, restored)
+    assert saved == plan == load_http_config(target)
+    before = (target / "http-server/config.json").read_bytes()
+    with pytest.raises(ValueError, match="already configured"):
+        await save_http_config(target, restored)
+    assert (target / "http-server/config.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("fields", [
+    {"resource": "http://computer.example/mcp"},
+    {"resource": "https://computer.example/mcp?secret=value"},
+    {"resource": "https://computer.example/mcp", "port": 0},
+    {"resource": "https://computer.example/mcp", "redirects": frozenset()},
+    {"resource": "https://computer.example/mcp", "mode": "wildcard"},
+])
+async def test_screen_setup_rejects_invalid_drafts(fields):
+    with pytest.raises(ValueError):
+        await remote_setup.plan_remote_setup(**fields)

@@ -92,6 +92,11 @@ async def configure_http(
         scopes=scopes,
         redirects=redirects,
     )
+    return await save_http_config(directory, config)
+
+
+async def save_http_config(directory: Path, config: HTTPServiceConfig) -> HTTPServiceConfig:
+    """Commit an already validated setup plan without changing its reviewed fields."""
     prepare_directory(directory)
     with ProcessLock(directory / "http-server.lock"):
         destination = directory / "http-server"

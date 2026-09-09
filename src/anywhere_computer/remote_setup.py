@@ -3,6 +3,7 @@
 import asyncio
 import getpass
 import json
+import secrets
 import subprocess
 import tempfile
 from pathlib import Path
@@ -14,7 +15,7 @@ from .client_tokens import ClientCredentialError
 from .cloudflare_tunnel import TunnelCredential, cloudflared_executable
 from .credentials import has_interactive_input
 from .engine import Engine
-from .http_service import configure_http, load_http_config
+from .http_service import HTTPServiceConfig, load_http_config, save_http_config
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
 from .state import prepare_directory
@@ -41,6 +42,24 @@ async def setup_scopes(mode: str) -> frozenset[str]:
             await engine.close()
 
 
+async def plan_remote_setup(
+    *, resource: str, owner: str = "owner", client: str = "anywhere-native",
+    port: int = 8768, mode: str = "read-only", redirects: frozenset[str] | None = None,
+) -> HTTPServiceConfig:
+    """Create an immutable, validated plan without credentials or persistent setup.
+
+    Native setup screens and the CLI share this entry point. Commit the returned
+    plan with save_http_config; do not recompute permissions after displaying it.
+    """
+    return HTTPServiceConfig(
+        resource=resource, owner=owner, client=client, port=port,
+        device=secrets.token_hex(16), scopes=await setup_scopes(mode),
+        redirects=redirects if redirects is not None else frozenset({
+            "http://127.0.0.1/oauth/callback", "http://[::1]/oauth/callback",
+        }),
+    )
+
+
 def setup_remote(directory: Path) -> dict[str, JsonValue]:
     """Save each completed step once; reruns preserve existing authorization."""
     if not has_interactive_input():
@@ -60,17 +79,14 @@ def setup_remote(directory: Path) -> dict[str, JsonValue]:
             port = int(input("Loopback port [8768]: ").strip() or "8768")
             print("Access: read-only; files (file changes); all (includes running commands).")
             mode = input("Access [read-only]: ").strip().casefold() or "read-only"
-            scopes = asyncio.run(setup_scopes(mode))
             callbacks = input(
                 "OAuth callback URLs (space-separated; Enter for native loopback): "
             ).split()
-            config = asyncio.run(configure_http(
-                directory, resource=resource, owner=owner_name, client=client, port=port,
-                scopes=scopes,
-                redirects=frozenset(callbacks or [
-                    "http://127.0.0.1/oauth/callback", "http://[::1]/oauth/callback",
-                ]),
+            plan = asyncio.run(plan_remote_setup(
+                resource=resource, owner=owner_name, client=client, port=port, mode=mode,
+                redirects=frozenset(callbacks) if callbacks else None,
             ))
+            config = asyncio.run(save_http_config(directory, plan))
         print(json.dumps({"resource": config.resource, "owner": config.owner,
                           "client": config.client, "port": config.port,
                           "allowed_tools": sorted(config.scopes)}, indent=2))
