@@ -74,3 +74,8 @@ Quality CI では三 OS のそれぞれで同梱 ZIP を生成し、日本語・
 Keychain/Windows Vault/Secret Service 検証を代替しない。成功した ZIP は private repo の
 Actions artifact として 14 日保持する。ジョブ定義の追加だけでは Windows/Linux の成功
 実績としない。実際のジョブ結果は別途確認する。
+
+ZIP の公開は出力ディレクトリと同じファイルシステム内の staging で全体を完成させてから、
+排他的な hard link 作成で行う。既存ファイルを置き換えず、作成失敗時に最終ファイル名で
+途中の ZIP を残さない。hard link 非対応のファイルシステムでは失敗を返すため、
+その場合は対応するローカルファイルシステム上でビルドする。

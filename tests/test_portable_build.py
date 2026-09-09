@@ -59,3 +59,31 @@ def test_setup_launcher_uses_shared_setup_and_preserves_arguments(tmp_path, monk
                          str(tmp_path / "user state/chatgpt"), "--help"]]
     suffix = "cmd" if windows else "command"
     assert (tmp_path / f"Setup ChatGPT.{suffix}").is_file()
+
+
+def test_archive_publication_preserves_existing_file_and_survives_staging_cleanup(tmp_path):
+    staged = tmp_path / "staged.zip"
+    published = tmp_path / "published.zip"
+    staged.write_bytes(b"complete archive")
+    portable_builder.publish_archive(staged, published)
+    staged.unlink()
+    assert published.read_bytes() == b"complete archive"
+    staged.write_bytes(b"replacement")
+    with pytest.raises(FileExistsError):
+        portable_builder.publish_archive(staged, published)
+    assert published.read_bytes() == b"complete archive"
+
+
+def test_failed_archive_publication_leaves_no_partial_output(tmp_path, monkeypatch):
+    staged = tmp_path / "staged.zip"
+    published = tmp_path / "published.zip"
+    staged.write_bytes(b"complete archive")
+
+    def fail_link(*args):
+        raise OSError("fixture filesystem failure")
+
+    monkeypatch.setattr(portable_builder.os, "link", fail_link)
+    with pytest.raises(OSError, match="filesystem failure"):
+        portable_builder.publish_archive(staged, published)
+    assert not published.exists()
+    assert staged.read_bytes() == b"complete archive"

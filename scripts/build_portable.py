@@ -56,6 +56,13 @@ def write_setup_launcher(app: Path, *, windows: bool) -> None:
         launcher.chmod(0o755)
 
 
+def publish_archive(staged: Path, output: Path) -> None:
+    # Staging is on the destination filesystem. Linking publishes the complete
+    # file atomically and refuses an existing destination, including a symlink.
+    # A copy into the final pathname would leave a partial release on interruption.
+    os.link(staged, output)
+
+
 def build_portable(root: Path, runtime: Path, output: Path) -> Path:
     validate_runtime(runtime)
     if output.exists():
@@ -127,9 +134,7 @@ def build_portable(root: Path, runtime: Path, output: Path) -> Path:
             for path in sorted(app.rglob("*")):
                 if path.is_file():
                     archive.write(path, path.relative_to(stage))
-        # Exclusive creation prevents a concurrent build from replacing an existing archive.
-        with output.open("xb") as destination, archive_path.open("rb") as source:
-            shutil.copyfileobj(source, destination)
+        publish_archive(archive_path, output)
     return output
 
 
