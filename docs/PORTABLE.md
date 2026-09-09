@@ -53,3 +53,16 @@ uv run --offline python scripts/verify_portable.py '/path/to/Anywhere Computer'
 公開試験の結果は `docs/research/2026-09-09-portable-internet-verification.json` に記録する。
 同一 Mac から公開エッジを経由した試験であり、別端末や ChatGPT UI からの接続ではない。
 通常の常用プロフィールを試験へ流用せず、専用マーカー付きの試験プロフィールだけを使う。
+
+同梱 ZIP には、設定開始用の `Setup ChatGPT.command`（macOS/Linux）または
+`Setup ChatGPT.cmd`（Windows）も含める。macOS/Windows は関連付けされた端末から
+開く入口として用意し、Linux は端末から `.command` を実行する。どちらも同じ
+`setup_chatgpt.py` を同梱 Python の `-I` で起動する。状態ディレクトリは本体と同じ
+OS 別規則で決めた場所の `chatgpt` サブディレクトリで、配布物を移動しても分離する。
+既存の ANYWHERE_STATE_DIR 指定は本体の規則に従う。明示引数で変更もできる。
+終了時は対話端末なら Return を待ち、設定結果がすぐ消えないようにする。
+これは対話設定の入口であり、公開ホスティングや ChatGPT の認証を自動完了するものではない。
+
+macOS で空白・日本語パスへ再展開し、この入口から `--help` を実行できることと、
+新しい配布物のエージェント起動・ファイル操作・端末再接続・後片付けを検証した。
+Finder のダブルクリック動作・Gatekeeper/公証・Windows の実起動は未確認。

@@ -38,3 +38,24 @@ def test_output_is_never_replaced(tmp_path):
     with pytest.raises(ValueError, match="already exists"):
         portable_builder.build_portable(tmp_path, runtime, archive)
     assert archive.read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("windows", [False, True])
+def test_setup_launcher_uses_shared_setup_and_preserves_arguments(tmp_path, monkeypatch, windows):
+    import io
+    import runpy
+    import sys
+
+    from anywhere_computer import cli, state
+
+    portable_builder.write_setup_launcher(tmp_path, windows=windows)
+    captured = []
+    monkeypatch.setattr(cli, "main", lambda: captured.append(list(sys.argv)))
+    monkeypatch.setattr(state, "state_directory", lambda: tmp_path / "user state")
+    monkeypatch.setattr(sys, "argv", ["setup_chatgpt.py", "--help"])
+    monkeypatch.setattr(sys, "stdin", io.StringIO())
+    runpy.run_path(str(tmp_path / "setup_chatgpt.py"), run_name="__main__")
+    assert captured == [["anywhere", "chatgpt-setup", "--state-dir",
+                         str(tmp_path / "user state/chatgpt"), "--help"]]
+    suffix = "cmd" if windows else "command"
+    assert (tmp_path / f"Setup ChatGPT.{suffix}").is_file()

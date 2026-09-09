@@ -24,6 +24,38 @@ def validate_runtime(source: Path) -> None:
             raise ValueError("Runtime contains a special file")
 
 
+def write_setup_launcher(app: Path, *, windows: bool) -> None:
+    (app / "setup_chatgpt.py").write_text(
+        "import sys\n"
+        "from anywhere_computer.cli import main\n"
+        "from anywhere_computer.state import state_directory\n"
+        "sys.argv = ['anywhere', 'chatgpt-setup', '--state-dir',\n"
+        "            str(state_directory() / 'chatgpt'), *sys.argv[1:]]\n"
+        "try:\n"
+        "    main()\n"
+        "finally:\n"
+        "    if sys.stdin.isatty() and '--help' not in sys.argv:\n"
+        "        try: input('\\nPress Return to close this window...')\n"
+        "        except (EOFError, KeyboardInterrupt): pass\n",
+        encoding="utf-8",
+    )
+    if windows:
+        (app / "Setup ChatGPT.cmd").write_text(
+            '@echo off\nsetlocal DisableDelayedExpansion\n'
+            '"%~dp0runtime\\python.exe" -I "%~dp0setup_chatgpt.py" %*\n',
+            encoding="utf-8",
+        )
+    else:
+        launcher = app / "Setup ChatGPT.command"
+        launcher.write_text(
+            '#!/bin/sh\n'
+            'base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1\n'
+            'exec "$base/runtime/bin/python3" -I "$base/setup_chatgpt.py" "$@"\n',
+            encoding="utf-8",
+        )
+        launcher.chmod(0o755)
+
+
 def build_portable(root: Path, runtime: Path, output: Path) -> Path:
     validate_runtime(runtime)
     if output.exists():
@@ -67,10 +99,12 @@ def build_portable(root: Path, runtime: Path, output: Path) -> Path:
                                 'base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1\n'
                                 'exec "$base/runtime/bin/python3" -I -m anywhere_computer "$@"\n')
             launcher.chmod(0o755)
+        write_setup_launcher(app, windows=os.name == "nt")
         shutil.copyfile(root / "LICENSE", app / "LICENSE")
         (app / "README.txt").write_text(
             "Anywhere Computer portable alpha\n"
             "Run ./anywhere --help (Windows: anywhere.cmd --help).\n"
+            "Double-click Setup ChatGPT.command on macOS, or Setup ChatGPT.cmd on Windows.\n"
             "Run chatgpt-setup with an explicit --state-dir to configure ChatGPT.\n"
             "Public HTTPS and ChatGPT authorization are still required.\n"
             "Python and dependencies retain their own licenses under runtime/.\n"
