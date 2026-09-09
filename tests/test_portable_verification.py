@@ -1,0 +1,31 @@
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+
+import pytest
+
+spec = importlib.util.spec_from_file_location(
+    "portable_verifier", Path(__file__).resolve().parents[1] / "scripts/verify_portable.py",
+)
+assert spec is not None and spec.loader is not None
+portable_verifier = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(portable_verifier)
+
+
+def test_manifest_rejects_changed_payload(tmp_path):
+    payload = tmp_path / "payload"
+    payload.write_bytes(b"original")
+    (tmp_path / "manifest.json").write_text(json.dumps({"files": {
+        "payload": hashlib.sha256(b"original").hexdigest(),
+    }}))
+    assert portable_verifier.verify_manifest(tmp_path) == 1
+    payload.write_bytes(b"modified")
+    with pytest.raises(ValueError, match="checksum"):
+        portable_verifier.verify_manifest(tmp_path)
+
+
+def test_manifest_rejects_path_escape(tmp_path):
+    (tmp_path / "manifest.json").write_text(json.dumps({"files": {"../outside": "a" * 64}}))
+    with pytest.raises(ValueError, match="member path"):
+        portable_verifier.verify_manifest(tmp_path)
