@@ -16,9 +16,29 @@ The initial setup screen runs on the user's computer before the remote MCP conne
 
 The CLI `remote-setup` uses the same plan/commit functions. `http-configure` retains its original API through `configure_http`, which constructs a configuration and calls the shared commit function.
 
+## Implemented screen state controller
+
+`SetupController(directory)` does not create a state directory or access credentials.
+`progress()` reads the current configuration and returns a typed `SetupProgress` with
+`new`, `review`, `saving`, `configured`, `conflict`, or `invalid` phase. Here
+`configured` means the HTTP configuration stage is saved, not that authentication,
+startup, public reachability, or the entire setup has completed.
+
+`review(plan)` validates and holds an immutable plan, returning its content fingerprint.
+That fingerprint identifies the displayed plan; it is not a credential or endpoint
+authentication mechanism. `confirm(plan_id)` rejects stale plans and serializes confirms.
+A new plan cannot replace one while its save is awaiting completion.
+
+If saving raises an error, the controller reconciles the actual disk contents before
+returning. An exact matching saved plan is reported as configured; another saved plan
+is a conflict; unreadable/corrupt configuration is invalid. If the finished save did
+not publish a configuration, the screen can return to review with a retry message.
+A fresh controller after restart reads saved configuration without replaying a save.
+No generic network endpoint exposes these trusted-host methods.
+
 ## Still required for the setup application
 
-1. A local UI/controller with explicit draft, committing, saved and error states; reconcile uncertain writes by reading the actual saved configuration.
+1. Connect the implemented local controller to the initial setup UI and a trusted native host transport.
 2. Separate owner/tunnel credential steps using the native vault, with no secret fields in configuration DTOs, logs or persisted drafts.
 3. Browser authorization start, waiting, completion and cancellation states around native login.
 4. Device registration and connection checks with displayed receipts.
@@ -28,3 +48,5 @@ The CLI `remote-setup` uses the same plan/commit functions. `http-configure` ret
 The shared functions alone do not establish a public route, start a service, register OS startup, request administrator rights, or prove a successful first-run experience. The product goal retains all of those applicable acceptance gates.
 
 Validation on 2026-09-09: related setup/HTTP/authorization tests 29 passed; full suite 496 passed, 5 skipped. Ruff, strict mypy and Windows-target mypy passed. Plugin validation passed. The installed version-specific runtime matched source and successfully planned/committed/read back a files-only configuration in a disposable directory without native credentials. No production setup or OS registration was performed.
+
+Controller validation on 2026-09-09: added lost-result/double-confirm, stale-plan/conflict, pending-save/retry, and corrupt-state tests. Full suite: 500 passed, 5 skipped. Ruff and strict mypy (including Windows target) passed for 54 runtime modules. The reinstalled version-specific runtime matched source and passed an isolated controller confirmation/reconciliation smoke test. These checks do not replace the pending graphical first-run acceptance test.
