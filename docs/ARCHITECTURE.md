@@ -47,16 +47,21 @@ An embedded browser password/consent route is implemented with native-keyring
 owner verification. An optional cloudflared child adapter can use an owner-provisioned
 constant tunnel with native-keyring/OS-pipe credential handoff and bounded restarts;
 it does not provision or certify the public route. Production routing, complete browser onboarding, device pairing, graphical UI, screen and
-browser operations, service installation and standalone installers remain planned.
+browser operations and standalone installers remain planned. Explicit per-user service
+registration adapters exist for all three OSes; actual login/reboot remote recovery
+is not yet certified.
 The normal local agent therefore still advertises remote readiness as unavailable.
 Its local endpoint is not a public MCP HTTP endpoint. Office support currently
-reads bounded Word, Excel and PowerPoint content; editing/rendering remain planned.
+reads bounded Word, Excel and PowerPoint content, supports Excel A1 ranges, and
+generates plain-text DOCX and typed multi-sheet XLSX. Formatting-preserving edits,
+PDF support and rendering remain planned.
 
 Terminals use pipes, not a PTY. Sessions survive connector disconnections but not
 agent crashes. Operation records remain available after a restart.
 
-Text reads/writes are limited to 16 MiB. Search is literal and bounded. File moves
-support regular files on the same filesystem. Hashes/locks protect cooperating
+Text reads/writes are limited to 16 MiB. Search supports bounded literal/isolated-process regex matching and limited OOXML
+content. File moves use exclusive native rename for files, directories and symlinks
+on the same filesystem. Hashes/locks protect cooperating
 writers; a last-moment external edit can still race replacement. Backups preserve
 prior content, and hash-checked restore is implemented. Retention controls remain planned. Operation results
 may include private content and are stored locally; diagnostic history excludes

@@ -1,15 +1,16 @@
 # Desktop Commander 機能充足監査
 
-監査日: 2026-09-09。対象: Anywhere Computer `0365c5eca75d98a09802428dcc1bd9b9cf6297ef` と現在の作業ツリー。
+監査日: 2026-09-09。実装照合点: Anywhere Computer `a65083afee69759cc08931a4b9432379c54d0060`。
 
-**結論: 全機能は満たしていない。34 ツールという数は互換性の証拠にならない。**
+**結論: 全機能は満たしていない。40 ツールという数は互換性の証拠にならない。**
 標準ツールの入力・処理・出力を照合した。terminal から外部ソフトや自作スクリプトを呼べること、
-ホストの別プラグインが提供する機能は実装済みに数えない。製品コードは変更していない。
-未コミットの公開経路監視は開発途中なので充足判定から除外する。
+ホストの別プラグインが提供する機能は実装済みに数えない。本表は追加済み実装を各行に統合したもの。検証済み実装と未確認の実環境条件を区別する。
 
 ## 比較対象と判定規則
 
-- 現行 [Remote 公式 README](https://github.com/desktop-commander/remote-desktop-commander#available-tools) の 30 機能カテゴリを確認。
+比較元は初回調査のスナップショットであり、この更新で外部資料を再取得したものではない。
+
+- 2026-09-09 に確認した [Remote 公式 README](https://github.com/desktop-commander/remote-desktop-commander#available-tools) の 30 機能カテゴリを確認。
 - ローカル [公式 manifest](https://raw.githubusercontent.com/wonderwhy-er/DesktopCommanderMCP/main/manifest.template.json) に 26 ツールが存在。package.json は 0.2.48。
 - Remote [server.json](https://raw.githubusercontent.com/desktop-commander/remote-desktop-commander/main/server.json) は 1.0.22。GitHub release の版と同一とは扱わない。
 - 詳細比較の固定点は [既存台帳](2026-09-08-findings.md): ローカル commit `56deabc3fe3c586f91728c56da5715712ff34eb6`。
@@ -23,28 +24,28 @@
 |---|---|---|---|
 |DC01|read_file|部分|files_read は UTF-8・負 offset・hash。documents_read は OOXML の限定抽出。URL 取得、画像 MIME/MCP image 出力、PDF 抽出なし。バイナリ転送は画像表示の代替ではない。|
 |DC02|read_multiple_files|部分|files_read_many は最大20個のテキストと個別エラー。形式別の複数読み取りはない。|
-|DC03|write_file|部分|テキスト作成・置換・追記とバイナリ保存あり。Excel/DOCX の構造を扱う書込みなし。既存更新は hash 必須。|
+|DC03|write_file|部分|テキスト・バイナリ保存に加え、DOCX本文、複数シートXLSX（文字列/数値/真偽値/明示数式）の生成・全体置換。hash/backupあり。既存Officeの書式保持編集・数式再計算なし。|
 |DC04|write_pdf|未対応|Markdown から PDF 作成、ページ挿入・削除、別名出力の専用処理なし。|
 |DC05|create_directory|対応|directories_create: parents=True / exist_ok=True。|
 |DC06|list_directory|対応|directories_list: 再帰・隠し項目・上限・truncated。深さ最大8、最大2000項目、directory symlink は辿らない。|
-|DC07|move_file|部分|files_move は同一ファイルシステムの通常ファイルを排他的 hard-link/unlink。フォルダ・symlink・別ファイルシステム移動なし。|
-|DC08|get_file_info|部分|path/size/modified/directory/symlink。権限、他の時刻、形式固有情報が不足。|
+|DC07|move_file|部分|同一ファイルシステムのファイル・フォルダ・symlinkをOSの排他的renameで移動。別ファイルシステムへの移動なし。|
+|DC08|get_file_info|部分|ファイル種別、mode bits、各時刻、リンク自身と参照先の情報。非対応の作成時刻はnull。形式固有メタデータなし。|
 |DC09|edit_block|部分|files_edit は exact match 件数と hash 検査。Office 編集、不一致候補提示なし。|
-|DC10|start_search|部分|名前/UTF-8内容、literal、glob、大小文字、隠し項目、単語境界、件数/深さ/ファイル上限。regex・文脈行・時間上限・Office 内容検索なし。|
+|DC10|start_search|部分|名前/UTF-8/限定OOXML内容、literal/隔離子プロセスregex、glob、大小文字、単語境界、文脈行、時間・容量上限。文書検索はセル/段落の位置とhash付き。PDF検索なし。同期OS呼出しの強制中断は保証しない。|
 |DC11|get_more_search_results|対応|search_results の cursor/limit と状態・上限理由。|
 |DC12|stop_search|対応|search_stop と協調的 worker 中断。|
 |DC13|list_searches|対応|search_list の ID/状態一覧。agent instance 内の検索のみ。|
 |DC14|start_process|部分|terminal_start: shell/cwd・非同期開始・長時間実行。timeout/対話可能判定/verbose timing なし。|
-|DC15|interact_with_process|部分|terminal_input は入力送信のみ、出力取得は別ツール。wait_for_prompt と応答待機なし。|
-|DC16|read_process_output|部分|terminal_output は正の byte cursor・欠落 byte 数・終了コード。負 offset による末尾取得、待機 timeout/timing なし。|
+|DC15|interact_with_process|部分|terminal_inputで入力、terminal_outputのwait_msで出力待機。別ツール契約で、wait_for_promptなし。|
+|DC16|read_process_output|部分|絶対byte cursor、負cursorによる末尾取得、欠落量、終了コード、最大30秒のwait_ms。verbose timing/プロンプト認識なし。|
 |DC17|force_terminate|対応|terminal_stop: 管理中セッションと process group/tree の終了処理。任意 PID 用ではない。|
 |DC18|list_sessions|対応|terminal_list: 管理中セッション ID/PID/状態/終了コード/cursor。|
-|DC19|list_processes|未対応|OS 全体のプロセス一覧・資源情報のツールなし。psutil の依存だけでは実装にならない。|
-|DC20|kill_process|未対応|任意のシステム PID を指定する専用ツールなし。|
-|DC21|get_config|部分|接続用 CLI 設定・診断はあるが、実行エンジン設定取得の MCP ツールなし。|
-|DC22|set_config_value|部分|接続設定 CLI はあるが、実行エンジンの型付き設定更新なし。|
-|DC23|get_usage_stats|未対応|稼働時間・active count はあるが、成功/失敗等の利用集計なし。|
-|DC24|get_recent_tool_calls|部分|operations_recent は要約のみ。引数を表示しない設計。toolName/since 絞込み・結果プレビューなし。operations_get は既知 ID の結果照会。|
+|DC19|list_processes|対応|processes_list: OSプロセスのPID、起動時刻、名前、状態、資源情報。引数・環境変数は非表示。|
+|DC20|kill_process|対応|processes_stop: PIDと起動時刻を照合し終了。自身と祖先を保護。OS権限による拒否は返却。|
+|DC21|get_config|部分|settings_get: 永続する既定shellと読書き行数上限。allowedDirectories/blockedCommandsなし。|
+|DC22|set_config_value|部分|settings_update: 型付き永続設定。既定shellは全クライアント共有の実行関連権限。許可ディレクトリ/禁止コマンド設定なし。|
+|DC23|get_usage_stats|対応|usage_stats: 永続台帳のtool/state別件数集計。操作ID単位で集計。|
+|DC24|get_recent_tool_calls|部分|operations_recent: ツール名完全一致と開始時刻下限で絞込み。引数・結果プレビューは返さない。operations_getは既知ID照会。|
 |DC25|get_prompts|部分|skill/README の導入説明はあるが、ID 指定のプロンプトライブラリなし。|
 |DC26|feedback|未対応|独自フィードバックフォームを開く専用ツールなし。第三者フォームへの送信は代替要件ではない。|
 |DC27|list_devices|部分|CLI の永続 SSH/HTTP 登録・一覧・名前・選択あり。MCP 会話からの端末一覧/各呼出しの deviceId routing、アカウント共有 dashboard なし。|
@@ -52,7 +53,7 @@
 |DC29|ping device|部分|computer_status と CLI device-status の認証済み照会あり。MCP protocol ping は接続先端末の稼働保証ではない。deviceId 指定 pong/時刻ツールなし。|
 |DC30|shutdown agent|部分|CLI stop はローカル agent 停止。端末 ID 指定で応答後に遠隔 agent を止める公開ツールなし。|
 
-集計: **対応7 / 部分17 / 未対応6**。これは30項目の分類数であり、完成率ではない。
+集計: **対応10 / 部分17 / 未対応3**。これは30項目の分類数であり、完成率ではない。
 「対応」でも API 名・入力・返却形式は独自で、drop-in replacement ではない。
 
 ## EX01–EX17: ツール名以外の全項目
@@ -61,20 +62,20 @@
 |---|---|---|---|
 |EX01|テキスト|部分|CRLF、末尾、hash、限定置換、backup/restore。編集不一致の候補提示なし。|
 |EX02|画像/URL|部分|byte/base64 転送はある。画像 handler/MIME/render、URL fetch はない。|
-|EX03|Excel|部分|シート・セル・保存値/数式文字列の抽出。A1 範囲・行単位契約、作成/追記/セル編集なし。|
-|EX04|DOCX|部分|本文段落と表内段落の文字抽出。表構造・見出し outline・画像参照・header/footer・XML 編集・Markdown 作成なし。|
+|EX03|Excel|部分|シート/保存値/数式/A1範囲の読取、型付き値と明示数式による複数シート生成。書式保持セル編集・追記・数式再計算なし。|
+|EX04|DOCX|部分|本文と表内段落の文字抽出、プレーンテキストからDOCX生成。表構造・outline・画像・header/footer・書式保持編集・Markdown生成なし。|
 |EX05|PDF|未対応|形式としての読取/作成/ページ操作なし。|
-|EX06|検索|部分|DC10 に記載。Office を単純 UTF-8 検索しても文書検索対応にはならない。|
+|EX06|検索|部分|DC10に記載。DOCX/XLSX/PPTXの限定内容検索を実装。PDF非対応、長いフィールドは切詰めを明示。文書モードの文脈行は拒否。|
 |EX07|端末|部分|実プロセスの入出力試験あり。PIPE 方式、PTY なし。各 REPL/SSH/DB CLI の個別互換、プロンプト待機は未検証/未対応。agent 再起動を越えたセッション復元なし。|
 |EX08|プレビュー UI|未対応|MCP は tools-only。Markdown/画像/HTML/Office の UI resource なし。|
 |EX09|編集 UI|未対応|編集・undo・選択文脈・部分読取マージの UI なし。ファイル backup は UI undo と別。|
 |EX10|フォルダ UI|未対応|ツリー・遅延ロード・追加読込・OS file manager で開く UI なし。|
 |EX11|設定 UI|未対応|接続承認画面は設定編集 UI の代替ではない。|
-|EX12|実行設定|未対応|blockedCommands/allowedDirectories/defaultShell 等の永続設定 API なし。呼出し単位 shell 指定や HTTP tool scope とは別。|
-|EX13|履歴|部分|永続 operation 状態/要約あり。引数ログは抑制する設計。高度な検索/保持期間/ローテーションは未完。|
+|EX12|実行設定|部分|既定shell・読書き行数上限の永続設定APIあり。blockedCommands/allowedDirectoriesなし。HTTP tool scopeはOS sandboxではない。|
+|EX13|履歴|部分|永続operation状態/要約、tool/since絞込み。引数ログは抑制。保持期間/ローテーションは未完。|
 |EX14|導入運用|部分|共通 Python/CLI、Codex package、3 OS 自動起動 adapter。無害な CI worker の登録/停止証拠あり。実ログイン/再起動後の公開接続、更新/rollback、sleep 復帰、初心者向け導入の完成検証なし。|
 |EX15|Remote 接続|部分|HTTPS/SSH、OAuth PKCE、native vault、refresh/revoke、CLI 端末選択。照合コード pairing/dashboard/会話中 routing、二台の実機実証は未達。|
-|EX16|Remote 安定性|部分|重複抑制/unknown、子プロセス監督、公開 edge 経由の connector crash 復帰証拠あり。公開経路のみの断線・sleep/ネットワーク変更からの回復、heartbeat 完成検証なし。開発中 remote_health は除外。|
+|EX16|Remote 安定性|部分|重複抑制/unknown、子プロセス監督、公開edge経由のconnector crash復帰証拠。任意の公開メタデータ監視を実装（既定無効・認証稼働の証明ではない）。ネットワーク変更/sleepの実証は未完。|
 |EX17|サポート|部分|README/skill/診断文書あり。独自プロンプト集、feedback/usage 入口、日本語/英語全導線整備は未完。人的優先サポートは運営要件。|
 
 画面操作/Accessibility/ブラウザ DOM/OCR/音声等は追加目標であり、今回確認できた Desktop Commander MCP の30公開ツールには含まれない。
@@ -82,46 +83,20 @@
 
 ## 実装・検証の根拠
 
-- 登録/schema/dispatch: `src/anywhere_computer/engine.py`, `models.py`, `mcp_server.py`。34名を registry から公開し重複登録を拒否。MCP image/resources/prompts の提供なし。
+- 登録/schema/dispatch: `src/anywhere_computer/engine.py`, `models.py`, `mcp_server.py`。40名を registry から公開し重複登録を拒否。MCP image/resources/prompts の提供なし。
 - 形式/ファイル/検索/端末: `files.py`, `documents.py`, `search.py`, `sessions.py`。対応する `tests/test_engine.py`, `test_documents.py`, `test_search.py` と照合。
 - 端末選択/履歴: `devices.py`, `cli.py`, `state.py`, `remote_bridge.py` と対応テスト。CLI機能とMCP公開ツールを区別。
-- 今回実行: engine/documents/search/devices/mcp_protocol/remote_transport/remote_lifecycle/binary_files/downloads/uploads の **80 passed (6.80s)**。registry schema と duplicate guard のテストを含む。
-- 今回の mypy: 45 source files 成功。未コミット remote_health を含む Ruff は UP047 が1件残る。監査のため既存の開発途中コードを変更していない。
-- 全体 pytest: **407 passed / 5 skipped / 1 failed (38.89s)**。失敗は `test_packaged_runtime_matches_current_source_and_checksums` で、開発途中の `remote_health.py` が既存同梱 wheel にないため。未完成機能を同梱し直して検査を通すことはしていない。Windows 対象 mypy も45ファイル成功、`git diff --check` 成功。現作業ツリーはリリース可能とは判定しない。
+- 上記コミットの実装検証: **470 passed / 5 skipped**。Ruff、mypy通常/Windows対象（50 source files）、plugin構造検証、同梱wheel全50 Pythonファイルとソース/checksum一致が成功。これはOS全条件・全機能の完成証明ではない。
+- セキュリティ修正の追加再確認: 関連pytest **54 passed / 3 skipped**。内部Python起動の隔離と旧自動起動登録の移行を確認。[監査と修正](2026-09-09-code-execution-audit.md)。
+- 実装対応: Office生成は `document_writer.py`、プロセス管理は `processes.py`、実行設定は `state.py` / `engine.py`、排他的移動は `move_native.py`、公開監視は `remote_health.py`。各機能の専用テストも存在。
 - 公開接続の既存証拠: [constant internet receipt](2026-09-09-constant-internet-verification.json)。同一macOSから公開edge経由の隔離エンジン。17 MiB/更新/失効/接続子クラッシュから6.5958545秒で復帰。二台の物理端末、本番常駐、実ブラウザ描画を証明しない。
 - OS 起動の既存証拠: [native startup receipt](2026-09-09-native-startup-verification.json)。三OSのCIで無害なworkerの実登録/起動/解除。実ユーザーのログイン後のremote接続とは別。
 
 ## 未達を解消する順序
 
-1. 互換台帳に沿って URL/画像/PDF・Office の入出力、フォルダ移動、metadata、検索、端末、プロセス管理、設定/履歴の穴を埋める。形式別の fixture と失敗時保全を受け入れ条件にする。
+1. URL/画像/PDF、Office書式保持編集、端末のPTY/プロンプト待機、独自ヘルプと設定の残不足を埋める。実装済みのフォルダ移動・プロセス管理・統計・検索拡張を未実装扱いに戻さない。形式別の fixture と失敗時保全を受け入れ条件にする。
 2. 会話からの端末管理/選択・identity・agent停止、pairing と dashboard、プレビュー/編集/設定 UI を作る。
-3. 公開経路の生存確認、ネットワーク断/sleep/再起動/ログイン/更新の障害試験を行い、macOS/Windows/Linux と二台の実機で証拠を残す。
+3. 実装済み公開メタデータ監視の限界を踏まえ、認証付き経路とネットワーク断/sleep/再起動/ログイン/更新の障害試験を行い、macOS/Windows/Linux と二台の実機で証拠を残す。
 4. 完成した候補で Codex/ChatGPT 実利用と配布を検証し、公式申請を行う。現在は private alpha であり、全機能代替として公開しない。
 
 依存最小化の方針は維持する。ただし、未実装の形式処理や OS 差分が依存なしで既に解決したとは扱わない。
-
-## 監査後の更新
-
-- DC01/EX03: Excel A1矩形範囲の読取を追加。DC03/EX03/EX04: DOCXテキストと
-  単一シート文字列XLSXの新規生成/全体置換を追加。hash照合・backup/restoreを試験。
-  数値/真偽値/明示数式/複数シート生成を追加し、別実装readerでも確認。
-  数式再計算/Markdown、書式保持編集、Office表示確認は残る。
-- DC07: 同一ファイルシステムのフォルダ/リンク移動を排他的renameで追加。
-  別ファイルシステムへの移動は未対応。DC19/20: OSプロセス一覧と起動時刻照合による終了を追加。
-  DC23: 台帳のtool/state別件数集計を追加。DC21/22: 既定shell・読書き行数上限の永続設定を追加。
-  許可ディレクトリ/禁止コマンド等は未対応。これらの追加後に全項目の再判定が必要。
-- DC24: operations_recent にツール名完全一致と開始時刻下限の絞込みを追加。
-  引数/結果プレビューは返さない方針を維持し、部分判定を維持。
-- DC16: terminal_output に末尾基準の負 byte cursor を追加。返却は絶対 next_cursor で
-  継続可能。保持範囲外の欠落量も試験。wait_ms による出力待機も追加。
-  verbose timing やプロンプト認識は未対応で部分判定を維持。
-- DC10/EX06: 本文検索に前後各最大10行の文脈を追加。各行2000文字、ページ容量による
-  分割と cursor 継続を試験。協調的な検索時間上限と取得済み結果の保持も追加。
-  独立プロセスでの正規表現を追加し、停止時の回収、時間上限、起動故障、総結果容量を試験。
-  同期OS呼出しの強制終了、Office 内容検索は未対応で、部分判定を維持。
-- DC08: `files_info` にファイル種別、mode bits、アクセス/状態変更/作成時刻、リンク自身と
-  参照先の区別を追加。作成時刻非対応は null とする。形式固有情報はまだないため判定は部分のまま。
-  契約は [FILE-INFO](../FILE-INFO.md)、試験は `tests/test_file_info.py`。
-- EX16: 任意の公開メタデータ監視を追加。既定無効、宛先照合、世代を越えた結果の破棄と
-  保存失敗後の継続を試験。実ネットワーク障害試験の完了を意味しない。
-  契約は [PUBLIC-HEALTH](../PUBLIC-HEALTH.md)。
