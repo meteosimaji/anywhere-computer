@@ -14,14 +14,31 @@ from typing import Any
 
 
 def verify_manifest(app: Path) -> int:
+    if (app / "manifest.json").is_symlink():
+        raise ValueError("Invalid portable manifest path")
     manifest = json.loads((app / "manifest.json").read_text())
-    for name, digest in manifest["files"].items():
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    if not isinstance(files, dict) or not files:
+        raise ValueError("Invalid portable file manifest")
+    for name, digest in files.items():
+        if (not isinstance(name, str) or Path(name).is_absolute()
+                or name != Path(name).as_posix() or ".." in Path(name).parts
+                or name == "manifest.json"):
+            raise ValueError("Invalid portable member path")
         path = app / name
         if not path.resolve().is_relative_to(app.resolve()) or path.is_symlink():
             raise ValueError("Invalid portable member path")
         if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
             raise ValueError("Portable checksum mismatch")
-    return len(manifest["files"])
+    observed = set()
+    for path in app.rglob("*"):
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise ValueError("Invalid portable member type")
+        if path.is_file():
+            observed.add(path.relative_to(app).as_posix())
+    if observed != set(files) | {"manifest.json"}:
+        raise ValueError("Unexpected portable files; verify a freshly extracted build")
+    return len(files)
 
 
 async def exercise(directory: Path) -> dict[str, bool]:

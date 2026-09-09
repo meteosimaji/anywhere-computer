@@ -87,3 +87,10 @@ def test_failed_archive_publication_leaves_no_partial_output(tmp_path, monkeypat
         portable_builder.publish_archive(staged, published)
     assert not published.exists()
     assert staged.read_bytes() == b"complete archive"
+
+
+def test_runtime_rejects_directory_link_cycle(tmp_path):
+    (tmp_path / "BUILD").write_text("fixture")
+    (tmp_path / "cycle").symlink_to(tmp_path, target_is_directory=True)
+    with pytest.raises(ValueError, match="directory symlinks"):
+        portable_builder.validate_runtime(tmp_path)

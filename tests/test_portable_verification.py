@@ -29,3 +29,17 @@ def test_manifest_rejects_path_escape(tmp_path):
     (tmp_path / "manifest.json").write_text(json.dumps({"files": {"../outside": "a" * 64}}))
     with pytest.raises(ValueError, match="member path"):
         portable_verifier.verify_manifest(tmp_path)
+
+
+@pytest.mark.parametrize("extra", ["sitecustomize.py", "package/injected.pth",
+                                   "package/__pycache__/cached.pyc"])
+def test_manifest_rejects_unlisted_code(tmp_path, extra):
+    (tmp_path / "payload").write_bytes(b"original")
+    (tmp_path / "manifest.json").write_text(json.dumps({"files": {
+        "payload": hashlib.sha256(b"original").hexdigest(),
+    }}))
+    additional = tmp_path / extra
+    additional.parent.mkdir(parents=True, exist_ok=True)
+    additional.write_bytes(b"unlisted")
+    with pytest.raises(ValueError, match="Unexpected portable files"):
+        portable_verifier.verify_manifest(tmp_path)

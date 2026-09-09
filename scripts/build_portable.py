@@ -18,8 +18,11 @@ def validate_runtime(source: Path) -> None:
     if (source / "pyvenv.cfg").exists() or not (source / "BUILD").is_file():
         raise ValueError("Use a trusted python-build-standalone base, not a virtualenv")
     for path in source.rglob("*"):
-        if path.is_symlink() and not path.resolve(strict=True).is_relative_to(source.resolve()):
-            raise ValueError("Runtime symlink escapes its directory")
+        if path.is_symlink():
+            if not path.resolve(strict=True).is_relative_to(source.resolve()):
+                raise ValueError("Runtime symlink escapes its directory")
+            if path.is_dir():
+                raise ValueError("Runtime directory symlinks are unsupported")
         if not path.is_file() and not path.is_dir():
             raise ValueError("Runtime contains a special file")
 
@@ -125,7 +128,7 @@ def build_portable(root: Path, runtime: Path, output: Path) -> Path:
                     "runtime_build": (runtime / "BUILD").read_text().strip(),
                     "bundled_inputs": checksums, "files": {}}
         manifest["files"] = {
-            str(path.relative_to(app)): hashlib.sha256(path.read_bytes()).hexdigest()
+            path.relative_to(app).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(app.rglob("*")) if path.is_file()
         }
         (app / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
