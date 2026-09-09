@@ -133,3 +133,27 @@ def test_xml_size_limit_is_checked_before_parsing(tmp_path, monkeypatch):
     monkeypatch.setattr(documents, "XML_LIMIT", 2048)
     with pytest.raises(ValueError, match="exceeds"):
         read_document(ReadDocument(path=str(path)))
+
+
+def test_word_table_cells_keep_order_and_nearest_nested_table(tmp_path):
+    def paragraph(text):
+        return f'<w:p><w:r><w:t>{text}</w:t></w:r></w:p>'
+    body = (paragraph("intro") + '<w:tbl><w:tr><w:tc>' + paragraph("outer")
+            + '<w:tbl><w:tr><w:tc>' + paragraph("inner") + '</w:tc></w:tr></w:tbl>'
+            + paragraph("outer again") + '</w:tc><w:tc>' + paragraph("second cell")
+            + '</w:tc></w:tr><w:tr><w:tc>' + paragraph("second row")
+            + '</w:tc></w:tr></w:tbl>' + paragraph("end"))
+    path = package(tmp_path / "tables.docx", "word/document.xml", {
+        "word/document.xml": f'<w:document xmlns:w="{WORD[1:-1]}"><w:body>{body}'
+                             '</w:body></w:document>',
+    })
+    entries = read_document(ReadDocument(path=str(path)))["entries"]
+    assert [item["text"] for item in entries] == [
+        "intro", "outer", "inner", "outer again", "second cell", "second row", "end",
+    ]
+    assert "table" not in entries[0] and "table" not in entries[-1]
+    assert [(item["table"], item["row_index"], item["cell_index"]) for item in entries[1:-1]] == [
+        (1, 1, 1), (2, 1, 1), (1, 1, 1), (1, 1, 2), (1, 2, 1),
+    ]
+    page = read_document(ReadDocument(path=str(path), offset=2, limit=1))
+    assert page["entries"] == [entries[2]]

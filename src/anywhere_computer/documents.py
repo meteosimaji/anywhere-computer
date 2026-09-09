@@ -115,6 +115,34 @@ def text_runs(element: ET.Element, namespace: str) -> str:
     return "".join(pieces)
 
 
+def word_paragraphs(body: ET.Element) -> list[JsonValue]:
+    """Keep document order and nearest table cell without recursively walking XML."""
+    entries: list[JsonValue] = []
+    pending: list[tuple[ET.Element, dict[str, JsonValue]]] = [(body, {})]
+    table_count = 0
+    while pending:
+        element, location = pending.pop()
+        if element.tag == WORD + "tbl":
+            table_count += 1
+            location = {"table": table_count}
+        if element.tag == WORD + "p":
+            entries.append({"paragraph": len(entries) + 1,
+                            "text": text_runs(element, WORD), **location})
+        children = []
+        row_index = cell_index = 0
+        for child in element:
+            child_location = location
+            if element.tag == WORD + "tbl" and child.tag == WORD + "tr":
+                row_index += 1
+                child_location = {**location, "row_index": row_index}
+            elif element.tag == WORD + "tr" and child.tag == WORD + "tc":
+                cell_index += 1
+                child_location = {**location, "cell_index": cell_index}
+            children.append((child, child_location))
+        pending.extend(reversed(children))
+    return entries
+
+
 def read_document(args: ReadDocument) -> dict[str, JsonValue]:
     path = absolute_path(args.path)
     content = read_bytes(path)
@@ -135,10 +163,7 @@ def read_document(args: ReadDocument) -> dict[str, JsonValue]:
             body = root.find(WORD + "body")
             if body is None:
                 raise ValueError("Word document has no body")
-            entries = [
-                {"paragraph": index + 1, "text": text_runs(paragraph, WORD)}
-                for index, paragraph in enumerate(body.iter(WORD + "p"))
-            ]
+            entries = word_paragraphs(body)
         elif root.tag == SHEET + "workbook":
             kind = "xlsx"
             relations = package.relationships(part)
