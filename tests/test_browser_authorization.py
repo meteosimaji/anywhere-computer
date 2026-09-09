@@ -188,3 +188,22 @@ async def test_busy_password_workers_do_not_queue_verifications(browser):
         browser.password_slots.release()
     assert (await decide(browser, fields, headers))[0] == 303
     assert browser.authorization_endpoint == "https://computer.example/authorize"
+
+
+def test_consent_csp_allows_only_callback_path_and_pinned_script():
+    import base64
+    import hashlib
+
+    from anywhere_computer.browser_authorization import _PASSWORD_VISIBILITY_SCRIPT
+
+    headers = BrowserAuthorization._headers('https://chatgpt.com/connector_platform_oauth_redirect')
+    policy = headers['Content-Security-Policy']
+    assert "form-action 'self' https://chatgpt.com/connector_platform_oauth_redirect;" in policy
+    digest = base64.b64encode(
+        hashlib.sha256(_PASSWORD_VISIBILITY_SCRIPT.encode()).digest()
+    ).decode()
+    assert f"script-src 'sha256-{digest}';" in policy
+    assert "script-src 'unsafe-inline'" not in policy
+    assert "form-action 'self';" in BrowserAuthorization._headers()['Content-Security-Policy']
+    with pytest.raises(ValueError):
+        BrowserAuthorization._headers('https://host;evil.example/callback')

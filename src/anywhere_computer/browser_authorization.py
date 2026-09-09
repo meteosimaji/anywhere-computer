@@ -6,6 +6,7 @@ memory-only and expire on restart. This module does not deploy a public service.
 """
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import html
@@ -16,11 +17,37 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from http.cookies import CookieError, SimpleCookie
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 from .authorization import AuthorizationStore
 from .http_mcp import HTTPResult, HTTPRoute
 from .owner_credentials import OwnerCredentials
+
+_PASSWORD_VISIBILITY_SCRIPT = """(() => {
+  const field = document.getElementById('password');
+  const toggle = document.getElementById('password-visibility');
+  function hide() {
+    field.type = 'password';
+    toggle.textContent = '表示';
+    toggle.setAttribute('aria-pressed', 'false');
+    toggle.setAttribute('aria-label', 'パスワードを表示');
+  }
+  toggle.addEventListener('click', () => {
+    if (field.type === 'text') { hide(); return; }
+    field.type = 'text';
+    toggle.textContent = '隠す';
+    toggle.setAttribute('aria-pressed', 'true');
+    toggle.setAttribute('aria-label', 'パスワードを隠す');
+  });
+  field.form.addEventListener('submit', hide);
+  window.addEventListener('pagehide', hide);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) hide();
+  });
+})();"""
+_PASSWORD_VISIBILITY_HASH = base64.b64encode(
+    hashlib.sha256(_PASSWORD_VISIBILITY_SCRIPT.encode()).digest()
+).decode('ascii')
 
 
 @dataclass(frozen=True)
@@ -94,7 +121,18 @@ class BrowserAuthorization:
         return self.origin + "/authorize"
 
     @staticmethod
-    def _headers() -> dict[str, str]:
+    def _headers(redirect: str | None = None) -> dict[str, str]:
+        form_targets = "'self'"
+        if redirect is not None:
+            # Called only with a registered, validated callback. CSP also checks
+            # the 303 destination in Chromium; allow that exact callback path.
+            target = urlsplit(redirect)
+            if re.fullmatch(r"[A-Za-z0-9.\[\]:-]+", target.netloc) is None:
+                raise ValueError("Callback authority cannot be represented in CSP")
+            callback = urlunsplit((
+                target.scheme, target.netloc, quote(target.path, safe="/%"), "", ""
+            ))
+            form_targets += " " + callback
         return {
             "Content-Type": "text/html; charset=utf-8",
             "Cache-Control": "no-store",
@@ -105,7 +143,8 @@ class BrowserAuthorization:
             "Referrer-Policy": "same-origin",
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
-            "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+            f"script-src 'sha256-{_PASSWORD_VISIBILITY_HASH}'; "
+            f"form-action {form_targets}; base-uri 'none'; frame-ancestors 'none'",
         }
 
     @staticmethod
@@ -133,6 +172,9 @@ class BrowserAuthorization:
             "border:1px solid #244a6f;border-radius:6px;background:#244a6f;"
             "color:white;font:inherit}"
             "button[name=deny]{background:white;color:#244a6f}.error{color:#a12622}"
+            ".password-row{display:flex;gap:8px;align-items:center}"
+            ".password-row input{min-width:0;flex:1}"
+            ".password-row button{margin:0;flex:none;background:white;color:#244a6f}"
             "small{color:#475669}@media(max-width:680px){main{margin:12px;padding:20px}}"
             "</style><main><small>Anywhere Computer</small><h1>この接続を許可しますか？</h1>"
             f"<dl><dt>クライアント ID</dt><dd>{escape(record.client)}</dd>"
@@ -146,12 +188,16 @@ class BrowserAuthorization:
             f"<input type=hidden name=request_id value='{escape(identity)}'>"
             f"<input type=hidden name=csrf value='{escape(csrf)}'>"
             "<label for=password>端末所有者のパスワード</label>"
+            "<div class=password-row>"
             "<input id=password type=password name=password autocomplete=current-password "
             "maxlength=1024>"
+            "<button type=button id=password-visibility aria-controls=password "
+            "aria-pressed=false aria-label='パスワードを表示'>表示</button></div>"
             "<button type=submit name=approve value=yes>確認して接続を許可</button>"
             "<button type=submit name=deny value=yes>拒否</button>"
             "</form><p><small>この要求は5分で期限切れになります。"
-            "パスワードは接続元のクライアントには渡しません。</small></p></main></html>"
+            "パスワードは接続元のクライアントには渡しません。</small></p></main>"
+            f"<script>{_PASSWORD_VISIBILITY_SCRIPT}</script></html>"
         ).encode()
 
     def _error(self, status: int, message: str) -> HTTPResult:
@@ -223,7 +269,7 @@ class BrowserAuthorization:
             generation,
         )
         self.pending[identity] = record
-        headers = self._headers()
+        headers = self._headers(record.redirect)
         headers["Set-Cookie"] = (
             f"{self._cookie_name(identity)}={browser}; Path=/; Max-Age=300; "
             "Secure; HttpOnly; SameSite=Strict"
@@ -255,11 +301,15 @@ class BrowserAuthorization:
         cookies = SimpleCookie()
         cookies.load(headers.get("cookie", ""))
         cookie = cookies.get(self._cookie_name(identity))
+        if record is None or record.expires <= time.monotonic():
+            return self._error(403, "この接続要求は期限切れです。接続元からやり直してください。")
+        if cookie is None:
+            return self._error(
+                403, "接続確認用の Cookie が届いていません。"
+                "同じブラウザーで接続元からやり直してください。"
+            )
         if (
-            record is None
-            or record.expires <= time.monotonic()
-            or cookie is None
-            or not hmac.compare_digest(record.browser_hash, _digest(cookie.value))
+            not hmac.compare_digest(record.browser_hash, _digest(cookie.value))
             or not hmac.compare_digest(record.csrf_hash, _digest(csrf))
         ):
             return self._error(
@@ -289,7 +339,7 @@ class BrowserAuthorization:
                 return (
                     403,
                     self._page(identity, record, csrf, error="パスワードを確認してください。"),
-                    self._headers(),
+                    self._headers(record.redirect),
                 )
         # Verification yields to other requests. Only one decision can consume this
         # exact request, and its deadline must still hold after password verification.
@@ -312,7 +362,7 @@ class BrowserAuthorization:
             )
         target = urlsplit(record.redirect)
         query = target.query + ("&" if target.query else "") + urlencode(result)
-        response_headers = self._headers()
+        response_headers = self._headers(record.redirect)
         response_headers["Location"] = urlunsplit(
             (target.scheme, target.netloc, target.path, query, "")
         )
