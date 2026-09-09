@@ -17,6 +17,9 @@ Codex の会話・スキル参照と、対応する既存 MCP ツールの直接
 Codex のモデルを起動しない仕組みと制限は [Codex context](docs/CODEX-CONTEXT.md) を参照してください。
 ChatGPT アプリへの接続・認証は別途必要であり、Codex へのインストールだけでは完了しません。
 
+macOS arm64 では、Python/uv の手動導入を不要にするランタイム同梱 ZIP を生成・
+移動起動検証しました。[同梱配布物の手順と対応状況](docs/PORTABLE.md) を参照してください。
+
 ## ChatGPT 用の接続設定
 
 実行環境を準備した後は、次のコマンドで ChatGPT 用の設定を開始できます。
