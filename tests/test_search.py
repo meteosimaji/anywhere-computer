@@ -280,3 +280,39 @@ async def test_document_regex_worker_failure_is_not_a_skipped_file(tmp_path, mon
     monkeypatch.setattr("anywhere_computer.search.regex_line_numbers", fail)
     page = await results(tmp_path, pattern="needle", kind="documents", mode="regex")
     assert page["state"] == "failed" and page["skipped"] == 0
+
+
+async def test_word_table_search_roundtrips_location_across_document_pages(tmp_path):
+    import hashlib
+    import zipfile
+
+    from anywhere_computer.documents import REL, WORD, read_document
+    from anywhere_computer.models import ReadDocument
+
+    def paragraph(text):
+        return f'<w:p><w:r><w:t>{text}</w:t></w:r></w:p>'
+
+    path = tmp_path / "表検索.docx"
+    relation = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    body = paragraph("plain") * 101
+    body += ('<w:tbl><w:tr><w:tc>' + paragraph("outer")
+             + '<w:tbl><w:tr><w:tc>' + paragraph("needle 日本語")
+             + '</w:tc></w:tr></w:tbl></w:tc></w:tr></w:tbl>')
+    with zipfile.ZipFile(path, "w") as package:
+        package.writestr("_rels/.rels", f'<Relationships xmlns="{REL}">'
+                         f'<Relationship Id="main" Type="{relation}/officeDocument" '
+                         'Target="word/document.xml"/></Relationships>')
+        package.writestr("word/document.xml", f'<w:document xmlns:w="{WORD[1:-1]}">'
+                         f'<w:body>{body}</w:body></w:document>')
+    before = path.read_bytes()
+    page = await results(tmp_path, pattern="needle", kind="documents")
+    assert page["state"] == "completed" and not page["truncated"]
+    assert len(page["results"]) == 1
+    match = page["results"][0]
+    location = match["document_location"]
+    assert location == {"paragraph": 103, "text": "needle 日本語", "table": 2,
+                        "row_index": 1, "cell_index": 1}
+    reread = read_document(ReadDocument(path=str(path), offset=location["paragraph"] - 1, limit=1))
+    assert reread["entries"] == [location]
+    assert reread["sha256"] == match["source_sha256"] == hashlib.sha256(before).hexdigest()
+    assert path.read_bytes() == before
