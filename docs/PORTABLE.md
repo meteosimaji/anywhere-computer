@@ -29,7 +29,9 @@ macOS は実行権限を保つ標準のアーカイブユーティリティま�
 2026-09-09: macOS arm64 / CPython 3.12.13 で実物を生成し、日本語と空白を含む
 別ディレクトリへ ZIP から展開。PATH を /usr/bin:/bin に限定し、PYTHONHOME と
 PYTHONPATH を無効な場所に向けても CLI 起動・依存 import・日本語ファイルの書込/読込・
-別 Python プロセスを使う正規表現検索が成功した。Windows/Linux の同梱配布物は未検証。
+別 Python プロセスを使う正規表現検索が成功した。Linux ARM64 同梱版も Ubuntu の隔離
+ゲストで生成・検証済み（詳細は `research/2026-09-09-linux-guest-verification.md`）。
+Windows の同梱配布物は実機未検証。
 
 配布物自体のエージェント試験は次で再実行できる。信頼済み ZIP を展開したディレクトリを
 指定する。実行時に OS 資格情報ストアへのアクセスが必要で、試験専用の一時資格情報を
@@ -93,3 +95,8 @@ manifest 自体は署名されておらず、信頼できる配布元から取�
 ビルド時に依存の取得を許可する。`--require-hashes` と固定依存一覧は維持する。
 指定しない場合は従来どおりオフラインで、必要情報がなければ失敗する。配布物の実行には
 uv もこのダウンロード設定も不要。三 OS の CI では新しい環境のためこのオプションを使う。
+
+Linux ARM64 でも通常モードの実エージェント試験が成功した。Ubuntu 24.04.4 の隔離
+ゲストで GNOME Secret Service を使い、認証付き起動・端末再接続・停止・試験用資格情報の
+削除を確認した。詳細は `research/2026-09-09-linux-native-vault-verification.md`。
+利用可能で解錠済みの OS 資格情報サービスが必要で、Windows や ChatGPT UI の実測ではない。
