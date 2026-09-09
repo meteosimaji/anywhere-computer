@@ -1,13 +1,27 @@
 # Document inspection
 
-`documents_write` creates a simple DOCX from `text`, or a single-sheet XLSX from
-`rows` (arrays of strings) and optional `sheet_name`. Specify `format: docx/xlsx`
+`documents_write` creates a simple DOCX from `text`, or an XLSX from
+`rows` (arrays of strings, finite numbers, booleans, nulls, or explicit formula objects)
+and optional `sheet_name`. For multiple sheets, use `sheets` instead of `rows`:
+`{"Data":[[1,2]],"Summary":[[{"formula":"SUM(Data!A1:B1)"}]]}`.
+Names must be unique ignoring case; at most 32 sheets, 100000 total cells and
+1000000 total text characters are accepted. Sheet insertion order is retained.
+A formula object is `{"formula":"=SUM(A1:A3)"}`.
+Strings beginning with `=` remain strings; null cells are omitted. Formula values are not
+calculated or cached by this engine. Spreadsheet applications control numeric precision.
+Specify `format: docx/xlsx`
 and a matching file extension. `mode: create` refuses existing destinations;
 `mode: replace` regenerates the entire document and requires `expected_sha256`.
 Replacement retains a backup usable by `files_restore`. This is not formatting-preserving
-editing. Markdown interpretation, formulas, numeric cell types, images and multiple-sheet
-creation are not yet implemented. Generated packages are tested with the internal reader;
+editing. Markdown interpretation, formula calculation and images are not yet implemented.
+Generated packages are tested with the internal reader;
 Microsoft Office rendering remains unverified.
+
+2026-09-09 independent-reader verification also passed using development-only
+python-docx and openpyxl: Japanese Word paragraphs, workbook sheet order, numeric/boolean
+cells, literal leading-equals strings and explicitly stored formulas. These libraries were
+not added to project runtime dependencies. This checks package interpretation, not Office
+rendering or formula recalculation.
 
 `documents_read` reads the main-body text of Word OOXML documents, stored Excel
 worksheet cells and formulas, and PowerPoint slide paragraphs. It uses Python

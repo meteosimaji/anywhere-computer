@@ -328,7 +328,7 @@ class Engine:
         )
         self.register(
             "documents_write",
-            "Generate a simple Word text document or single-sheet string workbook. "
+            "Generate a Word text document or workbook with typed cells and explicit formulas. "
             "Replace regenerates the entire document, requires its current hash, "
             "and retains backup.",
             WriteDocument, document_write, destructive=True,

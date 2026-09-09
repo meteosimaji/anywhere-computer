@@ -92,10 +92,18 @@ class ReadDocument(FilePath):
     limit: int = Field(default=100, ge=1, le=100)
 
 
+class FormulaCell(Contract):
+    formula: str = Field(min_length=1, max_length=8192)
+
+
+SpreadsheetValue = str | int | float | bool | FormulaCell | None
+
+
 class WriteDocument(FilePath):
     format: Literal["docx", "xlsx"]
     text: str | None = Field(default=None, max_length=1000000)
-    rows: list[list[str]] | None = Field(default=None, max_length=10000)
+    rows: list[list[SpreadsheetValue]] | None = Field(default=None, max_length=10000)
+    sheets: dict[str, list[list[SpreadsheetValue]]] | None = Field(default=None, max_length=32)
     sheet_name: str = Field(default="Sheet1", min_length=1, max_length=31)
     mode: Literal["create", "replace"] = "create"
     expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
