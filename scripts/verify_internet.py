@@ -314,7 +314,22 @@ async def cleanup_probe(
         await attempt("engine_closed", engine.close)
 
 
-async def verify(receipt_path, *, tunnel_directory=None):
+def require_runtime_root(expected):
+    root = expected.resolve(strict=True)
+    if not Path(sys.executable).resolve().is_relative_to(root):
+        raise ValueError("Probe interpreter is outside the expected runtime")
+    modules = [module for name, module in sys.modules.items()
+               if name == "anywhere_computer" or name.startswith("anywhere_computer.")]
+    if not modules:
+        raise ValueError("Probe did not import the application")
+    for module in modules:
+        location = getattr(module, "__file__", None)
+        if not location or not Path(location).resolve().is_relative_to(root):
+            raise ValueError("Probe application import is outside the expected runtime")
+    return len(modules)
+
+
+async def verify(receipt_path, *, tunnel_directory=None, expected_runtime_root=None):
     executable = shutil.which("cloudflared")
     if executable is None:
         raise RuntimeError("Install an optional cloudflared test binary before running this probe")
@@ -326,6 +341,9 @@ async def verify(receipt_path, *, tunnel_directory=None):
         "scope": f"Same {sys.platform} host via public HTTPS edge; disposable file/owner; "
         "HTTP consent form test",
     }
+    if expected_runtime_root is not None:
+        report["bundled_modules_verified"] = require_runtime_root(expected_runtime_root)
+        report["bundled_runtime_verified"] = True
     tunnel = None
     drain = None
     adapter = None
@@ -371,6 +389,7 @@ async def verify(receipt_path, *, tunnel_directory=None):
             if constant:
                 command = [
                     sys.executable,
+                    "-I",
                     "-m",
                     "anywhere_computer.cli",
                     "tunnel-run",
@@ -842,6 +861,8 @@ async def verify(receipt_path, *, tunnel_directory=None):
                 raise RuntimeError("Public request remained authorized after device revocation")
             report["revocation_verified"] = True
             report["no_store_headers_verified"] = True
+            if expected_runtime_root is not None:
+                report["bundled_modules_verified"] = require_runtime_root(expected_runtime_root)
             report["completed"] = True
         except Exception as error:
             report["failure_type"] = type(error).__name__
@@ -878,9 +899,12 @@ if __name__ == "__main__":
         type=Path,
         help="Use an existing dedicated constant tunnel; performs an owned child crash test",
     )
+    parser.add_argument("--expected-runtime-root", type=Path,
+                        help="Require interpreter and application imports under this runtime")
     arguments = parser.parse_args()
     try:
-        asyncio.run(verify(arguments.receipt, tunnel_directory=arguments.tunnel_state_dir))
+        asyncio.run(verify(arguments.receipt, tunnel_directory=arguments.tunnel_state_dir,
+                           expected_runtime_root=arguments.expected_runtime_root))
     except Exception as error:
         print(json.dumps({"completed": False, "failure_type": type(error).__name__}), flush=True)
         raise SystemExit(1) from None

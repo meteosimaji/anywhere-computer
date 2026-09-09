@@ -43,3 +43,13 @@ uv run --offline python scripts/verify_portable.py '/path/to/Anywhere Computer'
 ワーカー・端末セッションの接続終了後の入力/出力・処理中の停止拒否・処理後の正常終了を
 確認した。試験用 Keychain 資格情報の削除も再照会して確認した。この試験はローカル
 接続であり、インターネット越しの切断回復や ChatGPT 側の実利用を証明するものではない。
+
+同梱版の公開 HTTPS 試験には、既存の `scripts/verify_internet.py` を同梱 Python の
+`-I` で実行し、`--expected-runtime-root` に同梱 runtime ディレクトリを指定する。
+開始前と処理終了時にインタープリターおよび読み込まれた本体モジュールの配置を検査し、
+開発ツリーなどからの混入を拒否する。トンネル監督の子 Python も `-I` で起動する。
+公開試験には別途 cloudflared と試験専用トンネルが必要で、これらは ZIP に含まれない。
+
+公開試験の結果は `docs/research/2026-09-09-portable-internet-verification.json` に記録する。
+同一 Mac から公開エッジを経由した試験であり、別端末や ChatGPT UI からの接続ではない。
+通常の常用プロフィールを試験へ流用せず、専用マーカー付きの試験プロフィールだけを使う。

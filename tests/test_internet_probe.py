@@ -204,3 +204,22 @@ async def test_cleanup_continues_after_connector_failure_and_never_records_secre
     assert report["client_keyring_removed"] and report["owner_keyring_removed"]
     assert report["completed"] is False and not report["owned_connector_processes_stopped"]
     assert "synthetic-secret" not in json.dumps(report)
+
+
+def test_probe_runtime_binding_rejects_wrong_interpreter(tmp_path):
+    helper = runpy.run_path(str(Path(__file__).parents[1] / "scripts/verify_internet.py"))
+    with pytest.raises(ValueError, match="interpreter"):
+        helper["require_runtime_root"](tmp_path)
+
+
+def test_probe_runtime_binding_detects_application_overlay(tmp_path, monkeypatch):
+    helper = runpy.run_path(str(Path(__file__).parents[1] / "scripts/verify_internet.py"))
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python"))
+    modules = [module for name, module in sys.modules.items()
+               if name == "anywhere_computer" or name.startswith("anywhere_computer.")]
+    for index, module in enumerate(modules):
+        monkeypatch.setattr(module, "__file__", str(tmp_path / f"module{index}.py"))
+    assert helper["require_runtime_root"](tmp_path) == len(modules)
+    monkeypatch.setattr(modules[-1], "__file__", str(tmp_path.parent / "overlay.py"))
+    with pytest.raises(ValueError, match="application import"):
+        helper["require_runtime_root"](tmp_path)
