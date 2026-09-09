@@ -211,3 +211,35 @@ async def test_screen_setup_plan_commits_exact_reviewed_fields(tmp_path, monkeyp
 async def test_screen_setup_rejects_invalid_drafts(fields):
     with pytest.raises(ValueError):
         await remote_setup.plan_remote_setup(**fields)
+
+
+def test_chatgpt_setup_uses_fixed_public_client_and_resumes(tmp_path, wizard, capsys):
+    vault, answer = wizard
+    answer(["https://computer.example/mcp", "all"], [PASSWORD, PASSWORD, TOKEN])
+    first = remote_setup.setup_remote(tmp_path, client_kind="chatgpt")
+    config = load_http_config(tmp_path)
+    assert config.client == "anywhere-chatgpt"
+    assert config.redirects == frozenset({remote_setup.CHATGPT_REDIRECT})
+    assert "terminal_start" in config.scopes and "codex_plugin_call" in config.scopes
+    assert first["chatgpt_connection"]["connected"] is False
+    assert first["chatgpt_connection"]["client_secret_required"] is False
+    assert first["service_started"] is False
+    before, writes = dict(vault.data), vault.writes
+    answer()
+    assert remote_setup.setup_remote(tmp_path, client_kind="chatgpt") == first
+    assert load_http_config(tmp_path) == config
+    assert vault.data == before and vault.writes == writes
+    output = capsys.readouterr().out
+    assert PASSWORD not in output and TOKEN not in output
+
+
+def test_chatgpt_setup_preserves_existing_native_configuration(tmp_path, wizard):
+    vault, answer = wizard
+    answer(["https://computer.example/mcp", "", "", "", ""], [PASSWORD, PASSWORD, TOKEN])
+    remote_setup.setup_remote(tmp_path)
+    config, before, writes = load_http_config(tmp_path), dict(vault.data), vault.writes
+    answer()
+    with pytest.raises(ValueError, match="another client"):
+        remote_setup.setup_remote(tmp_path, client_kind="chatgpt")
+    assert load_http_config(tmp_path) == config
+    assert vault.data == before and vault.writes == writes

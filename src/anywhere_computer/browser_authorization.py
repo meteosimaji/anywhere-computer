@@ -70,6 +70,9 @@ class BrowserAuthorization:
             raise ValueError("Owner credentials belong to another resource")
         self.store, self.credentials, self.device = store, credentials, device
         parsed = urlsplit(store.resource)
+        # Issuer comparison is exact; unlike the browser Origin, preserve the
+        # resource authority's spelling and explicit port to match discovery.
+        self.issuer = urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
         host = parsed.hostname or ""
         if ":" in host:
             host = "[" + host + "]"
@@ -185,7 +188,9 @@ class BrowserAuthorization:
         if not state or len(state) > 1024 or any(ord(c) < 32 or ord(c) > 126 for c in state):
             raise ValueError("Invalid authorization state")
         redirect = params["redirect_uri"]
-        if {key for key, _ in parse_qsl(urlsplit(redirect).query)} & {"code", "state", "error"}:
+        if {key for key, _ in parse_qsl(urlsplit(redirect).query)} & {
+            "code", "state", "error", "iss",
+        }:
             raise ValueError("Callback has reserved response fields")
         tools = frozenset(params["scope"].split())
         generation = self.store.validate_consent(
@@ -288,7 +293,7 @@ class BrowserAuthorization:
         if record.expires <= time.monotonic() or self.pending.pop(identity, None) is not record:
             return self._error(403, "この接続要求は既に処理済みか期限切れです。")
         self.attempts.pop(identity, None)
-        result = {"state": record.state}
+        result = {"state": record.state, "iss": self.issuer}
         if "deny" in params:
             result["error"] = "access_denied"
         else:

@@ -198,7 +198,10 @@ async def http_service(
                     allowed_tools=config.scopes,
                 )
                 consent = BrowserAuthorization(store, owner, device=config.device)
-                oauth = OAuthEndpoints(store, authorization_endpoint=consent.authorization_endpoint)
+                oauth = OAuthEndpoints(
+                    store, authorization_endpoint=consent.authorization_endpoint,
+                    authorization_response_iss_supported=True,
+                )
                 adapter = HTTPMCP(
                     backend.authenticate,
                     backend.session,

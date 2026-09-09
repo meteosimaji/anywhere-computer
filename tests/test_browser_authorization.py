@@ -65,6 +65,7 @@ async def test_consent_issues_one_bound_code(browser, authority):
     success = next(item for item in results if item[0] == 303)
     callback = parse_qs(urlsplit(success[2]["Location"]).query)
     assert callback["state"] == ["client-state"]
+    assert callback["iss"] == ["https://computer.example"]
     token = redeem(authority, callback["code"][0])
     assert authority.verify(token.value, resource=RESOURCE).tools == frozenset({"files_read"})
 
@@ -132,8 +133,36 @@ async def test_deny_requires_browser_binding_but_no_password(browser):
     )
     assert status == 303
     callback = parse_qs(urlsplit(response_headers["Location"]).query)
-    assert callback == {"state": ["client-state"], "error": ["access_denied"]}
+    assert callback == {"state": ["client-state"], "error": ["access_denied"],
+                        "iss": ["https://computer.example"]}
     assert (await decide(browser, fields, headers))[0] == 403
+
+
+async def test_registered_redirect_cannot_inject_duplicate_issuer(browser, authority):
+    redirect = REDIRECT + "?iss=https%3A%2F%2Fevil.example"
+    authority.register_client("injected", frozenset({redirect}))
+    status, _, headers = await browser.authorize("GET", {}, b"", urlencode({
+        "response_type": "code", "client_id": "injected", "redirect_uri": redirect,
+        "resource": RESOURCE, "scope": "files_read", "state": "selected",
+        "code_challenge": pkce_s256(VERIFIER), "code_challenge_method": "S256",
+    }))
+    assert status == 400 and "Location" not in headers
+
+
+def test_issuer_preserves_discovery_authority_exactly(tmp_path):
+    from anywhere_computer.authorization import AuthorizationStore
+    from anywhere_computer.oauth_endpoints import OAuthEndpoints
+
+    resource = "https://Computer.Example:443/mcp"
+    store = AuthorizationStore(tmp_path / "auth", resource=resource, known_tools=frozenset())
+    try:
+        owner = OwnerCredentials(tmp_path, resource=resource, owner="owner", vault=MemoryVault())
+        consent = BrowserAuthorization(store, owner, device="device")
+        metadata = OAuthEndpoints(store, authorization_endpoint=consent.authorization_endpoint)
+        assert consent.origin == "https://computer.example"
+        assert consent.issuer == metadata.issuer == "https://Computer.Example:443"
+    finally:
+        store.close()
 
 
 async def test_failed_attempts_do_not_lock_another_browser(browser):

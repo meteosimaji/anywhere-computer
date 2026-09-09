@@ -7,6 +7,7 @@ import secrets
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import Literal
 
 from pydantic import JsonValue
 
@@ -19,6 +20,9 @@ from .http_service import HTTPServiceConfig, load_http_config, save_http_config
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
 from .state import prepare_directory
+
+CHATGPT_CLIENT = "anywhere-chatgpt"
+CHATGPT_REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect"
 
 
 async def setup_scopes(mode: str) -> frozenset[str]:
@@ -60,26 +64,42 @@ async def plan_remote_setup(
     )
 
 
-def setup_remote(directory: Path) -> dict[str, JsonValue]:
+def setup_remote(
+    directory: Path, *, client_kind: Literal["native", "chatgpt"] = "native",
+) -> dict[str, JsonValue]:
     """Save each completed step once; reruns preserve existing authorization."""
     if not has_interactive_input():
         raise ValueError("Remote setup requires an interactive terminal")
+    if client_kind not in {"native", "chatgpt"}:
+        raise ValueError("Unsupported setup client")
     prepare_directory(directory)
     with ProcessLock(directory / "remote-setup.lock"):
         print("Remote setup. Completed steps are preserved when you rerun this command.")
         destination = directory / "http-server"
         if destination.exists() or destination.is_symlink():
             config = load_http_config(directory)
+            if client_kind == "chatgpt" and (
+                config.client != CHATGPT_CLIENT
+                or config.redirects != frozenset({CHATGPT_REDIRECT})
+            ):
+                raise ValueError(
+                    "Existing configuration belongs to another client; it was preserved. "
+                    "Use a separate state directory for ChatGPT setup."
+                )
         else:
             resource = input("Public HTTPS address ending in /mcp: ").strip()
-            owner_name = input("Owner identifier [owner]: ").strip() or "owner"
-            client = (
-                input("OAuth client identifier [anywhere-native]: ").strip() or "anywhere-native"
-            )
-            port = int(input("Loopback port [8768]: ").strip() or "8768")
+            if client_kind == "chatgpt":
+                owner_name, client, port = "owner", CHATGPT_CLIENT, 8768
+            else:
+                owner_name = input("Owner identifier [owner]: ").strip() or "owner"
+                client = (
+                    input("OAuth client identifier [anywhere-native]: ").strip()
+                    or "anywhere-native"
+                )
+                port = int(input("Loopback port [8768]: ").strip() or "8768")
             print("Access: read-only; files (file changes); all (includes running commands).")
             mode = input("Access [read-only]: ").strip().casefold() or "read-only"
-            callbacks = input(
+            callbacks = [CHATGPT_REDIRECT] if client_kind == "chatgpt" else input(
                 "OAuth callback URLs (space-separated; Enter for native loopback): "
             ).split()
             plan = asyncio.run(plan_remote_setup(
@@ -111,7 +131,7 @@ def setup_remote(directory: Path) -> dict[str, JsonValue]:
             executable = True
         except (OSError, RuntimeError, subprocess.TimeoutExpired):
             executable = False
-        return {
+        result: dict[str, JsonValue] = {
             "configuration_saved": True,
             "owner_initialized": True,
             "tunnel_credential_saved": installed,
@@ -126,3 +146,14 @@ def setup_remote(directory: Path) -> dict[str, JsonValue]:
                 "Check the provider route, then run remote-watch with this state directory."
             ),
         }
+        if client_kind == "chatgpt":
+            result["chatgpt_connection"] = {
+                "mcp_url": config.resource, "authentication": "OAuth",
+                "client_id": CHATGPT_CLIENT, "token_endpoint_auth_method": "none",
+                "redirect_uri": CHATGPT_REDIRECT, "client_secret_required": False,
+                "connected": False,
+                "instructions": "After starting the service and verifying public HTTPS, "
+                "add this MCP in ChatGPT Developer mode using the predefined client ID. "
+                "Complete owner login and consent. Saved setup alone is not a connection.",
+            }
+        return result

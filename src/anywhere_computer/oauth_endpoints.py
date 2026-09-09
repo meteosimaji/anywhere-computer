@@ -14,7 +14,10 @@ from .http_mcp import HTTPResult, HTTPRoute
 
 
 class OAuthEndpoints:
-    def __init__(self, store: AuthorizationStore, *, authorization_endpoint: str) -> None:
+    def __init__(
+        self, store: AuthorizationStore, *, authorization_endpoint: str,
+        authorization_response_iss_supported: bool = False,
+    ) -> None:
         validate_authorization_url(authorization_endpoint)
         resource = urlsplit(store.resource)
         if resource.path != "/mcp":
@@ -22,6 +25,9 @@ class OAuthEndpoints:
         self.store = store
         self.issuer = urlunsplit((resource.scheme, resource.netloc, "", "", ""))
         self.authorization_endpoint = authorization_endpoint
+        # External embeddings must opt in only when their consent responses
+        # actually return the same issuer on both success and denial.
+        self.authorization_response_iss_supported = authorization_response_iss_supported
         self.metadata_url = self.issuer + "/.well-known/oauth-protected-resource"
 
     @property
@@ -67,6 +73,9 @@ class OAuthEndpoints:
                 "grant_types_supported": ["authorization_code", "refresh_token"],
                 "token_endpoint_auth_methods_supported": ["none"],
                 "code_challenge_methods_supported": ["S256"],
+                "authorization_response_iss_parameter_supported": (
+                    self.authorization_response_iss_supported
+                ),
                 "scopes_supported": list(sorted(self.store.known_tools)),
             },
             {},

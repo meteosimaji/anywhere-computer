@@ -439,7 +439,10 @@ async def verify(receipt_path, *, tunnel_directory=None):
             owner_password = secrets.token_urlsafe(32)
             await asyncio.to_thread(owner_credentials.initialize, owner_password)
             consent = BrowserAuthorization(store, owner_credentials, device="probe-device")
-            oauth = OAuthEndpoints(store, authorization_endpoint=consent.authorization_endpoint)
+            oauth = OAuthEndpoints(
+                store, authorization_endpoint=consent.authorization_endpoint,
+                authorization_response_iss_supported=True,
+            )
             adapter.public_routes = {**oauth.routes(), **consent.routes()}
             adapter.origins = frozenset({public})
             adapter.auth_challenge = oauth.challenge
@@ -474,6 +477,17 @@ async def verify(receipt_path, *, tunnel_directory=None):
                     raise RuntimeError("Public metadata did not become reachable")
                 await asyncio.sleep(2)  # GET readiness only; mutations are never retried.
             report["metadata_verified"] = True
+            status, _, issuer_metadata = await asyncio.to_thread(
+                public_request, public + "/.well-known/oauth-authorization-server",
+            )
+            if (
+                status != 200 or not issuer_metadata
+                or issuer_metadata.get("issuer") != public
+                or issuer_metadata.get("authorization_response_iss_parameter_supported") is not True
+                or body.get("authorization_servers") != [public]
+            ):
+                raise RuntimeError("Public issuer identification metadata was inconsistent")
+            report["issuer_metadata_verified"] = True
             print(json.dumps({"stage": "public_metadata_verified"}), flush=True)
             token_body = None
             native_callback_port = None
@@ -508,10 +522,12 @@ async def verify(receipt_path, *, tunnel_directory=None):
                 if (
                     returned._replace(query="").geturl() != callback
                     or fields.get("state") != query["state"]
+                    or fields.get("iss") != [public]
                     or returned.hostname not in {"127.0.0.1", "::1"}
                     or returned.scheme != "http"
                 ):
                     raise RuntimeError("Public consent callback binding failed")
+                report["authorization_response_issuer_verified"] = True
                 connection = http.client.HTTPConnection(returned.hostname, returned.port, timeout=5)
                 try:
                     connection.request("GET", returned.path + "?" + returned.query)

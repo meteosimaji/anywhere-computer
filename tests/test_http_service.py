@@ -50,13 +50,17 @@ async def configured(tmp_path, unused_tcp_port):
     return config, owner
 
 
-async def authenticate(http):
+async def authenticate(http, *, client_id="native", redirect=REDIRECT):
+    metadata = (await http.get("/.well-known/oauth-authorization-server")).json()
+    assert metadata["authorization_response_iss_parameter_supported"] is True
+    resource_metadata = (await http.get("/.well-known/oauth-protected-resource")).json()
+    assert resource_metadata["authorization_servers"] == [metadata["issuer"]]
     response = await http.get(
         "/authorize",
         params={
             "response_type": "code",
-            "client_id": "native",
-            "redirect_uri": REDIRECT,
+            "client_id": client_id,
+            "redirect_uri": redirect,
             "resource": RESOURCE,
             "scope": " ".join(sorted(SCOPES)),
             "state": "client-state",
@@ -75,20 +79,42 @@ async def authenticate(http):
         },
     )
     assert response.status_code == 303
-    code = parse_qs(urlsplit(response.headers["location"]).query)["code"][0]
+    fields = parse_qs(urlsplit(response.headers["location"]).query)
+    assert fields["iss"] == [metadata["issuer"]]
+    assert response.headers["location"].split("?", 1)[0] == redirect
+    code = fields["code"][0]
     response = await http.post(
         "/oauth/token",
         data={
             "grant_type": "authorization_code",
             "code": code,
             "code_verifier": "v" * 43,
-            "client_id": "native",
-            "redirect_uri": REDIRECT,
+            "client_id": client_id,
+            "redirect_uri": redirect,
             "resource": RESOURCE,
         },
     )
     assert response.status_code == 200
     return response.json()["access_token"]
+
+
+async def test_chatgpt_predefined_client_uses_stable_issuer_callback(tmp_path, unused_tcp_port):
+    from anywhere_computer.remote_setup import CHATGPT_CLIENT, CHATGPT_REDIRECT
+
+    config = await setup(tmp_path, unused_tcp_port, client=CHATGPT_CLIENT,
+                         redirects=frozenset({CHATGPT_REDIRECT}))
+    owner = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
+    owner.initialize("synthetic owner password")
+    async with http_service(tmp_path, credentials=owner):
+        async with httpx.AsyncClient(
+            base_url=f"http://127.0.0.1:{config.port}", trust_env=False,
+        ) as http:
+            token = await authenticate(http, client_id=CHATGPT_CLIENT, redirect=CHATGPT_REDIRECT)
+            headers = await initialize(http, token)
+            result = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": "catalog", "method": "tools/list",
+            })
+            assert {row["name"] for row in result.json()["result"]["tools"]} == SCOPES
 
 
 async def initialize(http, token):

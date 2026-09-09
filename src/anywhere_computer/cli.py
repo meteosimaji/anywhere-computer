@@ -62,6 +62,7 @@ def main() -> None:
             "remote-serve",
             "remote-watch",
             "remote-setup",
+            "chatgpt-setup",
             "remote-doctor",
             "remote-health-enable",
             "remote-health-disable",
@@ -353,6 +354,10 @@ def main() -> None:
             raise SystemExit(watch_http(directory))
         elif args.command == "remote-setup":
             print(json.dumps(setup_remote(directory), ensure_ascii=False, indent=2))
+        elif args.command == "chatgpt-setup":
+            print(json.dumps(
+                setup_remote(directory, client_kind="chatgpt"), ensure_ascii=False, indent=2,
+            ))
         elif args.command == "remote-watch":
             if sys.platform == "win32":
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)

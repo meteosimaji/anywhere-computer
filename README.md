@@ -17,6 +17,21 @@ Codex の会話・スキル参照と、対応する既存 MCP ツールの直接
 Codex のモデルを起動しない仕組みと制限は [Codex context](docs/CODEX-CONTEXT.md) を参照してください。
 ChatGPT アプリへの接続・認証は別途必要であり、Codex へのインストールだけでは完了しません。
 
+## ChatGPT 用の接続設定
+
+実行環境を準備した後は、次のコマンドで ChatGPT 用の設定を開始できます。
+
+```sh
+uv run anywhere chatgpt-setup --state-dir ./local-state/chatgpt
+```
+
+公開 HTTPS の MCP URL と権限を選び、パスワード・トンネル資格情報はローカルの
+非表示入力で設定します。クライアント ID と ChatGPT の戻り先は自動入力されます。
+中断時は同じコマンドで再開できます。異なるクライアントの既存設定は上書きしません。
+これは接続設定の開始コマンドであり、Python/uv の導入、公開 URL の発行、常駐起動、
+ChatGPT への追加・認証までを自動完了するインストーラーではありません。
+詳細は [セットアップ](docs/SETUP-CONTROLLER.md#chatgpt-preset-and-issuer-identification) を参照してください。
+
 ## 起動
 
 Python 3.12 と [uv](https://docs.astral.sh/uv/) を利用します。

@@ -116,3 +116,67 @@ browser/real-engine integration evidence, not actual ChatGPT/Codex host acceptan
 The screen still requires an installed local MCP connector and a user-provided
 public URL. One-click native runtime bootstrap, credentials, service launch, actual
 internet reachability and official-directory acceptance remain outstanding.
+
+## ChatGPT preset and issuer identification
+
+The `chatgpt-setup` CLI uses the same resumable setup controller and native vaults.
+For a new state directory it asks for the public MCP address and access profile;
+owner (`owner`), client (`anywhere-chatgpt`), loopback port (8768), and the ChatGPT
+callback are filled in. Owner-password and optional tunnel-token prompts remain
+hidden and local. Existing setup for a different client is rejected before any
+credential change; it is never silently repurposed or overwritten.
+
+After the runtime is installed, start the setup from one command:
+
+```sh
+anywhere chatgpt-setup --state-dir /absolute/path/to/chatgpt-state
+```
+
+From a source checkout with uv already installed, use `uv run anywhere` instead
+of `anywhere`. This command does not install Python/uv, provision a domain, start
+hosting, change OS startup, or connect the ChatGPT account automatically.
+
+The saved setup prints public connection fields for a predefined OAuth client:
+MCP URL, client ID `anywhere-chatgpt`, public-client authentication (`none`), and
+`https://chatgpt.com/connector_platform_oauth_redirect`. No client secret is
+created or printed. Select the predefined OAuth-client option in ChatGPT and
+complete owner login/consent after the service is publicly reachable.
+
+The embedded authorization service now advertises RFC 9207 issuer identification.
+Both approved and denied consent responses return `iss` equal to the metadata
+issuer, including its exact authority spelling/port. The browser's normalized
+Origin remains a separate CSRF check. Registered callback queries containing
+`iss` are rejected to prevent duplicate issuer parameters. Arbitrary external
+OAuthEndpoints embeddings do not advertise this support unless explicitly opted in.
+
+OpenAI documents this issuer support as the prerequisite for new eligible MCP
+connections to use the stable ChatGPT redirect. The connection management screen
+remains authoritative for the actual redirect mode. This preset does not implement
+CIMD, dynamic registration, or private-key JWT authentication.
+
+Source: https://developers.openai.com/apps-sdk/build/auth
+
+Validation of this preset/issuer update (2026-09-09):
+
+- Full pytest: 540 passed, 5 skipped in 74.32 seconds. Ruff and strict mypy,
+  including Windows-target mypy, passed on all 58 runtime modules.
+- HTTP integration exercised predefined ChatGPT client registration, stable callback,
+  exact issuer response, PKCE token exchange and the grant-filtered MCP catalog.
+- Success and denial both include the issuer. Tests reject callback issuer injection,
+  preserve explicit issuer authority spelling/port, resume completed ChatGPT setup
+  without prompts or credential writes, and reject replacement of native-client setup.
+- Public HTTPS integration verified matching issuer metadata/response, native login,
+  one-dispatch lost-write recovery, 17 MiB hash-checked download, refresh rotation,
+  grant revocation and a 6.67-second owned tunnel-child recovery retaining its MCP session.
+  [Public receipt](research/2026-09-09-internet-issuer-verification.json) matches the current
+  verifier script and runtime. This was a disposable engine through the public edge,
+  not a ChatGPT app UI test or a production hosting setup.
+- The fixture listener, owned connector children, temporary files and temporary
+  keyring records were removed. The dedicated tunnel's retained token/route were preserved.
+- Installed `0.1.0-alpha.1+codex.20260909030721`. All 58 source modules and the web asset
+  matched the installed version-specific runtime; its CLI exposes `chatgpt-setup`.
+  Runtime ID: `6efefa2ea387858b1431fe842c7d2b4064463c720397d4a8e272f2477cfbc211`.
+- The old Commander LaunchAgent remains absent; launchctl reports its label as disabled.
+- No user's production owner password, ChatGPT account setting, or autostart definition
+  was changed by this update. Actual ChatGPT setup and one-command runtime installation
+  remain outstanding acceptance requirements.
