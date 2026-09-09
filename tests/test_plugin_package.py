@@ -27,6 +27,8 @@ def test_packaged_runtime_matches_current_source_and_checksums():
             assert archive.read("anywhere_computer/" + source.name) == source.read_bytes(), (
                 "Rebuild plugin after source changes: uv run python scripts/package_plugin.py"
             )
+        for asset in (ROOT / "src/anywhere_computer/web").glob("*"):
+            assert archive.read("anywhere_computer/web/" + asset.name) == asset.read_bytes()
         metadata = archive.read("anywhere_computer-0.1.0a1.dist-info/METADATA").decode()
         assert "Requires-Dist: mcp" not in metadata
         assert "Requires-Dist: filelock" not in metadata

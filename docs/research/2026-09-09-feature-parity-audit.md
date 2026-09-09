@@ -68,10 +68,10 @@
 |EX05|PDF|未対応|形式としての読取/作成/ページ操作なし。|
 |EX06|検索|部分|DC10に記載。DOCX/XLSX/PPTXの限定内容検索を実装。PDF非対応、長いフィールドは切詰めを明示。文書モードの文脈行は拒否。|
 |EX07|端末|部分|実プロセスの入出力試験あり。PIPE 方式、PTY なし。各 REPL/SSH/DB CLI の個別互換、指定文字列のプロンプト待機は実装・実プロセス試験済み。自動認識は未対応。agent 再起動を越えたセッション復元なし。|
-|EX08|プレビュー UI|未対応|MCP は tools-only。Markdown/画像/HTML/Office の UI resource なし。|
-|EX09|編集 UI|未対応|編集・undo・選択文脈・部分読取マージの UI なし。ファイル backup は UI undo と別。|
-|EX10|フォルダ UI|未対応|ツリー・遅延ロード・追加読込・OS file manager で開く UI なし。|
-|EX11|設定 UI|未対応|接続承認画面は設定編集 UI の代替ではない。|
+|EX08|プレビュー UI|未対応|作業中: MCP Apps resource と画像/抽出文書の表示を追加。プロトコル試験済み、実ホスト表示は未検証。Markdown/HTML の整形表示なし。|
+|EX09|編集 UI|未対応|作業中: 全体読込後のテキスト編集・保存前の取消・ハッシュ確認を追加。結果不明時の照会をスクリプト試験済み。実ホスト操作、選択文脈、保存後 undo は未検証/未実装。|
+|EX10|フォルダ UI|未対応|作業中: 一階層の一覧と上限を増やす追加表示を実装。実ホスト操作未検証。ツリー展開・OS file manager 起動なし。|
+|EX11|設定 UI|未対応|作業中: 共有設定3項目の画面を追加。実ホスト操作未検証。初回接続・OS 権限・自動起動設定画面は未実装。|
 |EX12|実行設定|部分|既定shell・読書き行数上限の永続設定APIあり。blockedCommands/allowedDirectoriesなし。HTTP tool scopeはOS sandboxではない。|
 |EX13|履歴|部分|永続operation状態/要約、tool/since絞込み。引数ログは抑制。保持期間/ローテーションは未完。|
 |EX14|導入運用|部分|共通 Python/CLI、Codex package、3 OS 自動起動 adapter。無害な CI worker の登録/停止証拠あり。実ログイン/再起動後の公開接続、更新/rollback、sleep 復帰、初心者向け導入の完成検証なし。|

@@ -28,6 +28,7 @@ from .models import (
     ListDirectory,
     ListProcesses,
     MoveFile,
+    OpenWorkspace,
     OperationId,
     ReadBinary,
     ReadDocument,
@@ -116,6 +117,21 @@ class Engine:
         )
 
     def _register_tools(self) -> None:
+        async def workspace_open(args: OpenWorkspace) -> Result:
+            path = str(absolute_path(args.path)) if args.path else ""
+            return {
+                "workspace": {"path": path, "view": args.view},
+                "instructions": "Open the workspace UI if supported. Otherwise use "
+                "directories_list/files_read/settings_get and the corresponding write tools. "
+                "Opening this view does not read or change files.",
+            }
+
+        self.register(
+            "workspace_open", "Use this when the user wants an interactive file browser, "
+            "preview, text editor or settings view. Provide an absolute path when known. "
+            "The view calls separately authorized tools; opening it does not read or write files.",
+            OpenWorkspace, workspace_open, read_only=True,
+        )
         async def settings_get(_: Empty) -> Result:
             return cast(Result, self.settings().model_dump(mode="json"))
 

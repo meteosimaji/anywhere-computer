@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Anywhere Computer</title>
+<style>
+:root{color-scheme:light dark;--paper:#fafaf7;--ink:#202c2a;--muted:#63726d;--line:#dbe2db;--accent:#146c52;--soft:#edf3eb;--danger:#ac3030;font:14px/1.5 system-ui,sans-serif;background:var(--paper);color:var(--ink)}
+*{box-sizing:border-box}body{margin:0}button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer;background:var(--paper);border:1px solid var(--line);border-radius:8px;padding:8px 12px}button:hover:not(:disabled){background:var(--soft)}button:disabled{opacity:.45;cursor:default}button.primary{background:var(--accent);color:white;border-color:var(--accent)}input,select{border:1px solid var(--line);border-radius:8px;padding:8px;background:var(--paper);min-width:0}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #7bbb9e;outline-offset:2px}[hidden]{display:none!important}header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:20px 24px 12px}h1{font-size:19px;letter-spacing:-.5px;margin:0}header small{color:var(--muted)}.pill{font-size:12px;background:var(--soft);padding:4px 10px;border-radius:100px;white-space:nowrap}nav,.bar{display:flex;align-items:center;gap:8px;padding:10px 24px;border-bottom:1px solid var(--line)}nav{flex-wrap:wrap}nav button[aria-pressed=true]{background:var(--soft);color:var(--accent);border-color:transparent}.spacer{flex:1}.bar input{flex:1;width:100%}.surface{padding:18px 24px;min-height:260px;max-height:650px;overflow:auto}.empty{padding:32px 12px;max-width:520px;color:var(--muted)}.empty h2{font-size:24px;color:var(--ink);line-height:1.25;font-weight:550}.file-list{list-style:none;padding:0;margin:0}.file-list button{display:flex;width:100%;text-align:left;gap:12px;border:0;border-radius:6px;border-bottom:1px solid var(--line);padding:12px}.file-list span{overflow-wrap:anywhere}.kind{color:var(--muted);width:38px;flex-shrink:0;font-size:11px;padding-top:3px}.toolbar{display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap}.caption{color:var(--muted);font-size:12px;overflow-wrap:anywhere}.caption strong{color:var(--ink)}textarea{width:100%;min-height:290px;resize:vertical;border:1px solid var(--line);border-radius:8px;padding:16px;white-space:pre;tab-size:4;background:var(--paper);font:13px/1.65 ui-monospace,monospace}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:13px/1.6 ui-monospace,monospace}img{display:block;max-width:100%;max-height:450px;object-fit:contain;margin:auto}.setting{display:grid;grid-template-columns:minmax(130px,1fr) minmax(130px,2fr) auto;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}footer{padding:10px 24px 16px;border-top:1px solid var(--line)}#notice{margin:0;font-size:13px;overflow-wrap:anywhere}#notice[data-error=true]{color:var(--danger)}#recovery{margin-top:10px}#operation{font:12px ui-monospace,monospace;overflow-wrap:anywhere}dialog{background:var(--paper);color:var(--ink);border:1px solid var(--line);border-radius:14px;padding:24px;max-width:min(440px,90vw)}dialog::backdrop{background:#17221d66}.dialog-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+@media(prefers-color-scheme:dark){:root{--paper:#17211d;--ink:#e4ebe4;--muted:#a3b4aa;--line:#37463d;--accent:#22795c;--soft:#24382d;--danger:#ff9999}}:root[data-theme=light]{color-scheme:light;--paper:#fafaf7;--ink:#202c2a;--muted:#63726d;--line:#dbe2db;--accent:#146c52;--soft:#edf3eb;--danger:#ac3030}:root[data-theme=dark]{color-scheme:dark;--paper:#17211d;--ink:#e4ebe4;--muted:#a3b4aa;--line:#37463d;--accent:#22795c;--soft:#24382d;--danger:#ff9999}
+@media(max-width:520px){header,nav,.bar,footer{padding-left:14px;padding-right:14px}.surface{padding:14px}.bar{flex-wrap:wrap}.bar input{flex-basis:100%;order:-1}.setting{grid-template-columns:1fr auto}.setting label{grid-column:1/-1}header small{display:none}}
+</style>
+<header><div><h1>Anywhere Computer</h1><small>ファイルと作業を、この会話から。</small></div><span id="connection" class="pill">接続確認中</span></header>
+<nav aria-label="作業画面"><button id="files-tab" aria-pressed="true">ファイル</button><button id="settings-tab" aria-pressed="false">設定</button><span class="spacer"></span><label id="device-label" hidden>端末 <select id="device" aria-label="操作する端末"><option value="local">この接続先</option></select></label><button id="devices" hidden>端末一覧を更新</button></nav>
+<form id="path-form" class="bar"><button id="back" type="button" disabled>戻る</button><input id="path" aria-label="絶対パス" placeholder="ファイルまたはフォルダーの絶対パス" autocomplete="off" spellcheck="false"><button class="primary" id="open" type="submit" disabled>開く</button></form>
+<main class="surface">
+<section id="welcome" class="empty"><h2>内容を確かめて、<br>必要なところを編集。</h2><p>フォルダーを開いてファイルを選ぶか、絶対パスを指定してください。変更は「保存」を押したときだけ書き込みます。</p></section>
+<section id="folder" hidden><div class="toolbar"><strong>フォルダー</strong><span id="folder-count" class="caption"></span></div><ul id="entries" class="file-list"></ul><button id="more-entries" hidden>さらに表示</button></section>
+<section id="text-panel" hidden><div class="toolbar"><strong>テキスト</strong><span id="read-status" class="caption"></span><span class="spacer"></span><button id="more-text" hidden>続きを読み込む</button><button id="undo" disabled>編集を戻す</button><button class="primary" id="save" disabled>保存</button></div><textarea id="editor" aria-label="ファイルの内容" spellcheck="false" readonly></textarea><p id="file-meta" class="caption"></p></section>
+<section id="preview" hidden><div class="toolbar"><strong id="preview-title">プレビュー</strong><button id="more-document" hidden>続きを読み込む</button></div><img id="image" alt="選択した画像のプレビュー" hidden><pre id="document"></pre></section>
+<section id="settings" hidden><h2>この接続先の設定</h2><p class="caption">同じエージェントに接続するクライアントで共有されます。各項目を個別に適用します。</p><div class="setting"><label for="default-shell">既定のシェル</label><input id="default-shell" placeholder="空欄でOS既定" autocomplete="off"><button id="set-shell">適用</button></div><p class="caption">次回以降の端末実行に使う実行ファイルの絶対パスです。</p><div class="setting"><label for="read-limit">読込行数の上限</label><input id="read-limit" type="number" min="1" max="5000"><button id="set-read">適用</button></div><div class="setting"><label for="write-limit">書込行数の上限</label><input id="write-limit" type="number" min="1" max="100000"><button id="set-write">適用</button></div></section>
+</main>
+<footer><p id="notice" role="status" aria-live="polite">ホストとの接続を待っています。</p><div id="recovery" hidden><p>操作結果が未確認です。再送せず、結果を照会してください。</p><p id="operation"></p><button id="resolve">結果を照会</button></div></footer>
+<dialog id="discard"><h2>編集中の内容があります</h2><p>移動すると、保存していない編集内容は失われます。</p><div class="dialog-actions"><button id="keep">編集を続ける</button><button id="discard-go">破棄して移動</button></div></dialog>
+<script>
+"use strict";
+(() => {
+  const $ = id => document.getElementById(id);
+  const pending = new Map();
+  const MAX_TEXT = 1024 * 1024, MAX_IMAGE = 5 * 1024 * 1024;
+  const operationMeta = "io.github.meteosimaji.anywhere-computer/operation_id";
+  const state = {ready:false, busy:false, target:"local", rootTools:new Set(), tools:new Set(), current:null, dirty:false, history:[], limit:200, mutation:null, objectUrl:null, pendingNavigation:null, hostOrigin:null};
+  const ids = ["welcome","folder","text-panel","preview","settings"];
+  const id32 = () => crypto.randomUUID().replaceAll("-", "");
+  const normalize = text => text.replace(/\r\n?/g, "\n");
+  const byteLength = text => new TextEncoder().encode(text).length;
+  const message = (text, error=false) => {$("notice").textContent=text; $("notice").dataset.error=String(error);};
+  function notify(method, params={}) {window.parent.postMessage({jsonrpc:"2.0",method,params}, state.hostOrigin || "*");}
+  function rpc(method, params) {
+    const id = id32();
+    return new Promise((resolve,reject) => {
+      const timer = setTimeout(() => {pending.delete(id); reject(new Error("応答を確認できませんでした。"));}, 75000);
+      pending.set(id,{resolve,reject,timer,method});
+      window.parent.postMessage({jsonrpc:"2.0",id,method,params}, state.hostOrigin || "*");
+    });
+  }
+  function controls() {
+    const blocked = !state.ready || state.busy;
+    for(const control of document.querySelectorAll("button,input,select")) control.disabled=blocked;
+    $("resolve").disabled=blocked || !state.tools.has("operations_get");
+    $("back").disabled=blocked || !state.history.length;
+    $("open").disabled=blocked || !state.tools.has("files_info");
+    $("settings-tab").disabled=blocked || !state.tools.has("settings_get");
+    const writable = state.current?.kind==="text" && state.current.complete && !state.current.mixed;
+    $("editor").readOnly=blocked || !writable || !!state.mutation || (!state.tools.has("files_write") || !state.tools.has("operations_get"));
+    $("save").disabled=blocked || !writable || !state.dirty || !!state.mutation || (!state.tools.has("files_write") || !state.tools.has("operations_get"));
+    $("undo").disabled=blocked || !state.dirty || !!state.mutation;
+    for(const id of ["set-shell","set-read","set-write"]) $(id).disabled=blocked || !!state.mutation || (!state.tools.has("settings_update") || !state.tools.has("operations_get"));
+  }
+  async function job(action) {
+    if(state.busy) return;
+    state.busy=true; controls();
+    try {await action();} catch(error) {message(error.message || "操作を完了できませんでした。",true);}
+    finally {state.busy=false;controls();}
+  }
+  function show(panel) {for(const id of ids) $(id).hidden=id!==panel;$("files-tab").setAttribute("aria-pressed",String(panel!=="settings"));$("settings-tab").setAttribute("aria-pressed",String(panel==="settings"));$("path-form").hidden=panel==="settings";}
+  function changed() {state.dirty=!!state.current && $("editor").value!==normalize(state.current.text || "");controls();}
+  function navigate(action) {
+    if(state.mutation) {message("未確認の操作を照会してから移動してください。",true);return;}
+    if(state.dirty) {state.pendingNavigation=action; $("discard").showModal();return;}
+    action();
+  }
+  function clearFile() {
+    if(state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+    state.objectUrl=null;state.current=null;state.dirty=false;$("editor").value="";
+    $("image").hidden=true;$("image").removeAttribute("src");$("document").textContent="";
+  }
+  async function call(name,args={}, {target=state.target, mutation=false}={}) {
+    if(!state.ready) throw new Error("ホストに接続されていません。");
+    if(!state.tools.has(name) && target===state.target) throw new Error("この端末では操作が許可されていません: "+name);
+    if(mutation && !state.tools.has("operations_get")) throw new Error("結果照会の権限がないため、この画面から変更できません。");
+    const operationId=id32();
+    const routed=target!=="local";
+    const packet={name:routed?"devices_call":name, arguments:routed?{device_id:target,tool:name,arguments:args}:args, _meta:{[operationMeta]:operationId}};
+    let result;
+    try {result=await rpc("tools/call",packet);} catch(error) {
+      if(mutation) uncertain(operationId,target,name,args);
+      throw error;
+    }
+    const reply=result?.structuredContent;
+    if(!reply || reply.operation_id!==operationId || !["completed","failed","running","unknown"].includes(reply.state)) {
+      if(mutation) uncertain(operationId,target,name,args);
+      throw new Error("操作結果の識別情報を確認できませんでした。");
+    }
+    if(reply.state!=="completed") {
+      if(mutation && reply.state!=="failed") uncertain(operationId,target,name,args);
+      throw new Error(reply.error || "操作がまだ完了していません。");
+    }
+    if(!reply.data || typeof reply.data!=="object" || (routed && (reply.data.device_id!==target || !reply.data.result))) {
+      if(mutation) uncertain(operationId,target,name,args);
+      throw new Error("応答の端末または内容を確認できません。");
+    }
+    const data=routed?reply.data.result:reply.data;
+    if(mutation && !validMutationResult(name,data)) {
+      uncertain(operationId,target,name,args);
+      throw new Error("完了応答の内容を確認できません。操作結果を照会してください。");
+    }
+    return data;
+  }
+  function validMutationResult(name,data) {
+    return !!data && typeof data==="object" && !Array.isArray(data) &&
+      (name!=="files_write" || (typeof data.sha256==="string" && /^[a-f0-9]{64}$/.test(data.sha256)));
+  }
+  function uncertain(operationId,target,name,args) {
+    state.mutation={operationId,target,name,args};$("recovery").hidden=false;
+    $("operation").textContent=`端末 ${target} / 操作 ${operationId}`;
+  }
+  async function listDevices() {
+    // Registry operations belong to the connector even when a remote device is selected.
+    const operationId=id32();
+    const response=await rpc("tools/call",{name:"devices_list",arguments:{},_meta:{[operationMeta]:operationId}});
+    const reply=response?.structuredContent;
+    if(reply?.operation_id!==operationId || reply.state!=="completed" || !Array.isArray(reply.data?.devices)) throw new Error("端末一覧を取得できません。");
+    $("device").replaceChildren();
+    for(const item of reply.data.devices) {
+      const option=document.createElement("option");option.value=item.device_id;
+      option.textContent=`${item.name} · ${item.state}`;$("device").append(option);
+    }
+    $("device").value=state.target;
+  }
+  async function selectDevice(target) {
+    const old=state.target;
+    if(target===old) return;
+    try {
+      let allowed=state.rootTools;
+      if(target!=="local") {
+        const operationId=id32();
+        const response=await rpc("tools/call",{name:"devices_tools",arguments:{device_id:target},_meta:{[operationMeta]:operationId}});
+        const reply=response?.structuredContent;
+        if(reply?.operation_id!==operationId || reply.state!=="completed" || reply.data?.device_id!==target || !Array.isArray(reply.data.tools)) throw new Error("端末の認証と接続を確認できません。");
+        allowed=new Set(reply.data.tools.map(tool=>tool.name));
+      }
+      state.target=target;state.tools=allowed;state.history=[];clearFile();$("path").value="";show("welcome");
+      message("端末を選択しました。対象の絶対パスを指定してください。");
+    } finally {$("device").value=state.target;}
+  }
+  function fileName(path) {return path.split(/[\\/]/).filter(Boolean).pop() || path;}
+  async function openPath(path,{remember=true,limit=200}={}) {
+    if(!path) throw new Error("絶対パスを入力してください。");
+    const info=await call("files_info",{path});
+    if(remember && state.current?.path && state.current.path!==path) state.history.push(state.current.path);
+    clearFile();$("path").value=path;state.limit=limit;
+    if(info.directory) {
+      const listing=await call("directories_list",{path,depth:1,limit});
+      state.current={kind:"folder",path};show("folder");$("entries").replaceChildren();
+      const entries=[...listing.entries].sort((a,b)=>Number(b.directory)-Number(a.directory)||a.path.localeCompare(b.path));
+      for(const item of entries) {
+        const li=document.createElement("li"),button=document.createElement("button"),tag=document.createElement("span"),label=document.createElement("span");
+        tag.className="kind";tag.textContent=item.symlink?"LINK":item.directory?"DIR":"FILE";
+        label.textContent=fileName(item.path);button.append(tag,label);
+        button.onclick=()=>navigate(()=>job(()=>openPath(item.path)));li.append(button);$("entries").append(li);
+      }
+      $("folder-count").textContent=`${entries.length}件${listing.truncated?" · 一部表示":""}`;
+      $("more-entries").hidden=!listing.truncated || limit>=2000;
+      message(listing.truncated?"一覧は一部です。さらに表示するとフォルダーを再取得します。":"フォルダーを読み込みました。");
+      return;
+    }
+    const suffix=path.split(".").pop().toLowerCase();
+    if(["png","jpg","jpeg","gif","webp"].includes(suffix)) return loadImage(path,info);
+    if(["docx","xlsx","pptx"].includes(suffix)) {
+      state.current={kind:"document",path,offset:0,hash:null};show("preview");$("preview-title").textContent="文書の内容";
+      return nextDocument();
+    }
+    state.current={kind:"text",path,text:"",hash:null,offset:0,complete:false,mixed:false};show("text-panel");
+    return nextText();
+  }
+  async function nextText() {
+    const file=state.current;
+    const page=await call("files_read",{path:file.path,offset:file.offset,limit:200});
+    if(typeof page.text!=="string" || page.offset!==file.offset || !/^[a-f0-9]{64}$/.test(page.sha256)) throw new Error("読込結果が不正です。");
+    if(file.hash && page.sha256!==file.hash) {$("more-text").hidden=true;throw new Error("読込中にファイルが変わりました。再度開いてください。");}
+    const full=file.text+page.text;
+    if(byteLength(full)>MAX_TEXT) {$("more-text").hidden=true;throw new Error("画面のテキスト上限は1 MiBです。ツールで必要な部分を読み込んでください。");}
+    if(page.truncated && page.next_offset<=file.offset) throw new Error("読込位置が進みませんでした。");
+    file.text=full;file.hash=page.sha256;file.offset=page.next_offset;file.complete=!page.truncated;
+    const endings=new Set(full.match(/\r\n|\r|\n/g)||[]);file.mixed=endings.size>1;file.newline=endings.size===1?[...endings][0]:"\n";
+    $("editor").value=normalize(full);$("read-status").textContent=`${file.offset} / ${page.total_lines}行${file.complete?" · 全体読込済み":" · 読込途中"}`;
+    $("more-text").hidden=file.complete;$("file-meta").textContent=`${file.path} · ${file.newline==="\r\n"?"CRLF":file.newline==="\r"?"CR":"LF"}`;
+    message(file.mixed?"改行形式が混在しています。この画面では保存できません。":file.complete?"全体を読み込みました。編集後に保存できます。":"続きがあります。全体を読み込むまで保存はできません。");
+  }
+  async function saveText() {
+    const file=state.current;
+    if(!file?.complete || file.mixed || !state.dirty || state.mutation) return;
+    const text=$("editor").value.replace(/\n/g,file.newline);
+    if(byteLength(text)>MAX_TEXT) throw new Error("保存できるテキストは1 MiBまでです。");
+    const saved=await call("files_write",{path:file.path,text,mode:"replace",expected_sha256:file.hash},{mutation:true});
+    file.text=text;file.hash=saved.sha256;state.dirty=false;
+    message("保存しました。変更前の内容はエージェントのバックアップに保持されています。");
+  }
+  async function loadImage(path,info) {
+    if(typeof info.size!=="number" || info.size>MAX_IMAGE) throw new Error("画像プレビューは5 MiBまでです。");
+    let offset=0,hash=null;const chunks=[];
+    while(true) {
+      const page=await call("files_read_binary",{path,offset,limit:262144,...(hash?{expected_sha256:hash}:{})});
+      if(page.total_bytes>MAX_IMAGE || page.offset!==offset || (hash && hash!==page.sha256)) throw new Error("画像が変更されたか、上限を超えました。");
+      const bytes=Uint8Array.from(atob(page.data_base64),char=>char.charCodeAt(0));chunks.push(bytes);hash=page.sha256;
+      if(page.eof) break;
+      if(page.next_offset<=offset) throw new Error("画像の読込位置が進みませんでした。");offset=page.next_offset;
+    }
+    const first=chunks[0],ascii=new TextDecoder("latin1").decode(first.slice(0,12));
+    const mime=first[0]===137&&ascii.slice(1,4)==="PNG"?"image/png":first[0]===255&&first[1]===216?"image/jpeg":ascii.startsWith("GIF8")?"image/gif":ascii.startsWith("RIFF")&&ascii.endsWith("WEBP")?"image/webp":null;
+    if(!mime) throw new Error("対応する画像形式を確認できません。SVGやHTMLは実行しません。");
+    state.objectUrl=URL.createObjectURL(new Blob(chunks,{type:mime}));state.current={kind:"image",path};
+    $("image").src=state.objectUrl;$("image").hidden=false;$("preview-title").textContent="画像";$("more-document").hidden=true;show("preview");message("画像を読み込みました。");
+  }
+  async function nextDocument() {
+    const file=state.current,page=await call("documents_read",{path:file.path,offset:file.offset,limit:50});
+    if(file.hash && file.hash!==page.sha256) throw new Error("文書が変更されました。再度開いてください。");
+    file.hash=page.sha256;
+    const text=JSON.stringify(page,null,2);
+    if(byteLength($("document").textContent)+byteLength(text)>MAX_TEXT) throw new Error("文書プレビューの上限に達しました。");
+    $("document").textContent+=text+"\n";
+    $("more-document").hidden=!page.truncated || !Number.isInteger(page.next_offset) || page.next_offset<=file.offset;
+    file.offset=page.next_offset;message("抽出した文書内容です。元の書式やページ配置は再現していません。");
+  }
+  async function settingsView() {
+    const values=await call("settings_get");clearFile();show("settings");
+    $("default-shell").value=values.default_shell || "";$("read-limit").value=values.file_read_line_limit;$("write-limit").value=values.file_write_line_limit;
+    message("現在の共有設定を読み込みました。");
+  }
+  async function applySetting(key,element,numeric=false) {
+    const raw=$(element).value,value=numeric?Number(raw):(raw || null);
+    if(numeric && (!raw || !Number.isSafeInteger(value))) throw new Error("整数を入力してください。");
+    await call("settings_update",{key,value},{mutation:true});message("設定を適用しました。");
+  }
+  async function resolveMutation() {
+    const pendingMutation=state.mutation;
+    if(!pendingMutation) return;
+    const outcome=await call("operations_get",{operation_id:pendingMutation.operationId},{target:pendingMutation.target});
+    if(outcome.operation_id!==pendingMutation.operationId ||
+       (outcome.state==="completed" && !validMutationResult(pendingMutation.name,outcome.data))) {
+      throw new Error("照会結果の識別情報または内容を確認できません。再送はしていません。");
+    }
+    if(outcome.state!=="completed" && outcome.state!=="failed") {message("結果はまだ確定していません。書込みは再送していません。",true);return;}
+    state.mutation=null;$("recovery").hidden=true;
+    if(outcome.state==="completed" && pendingMutation.name==="files_write") {
+      // Preserve the draft; the recorded write result identifies the submitted snapshot.
+      state.current.text=pendingMutation.args.text;state.current.hash=outcome.data.sha256;changed();
+    }
+    message(outcome.state==="completed"?"記録された完了結果を確認しました。":"記録では操作に失敗しています。現在の内容を確認してください。",outcome.state==="failed");
+  }
+  async function consume(result) {
+    const reply=result?.structuredContent;
+    if(reply?.state!=="completed" || !reply.data?.workspace) return;
+    if(state.dirty || state.busy || state.mutation) {message("新しい表示要求があります。現在の編集は保持しています。");return;}
+    const allowed=result._meta?.workspaceTools;
+    if(!Array.isArray(allowed)) {message("画面用の操作権限情報がありません。",true);return;}
+    state.rootTools=new Set(allowed.filter(value=>typeof value==="string"));state.tools=state.rootTools;
+    state.target="local";$("device").value="local";state.history=[];clearFile();
+    const routing=state.rootTools.has("devices_list")&&state.rootTools.has("devices_call")&&state.rootTools.has("devices_tools");
+    $("device-label").hidden=!routing;$("devices").hidden=!routing;
+    $("path").value=reply.data.workspace.path || "";
+    await job(async()=>{
+      if(routing) await listDevices();
+      if(reply.data.workspace.view==="settings") await settingsView();
+      else if($("path").value) await openPath($("path").value);
+      else {show("welcome");message("接続しました。絶対パスを指定してください。");}
+    });
+  }
+  window.addEventListener("message",event=>{
+    if(event.source!==window.parent || (state.hostOrigin && event.origin!==state.hostOrigin)) return;
+    const packet=event.data;if(!packet || packet.jsonrpc!=="2.0") return;
+    if(pending.has(packet.id) && !packet.method) {
+      const item=pending.get(packet.id);pending.delete(packet.id);clearTimeout(item.timer);
+      if(item.method==="ui/initialize" && event.origin!=="null") state.hostOrigin=event.origin;
+      if(packet.error) item.reject(new Error(packet.error.message || "ホストが要求を拒否しました。"));else item.resolve(packet.result);
+      return;
+    }
+    if(packet.method==="ui/notifications/tool-result") void consume(packet.params);
+    else if(packet.method==="ui/notifications/host-context-changed") {
+      if(["light","dark"].includes(packet.params?.theme)) document.documentElement.dataset.theme=packet.params.theme;
+    } else if(packet.method==="ping" && packet.id!==undefined) window.parent.postMessage({jsonrpc:"2.0",id:packet.id,result:{}},state.hostOrigin||"*");
+    else if(packet.method==="ui/resource-teardown" && packet.id!==undefined) {
+      for(const item of pending.values()) {clearTimeout(item.timer);item.reject(new Error("画面が閉じられました。"));}pending.clear();
+      if(state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+      window.parent.postMessage({jsonrpc:"2.0",id:packet.id,result:{}},state.hostOrigin||"*");
+    }
+  });
+  $("path-form").onsubmit=event=>{event.preventDefault();navigate(()=>job(()=>openPath($("path").value)));};
+  $("back").onclick=()=>navigate(()=>job(()=>openPath(state.history.pop(),{remember:false})));
+  $("more-entries").onclick=()=>job(()=>openPath(state.current.path,{remember:false,limit:Math.min(2000,state.limit*2)}));
+  $("more-text").onclick=()=>job(nextText);$("more-document").onclick=()=>job(nextDocument);
+  $("editor").oninput=changed;$("save").onclick=()=>job(saveText);
+  $("undo").onclick=()=>{$("editor").value=normalize(state.current.text);changed();message("保存前の内容に戻しました。");};
+  $("keep").onclick=()=>{state.pendingNavigation=null;$("discard").close();};
+  $("discard-go").onclick=()=>{const action=state.pendingNavigation;state.pendingNavigation=null;state.dirty=false;$("discard").close();action?.();};
+  $("devices").onclick=()=>job(listDevices);
+  $("device").onchange=()=>{const target=$("device").value;$("device").value=state.target;navigate(()=>job(()=>selectDevice(target)));};
+  $("settings-tab").onclick=()=>navigate(()=>job(settingsView));
+  $("files-tab").onclick=()=>navigate(()=>{clearFile();show("welcome");message("絶対パスを指定してください。");controls();});
+  $("set-shell").onclick=()=>job(()=>applySetting("default_shell","default-shell"));
+  $("set-read").onclick=()=>job(()=>applySetting("file_read_line_limit","read-limit",true));
+  $("set-write").onclick=()=>job(()=>applySetting("file_write_line_limit","write-limit",true));
+  $("resolve").onclick=()=>job(resolveMutation);
+  controls();
+  if(window.parent===window) {$("connection").textContent="ホスト未接続";message("この画面はMCP Apps対応ホストから開いてください。ファイルには接続していません。");return;}
+  rpc("ui/initialize",{appInfo:{name:"Anywhere Computer workspace",version:"1"},appCapabilities:{availableDisplayModes:["inline","fullscreen"]},protocolVersion:"2026-01-26"}).then(result=>{
+    if(result?.protocolVersion!=="2026-01-26" || !result.hostCapabilities?.serverTools) throw new Error("必要なホスト機能がありません。");
+    if(["light","dark"].includes(result.hostContext?.theme)) document.documentElement.dataset.theme=result.hostContext.theme;
+    state.ready=true;$("connection").textContent="接続済み";notify("ui/notifications/initialized");controls();
+    let previous="";new ResizeObserver(()=>{const size={width:Math.ceil(document.body.getBoundingClientRect().width),height:Math.ceil(document.body.getBoundingClientRect().height)},key=JSON.stringify(size);if(key!==previous){previous=key;notify("ui/notifications/size-changed",size);}}).observe(document.body);
+  }).catch(error=>{$("connection").textContent="接続できません";message(error.message,true);});
+})();
+</script>
+</html>

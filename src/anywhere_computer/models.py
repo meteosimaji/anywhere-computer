@@ -13,6 +13,11 @@ class Empty(Contract):
     pass
 
 
+class OpenWorkspace(Contract):
+    path: str = Field(default="", max_length=4096)
+    view: Literal["files", "settings"] = "files"
+
+
 class RuntimeSettings(Contract):
     default_shell: str | None = None
     file_read_line_limit: int = Field(default=5000, ge=1, le=5000)

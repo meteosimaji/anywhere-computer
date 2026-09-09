@@ -14,6 +14,7 @@ from pydantic import JsonValue
 from . import __version__
 from .connection import WIRE_LIMIT, ensure_agent, exchange
 from .models import Reply, Request
+from .workspace_ui import UI_ACTIONS, supports_ui, with_ui_metadata, workspace_resource
 
 Catalog = Callable[[], Awaitable[list[JsonValue]]]
 Execute = Callable[[Request], Awaitable[Reply]]
@@ -32,13 +33,14 @@ def rpc_error(identity: JsonValue, code: int, message: str) -> dict[str, JsonVal
 
 
 class MCPSession:
-    """Transport-independent tools-only MCP session; no unadvertised capabilities."""
+    """Transport-independent MCP session with negotiated, packaged UI resources."""
 
     def __init__(self, catalog: Catalog, execute: Execute) -> None:
         self.catalog = catalog
         self.execute = execute
         self.initialized = False
         self.ready = False
+        self.ui_enabled = False
 
     async def handle(self, packet: JsonValue) -> dict[str, JsonValue] | None:
         if not isinstance(packet, dict):
@@ -74,6 +76,7 @@ class MCPSession:
             ):
                 return rpc_error(identity, -32602, "Invalid initialization parameters")
             self.initialized = True
+            self.ui_enabled = supports_ui(cast(dict[str, JsonValue], params["capabilities"]))
             result = {
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {
@@ -83,12 +86,32 @@ class MCPSession:
                 "serverInfo": {"name": "anywhere-computer", "version": __version__},
                 "instructions": INSTRUCTIONS,
             }
+            if self.ui_enabled:
+                capabilities = cast(dict[str, JsonValue], result["capabilities"])
+                capabilities["resources"] = {"subscribe": False, "listChanged": False}
         elif not self.ready:
             return rpc_error(identity, -32600, "Initialize the session first")
         elif method == "tools/list":
             if params.get("cursor") is not None:
                 return rpc_error(identity, -32602, "No continuation cursor exists")
-            result = {"tools": await self.catalog()}
+            result = {"tools": with_ui_metadata(await self.catalog(), enabled=self.ui_enabled)}
+        elif method in {"resources/list", "resources/read", "resources/templates/list"}:
+            if not self.ui_enabled:
+                return rpc_error(identity, -32601, "UI resources were not negotiated")
+            allowed = any(isinstance(tool, dict) and tool.get("name") == "workspace_open"
+                          for tool in await self.catalog())
+            resource = workspace_resource()
+            if method == "resources/list":
+                if params.get("cursor") is not None:
+                    return rpc_error(identity, -32602, "No continuation cursor exists")
+                result = {"resources": [{k: v for k, v in resource.items() if k != "text"}]
+                          if allowed else []}
+            elif method == "resources/templates/list":
+                result = {"resourceTemplates": []}
+            elif not allowed or params.get("uri") != resource["uri"]:
+                return rpc_error(identity, -32602, "Resource is unavailable")
+            else:
+                result = {"contents": [{k: v for k, v in resource.items() if k != "name"}]}
         elif method == "tools/call":
             name, arguments = params.get("name"), params.get("arguments", {})
             if not isinstance(name, str) or not isinstance(arguments, dict):
@@ -124,6 +147,10 @@ class MCPSession:
                 "structuredContent": cast(dict[str, JsonValue], reply.model_dump(mode="json")),
                 "isError": reply.state != "completed",
             }
+            if name == "workspace_open" and self.ui_enabled:
+                result["_meta"] = {"workspaceTools": cast(list[JsonValue], sorted(
+                    value for value in names if isinstance(value, str) and value in UI_ACTIONS
+                ))}
         else:
             return rpc_error(identity, -32601, "Method not found")
         return {"jsonrpc": "2.0", "id": identity, "result": result}
