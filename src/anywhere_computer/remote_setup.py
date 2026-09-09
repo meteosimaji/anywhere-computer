@@ -4,7 +4,9 @@ import asyncio
 import getpass
 import json
 import secrets
+import shlex
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Literal
@@ -19,10 +21,33 @@ from .engine import Engine
 from .http_service import HTTPServiceConfig, load_http_config, save_http_config
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
+from .runtime_launch import python_module_command
 from .state import prepare_directory
 
 CHATGPT_CLIENT = "anywhere-chatgpt"
 CHATGPT_REDIRECT = "https://chatgpt.com/connector_platform_oauth_redirect"
+
+
+def setup_commands(
+    directory: Path, client_kind: Literal["native", "chatgpt"],
+) -> dict[str, JsonValue]:
+    """Copyable commands contain public paths only, with explicit shell quoting."""
+    commands: dict[str, JsonValue] = {
+        "shell": "PowerShell" if sys.platform == "win32" else "POSIX shell",
+    }
+    for name, action in (
+        ("resume", "chatgpt-setup" if client_kind == "chatgpt" else "remote-setup"),
+        ("start", "remote-watch"), ("diagnose", "remote-doctor"),
+    ):
+        arguments = python_module_command(
+            "anywhere_computer.cli", action, "--state-dir", str(directory.resolve()),
+        )
+        # PowerShell single-quoted strings do not expand $, %, backticks or subexpressions.
+        commands[name] = (
+            "& " + " ".join("'" + argument.replace("'", "''") + "'" for argument in arguments)
+            if sys.platform == "win32" else shlex.join(arguments)
+        )
+    return commands
 
 
 async def setup_scopes(mode: str) -> frozenset[str]:
@@ -132,6 +157,7 @@ def setup_remote(
         except (OSError, RuntimeError, subprocess.TimeoutExpired):
             executable = False
         result: dict[str, JsonValue] = {
+            "commands": setup_commands(directory, client_kind),
             "configuration_saved": True,
             "owner_initialized": True,
             "tunnel_credential_saved": installed,
@@ -140,10 +166,11 @@ def setup_remote(
             "public_reachability": "unverified",
             "service_started": False,
             "next_step": (
-                "Install cloudflared 2025.4.0 or newer, then rerun remote-setup."
+                "Install cloudflared 2025.4.0 or newer, then run commands.resume."
                 if not executable else
-                "Rerun remote-setup to save the tunnel token." if not installed else
-                "Check the provider route, then run remote-watch with this state directory."
+                "Run commands.resume to save the tunnel token." if not installed else
+                "Check the provider route, then run commands.start. "
+                "Leave that terminal open; use commands.diagnose in another terminal."
             ),
         }
         if client_kind == "chatgpt":

@@ -243,3 +243,42 @@ def test_chatgpt_setup_preserves_existing_native_configuration(tmp_path, wizard)
         remote_setup.setup_remote(tmp_path, client_kind="chatgpt")
     assert load_http_config(tmp_path) == config
     assert vault.data == before and vault.writes == writes
+
+
+def test_setup_command_preserves_special_path_without_shell_execution(tmp_path):
+    import json
+    import os
+    import subprocess
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("POSIX shell execution test")
+    directory = tmp_path / "日本語 space ' $(touch INJECTED) `touch ALSO_INJECTED`"
+    commands = remote_setup.setup_commands(directory, "chatgpt")
+    import shlex
+    arguments = shlex.split(commands["resume"])
+    assert arguments == [sys.executable, "-I", "-m", "anywhere_computer.cli",
+                         "chatgpt-setup", "--state-dir", str(directory.resolve())]
+    # Replace the module invocation with a harmless argv recorder, keeping the generated
+    # state-path quoting intact. The shell must pass it literally, never execute its text.
+    recorder = "import json,sys; print(json.dumps(sys.argv[1:]))"
+    command = commands["resume"].replace(
+        "-m anywhere_computer.cli chatgpt-setup", "-c " + shlex.quote(recorder), 1,
+    )
+    observed = subprocess.run(["/bin/sh", "-c", command], cwd=tmp_path,
+                              capture_output=True, text=True, check=True, timeout=10)
+    assert json.loads(observed.stdout) == ["--state-dir", str(directory.resolve())]
+    assert not (tmp_path / "INJECTED").exists()
+    assert not (tmp_path / "ALSO_INJECTED").exists()
+
+
+def test_setup_commands_use_literal_powershell_arguments(tmp_path, monkeypatch):
+    monkeypatch.setattr(remote_setup.sys, "platform", "win32")
+    path = tmp_path / "quote' $() ` % !"
+    result = remote_setup.setup_commands(path, "native")
+    assert result["shell"] == "PowerShell"
+    assert result["resume"].startswith("& '")
+    assert "'remote-setup' '--state-dir'" in result["resume"]
+    assert "quote'' $() ` % !'" in result["resume"]
+    assert "'remote-watch'" in result["start"]
+    assert "'remote-doctor'" in result["diagnose"]

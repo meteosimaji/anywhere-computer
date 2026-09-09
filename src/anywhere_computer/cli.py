@@ -352,12 +352,16 @@ def main() -> None:
             print(json.dumps(http_authorization_status(directory)))
         elif args.command == "http-watch":
             raise SystemExit(watch_http(directory))
-        elif args.command == "remote-setup":
-            print(json.dumps(setup_remote(directory), ensure_ascii=False, indent=2))
-        elif args.command == "chatgpt-setup":
-            print(json.dumps(
-                setup_remote(directory, client_kind="chatgpt"), ensure_ascii=False, indent=2,
-            ))
+        elif args.command in {"remote-setup", "chatgpt-setup"}:
+            setup_result = setup_remote(
+                directory, client_kind="chatgpt" if args.command == "chatgpt-setup" else "native",
+            )
+            print(json.dumps(setup_result, ensure_ascii=False, indent=2))
+            commands = setup_result.get("commands")
+            if isinstance(commands, dict):
+                print(f"\nCopy a command into {commands['shell']}:")
+                for command_name in ("resume", "start", "diagnose"):
+                    print(f"\n{command_name}:\n{commands[command_name]}")
         elif args.command == "remote-watch":
             if sys.platform == "win32":
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)
