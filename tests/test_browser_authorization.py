@@ -37,6 +37,7 @@ async def begin(browser, **overrides):
     )
     status, body, headers = await browser.authorize("GET", {}, b"", query)
     assert status == 200
+    assert headers["Referrer-Policy"] == "same-origin"
     fields = dict(re.findall(r"name=(request_id|csrf) value='([^']+)'", body.decode()))
     request_headers = {
         "origin": "https://computer.example",
@@ -70,12 +71,14 @@ async def test_consent_issues_one_bound_code(browser, authority):
     assert authority.verify(token.value, resource=RESOURCE).tools == frozenset({"files_read"})
 
 
-@pytest.mark.parametrize("failure", ["origin", "cookie", "csrf", "password"])
+@pytest.mark.parametrize("failure", ["origin", "null_origin", "cookie", "csrf", "password"])
 async def test_invalid_consent_does_not_consume_request(browser, failure):
     fields, headers = await begin(browser)
     changed_fields, changed_headers = dict(fields), dict(headers)
     overrides = {}
-    if failure in {"origin", "cookie"}:
+    if failure == "null_origin":
+        changed_headers["origin"] = "null"
+    elif failure in {"origin", "cookie"}:
         changed_headers[failure] = "invalid"
     elif failure == "csrf":
         changed_fields["csrf"] = "invalid"

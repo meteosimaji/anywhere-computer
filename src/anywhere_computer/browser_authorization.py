@@ -99,7 +99,10 @@ class BrowserAuthorization:
             "Content-Type": "text/html; charset=utf-8",
             "Cache-Control": "no-store",
             "Pragma": "no-cache",
-            "Referrer-Policy": "no-referrer",
+            # HTML form POSTs under no-referrer send Origin: null, which our
+            # strict origin check must reject. Preserve same-origin submissions
+            # without disclosing the consent URL to the external callback.
+            "Referrer-Policy": "same-origin",
             "X-Content-Type-Options": "nosniff",
             "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
             "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
