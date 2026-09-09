@@ -18,6 +18,42 @@ class OpenWorkspace(Contract):
     view: Literal["files", "settings", "connection"] = "files"
 
 
+class CodexThreadPage(Contract):
+    limit: int = Field(default=10, ge=1, le=30)
+    cursor: str | None = Field(default=None, max_length=2048)
+
+
+class CodexThreadRead(Contract):
+    thread_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-zA-Z0-9_-]+$")
+    limit: int = Field(default=3, ge=1, le=10)
+    cursor: str | None = Field(default=None, max_length=2048)
+
+
+class CodexSkillsPage(Contract):
+    cwd: str | None = Field(default=None, max_length=4096)
+    limit: int = Field(default=30, ge=1, le=100)
+    after: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+
+class CodexSkillRead(Contract):
+    skill_id: str = Field(pattern=r"^[a-f0-9]{64}$")
+    cwd: str | None = Field(default=None, max_length=4096)
+
+
+class CodexPluginPage(Contract):
+    cwd: str = Field(min_length=1, max_length=4096)
+    limit: int = Field(default=30, ge=1, le=30)
+    cursor: str | None = Field(default=None, max_length=2048)
+
+
+class CodexPluginCall(Contract):
+    cwd: str = Field(min_length=1, max_length=4096)
+    server: str = Field(min_length=1, max_length=200)
+    tool: str = Field(min_length=1, max_length=200)
+    arguments: dict[str, JsonValue] = Field(default_factory=dict)
+    catalog_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
 class RuntimeSettings(Contract):
     default_shell: str | None = None
     file_read_line_limit: int = Field(default=5000, ge=1, le=5000)

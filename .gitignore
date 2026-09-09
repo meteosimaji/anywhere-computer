@@ -16,4 +16,4 @@ local-state/
 research-sources/
 
 .playwright-cli/
-output/playwright/
+output/

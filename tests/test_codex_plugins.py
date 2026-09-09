@@ -1,0 +1,187 @@
+import copy
+import os
+from pathlib import Path
+
+import pytest
+
+from anywhere_computer import codex_plugins
+from anywhere_computer.codex_plugins import (
+    PluginCallOutcomeUnknown,
+    call_codex_plugin_tool,
+    list_codex_plugin_tools,
+)
+
+
+@pytest.fixture
+def fake_codex(tmp_path, monkeypatch):
+    if os.name == "nt":
+        pytest.skip("Native executable fixture uses a POSIX shebang")
+    script = tmp_path / "fake-codex"
+    script.write_text(
+        """#!/usr/bin/env python3
+import json, sys
+for line in sys.stdin:
+    p=json.loads(line); m=p.get('method')
+    if 'id' not in p: continue
+    if m == 'initialize': r={}
+    elif m == 'thread/start':
+        assert p['params']['ephemeral'] is True
+        r={'thread':{'id':'thread-1','ephemeral':True}}
+    elif m == 'mcpServerStatus/list':
+        r={'servers':[{'name':'demo','tools':[{'name':'echo','description':'Echo',
+            'inputSchema':{'type':'object'}}]}]}
+    elif m == 'mcpServer/tool/call':
+        r={'content':[{'type':'text','text':'ok'}], 'isError':False,
+           'structuredContent':{'private':'discarded-by-size-check-only'}}
+    elif m == 'thread/unsubscribe': r={}
+    else: raise RuntimeError('unexpected method')
+    print(json.dumps({'jsonrpc':'2.0','id':p['id'],'result':r}),flush=True)
+""",
+        encoding="utf-8",
+    )
+    script.chmod(0o700)
+    monkeypatch.setattr(codex_plugins, "_executable", lambda _: script)
+    return script
+
+
+async def test_catalog_is_ephemeral_and_exposes_schema_digest(fake_codex, tmp_path):
+    result = await list_codex_plugin_tools(str(tmp_path), limit=30)
+    assert result["servers"][0]["server"] == "demo"
+    tool = result["servers"][0]["tools"][0]
+    assert set(tool) == {
+        "name", "description", "inputSchema", "annotations", "server", "catalog_sha256",
+    }
+    assert len(tool["catalog_sha256"]) == 64
+
+
+async def test_call_requires_fresh_catalog_digest_and_filters_result(fake_codex, tmp_path):
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    tool = catalog["servers"][0]["tools"][0]
+    result = await call_codex_plugin_tool(
+        str(tmp_path), "demo", "echo", {}, tool["catalog_sha256"],
+    )
+    assert result == {
+        "content": [{"type": "text", "text": "ok"}],
+        "is_error": False, "truncated": False,
+        "structured_content": {"private": "discarded-by-size-check-only"},
+    }
+    with pytest.raises(ValueError, match="stale"):
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, "0" * 64)
+
+
+async def test_recursive_server_and_tool_routes_are_rejected(fake_codex, tmp_path):
+    with pytest.raises(ValueError):
+        await call_codex_plugin_tool(str(tmp_path), "anywhere-computer", "echo", {}, "0" * 64)
+    with pytest.raises(ValueError):
+        await call_codex_plugin_tool(str(tmp_path), "demo", "devices_list", {}, "0" * 64)
+
+
+def test_plugin_inputs_and_unknown_type_are_bounded():
+    assert PluginCallOutcomeUnknown.__name__ == "PluginCallOutcomeUnknown"
+    with pytest.raises(ValueError):
+        codex_plugins._cwd("relative")
+    with pytest.raises(ValueError):
+        codex_plugins._cursor("x" * 2049)
+
+
+@pytest.fixture
+def stub_catalog(tmp_path, monkeypatch):
+    rows = [{"name": "demo", "tools": {"echo": {
+        "name": "echo", "description": "Echo", "inputSchema": {"type": "object"},
+        "annotations": {"readOnlyHint": True},
+    }}}]
+    state = {"rows": rows, "result": {"content": [{"type": "text", "text": "ok"}]},
+             "calls": [], "next": None, "error": None}
+
+    class Stub:
+        def __init__(self, _):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def request(self, method, params):
+            state["calls"].append((method, params))
+            if method == "thread/start":
+                assert params["ephemeral"] is True
+                return {"thread": {"id": "isolated"}}
+            if method == "mcpServerStatus/list":
+                return {"data": state["rows"], "nextCursor": state["next"]}
+            if method == "mcpServer/tool/call":
+                if state["error"]:
+                    raise state["error"]
+                return state["result"]
+            assert method == "thread/unsubscribe"
+            return {}
+
+    monkeypatch.setattr(codex_plugins, "_Session", Stub)
+    monkeypatch.setattr(codex_plugins, "_executable", lambda _: Path("/fixture"))
+    return state
+
+
+async def test_catalog_skips_self_and_returns_single_page(stub_catalog, tmp_path):
+    stub_catalog["rows"].append({"name": "plugin_anywhere-computer", "tools": {}})
+    stub_catalog["next"] = "page-two"
+    result = await list_codex_plugin_tools(str(tmp_path))
+    assert [row["server"] for row in result["servers"]] == ["demo"]
+    assert result["next_cursor"] == "page-two"
+    assert sum(m == "mcpServerStatus/list" for m, _ in stub_catalog["calls"]) == 1
+
+
+async def test_duplicate_and_changed_annotation_prevent_dispatch(stub_catalog, tmp_path):
+    result = await list_codex_plugin_tools(str(tmp_path))
+    digest = result["servers"][0]["tools"][0]["catalog_sha256"]
+    stub_catalog["rows"][0]["tools"]["echo"]["annotations"]["readOnlyHint"] = False
+    with pytest.raises(ValueError, match="stale"):
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
+    assert not any(m == "mcpServer/tool/call" for m, _ in stub_catalog["calls"])
+    stub_catalog["rows"].append(copy.deepcopy(stub_catalog["rows"][0]))
+    with pytest.raises(ValueError, match="duplicate"):
+        await list_codex_plugin_tools(str(tmp_path))
+
+
+@pytest.mark.parametrize("failure", [TimeoutError(), ConnectionError(), RuntimeError()])
+async def test_dispatched_error_is_unknown(stub_catalog, tmp_path, failure):
+    result = await list_codex_plugin_tools(str(tmp_path))
+    digest = result["servers"][0]["tools"][0]["catalog_sha256"]
+    stub_catalog["error"] = failure
+    with pytest.raises(PluginCallOutcomeUnknown):
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
+
+
+@pytest.mark.parametrize("result", [
+    {"content": [], "isError": "false"}, {"content": "malformed"},
+    {"content": [{"type": "text", "text": 5}]}, {"structuredContent": []},
+])
+async def test_malformed_result_is_unknown(stub_catalog, tmp_path, result):
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    digest = catalog["servers"][0]["tools"][0]["catalog_sha256"]
+    stub_catalog["result"] = result
+    with pytest.raises(PluginCallOutcomeUnknown):
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
+
+
+def test_result_utf8_bounds_and_metadata_filtering():
+    result = codex_plugins._tool_result({
+        "content": [{"type": "image", "data": "discard"},
+                    {"type": "text", "text": "あ" * 20000},
+                    {"type": "text", "text": "い" * 20000}],
+        "structuredContent": {"value": 1, "_meta": {"secret": "excluded"}},
+        "_meta": {"secret": "excluded"},
+    })
+    assert result["truncated"] is True
+    assert result["unsupported_content_items"] == 1
+    assert sum(len(row["text"].encode()) for row in result["content"]) <= 65536
+    assert result["structured_content"] == {"value": 1}
+    assert "excluded" not in str(result)
+
+
+async def test_transport_disallows_model_and_persistent_threads():
+    session = codex_plugins._Session(Path("/not-started"))
+    for method, params in [("turn/start", {}), ("thread/resume", {}),
+                           ("thread/start", {"ephemeral": False})]:
+        with pytest.raises(ValueError):
+            await session.request(method, params)

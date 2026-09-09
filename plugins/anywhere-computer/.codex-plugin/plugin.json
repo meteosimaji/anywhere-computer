@@ -1,7 +1,7 @@
 {
   "name": "anywhere-computer",
-  "version": "0.1.0-alpha.1+codex.20260909021332",
-  "description": "Persistent computer tools with conflict-aware files, document inspection and terminal sessions.",
+  "version": "0.1.0-alpha.1+codex.20260909025327",
+  "description": "Computer tools, selected Codex conversations, skills and MCP plugin access.",
   "author": {
     "name": "\u3081\u3066\u304a",
     "url": "https://github.com/meteosimaji"
@@ -9,8 +9,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Anywhere Computer",
-    "shortDescription": "Files, documents and persistent terminal work.",
-    "longDescription": "Local computer tools with operation recovery, bounded searches and document inspection. Development alpha; internet hosting and graphical desktop control are not included.",
+    "shortDescription": "Computer work and your Codex context.",
+    "longDescription": "Files, searches and terminal work, with selected Codex conversations, skills and compatible MCP tools. Development alpha; ChatGPT setup is required. Internet hosting and graphical desktop control are not included.",
     "developerName": "\u3081\u3066\u304a",
     "category": "Productivity",
     "capabilities": [
