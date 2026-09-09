@@ -66,7 +66,9 @@ def publish_archive(staged: Path, output: Path) -> None:
     os.link(staged, output)
 
 
-def build_portable(root: Path, runtime: Path, output: Path) -> Path:
+def build_portable(
+    root: Path, runtime: Path, output: Path, *, allow_downloads: bool = False,
+) -> Path:
     validate_runtime(runtime)
     if output.exists():
         raise ValueError("Output already exists; choose a new archive path")
@@ -97,7 +99,8 @@ def build_portable(root: Path, runtime: Path, output: Path) -> Path:
         requirements.write_text((bundled / "dependencies.txt").read_text() +
                                 f"\nanywhere-computer @ {wheel.as_uri()} " +
                                 f"--hash=sha256:{checksums[wheel.name]}\n")
-        subprocess.run([uv, "pip", "install", "--offline", "--require-hashes",
+        subprocess.run([uv, "pip", "install", *([] if allow_downloads else ["--offline"]),
+                        "--require-hashes",
                         "--python", str(interpreter), "--target", str(site),
                         "-r", str(requirements)], check=True)
         if os.name == "nt":
@@ -145,6 +148,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runtime", type=Path, default=Path(sys.base_prefix))
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--allow-downloads", action="store_true",
+                        help="Allow hash-pinned dependency downloads on the build machine")
     arguments = parser.parse_args()
     print(build_portable(Path(__file__).resolve().parents[1], arguments.runtime,
-                         arguments.output.absolute()))
+                         arguments.output.absolute(), allow_downloads=arguments.allow_downloads))

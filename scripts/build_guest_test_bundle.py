@@ -1,4 +1,4 @@
-"""Build a source-only guest test bundle from an explicit allowlist (stdlib only)."""
+"""Build an isolated guest test bundle from an explicit allowlist (stdlib only)."""
 
 import hashlib
 import json
@@ -12,6 +12,14 @@ def build_guest_bundle(root: Path, output: Path) -> Path:
     files += sorted((root / "src/anywhere_computer").glob("*.py"))
     files += sorted((root / "tests").glob("test_*.py"))
     files += [root / "docs/ARCHITECTURE.md"]
+    files += sorted((root / "scripts").glob("*.py"))
+    files += sorted((root / "src/anywhere_computer/web").glob("*.html"))
+    plugin = root / "plugins/anywhere-computer"
+    files += [plugin / name for name in (
+        ".codex-plugin/plugin.json", ".mcp.json", "LICENSE", "skills/computer-work/SKILL.md",
+        "bundled/checksums.json", "bundled/dependencies.txt",
+        "bundled/anywhere_computer-0.1.0a1-py3-none-any.whl",
+    )]
     payloads = {}
     for source in files:
         if source.is_symlink() or not source.is_file():
@@ -21,7 +29,8 @@ def build_guest_bundle(root: Path, output: Path) -> Path:
     manifest = {
         "source_revision": revision,
         "files_sha256": {name: hashlib.sha256(data).hexdigest() for name, data in payloads.items()},
-        "scope": "Source test bundle; hashes identify actual files, including uncommitted edits",
+        "scope": "Source and packaged-runtime test bundle; hashes identify actual files, "
+        "including uncommitted edits",
     }
     output.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:

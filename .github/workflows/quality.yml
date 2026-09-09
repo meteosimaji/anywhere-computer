@@ -30,7 +30,7 @@ jobs:
       - run: uv run python scripts/verify_tunnel_pipe.py --download-for-test
       - run: uv build
       - name: Build portable distribution
-        run: uv run python scripts/build_portable.py --output dist/portable-${{ matrix.os }}.zip
+        run: uv run python scripts/build_portable.py --allow-downloads --output dist/portable-${{ matrix.os }}.zip
       - name: Extract and verify relocated portable runtime
         shell: bash
         run: |
