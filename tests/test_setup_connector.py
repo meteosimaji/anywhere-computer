@@ -247,3 +247,37 @@ async def test_two_connectors_share_setup_operation_claim(tmp_path, monkeypatch)
     finally:
         first.close()
         second.close()
+
+
+async def test_chatgpt_preset_reviews_and_saves_canonical_oauth_settings(connector):
+    from anywhere_computer.http_service import load_http_config
+    from anywhere_computer.remote_setup import CHATGPT_CLIENT, CHATGPT_REDIRECT
+
+    reply = await connector.execute(operation(
+        "connection_setup_plan", resource="https://fixture.example/mcp",
+        client_kind="chatgpt", mode="all",
+    ))
+    assert reply.state == "completed" and reply.data["phase"] == "review"
+    config = reply.data["configuration"]
+    assert config["client"] == CHATGPT_CLIENT
+    assert config["redirects"] == [CHATGPT_REDIRECT]
+    assert "codex_plugin_call" in config["scopes"] and "terminal_start" in config["scopes"]
+    assert not (connector.controller.directory / "http-server").exists()
+    saved = await connector.execute(operation(
+        "connection_setup_confirm", plan_id=reply.data["plan_id"],
+    ))
+    assert saved.state == "completed" and saved.data["phase"] == "configured"
+    assert load_http_config(connector.controller.directory).client == CHATGPT_CLIENT
+
+
+@pytest.mark.parametrize("conflict", [
+    {"client": "anywhere-native"},
+    {"redirects": ["https://another.example/callback"]},
+    {"client_kind": "unknown"},
+])
+async def test_chatgpt_preset_rejects_conflicting_fields_before_review(connector, conflict):
+    arguments = {"resource": "https://fixture.example/mcp", "client_kind": "chatgpt", **conflict}
+    reply = await connector.execute(operation("connection_setup_plan", **arguments))
+    assert reply.state == "failed"
+    assert connector.controller.progress().phase == "new"
+    assert not (connector.controller.directory / "http-server").exists()

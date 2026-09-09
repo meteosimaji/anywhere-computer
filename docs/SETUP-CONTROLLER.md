@@ -180,3 +180,12 @@ Validation of this preset/issuer update (2026-09-09):
 - No user's production owner password, ChatGPT account setting, or autostart definition
   was changed by this update. Actual ChatGPT setup and one-command runtime installation
   remain outstanding acceptance requirements.
+
+For AI-assisted ChatGPT setup, call `connection_setup_plan` with
+`client_kind: "chatgpt"`, the public `/mcp` resource, and the intended permission
+mode. The connector supplies the predefined ChatGPT client ID and redirect URI;
+the assistant does not need to invent or transcribe them. Conflicting explicit
+client/redirect values are rejected before review. Omitting `client_kind` keeps
+the existing native-client behavior. The reviewed configuration still requires
+`connection_setup_confirm`; this only saves public configuration and does not
+create credentials, start a service, or connect ChatGPT automatically.

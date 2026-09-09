@@ -5,13 +5,13 @@ import hashlib
 import json
 import sqlite3
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, Self, cast
 
-from pydantic import Field, JsonValue
+from pydantic import Field, JsonValue, model_validator
 
 from .mcp_server import Catalog, Execute
 from .models import Contract, Empty, Reply, Request
-from .remote_setup import plan_remote_setup
+from .remote_setup import CHATGPT_CLIENT, CHATGPT_REDIRECT, plan_remote_setup
 from .setup_controller import SetupController
 from .state import prepare_directory
 
@@ -22,11 +22,24 @@ SETUP_TOOLS = frozenset({
 
 class ConnectionSetupDraft(Contract):
     resource: str = Field(max_length=2048)
+    client_kind: Literal["native", "chatgpt"] = Field(
+        default="native",
+        description="Use chatgpt to set its OAuth client and callback automatically",
+    )
     mode: Literal["read-only", "files", "all"] = "read-only"
     owner: str = Field(default="owner", min_length=1, max_length=128)
     client: str = Field(default="anywhere-native", min_length=1, max_length=128)
     port: int = Field(default=8768, ge=1, le=65535)
     redirects: list[str] | None = Field(default=None, min_length=1, max_length=10)
+
+    @model_validator(mode="after")
+    def validate_chatgpt_preset(self) -> Self:
+        if self.client_kind == "chatgpt":
+            if "client" in self.model_fields_set and self.client != CHATGPT_CLIENT:
+                raise ValueError("ChatGPT preset conflicts with the supplied client identifier")
+            if self.redirects is not None and self.redirects != [CHATGPT_REDIRECT]:
+                raise ValueError("ChatGPT preset conflicts with the supplied callback")
+        return self
 
 
 class ConnectionSetupConfirmation(Contract):
@@ -115,7 +128,8 @@ class SetupConnector:
              "Configured means configuration saved, not credentials or connectivity verified.",
              Empty, True),
             ("connection_setup_plan", "Prepare the local connector's initial HTTP configuration "
-             "for review. Public fields only; no passwords/tokens, service start or OS changes.",
+             "for review. Choose client_kind=chatgpt for automatic ChatGPT OAuth settings. "
+             "Public fields only; no passwords/tokens, service start or OS changes.",
              ConnectionSetupDraft, False),
             ("connection_setup_confirm", "Save the exact local HTTP configuration plan reviewed "
              "by the user. Never overwrites existing configuration. On response loss call "
@@ -157,9 +171,11 @@ class SetupConnector:
                     progress = self.controller.progress()
                 elif request.tool == "connection_setup_plan":
                     plan = await plan_remote_setup(
-                        resource=args.resource, owner=args.owner, client=args.client,
+                        resource=args.resource, owner=args.owner,
+                        client=CHATGPT_CLIENT if args.client_kind == "chatgpt" else args.client,
                         port=args.port, mode=args.mode,
-                        redirects=(frozenset(args.redirects)
+                        redirects=(frozenset({CHATGPT_REDIRECT})
+                                   if args.client_kind == "chatgpt" else frozenset(args.redirects)
                                    if args.redirects is not None else None),
                     )
                     progress = self.controller.review(plan)
