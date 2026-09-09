@@ -189,3 +189,17 @@ client/redirect values are rejected before review. Omitting `client_kind` keeps
 the existing native-client behavior. The reviewed configuration still requires
 `connection_setup_confirm`; this only saves public configuration and does not
 create credentials, start a service, or connect ChatGPT automatically.
+
+The connection screen now defaults its app selector to ChatGPT. It omits the
+manual client field from ChatGPT drafts and lets the connector apply the preset.
+Switching the app invalidates a previously reviewed plan. Existing configuration
+is identified from its actual client and callback before choosing the displayed
+app; saved configuration remains locked against replacement.
+
+2026-09-09 browser verification: the disposable local browser host served the
+actual workspace HTML and SetupConnector. Entering `https://fixture.example/mcp`
+with ChatGPT selected produced `anywhere-chatgpt` and the predefined callback in
+the review. Saving showed the configured state, disabled editing, and explicitly
+stated that authentication/startup/connectivity were not performed. The temporary
+host and tab were stopped afterwards. This is real browser UI testing against a
+local fixture, not evidence of acceptance in ChatGPT itself.

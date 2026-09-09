@@ -6,7 +6,7 @@ const {webcrypto} = require('node:crypto');
 const html = fs.readFileSync(process.argv[2], 'utf8');
 let script = html.split('<script>')[1].split('</script>')[0];
 script = script.replace('  controls();\n  if(window.parent',
-  '  globalThis.testUI={state,call,resolveMutation,listDevices,selectDevice,setupCall,confirmSetup,controls};return;\n  if(window.parent');
+  '  globalThis.testUI={state,call,resolveMutation,listDevices,selectDevice,setupCall,planSetup,confirmSetup,controls};return;\n  if(window.parent');
 const elements = new Map();
 let listener;
 let responder;
@@ -100,6 +100,28 @@ function completed(packet,data) {
   assert.equal(elements.get('setup-confirm').disabled,true);
   assert.equal(ui.state.mutation,null,'Setup must not enter file-operation recovery');
   assert.match(elements.get('setup-status').textContent,/認証・起動・接続確認/);
+  const chatConfig={...configuration,client:'anywhere-chatgpt',redirects:['https://chatgpt.com/connector_platform_oauth_redirect']};
+  responder=packet=>completed(packet,{...review,configuration:chatConfig});
+  await ui.setupCall('connection_setup_status');
+  assert.equal(elements.get('setup-kind').value,'chatgpt');
+  assert.equal(elements.get('setup-client').disabled,true);
+  responder=packet=>{
+    assert.equal(packet.params.arguments.client_kind,'chatgpt');
+    assert.equal(Object.hasOwn(packet.params.arguments,'client'),false,'Preset must not send a conflicting manual client');
+    return completed(packet,{...review,configuration:chatConfig});
+  };
+  await ui.planSetup();
+  elements.get('setup-kind').value='native';
+  elements.get('setup-kind').oninput();
+  assert.equal(ui.state.setup.plan_id,null,'Changing the app invalidates confirmation');
+  assert.equal(elements.get('setup-client').disabled,false);
+  elements.get('setup-client').value='chosen-native-client';
+  responder=packet=>{
+    assert.equal(packet.params.arguments.client_kind,'native');
+    assert.equal(packet.params.arguments.client,'chosen-native-client');
+    return completed(packet,{...review,configuration});
+  };
+  await ui.planSetup();
   ui.state.rootTools.clear();ui.controls();
   assert.equal(elements.get('setup-tab').hidden,true);
   before=calls;await assert.rejects(ui.setupCall('connection_setup_status'));

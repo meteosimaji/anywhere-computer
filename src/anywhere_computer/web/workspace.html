@@ -37,8 +37,9 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
 <div class="settings-grid">
 <div class="setting wide"><div class="section-heading"><h2 id="setup-title">接続の準備。</h2><button id="setup-reload">状態を確認</button></div><p id="setup-status" role="status" aria-live="polite">現在の設定を確認します。</p>
 <label for="setup-resource">接続先のURL</label><p>用意した公開URLを入力してください。</p><input id="setup-resource" type="url" placeholder="https://computer.example.com/mcp" autocomplete="off" spellcheck="false" maxlength="2048">
+<label for="setup-kind" class="setup-label">使うアプリ</label><select id="setup-kind"><option value="chatgpt">ChatGPT</option><option value="native">その他の MCP クライアント</option></select>
 <label for="setup-mode" class="setup-label">許可する操作</label><select id="setup-mode"><option value="read-only">見る・調べる</option><option value="files">ファイルを編集する</option><option value="all">すべての操作（コマンド実行を含む）</option></select>
-<details id="setup-options"><summary>詳細設定</summary><div class="setup-options"><label for="setup-owner">所有者名</label><input id="setup-owner" value="owner" maxlength="128" autocomplete="off"><label for="setup-client">接続アプリ名</label><input id="setup-client" value="anywhere-native" maxlength="128" autocomplete="off"><label for="setup-port">このコンピューターの待受ポート</label><input id="setup-port" type="number" value="8768" min="1" max="65535"></div></details>
+<details id="setup-options"><summary>詳細設定</summary><div class="setup-options"><label for="setup-owner">所有者名</label><input id="setup-owner" value="owner" maxlength="128" autocomplete="off"><label id="setup-client-label" for="setup-client">接続アプリ名</label><input id="setup-client" value="anywhere-native" maxlength="128" autocomplete="off"><label for="setup-port">このコンピューターの待受ポート</label><input id="setup-port" type="number" value="8768" min="1" max="65535"></div></details>
 <div class="setup-actions"><button id="setup-plan" class="primary">内容を確認</button></div></div>
 <div id="setup-review" class="setting wide" hidden><h2 id="setup-review-title">この内容で保存します。</h2><dl id="setup-summary"></dl><details><summary>接続設定の詳細</summary><dl id="setup-technical"></dl></details><details><summary>許可する操作の一覧</summary><ul id="setup-scopes"></ul></details><p class="setup-explanation">保存するのは接続の設定です。認証とサービスの起動は、このあと別途必要です。</p><button id="setup-confirm" class="primary">この内容を保存</button></div>
 </div></section>
@@ -78,7 +79,9 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     $("setup-tab").hidden=!setupAllowed;$("setup-tab").disabled=blocked || !setupAllowed;
     $("setup-reload").disabled=blocked || !setupAllowed;
     const setupEditable=setupAllowed && !state.setupUncertain && ["new","review"].includes(state.setup?.phase);
-    for(const id of ["setup-resource","setup-mode","setup-owner","setup-client","setup-port"]) $(id).disabled=blocked || !setupEditable;
+    for(const id of ["setup-resource","setup-kind","setup-mode","setup-owner","setup-client","setup-port"]) $(id).disabled=blocked || !setupEditable;
+    $("setup-client").hidden=$("setup-client-label").hidden=$("setup-kind").value==="chatgpt";
+    $("setup-client").disabled=blocked || !setupEditable || $("setup-kind").value==="chatgpt";
     $("setup-plan").disabled=blocked || !setupEditable || !state.rootTools.has("connection_setup_plan");
     $("setup-confirm").disabled=blocked || !setupEditable || state.setup?.phase!=="review" || !state.setup?.plan_id || !state.rootTools.has("connection_setup_confirm");
     const writable = state.current?.kind==="text" && state.current.complete && !state.current.mixed;
@@ -298,6 +301,7 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     $("setup-summary").replaceChildren();$("setup-technical").replaceChildren();$("setup-scopes").replaceChildren();
     const config=progress.configuration;
     if(config) {
+      $("setup-kind").value=config.client==="anywhere-chatgpt" && config.redirects.length===1 && config.redirects[0]==="https://chatgpt.com/connector_platform_oauth_redirect"?"chatgpt":"native";
       $("setup-mode").value=config.scopes.includes("terminal_start")?"all":config.scopes.includes("files_write")?"files":"read-only";
       $("setup-resource").value=config.resource;$("setup-owner").value=config.owner;$("setup-client").value=config.client;$("setup-port").value=config.port;
       for(const [label,value] of [["接続先",config.resource],["所有者",config.owner],["接続アプリ",config.client],["待受ポート",String(config.port)],["端末ID",config.device],["認証後の戻り先",config.redirects.join("\n")]]) {
@@ -330,7 +334,10 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
   async function planSetup() {
     const raw=$("setup-port").value,port=Number(raw);
     if(!raw || !Number.isInteger(port) || port<1 || port>65535) throw new Error("待受ポートは1〜65535の整数で入力してください。");
-    await setupCall("connection_setup_plan",{resource:$("setup-resource").value.trim(),mode:$("setup-mode").value,owner:$("setup-owner").value,client:$("setup-client").value,port});
+    const clientKind=$("setup-kind").value;
+    const draft={resource:$("setup-resource").value.trim(),client_kind:clientKind,mode:$("setup-mode").value,owner:$("setup-owner").value,port};
+    if(clientKind==="native") draft.client=$("setup-client").value;
+    await setupCall("connection_setup_plan",draft);
   }
   async function confirmSetup() {
     if(state.setup?.phase!=="review" || !state.setup.plan_id) throw new Error("保存する内容を確認してください。");
@@ -409,7 +416,7 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
   $("setup-tab").onclick=()=>navigate(()=>job(setupView));
   $("setup-reload").onclick=()=>job(()=>setupCall("connection_setup_status"));
   $("setup-plan").onclick=()=>job(planSetup);$("setup-confirm").onclick=()=>job(confirmSetup);
-  for(const id of ["setup-resource","setup-mode","setup-owner","setup-client","setup-port"]) $(id).oninput=()=>{if(state.setup?.phase==="review"){state.setup={phase:"new",plan_id:null,configuration:null};$("setup-review").hidden=true;}controls();};
+  for(const id of ["setup-resource","setup-kind","setup-mode","setup-owner","setup-client","setup-port"]) $(id).oninput=()=>{if(state.setup?.phase==="review"){state.setup={phase:"new",plan_id:null,configuration:null};$("setup-review").hidden=true;}controls();};
   $("settings-tab").onclick=()=>navigate(()=>job(settingsView));
   $("files-tab").onclick=()=>navigate(()=>{clearFile();show("welcome");message("絶対パスを指定してください。");controls();});
   $("set-shell").onclick=()=>job(()=>applySetting("default_shell","default-shell"));
