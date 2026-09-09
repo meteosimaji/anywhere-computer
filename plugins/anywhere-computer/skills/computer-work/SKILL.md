@@ -10,7 +10,8 @@ if a conflict occurs, read again and reassess the intended edit.
 Use paginated reads and searches. search_start supports filename_glob,
 excluded_directories, whole_word, max_files and max_depth. Inspect truncated,
 limit_reason, skipped and directory_errors before claiming a complete search.
-Patterns are literal; filename/directory filters use basename globs, not regex. documents_read inspects OOXML content; it does
+Use regex only when explicitly selected; filename/directory filters use basename globs.
+Document searches support bounded OOXML content and may truncate long fields. documents_read inspects OOXML content; it does
 not render pages or evaluate Excel formulas. Do not imply complete Office support.
 
 Use files_read_binary for binary files up to 1 GiB (a full hash scan per call),
@@ -50,7 +51,19 @@ stopping that work is intended. On an uncertain response, keep the operation ID
 and query operations_get before considering another mutation. Never interpret a
 missing response as proof that a write did not happen.
 
-This plugin connects to the local agent by default. The separate remote-mcp CLI
+The local connector provides devices_list, devices_tools and devices_call. List registered
+devices, then obtain the selected device's authorized tool schemas with devices_tools.
+Pass its explicit device_id, tool and arguments to devices_call. The reserved local ID
+addresses this connector's local agent; ordinary tools still operate locally. A cached
+ready observation is not a fresh connection check. Never infer the target from a device name.
+Keep device_id together with every session, search, transfer and operation ID. After a
+lost routed response, use devices_call on that SAME device to invoke operations_get,
+passing the original operation ID inside arguments and a fresh ID for the lookup request.
+Do not repeat a mutation with a new operation ID. The result is nested under data.result.
+Registration and login are explicit local CLI actions; routing never opens a login flow
+or exposes saved credentials. Remote catalogs cannot forward to further devices.
+
+The separate remote-mcp CLI
 can select an already configured SSH device. http-mcp can select an authorized
 HTTP profile. http-configure/http-serve support a persistent loopback HTTP server
 behind an owner-configured HTTPS proxy. http-watch can supervise a configured

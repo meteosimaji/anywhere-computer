@@ -49,7 +49,7 @@
 |DC24|get_recent_tool_calls|部分|operations_recent: ツール名完全一致と開始時刻下限で絞込み。引数・結果プレビューは返さない。operations_getは既知ID照会。|
 |DC25|get_prompts|部分|skill/README の導入説明はあるが、ID 指定のプロンプトライブラリなし。|
 |DC26|feedback|未対応|独自フィードバックフォームを開く専用ツールなし。第三者フォームへの送信は代替要件ではない。|
-|DC27|list_devices|部分|CLI の永続 SSH/HTTP 登録・一覧・名前・選択あり。MCP 会話からの端末一覧/各呼出しの deviceId routing、アカウント共有 dashboard なし。|
+|DC27|list_devices|部分|CLIの永続SSH/HTTP登録と、ローカルコネクターのdevices_list/tools/callで会話から明示IDによる転送。公開HTTPへの再転送権限は追加しない。共有dashboard・pairingなし。|
 |DC28|who_am_i|未対応|認証実装はあるが、現在の認証ユーザーを返す専用公開ツールなし。|
 |DC29|ping device|部分|computer_status と CLI device-status の認証済み照会あり。MCP protocol ping は接続先端末の稼働保証ではない。deviceId 指定 pong/時刻ツールなし。|
 |DC30|shutdown agent|部分|CLI stop はローカル agent 停止。端末 ID 指定で応答後に遠隔 agent を止める公開ツールなし。|
@@ -75,7 +75,7 @@
 |EX12|実行設定|部分|既定shell・読書き行数上限の永続設定APIあり。blockedCommands/allowedDirectoriesなし。HTTP tool scopeはOS sandboxではない。|
 |EX13|履歴|部分|永続operation状態/要約、tool/since絞込み。引数ログは抑制。保持期間/ローテーションは未完。|
 |EX14|導入運用|部分|共通 Python/CLI、Codex package、3 OS 自動起動 adapter。無害な CI worker の登録/停止証拠あり。実ログイン/再起動後の公開接続、更新/rollback、sleep 復帰、初心者向け導入の完成検証なし。|
-|EX15|Remote 接続|部分|HTTPS/SSH、OAuth PKCE、native vault、refresh/revoke、CLI 端末選択。照合コード pairing/dashboard/会話中 routing、二台の実機実証は未達。|
+|EX15|Remote 接続|部分|HTTPS/SSH、OAuth PKCE、native vault、refresh/revoke、CLI端末選択と会話中の明示ID routing。照合コードpairing/dashboard、二台の実機実証は未達。|
 |EX16|Remote 安定性|部分|重複抑制/unknown、子プロセス監督、公開edge経由のconnector crash復帰証拠。任意の公開メタデータ監視を実装（既定無効・認証稼働の証明ではない）。ネットワーク変更/sleepの実証は未完。|
 |EX17|サポート|部分|README/skill/診断文書あり。独自プロンプト集、feedback/usage 入口、日本語/英語全導線整備は未完。人的優先サポートは運営要件。|
 
@@ -84,7 +84,7 @@
 
 ## 実装・検証の根拠
 
-- 登録/schema/dispatch: `src/anywhere_computer/engine.py`, `models.py`, `mcp_server.py`。40名を registry から公開し重複登録を拒否。MCP image/resources/prompts の提供なし。
+- 登録/schema/dispatch: `src/anywhere_computer/engine.py`, `models.py`, `mcp_server.py`。40名をregistryから公開し重複登録を拒否。ローカルstdioには専用ルーター3名を追加し、名前衝突・多段転送を拒否。MCP image/resources/prompts の提供なし。
 - 形式/ファイル/検索/端末: `files.py`, `documents.py`, `search.py`, `sessions.py`。対応する `tests/test_engine.py`, `test_documents.py`, `test_search.py` と照合。
 - 端末選択/履歴: `devices.py`, `cli.py`, `state.py`, `remote_bridge.py` と対応テスト。CLI機能とMCP公開ツールを区別。
 - 上記コミットの実装検証: **470 passed / 5 skipped**。Ruff、mypy通常/Windows対象（50 source files）、plugin構造検証、同梱wheel全50 Pythonファイルとソース/checksum一致が成功。これはOS全条件・全機能の完成証明ではない。
@@ -96,7 +96,7 @@
 ## 未達を解消する順序
 
 1. URL/画像/PDF、Office書式保持編集、端末のPTY/プロンプト自動認識、独自ヘルプと設定の残不足を埋める。実装済みのフォルダ移動・プロセス管理・統計・検索拡張を未実装扱いに戻さない。形式別の fixture と失敗時保全を受け入れ条件にする。
-2. 会話からの端末管理/選択・identity・agent停止、pairing と dashboard、プレビュー/編集/設定 UI を作る。
+2. 会話からの端末選択は実装済み（[DEVICE-ROUTING](../DEVICE-ROUTING.md)）。identity・agent停止、pairingとdashboard、プレビュー/編集/設定UIを作る。
 3. 実装済み公開メタデータ監視の限界を踏まえ、認証付き経路とネットワーク断/sleep/再起動/ログイン/更新の障害試験を行い、macOS/Windows/Linux と二台の実機で証拠を残す。
 4. 完成した候補で Codex/ChatGPT 実利用と配布を検証し、公式申請を行う。現在は private alpha であり、全機能代替として公開しない。
 

@@ -5,7 +5,7 @@
 ChatGPT・Codex などの MCP クライアントから、ファイル・検索・端末作業を行う
 独立エージェント。Linux、Windows、macOS に共通の Python コードを使います。
 
-開発中の **0.1.0 alpha** です。ローカルエージェントと 40 個の MCP ツールを
+開発中の **0.1.0 alpha** です。ローカルエージェントの40ツールと、会話から端末を指定する3つのコネクターツールを
 実装しています。TLS リモート通信と HTTP MCP の内部実装・ループバック試験もあります。
 Word・Excel・PowerPoint の本文/セル読取を実装しています。
 一時 HTTPS 接続口を通るファイル読み書き・認可失効を macOS で実証しています。
@@ -127,6 +127,10 @@ HTTP 応答を失った操作は再送せず、既知の操作 ID と `unknown` 
 [HTTP クライアント](docs/REMOTE-TRANSPORT.md#http-client-and-stdio-connector)を参照してください。
 
 ## 複数端末
+
+ローカル接続では `devices_list` → `devices_tools` → `devices_call` の順に、登録した
+端末を明示的なIDで指定できます。通常のツールはローカルを対象としたままです。
+認証・再送の契約は [会話からの端末指定](docs/DEVICE-ROUTING.md) を参照してください。
 
 既存の SSH 設定のホスト名、または HTTP の接続プロフィールを名前で登録します。
 秘密鍵・パスワード・トークンは登録情報に含めません。

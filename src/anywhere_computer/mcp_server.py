@@ -173,6 +173,8 @@ async def serve_stdio(session: MCPSession, source: BinaryIO, destination: Binary
 
 
 async def run_mcp(directory: Path) -> None:
+    from .device_router import DeviceRouter
+
     async def catalog() -> list[JsonValue]:
         reply = await exchange(directory, "__catalog")
         raw = reply.data.get("tools")
@@ -186,4 +188,10 @@ async def run_mcp(directory: Path) -> None:
             directory, request.tool, request.arguments, operation_id=request.operation_id
         )
 
-    await serve_stdio(MCPSession(catalog, execute), sys.stdin.buffer, sys.stdout.buffer)
+    router = DeviceRouter(directory, catalog, execute)
+    try:
+        await serve_stdio(
+            MCPSession(router.catalog, router.execute), sys.stdin.buffer, sys.stdout.buffer,
+        )
+    finally:
+        router.close()
