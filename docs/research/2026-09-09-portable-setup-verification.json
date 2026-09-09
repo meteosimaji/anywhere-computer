@@ -1,0 +1,20 @@
+{
+  "agent_started": true,
+  "files_roundtrip": true,
+  "regex_child": true,
+  "terminal_reconnected": true,
+  "busy_stop_refused": true,
+  "agent_exited": true,
+  "fixture_credential_removed": true,
+  "manifest_files": 2254,
+  "archive_sha256": "34f2a1405266a22104105493d6c0ef3240495d93f15adf35d667b180a86a87e4",
+  "archive_bytes": 21481435,
+  "source_revision": "6b928e3b7d9bdeb305e9bde56a37f43d36ed1de8",
+  "source_parity_files": 58,
+  "workspace_html_parity": true,
+  "setup_launcher_help": true,
+  "platform": "macos-arm64",
+  "python": "3.12.13",
+  "scope": "relocated portable build with native Keychain; not ChatGPT UI or Windows acceptance",
+  "temporary_extraction_removed": true
+}

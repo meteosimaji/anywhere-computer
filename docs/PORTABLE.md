@@ -108,3 +108,12 @@ Linux ARM64 でも通常モードの実エージェント試験が成功した�
 配布物を移動した場合は新しい場所からセットアップを再開してコマンドを再生成する。
 開始コマンドはフォアグラウンドの `remote-watch` であり、その端末を開いたまま使う。
 自動起動登録、公開ルートの作成、資格情報の入力をこの表示だけで実行することはない。
+
+2026-09-09 のセットアップ改良を含む macOS ARM64 配布物は
+`dist/anywhere-macos-arm64-6b928e3.zip`（21,481,435 bytes）。ソース `6b928e3` の
+58 Python ファイルと workspace HTML が一致することを照合した。日本語・空白・引用符を
+含む新規展開先で通常の認証付きエージェント試験が成功し、試験用 Keychain 資格情報の
+削除まで確認した。制限した PATH と無効な PYTHONHOME/PYTHONPATH の環境でも
+`Setup ChatGPT.command --help` が成功。一時展開先は除去済み。ハッシュと検証結果は
+`research/2026-09-09-portable-setup-verification.json`。これは署名・公証、Finder からの
+起動、公開 HTTPS、ChatGPT UI、Windows の受け入れ試験ではない。
