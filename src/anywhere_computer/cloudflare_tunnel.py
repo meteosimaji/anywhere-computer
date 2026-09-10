@@ -20,7 +20,7 @@ from .http_service import load_http_config
 from .http_supervisor import _stop_child
 from .locking import ProcessLock
 from .secret_pipe import SecretPipe, SecretPipeCleanupError
-from .watch_status import WatchEvent, WatchFailureKind, save_watch_observation
+from .watch_status import WatchEvent, WatchFailureKind, lifecycle_print, save_watch_observation
 
 
 class TunnelCredential:
@@ -155,15 +155,12 @@ def run_tunnel_child(
             )
             token = ""
             try:
-                print(json.dumps({"tunnel_child_started": child.pid}), flush=True)
+                lifecycle_print({"tunnel_child_started": child.pid})
                 pipe.wait(handoff_timeout)
                 # Receiving a token is not evidence of edge connectivity or public readiness.
-                print(
-                    json.dumps(
-                        {"tunnel_credential_sent": True, "public_reachability": "unverified"}
-                    ),
-                    flush=True,
-                )
+                lifecycle_print({
+                    "tunnel_credential_sent": True, "public_reachability": "unverified",
+                })
                 if stop is None:
                     return child.wait()
                 while child.poll() is None:
@@ -199,7 +196,7 @@ def run_tunnel(
                 save_watch_observation(directory / "tunnel-watch-status.json", event,
                                        failures, restart_limit, code, failure_kind=failure_kind)
             except (OSError, ValueError):
-                print(json.dumps({"tunnel_observation_saved": False}), flush=True)
+                lifecycle_print({"tunnel_observation_saved": False})
 
         try:
             credential.read()  # Fail before launching if native storage is unavailable.
@@ -229,21 +226,16 @@ def run_tunnel(
                     failures = 0
                 if failures >= restart_limit:
                     observe_tunnel("restart_limit", code)
-                    print(json.dumps({"tunnel_stopped": "restart_limit"}), flush=True)
+                    lifecycle_print({"tunnel_stopped": "restart_limit"})
                     return 1
                 delay = min(2**failures, 30)
                 failures += 1
                 observe_tunnel("restart_wait", code)
-                print(
-                    json.dumps(
-                        {
+                lifecycle_print({
                             "tunnel_restart_in_seconds": delay,
                             "restart_attempt": failures,
                             "exit_code": code,
-                        }
-                    ),
-                    flush=True,
-                )
+                        })
                 if stop is None:
                     time.sleep(delay)
                 elif stop.wait(delay):

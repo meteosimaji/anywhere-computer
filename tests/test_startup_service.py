@@ -34,6 +34,10 @@ def registration(tmp_path, monkeypatch):
             if native["lost_ack"]:
                 raise RuntimeError("synthetic lost acknowledgment")
 
+        def start(self, snapshot):
+            calls.append("start")
+            native["snapshot"] = replace(native["snapshot"], running=True)
+
         def uninstall(self, snapshot):
             calls.append("uninstall")
             native["snapshot"] = StartupSnapshot(False)
@@ -63,7 +67,7 @@ def test_registration_is_idempotent_and_removal_preserves_config(registration):
     record = service._record(directory)
     assert record is not None and record.native_fingerprint == "1" * 64
     generated = definition(directory, connector=record.connector, startup_id=record.startup_id,
-                           executable=record.interpreter)
+                           executable=record.interpreter, policy_version=record.policy_version)
     assert generated.path.read_bytes() == generated.content
     assert record.startup_id.encode() in (
         generated.content if generated.platform != "win32"
@@ -156,6 +160,7 @@ def test_legacy_startup_can_be_removed_but_not_reenabled(registration):
     service.install_startup(directory)
     receipt = directory / "autostart.json"
     values = json.loads(receipt.read_text())
+    values.pop("policy_version")
     values.pop("isolated_python")  # Exact old schema, not just a new False value.
     receipt.write_text(json.dumps(values))
     record = service._record(directory)
@@ -276,3 +281,49 @@ def test_startup_pins_codex_path_and_preserves_it_when_path_changes(registration
     service.install_startup(directory)
     assert service._record(directory).codex_executable == str(selected)
     assert service._definition(directory, service._record(directory)).content == content
+
+
+def test_explicit_start_is_owned_and_does_not_restart_running(registration):
+    directory, native, calls, _ = registration
+    service.install_startup(directory)
+    native['snapshot'] = replace(native['snapshot'], running=False)
+    assert service.start_startup(directory)['native_running'] is True
+    service.start_startup(directory)
+    assert calls == ['install', 'start']
+
+
+def test_policy_one_receipt_can_be_inspected_and_upgraded(registration):
+    import json
+    directory, native, calls, _ = registration
+    service.install_startup(directory)
+    receipt = directory / 'autostart.json'
+    value = json.loads(receipt.read_text())
+    value.pop('policy_version')
+    receipt.write_text(json.dumps(value))
+    old = service._record(directory)
+    definition = service._definition(directory, old)
+    definition.path.write_bytes(definition.content)
+    assert service.startup_status(directory)['persistence_upgrade_required'] is True
+    service.upgrade_startup(directory)
+    assert service._record(directory).policy_version == 2
+    assert calls == ['install', 'uninstall', 'files_removed', 'install']
+
+
+def test_upgrade_failure_restores_verified_prior_registration(registration, monkeypatch):
+    directory, native, calls, _ = registration
+    service.install_startup(directory)
+    old = service._record(directory)
+    real = service._install_startup_locked
+    attempts = []
+
+    def fail_new(directory, **options):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise RuntimeError('fixture deployment failed')
+        return real(directory, **options)
+
+    monkeypatch.setattr(service, '_install_startup_locked', fail_new)
+    with pytest.raises(RuntimeError, match='previous registration restored'):
+        service.upgrade_startup(directory)
+    assert service._record(directory) == old
+    assert service.startup_status(directory)['native_running'] is True

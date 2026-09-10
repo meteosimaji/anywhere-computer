@@ -84,6 +84,10 @@ if ($request.operation -eq "install") {
         $folder.DeleteTask($request.name,0)
         $task=$null
     }
+} elseif ($request.operation -eq "start") {
+    if ($null -eq $task) { throw "Task is absent" }
+    if ($task.Xml -cne $request.expectedXml) { throw "Task changed" }
+    $null=$task.Run($null)
 } elseif ($request.operation -ne "query") { throw "Unknown operation" }
 $answer=@{present=($null -ne $task); sid=$identity.User.Value; user=$identity.Name}
 if ($null -ne $task) {
@@ -119,6 +123,21 @@ class NativeStartup:
     def _mac_target(self) -> str:
         return f"{_gui_domain()}/{self.definition.name}"
 
+    def _mac_enabled(self) -> bool:
+        output = _checked(["/bin/launchctl", "print-disabled", _gui_domain()])
+        quoted = '"' + self.definition.name + '"'
+        pattern = re.compile(r"^[ \t]*" + re.escape(quoted) +
+                             r"[ \t]*=>[ \t]*(enabled|disabled)[ \t]*$")
+        for line in output.splitlines():
+            match = pattern.fullmatch(line)
+            if match:
+                return match.group(1) == "enabled"
+            if quoted in line:
+                raise RuntimeError("Could not inspect the user LaunchAgent enabled state")
+        # An absent entry has no persistent enable/disable override. The plist's
+        # optional Disabled key is absent from our generated definitions.
+        return True
+
     def query(self) -> StartupSnapshot:
         definition = self.definition
         if definition.platform == "darwin":
@@ -144,7 +163,7 @@ class NativeStartup:
             wanted = [str(definition.path), expected["ProgramArguments"][0],
                       expected["WorkingDirectory"], expected["ProgramArguments"]]
             return StartupSnapshot(True, mac_identity == wanted, fields["state"] == "running",
-                                   True, _fingerprint(mac_identity))
+                                   self._mac_enabled(), _fingerprint(mac_identity))
         if definition.platform == "linux":
             output = self._systemd(
                 "show", definition.name + ".service", "--property=LoadState,FragmentPath,"
@@ -207,6 +226,18 @@ class NativeStartup:
             self._systemd("enable", "--now", definition.name + ".service")
         else:
             self._windows("install")
+
+    def start(self, snapshot: StartupSnapshot) -> None:
+        current = self.query()
+        if (not current.present or not current.matches or
+                current.fingerprint != snapshot.fingerprint):
+            raise RuntimeError("OS startup definition changed before start")
+        if self.definition.platform == "darwin":
+            _checked(["/bin/launchctl", "kickstart", self._mac_target()])
+        elif self.definition.platform == "linux":
+            self._systemd("start", self.definition.name + ".service")
+        else:
+            self._windows("start", expected_xml=current.raw)
 
     def uninstall(self, snapshot: StartupSnapshot) -> None:
         current = self.query()

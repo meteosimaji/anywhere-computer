@@ -36,7 +36,13 @@ from .remote_health import configure_public_monitor
 from .remote_service import serve_remote, watch_remote
 from .remote_setup import setup_remote
 from .ssh_transport import run_ssh_mcp
-from .startup_service import install_startup, startup_status, uninstall_startup
+from .startup_service import (
+    install_startup,
+    start_startup,
+    startup_status,
+    uninstall_startup,
+    upgrade_startup,
+)
 from .state import state_directory
 from .transfer_admin import list_transfers, release_transfer
 
@@ -71,6 +77,8 @@ def main() -> None:
             "autostart-install",
             "autostart-uninstall",
             "autostart-status",
+            "autostart-start",
+            "autostart-upgrade",
             "http-show",
             "http-doctor",
             "http-revoke",
@@ -113,6 +121,8 @@ def main() -> None:
     parser.add_argument("--probe-public", action="store_true",
                         help="Also probe configured HTTPS metadata (remote-doctor only)")
     parser.add_argument("--watch-parent", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--persistent", action="store_true",
+                        help="Keep remote supervision alive until explicitly stopped")
     parser.add_argument("--startup-id", help=argparse.SUPPRESS)
     parser.add_argument("--codex-executable", help="Pinned Codex CLI for remote services")
     args = parser.parse_args()
@@ -122,12 +132,15 @@ def main() -> None:
         if not Path(args.codex_executable).is_absolute():
             parser.error("--codex-executable must be absolute")
         os.environ["ANYWHERE_CODEX_EXECUTABLE"] = args.codex_executable
+    if args.persistent and args.command != "remote-watch":
+        parser.error("--persistent is only valid for remote-watch")
     if args.startup_id is not None and (
         args.command != "remote-watch" or not re.fullmatch(r"[a-f0-9]{32}", args.startup_id)
     ):
         parser.error("Invalid startup registration identifier")
     if args.connector is not None and args.command not in {
         "remote-watch", "remote-serve", "tunnel-run", "autostart-preview", "autostart-install",
+        "autostart-upgrade",
         "remote-doctor",
     }:
         parser.error("--connector is only valid for remote startup, its preview and remote-doctor")
@@ -287,6 +300,10 @@ def main() -> None:
             print(json.dumps(install_startup(directory, connector=args.connector), indent=2))
         elif args.command == "autostart-uninstall":
             print(json.dumps(uninstall_startup(directory), indent=2))
+        elif args.command == "autostart-start":
+            print(json.dumps(start_startup(directory), indent=2))
+        elif args.command == "autostart-upgrade":
+            print(json.dumps(upgrade_startup(directory, connector=args.connector), indent=2))
         elif args.command == "autostart-status":
             print(json.dumps(startup_status(directory), indent=2))
         elif args.command == "transfers":
@@ -373,7 +390,9 @@ def main() -> None:
         elif args.command == "remote-watch":
             if sys.platform == "win32":
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)
-            raise SystemExit(watch_remote(directory, connector=args.connector))
+            raise SystemExit(watch_remote(
+                directory, connector=args.connector, persistent=args.persistent,
+            ))
         elif args.command == "remote-serve":
             prior_terminate = signal.signal(signal.SIGTERM, signal.default_int_handler)
             try:

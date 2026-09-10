@@ -1,6 +1,5 @@
 """Foreground supervision of one owned HTTP child, with bounded crash retries."""
 
-import json
 import os
 import signal
 import subprocess
@@ -13,7 +12,7 @@ from .http_service import load_http_config
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
 from .runtime_launch import python_module_command
-from .watch_status import WatchEvent, save_watch_observation
+from .watch_status import WatchEvent, lifecycle_print, save_watch_observation
 
 
 def _stop_child(child: subprocess.Popen[bytes]) -> None:
@@ -49,7 +48,7 @@ def supervise(
             try:
                 save_watch_observation(status_path, event, failures, restart_limit, code)
             except (OSError, ValueError):
-                print(json.dumps({"watch_observation_saved": False}), flush=True)
+                lifecycle_print({"watch_observation_saved": False})
 
     while True:
         started = time.monotonic()
@@ -68,7 +67,7 @@ def supervise(
             raise
         try:
             observe("child_started")
-            print(json.dumps({"http_child_started": child.pid}), flush=True)
+            lifecycle_print({"http_child_started": child.pid})
             code = child.wait()
         except KeyboardInterrupt:
             observe("interrupted")
@@ -87,23 +86,16 @@ def supervise(
             failures = 0
         if failures >= restart_limit:
             observe("restart_limit", code)
-            print(
-                json.dumps({"http_watch_stopped": "restart_limit", "exit_code": code}), flush=True
-            )
+            lifecycle_print({"http_watch_stopped": "restart_limit", "exit_code": code})
             return 1
         delay = min(initial_delay * 2**failures, 30)
         failures += 1
         observe("restart_wait", code)
-        print(
-            json.dumps(
-                {
+        lifecycle_print({
                     "http_restart_in_seconds": delay,
                     "restart_attempt": failures,
                     "exit_code": code,
-                }
-            ),
-            flush=True,
-        )
+                })
         try:
             time.sleep(delay)
         except KeyboardInterrupt:

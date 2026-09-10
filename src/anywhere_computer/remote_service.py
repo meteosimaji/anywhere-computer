@@ -1,7 +1,6 @@
 """One foreground owner for a loopback HTTP service and its outbound connector."""
 
 import asyncio
-import json
 import os
 import signal
 import subprocess
@@ -12,9 +11,11 @@ from pathlib import Path
 from threading import Event
 
 import psutil
+from keyring.errors import KeyringError
 
-from .client_tokens import ClientCredentialError, CredentialStoreUnavailable
+from .client_tokens import ClientCredentialError, CredentialStoreUnavailable, CredentialVault
 from .cloudflare_tunnel import TunnelCredential, cloudflared_executable
+from .credentials import secure_backend
 from .http_service import http_service, load_http_config
 from .http_supervisor import _stop_child, supervise
 from .locking import ProcessLock
@@ -22,7 +23,7 @@ from .owner_credentials import OwnerCredentials
 from .remote_health import monitor_public_health
 from .runtime_launch import python_module_command
 from .state import prepare_directory
-from .watch_status import WatchEvent, save_watch_observation
+from .watch_status import WatchEvent, lifecycle_print, save_watch_observation
 
 
 def stop_remote_connector(child: subprocess.Popen[bytes]) -> None:
@@ -78,11 +79,11 @@ async def serve_remote(
         with ProcessLock(credential.lock):
             credential.read()
         async with http_service(directory) as running:
-            print(json.dumps({
+            lifecycle_print({
                 "remote_http_listening": f"http://127.0.0.1:{running.config.port}",
                 "resource": running.config.resource,
                 "public_reachability": "unverified",
-            }), flush=True)
+            })
             # No token crosses argv, environment, or stdout. The child rechecks
             # its native credential under its lifetime lock. If another runner
             # wins the preflight/start race, this child fails and HTTP unwinds.
@@ -108,7 +109,7 @@ async def serve_remote(
                     await asyncio.sleep(0.1)
                 code = child.returncode
                 assert code is not None
-                print(json.dumps({"remote_connector_exited": code}), flush=True)
+                lifecycle_print({"remote_connector_exited": code})
                 return code if code >= 0 else 1
             finally:
                 # Connector shutdown precedes HTTP shutdown. SIGINT/Ctrl+Break
@@ -126,7 +127,7 @@ def record_remote_startup(path: Path, event: WatchEvent, attempt: int | None = N
     try:
         save_watch_observation(path, event, 0, 5, None, startup_attempt=attempt)
     except (OSError, ValueError):
-        print(json.dumps({"watch_observation_saved": False}), flush=True)
+        lifecycle_print({"watch_observation_saved": False})
 
 
 def wait_for_remote_credentials(
@@ -149,11 +150,11 @@ def wait_for_remote_credentials(
             if attempt == 5:
                 raise
             delay = 2**attempt
-            print(json.dumps({
+            lifecycle_print({
                 "remote_startup_state": "credential_store_unavailable",
                 "retry_attempt": attempt + 1,
                 "retry_in_seconds": delay,
-            }), flush=True)
+            })
             try:
                 time.sleep(delay)
             except KeyboardInterrupt:
@@ -167,7 +168,9 @@ def wait_for_remote_credentials(
             raise
 
 
-def watch_remote(directory: Path, *, connector: str | None = None) -> int:
+def _watch_remote_once(
+    directory: Path, *, connector: str | None = None, vault: CredentialVault | None = None,
+) -> int:
     """Restart a failed combined service with a bounded budget and owner pipe."""
     prepare_directory(directory)
     with ProcessLock(directory / "remote-watch.lock"):
@@ -177,8 +180,10 @@ def watch_remote(directory: Path, *, connector: str | None = None) -> int:
             try:
                 config = load_http_config(directory)
                 stage = "credential_backend_error"
-                owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner)
-                credential = TunnelCredential(directory)
+                owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner,
+                                         **({"vault": vault} if vault is not None else {}))
+                credential = TunnelCredential(directory,
+                                              **({"vault": vault} if vault is not None else {}))
                 stage = "connector_check_error"
                 executable = (cloudflared_executable() if connector is None
                               else cloudflared_executable(connector))
@@ -210,5 +215,52 @@ def watch_remote(directory: Path, *, connector: str | None = None) -> int:
                 parent_pipe=True,
                 status_path=directory / "remote-watch-status.json",
             )
+        finally:
+            signal.signal(signal.SIGTERM, prior)
+
+
+def watch_remote(
+    directory: Path, *, connector: str | None = None, persistent: bool = False,
+    cooldown: float = 60,
+) -> int:
+    """OS-owned mode survives exhausted retry windows; uninstall is durable stop.
+
+    Rejected configuration remains blocked without repeated credential prompts.
+    Stop/restart after repairing configuration. Foreground behavior is unchanged.
+    """
+    if not persistent:
+        return _watch_remote_once(directory, connector=connector)
+    if cooldown < 1:
+        raise ValueError("Persistent cooldown must be at least one second")
+    prepare_directory(directory)
+    with ProcessLock(directory / "persistent-watch.lock"):
+        prior = signal.signal(signal.SIGTERM, signal.default_int_handler)
+        vault: CredentialVault | None = None
+        try:
+            while True:
+                try:
+                    if vault is None:
+                        try:
+                            vault = secure_backend()
+                        except (KeyringError, OSError):
+                            record_remote_startup(
+                                directory / "remote-watch-status.json", "credential_backend_error",
+                            )
+                            time.sleep(cooldown)
+                            continue
+                    code = _watch_remote_once(directory, connector=connector, vault=vault)
+                    event: WatchEvent = "unexpected_child_exit" if code in {0, 130} else "cooldown"
+                    record_remote_startup(directory / "remote-watch-status.json", event)
+                except CredentialStoreUnavailable:
+                    record_remote_startup(directory / "remote-watch-status.json", "cooldown")
+                except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired):
+                    # Do not recreate credentials or spin on permanent configuration errors.
+                    record_remote_startup(directory / "remote-watch-status.json", "blocked")
+                    while True:
+                        time.sleep(cooldown)
+                time.sleep(cooldown)
+        except KeyboardInterrupt:
+            record_remote_startup(directory / "remote-watch-status.json", "interrupted")
+            return 130
         finally:
             signal.signal(signal.SIGTERM, prior)

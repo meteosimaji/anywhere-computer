@@ -47,6 +47,7 @@ def startup_definition(
     startup_id: str | None = None,
     isolated_python: bool = True,
     codex_executable: str | None = None,
+    policy_version: Literal[1, 2] = 1,
 ) -> StartupDefinition:
     directory = directory.resolve()
     executable = _clean_argument(executable)
@@ -73,6 +74,8 @@ def startup_definition(
         if not Path(codex_executable).is_absolute():
             raise ValueError("Startup Codex executable requires an absolute path")
         arguments.extend(["--codex-executable", codex_executable])
+    if policy_version == 2:
+        arguments.append("--persistent")
     if startup_id is not None:
         if not re.fullmatch(r"[a-f0-9]{32}", startup_id):
             raise ValueError("Invalid startup registration identifier")
@@ -83,7 +86,8 @@ def startup_definition(
             "ProgramArguments": [executable, *arguments],
             "WorkingDirectory": str(directory),
             "RunAtLoad": True,
-            "KeepAlive": False,
+            "KeepAlive": policy_version == 2,
+            **({"ThrottleInterval": 60} if policy_version == 2 else {}),
             "ProcessType": "Background",
             "Umask": 0o077,
         }, sort_keys=True)
@@ -99,7 +103,8 @@ def startup_definition(
             "[Unit]\nDescription=Anywhere Computer remote connection\n"
             "After=graphical-session.target\n\n[Service]\nType=simple\n"
             f"ExecStart={command}\nWorkingDirectory={working_directory}\n"
-            "Restart=no\nUMask=0077\nKillMode=control-group\nTimeoutStopSec=30\n"
+            + ("Restart=always\nRestartSec=60\n" if policy_version == 2 else "Restart=no\n")
+            + "UMask=0077\nKillMode=control-group\nTimeoutStopSec=30\n"
             "\n[Install]\nWantedBy=default.target\n"
         ).encode()
         return StartupDefinition(
@@ -137,6 +142,10 @@ def startup_definition(
         "ExecutionTimeLimit": "PT0S",
     }.items():
         add(settings, key, value)
+    if policy_version == 2:
+        restart = add(settings, "RestartOnFailure")
+        add(restart, "Interval", "PT1M")
+        add(restart, "Count", "999")
     actions = add(root, "Actions")
     actions.set("Context", "Owner")
     action = add(actions, "Exec")
@@ -152,6 +161,7 @@ def current_definition(
     executable: str | None = None,
     isolated_python: bool = True,
     codex_executable: str | None = None,
+    policy_version: Literal[1, 2] = 1,
 ) -> StartupDefinition:
     import psutil
 
@@ -162,7 +172,7 @@ def current_definition(
         directory, platform=cast(Platform, sys.platform), home=Path.home(),
         executable=executable or os.path.abspath(sys.executable), user=psutil.Process().username(),
         connector=connector, startup_id=startup_id, isolated_python=isolated_python,
-        codex_executable=codex_executable,
+        codex_executable=codex_executable, policy_version=policy_version,
     )
     if sys.platform == "linux":
         configured = os.environ.get("XDG_CONFIG_HOME", "")
@@ -187,7 +197,8 @@ def preview_startup(
         pinned_codex = str(_executable(None))
     except FileNotFoundError:
         pinned_codex = None
-    definition = current_definition(directory, connector=connector, codex_executable=pinned_codex)
+    definition = current_definition(directory, connector=connector, codex_executable=pinned_codex,
+                                    policy_version=2)
     return {
         "platform": definition.platform,
         "name": definition.name,

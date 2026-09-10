@@ -20,6 +20,7 @@ def test_failed_atomic_update_preserves_previous_observation(tmp_path, monkeypat
     path = tmp_path / "watch.json"
     watch_status.save_watch_observation(path, "restart_wait", 1, 5, 7)
     previous = path.read_bytes()
+    previous_files = set(tmp_path.iterdir())
 
     def interrupted(*args):
         raise OSError("synthetic interruption")
@@ -32,4 +33,4 @@ def test_failed_atomic_update_preserves_previous_observation(tmp_path, monkeypat
     else:
         raise AssertionError("Injected replace failure was not reached")
     assert path.read_bytes() == previous
-    assert list(tmp_path.iterdir()) == [path]
+    assert set(tmp_path.iterdir()) == previous_files

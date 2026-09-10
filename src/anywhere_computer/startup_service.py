@@ -26,6 +26,7 @@ from .state import prepare_directory
 class StartupRecord(BaseModel):
     model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
     version: Literal[1] = 1
+    policy_version: Literal[1, 2] = 1
     platform: Literal["darwin", "linux", "win32"]
     user: str
     directory: str
@@ -88,7 +89,8 @@ def _record(directory: Path) -> StartupRecord | None:
 def _definition(directory: Path, record: StartupRecord) -> StartupDefinition:
     return current_definition(directory, connector=record.connector, startup_id=record.startup_id,
                               executable=record.interpreter, isolated_python=record.isolated_python,
-                              codex_executable=record.codex_executable)
+                              codex_executable=record.codex_executable,
+                              policy_version=record.policy_version)
 
 
 def _check_file(definition: StartupDefinition) -> bool:
@@ -145,6 +147,7 @@ def startup_status(directory: Path) -> dict[str, str | bool]:
     _check_snapshot(record, snapshot)
     return {**_result(definition, snapshot), "definition_exists": file_exists,
             "python_isolation_upgrade_required": not record.isolated_python,
+            "persistence_upgrade_required": record.policy_version < 2,
             "receipt_confirmed": bool(record.native_fingerprint), "changed": False}
 
 
@@ -152,78 +155,84 @@ def install_startup(directory: Path, *, connector: str | None = None) -> dict[st
     directory = directory.resolve()
     prepare_directory(directory)
     with ProcessLock(directory / "autostart.lock"):
-        record = _record(directory)
-        if record is not None and not record.isolated_python:
-            raise ValueError(
-                "Legacy startup must be removed with autostart-uninstall before "
-                "autostart-install can register isolated Python; credentials are preserved"
-            )
-        if record is not None and connector is not None and connector != record.connector:
-            raise ValueError("Startup connector differs; uninstall before changing it")
-        selected = connector if record is None else record.connector
-        executable = os.path.abspath(cloudflared_executable(selected))
-        config = load_http_config(directory)
-        owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner)
-        owner.ensure_initialized()
-        TunnelCredential(directory).read()
-        if record is None:
-            try:
-                pinned_codex = str(codex_executable(None))
-            except FileNotFoundError:
-                pinned_codex = None
-            record = StartupRecord(
-                platform=cast(Platform, sys.platform), user=psutil.Process().username(),
-                directory=str(directory),
-                interpreter=os.path.abspath(sys.executable), connector=executable,
-                startup_id=secrets.token_hex(16),
-                isolated_python=True, codex_executable=pinned_codex,
-            )
-            definition = _definition(directory, record)
-            backend = NativeStartup(definition)
-            if _read_file(definition.path) is not None or backend.query().present:
-                raise ValueError("A startup definition already exists; it will not be overwritten")
-            _create_file(directory / "autostart.json", record.model_dump_json(indent=2).encode())
+        return _install_startup_locked(directory, connector=connector)
+
+
+def _install_startup_locked(
+    directory: Path, *, connector: str | None = None,
+) -> dict[str, str | bool]:
+    record = _record(directory)
+    if record is not None and not record.isolated_python:
+        raise ValueError(
+            "Legacy startup must be removed with autostart-uninstall before "
+            "autostart-install can register isolated Python; credentials are preserved"
+        )
+    if record is not None and connector is not None and connector != record.connector:
+        raise ValueError("Startup connector differs; uninstall before changing it")
+    selected = connector if record is None else record.connector
+    executable = os.path.abspath(cloudflared_executable(selected))
+    config = load_http_config(directory)
+    owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner)
+    owner.ensure_initialized()
+    TunnelCredential(directory).read()
+    if record is None:
+        try:
+            pinned_codex = str(codex_executable(None))
+        except FileNotFoundError:
+            pinned_codex = None
+        record = StartupRecord(
+            platform=cast(Platform, sys.platform), user=psutil.Process().username(),
+            directory=str(directory),
+            interpreter=os.path.abspath(sys.executable), connector=executable,
+            startup_id=secrets.token_hex(16),
+            isolated_python=True, codex_executable=pinned_codex, policy_version=2,
+        )
+        definition = _definition(directory, record)
+        backend = NativeStartup(definition)
+        if _read_file(definition.path) is not None or backend.query().present:
+            raise ValueError("A startup definition already exists; it will not be overwritten")
+        _create_file(directory / "autostart.json", record.model_dump_json(indent=2).encode())
+    else:
+        definition = _definition(directory, record)
+        backend = NativeStartup(definition)
+    if not Path(record.interpreter).is_file():
+        raise ValueError("Registered Python interpreter is unavailable")
+    snapshot = backend.query()
+    _check_snapshot(record, snapshot)
+    created_definition = not _check_file(definition)
+    if created_definition:
+        _create_file(definition.path, definition.content)
+
+    def check_registered_snapshot(observed: StartupSnapshot) -> None:
+        try:
+            _check_snapshot(record, observed)
+        except ValueError:
+            # Remove only this attempt's still-identical pending login file.
+            # Never stop or reload a conflicting native registration.
+            if created_definition and not record.native_fingerprint and _check_file(definition):
+                definition.path.unlink()
+            raise
+
+    snapshot = backend.query()
+    check_registered_snapshot(snapshot)
+    if not snapshot.present or not snapshot.enabled:
+        try:
+            backend.install()
+        except (OSError, RuntimeError, TimeoutError):
+            # Resolve a lost acknowledgment once. Never force or blindly repeat creation.
+            snapshot = backend.query()
+            check_registered_snapshot(snapshot)
+            if not snapshot.present or not snapshot.enabled:
+                raise RuntimeError(
+                    "Startup registration was not confirmed; receipt preserved"
+                ) from None
         else:
-            definition = _definition(directory, record)
-            backend = NativeStartup(definition)
-        if not Path(record.interpreter).is_file():
-            raise ValueError("Registered Python interpreter is unavailable")
-        snapshot = backend.query()
-        _check_snapshot(record, snapshot)
-        created_definition = not _check_file(definition)
-        if created_definition:
-            _create_file(definition.path, definition.content)
-
-        def check_registered_snapshot(observed: StartupSnapshot) -> None:
-            try:
-                _check_snapshot(record, observed)
-            except ValueError:
-                # Remove only this attempt's still-identical pending login file.
-                # Never stop or reload a conflicting native registration.
-                if created_definition and not record.native_fingerprint and _check_file(definition):
-                    definition.path.unlink()
-                raise
-
-        snapshot = backend.query()
-        check_registered_snapshot(snapshot)
-        if not snapshot.present or not snapshot.enabled:
-            try:
-                backend.install()
-            except (OSError, RuntimeError, TimeoutError):
-                # Resolve a lost acknowledgment once. Never force or blindly repeat creation.
-                snapshot = backend.query()
-                check_registered_snapshot(snapshot)
-                if not snapshot.present or not snapshot.enabled:
-                    raise RuntimeError(
-                        "Startup registration was not confirmed; receipt preserved"
-                    ) from None
-            else:
-                snapshot = backend.query()
-        check_registered_snapshot(snapshot)
-        if not snapshot.present or not snapshot.enabled:
-            raise RuntimeError("Startup registration was not confirmed; receipt preserved")
-        _save_registered(directory, record, snapshot.fingerprint)
-        return _result(definition, snapshot)
+            snapshot = backend.query()
+    check_registered_snapshot(snapshot)
+    if not snapshot.present or not snapshot.enabled:
+        raise RuntimeError("Startup registration was not confirmed; receipt preserved")
+    _save_registered(directory, record, snapshot.fingerprint)
+    return _result(definition, snapshot)
 
 
 def _wait_stopped(directory: Path, *, timeout: float = 30) -> None:
@@ -232,7 +241,7 @@ def _wait_stopped(directory: Path, *, timeout: float = 30) -> None:
         try:
             with ExitStack() as locks:
                 for name in ("remote-watch.lock", "http-watch.lock", "http-server.lock",
-                             "cloudflare-tunnel.lock"):
+                             "cloudflare-tunnel.lock", "persistent-watch.lock"):
                     locks.enter_context(ProcessLock(directory / name))
                 return
         except TimeoutError:
@@ -248,28 +257,93 @@ def uninstall_startup(directory: Path) -> dict[str, str | bool]:
     if not directory.exists():
         return {"state": "not_installed", "changed": False}
     with ProcessLock(directory / "autostart.lock"):
+        return _uninstall_startup_locked(directory)
+
+
+def _uninstall_startup_locked(directory: Path) -> dict[str, str | bool]:
+    record = _record(directory)
+    if record is None:
+        return {"state": "not_installed", "changed": False}
+    definition = _definition(directory, record)
+    _check_file(definition)
+    backend = NativeStartup(definition)
+    snapshot = backend.query()
+    _check_snapshot(record, snapshot)
+    if snapshot.present:
+        backend.uninstall(snapshot)
+    after = backend.query()
+    _check_snapshot(record, after)
+    if after.running or after.enabled or (after.present and definition.platform != "linux"):
+        raise RuntimeError("OS startup removal was not confirmed; receipt preserved")
+    _wait_stopped(directory)
+    if _record(directory) != record:
+        raise ValueError("Startup receipt changed during removal")
+    if _check_file(definition):
+        definition.path.unlink()
+    backend.files_removed()
+    after = backend.query()
+    if after.present or after.running or after.enabled:
+        raise RuntimeError("OS startup removal was not confirmed; receipt preserved")
+    (directory / "autostart.json").unlink()
+    return {"state": "uninstalled", "changed": True, "credentials_preserved": True}
+
+
+def start_startup(directory: Path) -> dict[str, str | bool]:
+    """Start only a validated, enabled registration; never kill a running job."""
+    directory = directory.resolve()
+    with ProcessLock(directory / "autostart.lock"):
         record = _record(directory)
         if record is None:
-            return {"state": "not_installed", "changed": False}
+            raise ValueError("Startup is not installed")
         definition = _definition(directory, record)
-        _check_file(definition)
+        if not _check_file(definition):
+            raise ValueError("Startup definition is missing")
         backend = NativeStartup(definition)
         snapshot = backend.query()
         _check_snapshot(record, snapshot)
-        if snapshot.present:
-            backend.uninstall(snapshot)
+        if not snapshot.present or not snapshot.enabled:
+            raise ValueError("Startup must be registered and enabled before starting")
+        if not snapshot.running:
+            backend.start(snapshot)
         after = backend.query()
         _check_snapshot(record, after)
-        if after.running or after.enabled or (after.present and definition.platform != "linux"):
-            raise RuntimeError("OS startup removal was not confirmed; receipt preserved")
-        _wait_stopped(directory)
-        if _record(directory) != record:
-            raise ValueError("Startup receipt changed during removal")
-        if _check_file(definition):
-            definition.path.unlink()
-        backend.files_removed()
-        after = backend.query()
-        if after.present or after.running or after.enabled:
-            raise RuntimeError("OS startup removal was not confirmed; receipt preserved")
-        (directory / "autostart.json").unlink()
-        return {"state": "uninstalled", "changed": True, "credentials_preserved": True}
+        return _result(definition, after)
+
+
+def upgrade_startup(directory: Path, *, connector: str | None = None) -> dict[str, str | bool]:
+    """Serialize migration and retain a durable previous receipt until recovery completes."""
+    directory = directory.resolve()
+    prepare_directory(directory)
+    with ProcessLock(directory / "autostart.lock"):
+        backup = directory / "autostart-upgrade-previous.json"
+        if _read_file(backup) is not None:
+            raise ValueError("An interrupted startup upgrade requires recovery; receipt preserved")
+        old = _record(directory)
+        if old is None:
+            return _install_startup_locked(directory, connector=connector)
+        definition = _definition(directory, old)
+        if not _check_file(definition):
+            raise ValueError("Cannot upgrade a missing startup definition")
+        _check_snapshot(old, NativeStartup(definition).query())
+        _create_file(backup, old.model_dump_json(indent=2).encode())
+        try:
+            _uninstall_startup_locked(directory)
+            result = _install_startup_locked(directory, connector=connector or old.connector)
+        except (OSError, RuntimeError, ValueError):
+            try:
+                current = _record(directory)
+                if current != old:
+                    if current is not None:
+                        _uninstall_startup_locked(directory)
+                    _create_file(directory / "autostart.json",
+                                 old.model_dump_json(indent=2).encode())
+                _install_startup_locked(directory)
+            except (OSError, RuntimeError, ValueError):
+                raise RuntimeError(
+                    "Startup upgrade failed; previous receipt retained in "
+                    "autostart-upgrade-previous.json for recovery"
+                ) from None
+            backup.unlink()
+            raise RuntimeError("Startup upgrade failed; previous registration restored") from None
+        backup.unlink()
+        return result

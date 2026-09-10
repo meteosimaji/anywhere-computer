@@ -58,21 +58,25 @@ uv run anywhere stop
 ```
 
 実行中の端末セッションがある場合、`stop` は停止せず理由を返します。
-ログイン時の自動起動はまだ設定しません。
+`start` はログイン時の自動起動を設定しません。OS管理の常駐には
+`autostart-install` を使います。[常駐モード・停止・移行の仕様](docs/PERSISTENCE.md) を参照してください。
 
 `uv run anywhere autostart-preview --state-dir <設定ディレクトリ>` で、同じ
 `remote-watch` を macOS の LaunchAgent、Linux のユーザー unit、Windows の
 ログイン時タスクから起動する定義を JSON 内で確認できます。ファイル作成やサービス登録は
 行いません。`registration_state: unverified` は登録状態を調べていないことを示します。
 定義の生成だけでは、資格情報ストアへのアクセスや接続の準備完了を確認できません。
-登録・解除には開発中の `autostart-install`、`autostart-uninstall`、状態確認には
+登録・解除には `autostart-install`、`autostart-uninstall`、状態確認には
 `autostart-status` を追加しています。いずれも同じ `--state-dir` を指定します。
 登録には HTTP 設定、所有者の資格情報、トンネル資格情報、利用可能な接続子が必要です。
 登録記録と OS の定義が一致しない場合は変更を拒否し、解除を確認できない場合は記録を
 保持します。解除しても資格情報は削除しません。`native_running` は OS 側の実行状態であり、
 公開 URL への接続成功を意味しません。三 OS の隔離 CI で試験プロセスの実登録・起動・
 停止・解除と最終照会での不在を確認済みです。
-ログイン後の実接続、更新時の差し替えも引き続き開発中です。
+新規登録は常駐ポリシー2を使用します。`autostart-start` は停止済みの一致する登録を
+明示的に開始し、`autostart-upgrade` は実行中のPythonへ登録を移行します。
+macOSの現在のログインセッションでは実接続と監督プロセス異常終了後の復旧を確認しました。
+実際の再ログイン・OS再起動・スリープ復帰は未検証です。
 macOS の状態照会は `launchctl print` の出力解析を含みます。この形式は安定した API として
 保証されていないため、OS 更新後は実機試験が必要です。認識できない定義は変更を拒否します。
 Windows のログイン時タスクはログオン済みのユーザーセッションで動作します。

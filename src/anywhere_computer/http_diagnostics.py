@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import re
 import shutil
 import ssl
 from pathlib import Path
@@ -12,6 +13,13 @@ from pydantic import JsonValue
 from .http_service import load_http_config
 from .remote_health import public_monitor_status
 from .watch_status import read_watch_observation
+
+
+class MetadataHTTPError(ValueError):
+    def __init__(self, status: int, subcode: int | None = None) -> None:
+        super().__init__("Metadata endpoint returned a non-success status")
+        self.status = status
+        self.subcode = subcode
 
 
 async def _metadata(port: int, *, resource: str | None = None) -> dict[str, JsonValue]:
@@ -36,8 +44,13 @@ async def _metadata(port: int, *, resource: str | None = None) -> dict[str, Json
             raise ValueError("Metadata headers exceed limit")
         lines = header.decode("ascii").split("\r\n")
         status = lines[0].split(" ", 2)
-        if len(status) < 2 or status[0] != "HTTP/1.1" or status[1] != "200":
-            raise ValueError("Metadata endpoint did not return HTTP 200")
+        if (len(status) < 2 or status[0] != "HTTP/1.1"
+                or not re.fullmatch(r"[1-5][0-9]{2}", status[1])):
+            raise ValueError("Invalid HTTP status")
+        if status[1] != "200":
+            body = await reader.read(4096)
+            match = re.search(rb"(?:error code:|Error)\s*(1[0-9]{3})\b", body, re.I)
+            raise MetadataHTTPError(int(status[1]), int(match[1]) if match else None)
         headers: dict[str, str] = {}
         for line in lines[1:-2]:
             name, separator, value = line.partition(":")
@@ -159,6 +172,11 @@ async def diagnose_remote(
                 "metadata_reachable" if metadata["resource"] == config.resource
                 else "resource_mismatch"
             )
+        except MetadataHTTPError as error:
+            public["state"] = "http_error"
+            public["http_status"] = error.status
+            if error.subcode is not None:
+                public["provider_subcode"] = error.subcode
         except ssl.SSLCertVerificationError:
             public["state"] = "certificate_verification_failed"
         except (OSError, TimeoutError):
