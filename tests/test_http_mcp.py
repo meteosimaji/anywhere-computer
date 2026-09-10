@@ -258,3 +258,37 @@ async def test_terminal_maximum_wait_returns_result_over_http(http_agent, tmp_pa
                 assert data['wait_reason'] == 'timeout'
                 assert data['state'] == 'running'
                 assert data['bytes_sent'] == 3
+
+
+async def test_official_sdk_reports_nested_plugin_error(http_agent, tmp_path, monkeypatch):
+    from anywhere_computer import codex_plugins
+
+    calls = []
+
+    async def failed_plugin(**arguments):
+        calls.append(arguments)
+        return codex_plugins._tool_result({
+            "isError": True,
+            "content": [{"type": "text", "text": "Fixture rejected the input"}],
+        })
+
+    monkeypatch.setattr(codex_plugins, "call_codex_plugin_tool", failed_plugin)
+    _, engine, _, port = http_agent
+    async with asyncio.timeout(15):
+        async with httpx.AsyncClient(headers=HEADERS) as http:
+            async with streamable_http_client(
+                f"http://127.0.0.1:{port}/mcp", http_client=http,
+            ) as (reader, writer, _):
+                async with ClientSession(reader, writer) as client:
+                    await client.initialize()
+                    result = await client.call_tool("codex_plugin_call", {
+                        "cwd": str(tmp_path), "server": "fixture", "tool": "reject",
+                        "arguments": {}, "catalog_sha256": "a" * 64,
+                    })
+                    assert result.isError is True
+                    recorded = result.structuredContent
+                    assert recorded["state"] == "completed"
+                    assert recorded["data"]["is_error"] is True
+                    assert recorded["data"]["content"][0]["text"] == "Fixture rejected the input"
+                    assert json.loads(result.content[0].text) == recorded
+                    assert len(calls) == 1

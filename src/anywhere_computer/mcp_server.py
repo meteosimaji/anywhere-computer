@@ -145,7 +145,11 @@ class MCPSession:
             result = {
                 "content": [{"type": "text", "text": reply.model_dump_json()}],
                 "structuredContent": cast(dict[str, JsonValue], reply.model_dump(mode="json")),
-                "isError": reply.state != "completed",
+                # 完了済み操作でも、子プラグインが失敗を返す場合がある。
+                "isError": (
+                    reply.state != "completed"
+                    or (name == "codex_plugin_call" and reply.data.get("is_error") is True)
+                ),
             }
             if name == "workspace_open" and self.ui_enabled:
                 result["_meta"] = {"workspaceTools": cast(list[JsonValue], sorted(
