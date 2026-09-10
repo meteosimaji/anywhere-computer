@@ -97,3 +97,34 @@ This work does not establish native desktop Computer Use, persistent browser
 state across plugin calls, another plugin's interactive widget transfer, or
 ChatGPT-side native image rendering until tested through the deployed connection.
 The launchd upgrade timing issue reported in the handoff has not been changed.
+
+## Final validation and delivery
+
+Implementation commit: `997c03ca1d4c0dc99699e2205045321cf3919f9a`.
+Pushed to `origin/codex/chatgpt-plugin-bridge`; `git ls-remote` matched the local
+commit exactly. The original development branch was not merged or rewritten.
+
+After the wheel rebuild, the complete suite passed **648 tests, with 5 skipped**
+(245.27 seconds on this Mac). Ruff passed for the repository; strict mypy passed
+for all 59 source files. The standalone real-App-Server image verifier also exited
+successfully, including the stale-guard and no-model-turn assertions.
+
+The existing `package_plugin.py` and `build_portable.py` produced a plugin ZIP and
+an independently runnable portable ZIP. `verify_portable.py` passed file roundtrip,
+regex subprocess, terminal reconnection, busy-stop refusal, shutdown and cleanup;
+it checked a manifest containing 2,255 files.
+
+Staged portable (not activated):
+`~/Library/Application Support/Anywhere Computer/portable/chatgpt-images-20260910/Anywhere Computer`.
+Its runtime identity is
+`ac93ff05084c7df1c393c884b4d61bda21782584f1754598454e952f4d88769c`.
+
+The active launchd registration remained running on `plugin-inspect-20260910`.
+No autostart upgrade, production restart, OAuth change or token migration was
+performed. The new native-image projection has therefore been verified with the
+real App Server and official MCP SDK, not yet in the production ChatGPT connection.
+This intentionally avoids disturbing the connection or exercising the unresolved
+launchd migration race as a side effect of a repository patch.
+
+The two pre-existing local edits were checked again by SHA-256 and were unchanged.
+The new feature worktree was clean immediately after the implementation push.
