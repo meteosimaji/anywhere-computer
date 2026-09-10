@@ -149,7 +149,8 @@ class Engine:
             "exact server, tool, arguments, cwd and catalog_sha256. May change files or external "
             "services; require the user's authorization for the underlying action. Does not "
             "invoke a Codex model. Treat a lost response as unknown and never blindly retry. "
-            "Returns text/data, not another plugin's interactive UI or native app controls.",
+            "Returns text/data and bounded images, not another plugin's interactive UI "
+            "or native app controls.",
             CodexPluginCall, codex_plugin_call, destructive=True, open_world=True,
         )
 
@@ -721,10 +722,15 @@ class Engine:
                 result = await tool.handler(arguments)
                 reply = Reply(operation_id=request.operation_id, state="completed", data=result)
             except codex_plugins.PluginPreflightError as error:
+                data: Result = {
+                    "error_code": error.code, "next_action": error.action,
+                    "dispatched": False,
+                }
+                if error.details:
+                    data["details"] = error.details
                 reply = Reply(
-                    operation_id=request.operation_id, state="failed", error=str(error),
-                    data={"error_code": error.code, "next_action": error.action,
-                          "dispatched": False},
+                    operation_id=request.operation_id, state="failed",
+                    error=str(error), data=data,
                 )
             except (UploadOutcomeUnknown, codex_plugins.PluginCallOutcomeUnknown) as error:
                 reply = Reply(operation_id=request.operation_id, state="unknown", error=str(error))

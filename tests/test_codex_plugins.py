@@ -50,6 +50,7 @@ async def test_catalog_is_ephemeral_and_exposes_schema_digest(fake_codex, tmp_pa
     tool = result["servers"][0]["tools"][0]
     assert set(tool) == {
         "name", "description", "inputSchema", "annotations", "server", "catalog_sha256",
+        "call_arguments",
     }
     assert len(tool["catalog_sha256"]) == 64
 
@@ -166,7 +167,7 @@ async def test_malformed_result_is_unknown(stub_catalog, tmp_path, result):
 
 def test_result_utf8_bounds_and_metadata_filtering():
     result = codex_plugins._tool_result({
-        "content": [{"type": "image", "data": "discard"},
+        "content": [{"type": "audio", "data": "discard"},
                     {"type": "text", "text": "あ" * 20000},
                     {"type": "text", "text": "い" * 20000}],
         "structuredContent": {"value": 1, "_meta": {"secret": "excluded"}},
@@ -245,3 +246,82 @@ async def test_incomplete_scan_is_not_tool_absence(stub_catalog, tmp_path, monke
         await call_codex_plugin_tool(str(tmp_path), "later-server", "echo", {}, "0" * 64)
     assert caught.value.code == "catalog_incomplete"
     assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])
+
+
+async def test_preflight_failure_unsubscribes_without_dispatch(stub_catalog, tmp_path):
+    with pytest.raises(codex_plugins.PluginPreflightError):
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, "0" * 64)
+    methods = [method for method, _ in stub_catalog["calls"]]
+    assert methods[-1] == "thread/unsubscribe"
+    assert "mcpServer/tool/call" not in methods
+
+
+async def test_inspection_supplies_exact_call_arguments(stub_catalog, tmp_path):
+    result = await list_codex_plugin_tools(str(tmp_path), server="demo", tool="echo")
+    descriptor = result["servers"][0]["tools"][0]
+    arguments = descriptor["call_arguments"]
+    assert arguments == {
+        "cwd": str(tmp_path.resolve()), "server": "demo", "tool": "echo",
+        "catalog_sha256": descriptor["catalog_sha256"],
+    }
+    assert (await call_codex_plugin_tool(**arguments, arguments={}))["is_error"] is False
+
+
+async def test_stale_diagnostic_identifies_both_digests(stub_catalog, tmp_path):
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    actual = catalog["servers"][0]["tools"][0]["catalog_sha256"]
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, "0" * 64)
+    assert caught.value.details == {
+        "cwd": str(tmp_path.resolve()), "server": "demo", "tool": "echo",
+        "received_catalog_sha256": "0" * 64, "current_catalog_sha256": actual,
+    }
+    assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])
+
+
+async def test_stale_details_survive_ledger_replay(stub_catalog, tmp_path):
+    from anywhere_computer.engine import Engine
+    from anywhere_computer.models import Request
+
+    engine = Engine(tmp_path / "engine")
+    request = Request(operation_id="a" * 32, tool="codex_plugin_call", arguments={
+        "cwd": str(tmp_path), "server": "demo", "tool": "echo",
+        "arguments": {}, "catalog_sha256": "0" * 64,
+    })
+    try:
+        failed = await engine.execute(request)
+        count = len(stub_catalog["calls"])
+        replay = await engine.execute(request)
+        assert failed == replay == engine.ledger.get(request.operation_id)
+        assert failed.state == "failed"
+        assert failed.data["dispatched"] is False
+        assert failed.data["details"]["received_catalog_sha256"] == "0" * 64
+        assert len(failed.data["details"]["current_catalog_sha256"]) == 64
+        assert len(stub_catalog["calls"]) == count
+    finally:
+        await engine.close()
+
+
+async def test_workspace_mismatch_keeps_fail_closed_behavior(stub_catalog, tmp_path):
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    digest = catalog["servers"][0]["tools"][0]["catalog_sha256"]
+    other = tmp_path / "other"
+    other.mkdir()
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(str(other), "demo", "echo", {}, digest)
+    assert caught.value.code == "catalog_stale"
+    assert caught.value.details["cwd"] == str(other.resolve())
+    assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])
+
+
+async def test_cleanup_failure_does_not_mask_preflight(stub_catalog, tmp_path, monkeypatch):
+    original = codex_plugins._Session.request
+
+    async def request(self, method, params):
+        if method == "thread/unsubscribe":
+            raise ConnectionError("cleanup failed")
+        return await original(self, method, params)
+
+    monkeypatch.setattr(codex_plugins._Session, "request", request)
+    with pytest.raises(codex_plugins.PluginPreflightError, match="catalog_stale"):
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, "0" * 64)

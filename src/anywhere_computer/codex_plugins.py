@@ -10,6 +10,7 @@ from typing import cast
 from pydantic import JsonValue
 
 from .codex_context import WIRE_LIMIT, _executable
+from .plugin_images import IMAGE_LIMIT, MAX_IMAGES, bounded_image
 
 STARTUP_TIMEOUT = 30.0
 CALL_TIMEOUT = 120.0
@@ -24,9 +25,13 @@ _DENIED_TOOL_PREFIXES = ("codex_plugin_", "devices_", "connection_setup_", "mcp_
 class PluginPreflightError(ValueError):
     """A classified failure before any plugin tool dispatch."""
 
-    def __init__(self, code: str, action: str) -> None:
+    def __init__(
+        self, code: str, action: str, *,
+        details: dict[str, JsonValue] | None = None,
+    ) -> None:
         self.code = code
         self.action = action
+        self.details = dict(details or {})
         super().__init__(f"{code}: {action}")
 
 
@@ -287,6 +292,10 @@ async def _start_and_catalog(
                     "server": server,
                 }
                 clean["catalog_sha256"] = _descriptor_digest(server, cwd, clean)
+                clean["call_arguments"] = {
+                    "cwd": cwd, "server": server, "tool": name,
+                    "catalog_sha256": clean["catalog_sha256"],
+                }
                 if len(description) > 1000:
                     clean["description"] = description[:1000]
                     clean["description_truncated"] = True
@@ -374,7 +383,7 @@ async def list_codex_plugin_tools(
         "cwd": clean_cwd, "servers": cast(JsonValue, selected_servers),
         "inference_requested": False,
         "next_action": "Use codex_plugin_tools with server and optional tool for exact schemas; "
-        "copy server, tool name, cwd and catalog_sha256 into codex_plugin_call. "
+        "copy the selected tool\'s call_arguments into codex_plugin_call and add arguments. "
         "Registration and schemas do not prove successful execution.",
     }
     if next_cursor is not None:
@@ -396,42 +405,48 @@ async def call_codex_plugin_tool(
             _start_and_catalog(session, clean_cwd, limit=MAX_CATALOG, max_pages=MAX_PAGES),
             timeout=STARTUP_TIMEOUT,
         )
-        selected: dict[str, JsonValue] | None = None
-        for row in servers:
-            if row.get("server") != server:
-                continue
-            raw_tools = row.get("tools", [])
-            if not isinstance(raw_tools, list):
-                continue
-            for candidate in raw_tools:
-                if isinstance(candidate, dict) and candidate.get("name") == tool:
-                    if selected is not None:
-                        raise ValueError("Plugin catalog contains duplicate tool names")
-                    selected = candidate
-        selected_server = next((row for row in servers if row.get("server") == server), None)
-        if selected_server is not None and selected_server.get("availability") in {
-            "authentication_required", "runtime_not_ready", "unavailable",
-        }:
-            raise PluginPreflightError(
-                str(selected_server["availability"]),
-                "Inspect this server and repair its local authentication/runtime before retrying",
-            )
-        if selected is None and remaining_cursor is not None:
-            raise PluginPreflightError(
-                "catalog_incomplete",
-                "Server scan reached its page limit; tool absence is not established. "
-                "Inspect subsequent catalog pages; no plugin call was dispatched",
-            )
-        if selected is None:
-            raise PluginPreflightError(
-                "tool_not_found",
-                "Inspect the exact server/tool; it is absent from the bounded catalog",
-            )
-        if selected.get("catalog_sha256") != catalog_sha256:
-            raise PluginPreflightError(
-                "catalog_stale", "Inspect the tool again and use its new digest",
-            )
         try:
+            selected: dict[str, JsonValue] | None = None
+            for row in servers:
+                if row.get("server") != server:
+                    continue
+                raw_tools = row.get("tools", [])
+                if not isinstance(raw_tools, list):
+                    continue
+                for candidate in raw_tools:
+                    if isinstance(candidate, dict) and candidate.get("name") == tool:
+                        if selected is not None:
+                            raise ValueError("Plugin catalog contains duplicate tool names")
+                        selected = candidate
+            selected_server = next((row for row in servers if row.get("server") == server), None)
+            if selected_server is not None and selected_server.get("availability") in {
+                "authentication_required", "runtime_not_ready", "unavailable",
+            }:
+                raise PluginPreflightError(
+                    str(selected_server["availability"]),
+                    "Inspect this server and repair its local authentication/runtime "
+                    "before retrying",
+                )
+            if selected is None and remaining_cursor is not None:
+                raise PluginPreflightError(
+                    "catalog_incomplete",
+                    "Server scan reached its page limit; tool absence is not established. "
+                    "Inspect subsequent catalog pages; no plugin call was dispatched",
+                )
+            if selected is None:
+                raise PluginPreflightError(
+                    "tool_not_found",
+                    "Inspect the exact server/tool; it is absent from the bounded catalog",
+                )
+            if selected.get("catalog_sha256") != catalog_sha256:
+                raise PluginPreflightError(
+                    "catalog_stale", "Inspect the tool again and use its new digest",
+                    details={
+                        "cwd": clean_cwd, "server": server, "tool": tool,
+                        "received_catalog_sha256": catalog_sha256,
+                        "current_catalog_sha256": selected["catalog_sha256"],
+                    },
+                )
             try:
                 result = await asyncio.wait_for(session.request("mcpServer/tool/call", {
                     "threadId": thread_id, "server": server, "tool": tool,
@@ -465,9 +480,26 @@ def _tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
     total = 0
     truncated = False
     unsupported = 0
+    image_bytes = 0
+    image_count = 0
+    omitted_images = 0
     for item in content:
         if not isinstance(item, dict) or not isinstance(item.get("type"), str):
             raise ValueError("Invalid plugin content")
+        if item["type"] == "image":
+            if image_count >= MAX_IMAGES:
+                omitted_images += 1
+                truncated = True
+                continue
+            image, size = bounded_image(item, IMAGE_LIMIT - image_bytes)
+            if image is None:
+                omitted_images += 1
+                truncated = True
+            else:
+                clean_content.append(image)
+                image_bytes += size
+                image_count += 1
+            continue
         if item["type"] != "text":
             unsupported += 1
             truncated = True
@@ -479,11 +511,11 @@ def _tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
             clean_content.append({"type": "text", "text": text})
             total += len(text.encode("utf-8"))
         truncated = truncated or cut
-        if cut:
-            break
     output: dict[str, JsonValue] = {
         "content": clean_content, "is_error": is_error, "truncated": truncated,
     }
+    if omitted_images:
+        output["omitted_image_items"] = omitted_images
     if unsupported:
         output["unsupported_content_items"] = unsupported
     structured = result.get("structuredContent")
