@@ -182,7 +182,7 @@ class BrowserAuthorization:
             f"<dt>接続先</dt><dd>{escape(record.resource)}</dd>"
             f"<dt>認可後の戻り先</dt><dd>{escape(record.redirect)}</dd></dl>"
             f"<p>許可する機能</p><ul>{tools}</ul><p>{warning}</p>"
-            "<p>接続の認可は最長24時間です。要求した覚えがない場合は拒否してください。</p>"
+            "<p>接続の認可に有効期限はありません。接続は後から取り消せます。要求した覚えがない場合は拒否してください。</p>"
             f"<p class=error role=alert>{escape(error)}</p>"
             "<form method=post action=/authorize>"
             f"<input type=hidden name=request_id value='{escape(identity)}'>"

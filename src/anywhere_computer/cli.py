@@ -24,6 +24,7 @@ from .http_service import (
     enable_http_device,
     http_authorization_status,
     load_http_config,
+    retain_http_grants,
     revoke_http_device,
     serve_http,
 )
@@ -82,6 +83,7 @@ def main() -> None:
             "http-show",
             "http-doctor",
             "http-revoke",
+            "http-retain-grants",
             "http-enable",
             "http-auth-status",
             "tunnel-token",
@@ -367,6 +369,8 @@ def main() -> None:
                 raise SystemExit(1)
         elif args.command == "http-show":
             print(load_http_config(directory).model_dump_json(indent=2))
+        elif args.command == "http-retain-grants":
+            print(json.dumps({"retained_grants": retain_http_grants(directory)}))
         elif args.command == "http-revoke":
             revoke_http_device(directory)
             print(json.dumps({"http_device_revoked": True}))

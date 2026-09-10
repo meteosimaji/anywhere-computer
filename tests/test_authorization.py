@@ -194,6 +194,10 @@ def test_refresh_binding_and_lifetime(authority, monkeypatch):
     import time
 
     issued = redeem(authority, approve(authority))
+    # Preserve support for legacy finite grants.
+    with authority.db:
+        authority.db.execute("UPDATE grants SET expires=?", (time.time() + 86400,))
+        authority.db.execute("UPDATE refresh_tokens SET expires=?", (time.time() + 86400,))
     now = time.time()
     for override in (
         {"client": "other"},
@@ -341,3 +345,54 @@ def test_v2_generation_upgrade_preserves_tokens_and_serializes_concurrent_open(a
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         assert all(executor.map(lambda _: reopen(), range(2)))
+
+
+def test_permanent_grant_refreshes_years_later_but_access_expires(authority, monkeypatch):
+    import time
+
+    issued = redeem(authority, approve(authority))
+    now = time.time()
+    monkeypatch.setattr("anywhere_computer.authorization.time.time", lambda: now + 10 * 365 * 86400)
+    assert authority.verify(issued.value, resource=RESOURCE) is None
+    renewed = authority.refresh(
+        refresh_token=issued.refresh_value, client="client", resource=RESOURCE
+    )
+    assert renewed.expires_in == 900
+    identity = authority.verify(renewed.value, resource=RESOURCE)
+    assert identity is not None
+    authority.revoke(owner="owner", grant=identity.grant_id)
+    with pytest.raises(AuthorizationError):
+        authority.refresh(refresh_token=renewed.refresh_value, client="client", resource=RESOURCE)
+
+
+def test_retain_active_grants_does_not_revive_expired_or_revoked(authority, monkeypatch):
+    import time
+
+    now = time.time()
+    active = redeem(authority, approve(authority))
+    expired = redeem(authority, approve(authority))
+    revoked = redeem(authority, approve(authority))
+    active_id = authority.verify(active.value, resource=RESOURCE).grant_id
+    expired_id = authority.verify(expired.value, resource=RESOURCE).grant_id
+    revoked_id = authority.verify(revoked.value, resource=RESOURCE).grant_id
+    with authority.db:
+        authority.db.execute("UPDATE grants SET expires=?", (now + 86400,))
+        authority.db.execute("UPDATE refresh_tokens SET expires=?", (now + 86400,))
+        authority.db.execute("UPDATE grants SET expires=? WHERE id=?", (now - 1, expired_id))
+    authority.revoke(owner="owner", grant=revoked_id)
+    with pytest.raises(AuthorizationError):
+        authority.retain_active_grants(owner="other", device="device", client="client")
+    assert authority.retain_active_grants(owner="owner", device="device", client="other") == 0
+    assert authority.retain_active_grants(owner="owner", device="device", client="client") == 1
+    assert authority.retain_active_grants(owner="owner", device="device", client="client") == 0
+    assert authority.db.execute(
+        "SELECT expires FROM grants WHERE id=?", (active_id,)
+    ).fetchone() == (0,)
+    monkeypatch.setattr("anywhere_computer.authorization.time.time", lambda: now + 86401)
+    renewed = authority.refresh(
+        refresh_token=active.refresh_value, client="client", resource=RESOURCE
+    )
+    assert authority.verify(renewed.value, resource=RESOURCE) is not None
+    for token in (expired, revoked):
+        with pytest.raises(AuthorizationError):
+            authority.refresh(refresh_token=token.refresh_value, client="client", resource=RESOURCE)

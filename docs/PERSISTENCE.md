@@ -46,7 +46,7 @@ status/subcode information, not response bodies or cookies.
 ## Current Mac deployment (2026-09-10)
 
 Profile: `~/Library/Application Support/Anywhere Computer/chatgpt`.
-Portable release: `portable/persistence-final-20260910/Anywhere Computer` under the same
+Portable release: `portable/permanent-consent-20260910/Anywhere Computer` under the same
 application support root. Existing owner credentials and OAuth grants were retained.
 
 Before repair: no autostart receipt/LaunchAgent existed, no TCP 18768 listener,
@@ -65,8 +65,9 @@ Windows/Linux definitions and mocked adapters do not establish live recovery the
 Authenticated acceptance also passed in a new ordinary ChatGPT Chat conversation:
 computer_status and directories_list completed in the production operation ledger.
 An older conversation rejected developer MCP before reaching this service; use the
-new compatible conversation. OAuth grants currently expire after 24 hours and
-require reauthorization separately from service recovery. The engine's static
+new compatible conversation. New OAuth grants have no time deadline. Existing active grants can be migrated
+with http-retain-grants; revoked/expired grants require fresh consent. Access
+tokens still expire after 15 minutes and are renewed with rotating refresh tokens. The engine's static
 remote_ready=false field is not a live public HTTPS reachability measurement;
 use remote-doctor and authenticated client calls for that evidence. GUI control
 remains unavailable.

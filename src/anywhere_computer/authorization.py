@@ -226,7 +226,7 @@ class AuthorizationStore:
             grant = secrets.token_hex(16)
             self.db.execute(
                 "INSERT INTO grants(id,owner,device,client,tools,expires) VALUES(?,?,?,?,?,?)",
-                (grant, owner, device, client, encoded, now + 86400),
+                (grant, owner, device, client, encoded, 0),
             )
             self.db.execute(
                 "INSERT INTO codes(digest,grant_id,redirect,challenge,expires) VALUES(?,?,?,?,?)",
@@ -321,7 +321,7 @@ class AuthorizationStore:
         self, grant: str, tools: frozenset[str], grant_expires: float, now: float
     ) -> AccessToken:
         """Called only inside a code/refresh redemption transaction."""
-        lifetime = min(900, int(grant_expires - now))
+        lifetime = 900 if grant_expires == 0 else min(900, int(grant_expires - now))
         if lifetime < 1:
             raise AuthorizationError("invalid_grant")
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
@@ -360,7 +360,7 @@ class AuthorizationStore:
                 self.db.execute("UPDATE grants SET revoked=1 WHERE id=?", (grant_id,))
             else:
                 grant = self._grant(grant_id, now)
-                if row[1] <= now or grant is None:
+                if (row[1] != 0 and row[1] <= now) or grant is None:
                     raise AuthorizationError("invalid_grant")
                 # This policy keeps one grant's permissions stable across refreshes.
                 # Permission changes require new consent; they are never silently expanded.
@@ -381,7 +381,10 @@ class AuthorizationStore:
             "FROM grants g JOIN authorized_devices d ON g.device=d.id WHERE g.id=?",
             (grant,),
         ).fetchone()
-        if row is None or row[4] <= now or row[5] or not row[8] or row[0] != row[6]:
+        if (
+            row is None or (row[4] != 0 and row[4] <= now)
+            or row[5] or not row[8] or row[0] != row[6]
+        ):
             return None
         tools = frozenset(json.loads(row[3]))
         if tools - frozenset(json.loads(row[7])) or tools - self.known_tools:
@@ -402,6 +405,33 @@ class AuthorizationStore:
     def current_grant(self, grant: str) -> GrantIdentity | None:
         """Internal grant metadata lookup; this does not authenticate a request."""
         return self._grant(grant, time.time())
+
+    def retain_active_grants(self, *, owner: str, device: str, client: str) -> int:
+        """Local owner administration: remove deadlines only from still-valid grants.
+
+        Zero means no time deadline, never bypassing revocation or device/scope checks.
+        Expired refresh credentials and consumed tokens are not revived.
+        """
+        now = time.time()
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            if not self.device_enabled(owner=owner, device=device):
+                raise AuthorizationError("access_denied")
+            candidates = self.db.execute(
+                "SELECT id FROM grants WHERE owner=? AND device=? AND client=? "
+                "AND expires>? AND revoked=0", (owner, device, client, now),
+            ).fetchall()
+            changed = 0
+            for (grant_id,) in candidates:
+                if self._grant(grant_id, now) is None:
+                    continue
+                self.db.execute("UPDATE grants SET expires=0 WHERE id=?", (grant_id,))
+                self.db.execute(
+                    "UPDATE refresh_tokens SET expires=0 WHERE grant_id=? "
+                    "AND consumed=0 AND expires>?", (grant_id, now),
+                )
+                changed += 1
+        return changed
 
     def revoke(self, *, owner: str, grant: str) -> None:
         with self.db:

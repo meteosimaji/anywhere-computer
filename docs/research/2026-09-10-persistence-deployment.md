@@ -78,3 +78,26 @@ MCPs" before reaching the service. The new conversation succeeded after reconnec
 The static engine remote_ready=false field does not measure public connectivity;
 it was not used to infer failure. GUI control is not implemented. Grant expiry
 still requires reauthorization even while the OS service remains running.
+
+
+## Permanent consent follow-up
+
+At the owner's explicit request, new grants have no deadline and the one current
+ChatGPT grant was migrated with http-retain-grants. Read-only counts confirmed
+one permanent unrevoked grant and one permanent unused refresh token. No expired
+or revoked grant was restored. Access tokens still expire after 900 seconds;
+refresh rotation, replay-family revocation, PKCE and scope checks remain enabled.
+The consent page now states the no-deadline policy and later revocation option.
+
+Deployment: portable/permanent-consent-20260910/Anywhere Computer, runtime hash
+c9ac663e992f72fd2cdc5044cbaadfc16a1aa827d57ae0973fd375a102e21cb7, matched source.
+The first registration upgrade rolled back, and the next attempt succeeded;
+the original migration failure remains undiagnosed. Final registration/running
+and public/loopback metadata probes passed. No fresh ChatGPT tool call was made
+in this follow-up; the earlier authenticated acceptance is recorded above.
+
+Validation: 610 passed, 5 skipped; Ruff and mypy passed. Fresh portable manifest
+(2254 files), file roundtrip and regex subprocess passed. Simulated time ten years
+later verified refresh success, short access expiry and subsequent revocation.
+Legacy finite expiry and active-only migration are covered. These checks do not
+guarantee that ChatGPT itself will never require account login or reconnection.

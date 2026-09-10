@@ -249,6 +249,15 @@ def enable_http_device(directory: Path) -> bool:
         return store.enable_device(owner=config.owner, device=config.device)
 
 
+def retain_http_grants(directory: Path) -> int:
+    """Explicit local approval to retain this configured client's active grants."""
+    with _http_authority(directory) as (config, store):
+        _check_enrollment(store, config)
+        return store.retain_active_grants(
+            owner=config.owner, device=config.device, client=config.client,
+        )
+
+
 def http_authorization_status(directory: Path) -> dict[str, str | bool]:
     """Report persisted enrollment state, not network reachability or client login."""
     with _http_authority(directory) as (config, store):

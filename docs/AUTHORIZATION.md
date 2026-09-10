@@ -28,8 +28,13 @@ revokes the original grant and its tokens. Invalid verifier/client/callback
 attempts never issue a token and do not consume a still-valid code.
 
 Opaque access tokens contain 32 random bytes before URL-safe encoding and last
-15 minutes. A grant lasts at most 24 hours. Rotating refresh tokens can renew
-access within that original deadline; renewal never extends the consent period.
+15 minutes. New grants and rotating refresh tokens have no time deadline;
+access can be renewed until consent is revoked or device/tool permissions change.
+Legacy finite grants retain their deadlines unless explicitly migrated locally
+with `http-retain-grants --state-dir <profile>`. This migrates only still-valid
+grants for the configured owner/device/client, without reviving expired tokens.
+An expires value of zero denotes no deadline only for grants and refresh tokens;
+authorization codes and access tokens always retain their short lifetimes.
 Only SHA-256 digests of codes and tokens are stored in SQLite. Raw codes, tokens
 and verifiers are not persisted. AccessToken's repr excludes the token value.
 The caller must also avoid logging response bodies or serializing secrets to
@@ -121,8 +126,8 @@ its replacement plus a new access token. The grant ID remains stable, so an
 existing MCP session can continue using the renewed access token.
 
 Every renewal rechecks the current grant, device and tool permissions. Tokens
-cannot outlive the original 24-hour grant deadline. Access tokens issued near
-that deadline have a shorter expires_in. A valid reuse of an already consumed
+cannot outlive a finite legacy grant deadline. Access tokens issued near
+such a deadline have a shorter expires_in; permanent grants issue 900-second tokens. A valid reuse of an already consumed
 refresh token revokes the entire grant, including all derived access and refresh
 tokens. Concurrent renewals through different SQLite connections therefore issue
 at most one pair, then invalidate that grant when reuse is detected. Clients
