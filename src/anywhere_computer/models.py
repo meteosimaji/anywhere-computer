@@ -41,6 +41,10 @@ class CodexSkillRead(Contract):
 
 
 class CodexPluginPage(Contract):
+    server: str | None = Field(default=None, min_length=1, max_length=200)
+    tool: str | None = Field(default=None, min_length=1, max_length=200)
+    query: str | None = Field(default=None, min_length=1, max_length=200)
+    summary: bool = False
     cwd: str = Field(min_length=1, max_length=4096)
     limit: int = Field(default=30, ge=1, le=30)
     cursor: str | None = Field(default=None, max_length=2048)

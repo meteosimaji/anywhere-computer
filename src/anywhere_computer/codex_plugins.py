@@ -21,6 +21,28 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.:/-]{1,200}$")
 _DENIED_TOOL_PREFIXES = ("codex_plugin_", "devices_", "connection_setup_", "mcp__codex_app__")
 
 
+class PluginPreflightError(ValueError):
+    """A classified failure before any plugin tool dispatch."""
+
+    def __init__(self, code: str, action: str) -> None:
+        self.code = code
+        self.action = action
+        super().__init__(f"{code}: {action}")
+
+
+def _availability(row: dict[str, JsonValue], has_tools: bool) -> str:
+    runtime = row.get("runtimeStatus")
+    if runtime == "authenticationRequired" or row.get("authStatus") == "notLoggedIn":
+        return "authentication_required"
+    if runtime in {"failed", "cancelled", "disabled"}:
+        return "unavailable"
+    if runtime in {"notStarted", "starting"}:
+        return "runtime_not_ready"
+    if runtime == "connected" and has_tools:
+        return "ready_to_call"
+    return "unverified"
+
+
 class PluginCallOutcomeUnknown(RuntimeError):
     """The plugin call may have dispatched, but its outcome was not confirmed."""
 
@@ -269,7 +291,20 @@ async def _start_and_catalog(
                     clean["description"] = description[:1000]
                     clean["description_truncated"] = True
                 tools.append(clean)
-            servers.append({"server": server, "tools": tools})
+            servers.append({
+                "server": server, "tools": tools,
+                "availability": _availability(row, bool(tools)),
+                "runtime_status": row.get("runtimeStatus")
+                if row.get("runtimeStatus") in {
+                    "notStarted", "starting", "connected", "authenticationRequired",
+                    "failed", "cancelled", "disabled",
+                } else None,
+                "auth_status": row.get("authStatus")
+                if row.get("authStatus") in {
+                    "unknown", "unsupported", "notLoggedIn", "bearerToken", "oAuth",
+                } else "unknown",
+                "execution_verified": False,
+            })
             if len(json.dumps(servers, ensure_ascii=False).encode()) > 2 * 1024 * 1024:
                 raise ValueError("Plugin catalog exceeds the size limit")
         next_value = result.get("nextCursor", result.get("next_cursor"))
@@ -288,15 +323,24 @@ async def _start_and_catalog(
 
 async def list_codex_plugin_tools(
     cwd: str, limit: int = MAX_CATALOG, cursor: str | None = None,
+    *, server: str | None = None, tool: str | None = None,
+    query: str | None = None, summary: bool = False,
 ) -> dict[str, JsonValue]:
     if not 1 <= limit <= MAX_CATALOG:
         raise ValueError("Plugin catalog limit must be between 1 and 30")
+    if tool is not None and server is None:
+        raise PluginPreflightError("invalid_selection", "Specify server with tool")
+    for name in (server, tool):
+        if name is not None and not _SAFE_NAME.fullmatch(name):
+            raise PluginPreflightError("invalid_selection", "Use an exact catalog name")
+    if server is not None:
+        _deny(server, tool or "")
     clean_cwd = _cwd(cwd)
     bounded_cursor = _cursor(cursor)
     async with _Session(_executable(None)) as session:
         servers, next_cursor, thread_id = await asyncio.wait_for(
             _start_and_catalog(session, clean_cwd, limit=limit, cursor=bounded_cursor,
-                               max_pages=1),
+                               max_pages=MAX_PAGES if server else 1),
             timeout=STARTUP_TIMEOUT,
         )
         try:
@@ -305,7 +349,34 @@ async def list_codex_plugin_tools(
             )
         except (TimeoutError, ConnectionError, OSError, ValueError, RuntimeError):
             pass
-    result: dict[str, JsonValue] = {"cwd": clean_cwd, "servers": cast(JsonValue, servers)}
+    selected_servers: list[dict[str, JsonValue]] = []
+    for row in servers:
+        if server is not None and row["server"] != server:
+            continue
+        descriptors = cast(list[dict[str, JsonValue]], row["tools"])
+        selected = [item for item in descriptors if
+                    (tool is None or item["name"] == tool) and
+                    (query is None or query.casefold() in
+                     f"{row['server']} {item['name']} {item['description']}".casefold())]
+        if (query is not None and not selected
+                and query.casefold() not in str(row["server"]).casefold()):
+            continue
+        clean_row = dict(row)
+        clean_row["tool_count"] = len(selected)
+        clean_row["inspect_arguments"] = {"cwd": clean_cwd, "server": row["server"]}
+        if summary:
+            clean_row["tools"] = []
+            clean_row["tool_names_preview"] = [item["name"] for item in selected[:10]]
+        else:
+            clean_row["tools"] = cast(JsonValue, selected)
+        selected_servers.append(clean_row)
+    result: dict[str, JsonValue] = {
+        "cwd": clean_cwd, "servers": cast(JsonValue, selected_servers),
+        "inference_requested": False,
+        "next_action": "Use codex_plugin_tools with server and optional tool for exact schemas; "
+        "copy server, tool name, cwd and catalog_sha256 into codex_plugin_call. "
+        "Registration and schemas do not prove successful execution.",
+    }
     if next_cursor is not None:
         result["next_cursor"] = next_cursor
     return result
@@ -337,8 +408,23 @@ async def call_codex_plugin_tool(
                     if selected is not None:
                         raise ValueError("Plugin catalog contains duplicate tool names")
                     selected = candidate
-        if selected is None or selected.get("catalog_sha256") != catalog_sha256:
-            raise ValueError("Plugin catalog digest or tool schema is stale")
+        selected_server = next((row for row in servers if row.get("server") == server), None)
+        if selected_server is not None and selected_server.get("availability") in {
+            "authentication_required", "runtime_not_ready", "unavailable",
+        }:
+            raise PluginPreflightError(
+                str(selected_server["availability"]),
+                "Inspect this server and repair its local authentication/runtime before retrying",
+            )
+        if selected is None:
+            raise PluginPreflightError(
+                "tool_not_found",
+                "Inspect the exact server/tool; it is absent from the bounded catalog",
+            )
+        if selected.get("catalog_sha256") != catalog_sha256:
+            raise PluginPreflightError(
+                "catalog_stale", "Inspect the tool again and use its new digest",
+            )
         try:
             try:
                 result = await asyncio.wait_for(session.request("mcpServer/tool/call", {

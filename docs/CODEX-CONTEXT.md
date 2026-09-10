@@ -24,8 +24,18 @@ PC 上のエージェントがファイル操作やコマンドを実行する�
 
 ## 既存 MCP プラグインの直接実行
 
-`codex_plugin_tools(cwd)` で、指定ワークスペースから利用できる MCP サーバーと
-ツール定義を取得する。選んだ `server`、`tool`、同じ `cwd`、取得した定義の
+`codex_plugin_tools(cwd, summary=true, query="目的や名前")` で概要を探し、
+`codex_plugin_tools(cwd, server="正確な名前", tool="正確なツール名")` で
+必要な引数定義だけを取得する。server/tool/query/summary は省略可能で、旧形式も維持する。
+対象サーバーの検査は最大10ページ、検索は現在の1ページに限定し、next_cursorがあれば続ける。
+概要にはtool_countと最大10件の名前、次のinspect_argumentsを返す。
+認証要求、ランタイム未準備、利用不能、未確認、呼出準備完了をavailabilityで分ける。
+ready_to_callは接続と定義の確認であり、実行成功の証明ではない（execution_verified=false）。
+カタログが古い場合はcatalog_stale、定義不在はtool_not_found、認証不足は
+ authentication_requiredを返す。実行前の拒否にはdispatched=falseとnext_actionを付ける。
+一覧への追加引数がChatGPTに見えない場合は接続のツール定義を更新する。
+新しいツール名・権限スコープは追加していないため既存認可を拡張する必要はない。
+選んだ `server`、`tool`、同じ `cwd`、取得した定義の
 `catalog_sha256`、スキーマに従った `arguments` を `codex_plugin_call` に渡す。
 呼び出し直前に新しいカタログを取得し、定義が変わっていれば実行せず再選択を求める。
 

@@ -126,6 +126,7 @@ class Engine:
         async def codex_plugin_tools(args: CodexPluginPage) -> Result:
             return await codex_plugins.list_codex_plugin_tools(
                 cwd=args.cwd, limit=args.limit, cursor=args.cursor,
+                server=args.server, tool=args.tool, query=args.query, summary=args.summary,
             )
 
         async def codex_plugin_call(args: CodexPluginCall) -> Result:
@@ -136,7 +137,9 @@ class Engine:
 
         self.register(
             "codex_plugin_tools", "Use when the user wants to use an installed Codex MCP "
-            "plugin from this chat. Discover available tool schemas for an absolute workspace. "
+            "plugin from this chat. Start with summary=true and optional query; inspect with exact "
+            "server and optional tool to obtain schemas and catalog_sha256. Shows runtime/auth "
+            "state separately from verified execution. Use an absolute workspace cwd. "
             "Starts installed MCP servers in a temporary Codex context without model inference. "
             "Does not call a plugin tool, resume an existing chat or expose credentials.",
             CodexPluginPage, codex_plugin_tools, open_world=True,
@@ -717,6 +720,12 @@ class Engine:
             try:
                 result = await tool.handler(arguments)
                 reply = Reply(operation_id=request.operation_id, state="completed", data=result)
+            except codex_plugins.PluginPreflightError as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state="failed", error=str(error),
+                    data={"error_code": error.code, "next_action": error.action,
+                          "dispatched": False},
+                )
             except (UploadOutcomeUnknown, codex_plugins.PluginCallOutcomeUnknown) as error:
                 reply = Reply(operation_id=request.operation_id, state="unknown", error=str(error))
             except Exception as error:

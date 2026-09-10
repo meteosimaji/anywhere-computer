@@ -185,3 +185,48 @@ async def test_transport_disallows_model_and_persistent_threads():
                            ("thread/start", {"ephemeral": False})]:
         with pytest.raises(ValueError):
             await session.request(method, params)
+
+
+async def test_targeted_inspection_and_summary_preserve_digest(stub_catalog, tmp_path):
+    row = stub_catalog['rows'][0]
+    row['runtimeStatus'] = 'connected'
+    row['authStatus'] = 'unsupported'
+    summary = await list_codex_plugin_tools(str(tmp_path), query='echo', summary=True)
+    server = summary['servers'][0]
+    assert server['tools'] == [] and server['tool_count'] == 1
+    assert server['availability'] == 'ready_to_call'
+    assert server['execution_verified'] is False
+    inspected = await list_codex_plugin_tools(**server['inspect_arguments'], tool='echo')
+    descriptor = inspected['servers'][0]['tools'][0]
+    result = await call_codex_plugin_tool(
+        str(tmp_path), 'demo', 'echo', {}, descriptor['catalog_sha256'],
+    )
+    assert result['is_error'] is False
+    assert not any(method == 'turn/start' for method, _ in stub_catalog['calls'])
+
+
+@pytest.mark.parametrize('runtime,auth,expected', [
+    ('authenticationRequired', 'unknown', 'authentication_required'),
+    ('connected', 'notLoggedIn', 'authentication_required'),
+    ('starting', 'unknown', 'runtime_not_ready'),
+    ('disabled', 'unknown', 'unavailable'),
+])
+async def test_unavailable_server_never_dispatches(stub_catalog, tmp_path, runtime, auth, expected):
+    stub_catalog['rows'][0].update(runtimeStatus=runtime, authStatus=auth)
+    inspected = await list_codex_plugin_tools(str(tmp_path), server='demo', tool='echo')
+    assert inspected['servers'][0]['availability'] == expected
+    descriptor = inspected['servers'][0]['tools'][0]
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(
+            str(tmp_path), 'demo', 'echo', {}, descriptor['catalog_sha256'],
+        )
+    assert caught.value.code == expected
+    assert not any(method == 'mcpServer/tool/call' for method, _ in stub_catalog['calls'])
+
+
+async def test_absent_tool_and_stale_catalog_have_distinct_codes(stub_catalog, tmp_path):
+    for tool, expected in [('missing', 'tool_not_found'), ('echo', 'catalog_stale')]:
+        with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+            await call_codex_plugin_tool(str(tmp_path), 'demo', tool, {}, '0' * 64)
+        assert caught.value.code == expected
+    assert not any(method == 'mcpServer/tool/call' for method, _ in stub_catalog['calls'])

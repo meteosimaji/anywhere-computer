@@ -46,7 +46,7 @@ status/subcode information, not response bodies or cookies.
 ## Current Mac deployment (2026-09-10)
 
 Profile: `~/Library/Application Support/Anywhere Computer/chatgpt`.
-Portable release: `portable/permanent-consent-20260910/Anywhere Computer` under the same
+Portable release: `portable/plugin-inspect-20260910/Anywhere Computer` under the same
 application support root. Existing owner credentials and OAuth grants were retained.
 
 Before repair: no autostart receipt/LaunchAgent existed, no TCP 18768 listener,
