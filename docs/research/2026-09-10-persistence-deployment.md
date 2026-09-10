@@ -58,3 +58,23 @@ Recovery receipt:
 ```
 
 Final migration: persistence-final-20260910 runtime, policy 2; runtime hash 3198245af99e4708f49a3a971fe842c1faa41345087d052e64fff7668c4488e6. First migration attempt rolled back; a subsequent diagnostic attempt succeeded. Initial migration failure cause was not captured. Final full tests: 608 passed / 5 skipped. Freshly extracted final archive verified (2254 manifest files); a running installation regenerates Python bytecode and is not a fresh-archive checksum target. Production Python source hash matches.
+
+## Authenticated ChatGPT acceptance
+
+The existing expired authorization was renewed through the normal owner consent
+page, retaining the configured scope and 24-hour grant lifetime. A new ordinary
+Chat conversation with Anywhere Computer explicitly selected received the user's
+test question. It reported ready and successfully read the root directory list.
+Production ledger verification (tool, Unix start time, state only; no payloads):
+
+- computer_status, 1789027754.5344472, completed
+- computer_status, 1789027754.6224692, completed
+- directories_list, 1789027775.5211148, completed
+
+The final independent probe confirmed registered/native_running, matching receipt,
+no persistence/isolation upgrade required, and local/public metadata reachable.
+An older review conversation returned "This conversation does not support developer
+MCPs" before reaching the service. The new conversation succeeded after reconnect.
+The static engine remote_ready=false field does not measure public connectivity;
+it was not used to infer failure. GUI control is not implemented. Grant expiry
+still requires reauthorization even while the OS service remains running.
