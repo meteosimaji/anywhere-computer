@@ -14,6 +14,7 @@ from pydantic import JsonValue
 from . import __version__
 from .connection import WIRE_LIMIT, ensure_agent, exchange
 from .models import Reply, Request
+from .plugin_images import image_summary
 from .workspace_ui import UI_ACTIONS, supports_ui, with_ui_metadata, workspace_resource
 
 Catalog = Callable[[], Awaitable[list[JsonValue]]]
@@ -30,6 +31,34 @@ INSTRUCTIONS = (
 
 def rpc_error(identity: JsonValue, code: int, message: str) -> dict[str, JsonValue]:
     return {"jsonrpc": "2.0", "id": identity, "error": {"code": code, "message": message}}
+
+
+def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
+    structured = cast(dict[str, JsonValue], reply.model_dump(mode="json"))
+    images: list[JsonValue] = []
+    if name == "codex_plugin_call" and reply.state == "completed":
+        data = cast(dict[str, JsonValue], structured["data"])
+        content = data.get("content")
+        if isinstance(content, list):
+            projected: list[JsonValue] = []
+            for item in content:
+                if isinstance(item, dict) and item.get("type") == "image":
+                    images.append(item)
+                    projected.append(image_summary(item))
+                else:
+                    projected.append(item)
+            data["content"] = projected
+    # Only the wire representation changes; the durable reply retains original image bytes.
+    return {
+        "content": [{"type": "text", "text": json.dumps(
+            structured, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
+        )}, *images],
+        "structuredContent": structured,
+        "isError": (
+            reply.state != "completed"
+            or (name == "codex_plugin_call" and reply.data.get("is_error") is True)
+        ),
+    }
 
 
 class MCPSession:
@@ -142,15 +171,7 @@ class MCPSession:
                     error="Connection interrupted. Query operations_get with this operation_id. "
                     "Do not repeat a write until its outcome is known.",
                 )
-            result = {
-                "content": [{"type": "text", "text": reply.model_dump_json()}],
-                "structuredContent": cast(dict[str, JsonValue], reply.model_dump(mode="json")),
-                # 完了済み操作でも、子プラグインが失敗を返す場合がある。
-                "isError": (
-                    reply.state != "completed"
-                    or (name == "codex_plugin_call" and reply.data.get("is_error") is True)
-                ),
-            }
+            result = _reply_result(name, reply)
             if name == "workspace_open" and self.ui_enabled:
                 result["_meta"] = {"workspaceTools": cast(list[JsonValue], sorted(
                     value for value in names if isinstance(value, str) and value in UI_ACTIONS

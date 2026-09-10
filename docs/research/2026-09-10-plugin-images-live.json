@@ -1,0 +1,77 @@
+{
+  "transport": "official-mcp-sdk/stdio",
+  "cases": [
+    {
+      "case": "native_image_and_stale_guard",
+      "passed": true,
+      "image_sha256": "e5f674719d78a0ae3ad32db0897d303652f20026845d745e47f8536cbf3330ce",
+      "image_retained_in_ledger": true
+    },
+    {
+      "server": "openaiDeveloperDocs",
+      "tool": "list_openai_docs",
+      "bridge_round_trip_passed": true,
+      "tool_succeeded": true,
+      "error_code": null,
+      "error_reason": null,
+      "operation_id": "d901c3b878bb4c30bc8f8055401cd115"
+    },
+    {
+      "server": "codex_apps",
+      "tool": "google_calendar.get_colors",
+      "bridge_round_trip_passed": true,
+      "tool_succeeded": false,
+      "error_code": "FORBIDDEN",
+      "error_reason": "ACCESS_TOKEN_SCOPE_INSUFFICIENT",
+      "operation_id": "fa1f6ee50d454510911192de2ff514b1"
+    }
+  ],
+  "fixture": {
+    "sent_methods": [
+      "initialize",
+      "initialized",
+      "thread/start",
+      "mcpServerStatus/list",
+      "thread/unsubscribe",
+      "initialize",
+      "initialized",
+      "thread/start",
+      "mcpServerStatus/list",
+      "mcpServer/tool/call",
+      "thread/unsubscribe",
+      "initialize",
+      "initialized",
+      "thread/start",
+      "mcpServerStatus/list",
+      "thread/unsubscribe"
+    ],
+    "inference_requested": false
+  },
+  "installed": {
+    "sent_methods": [
+      "initialize",
+      "initialized",
+      "thread/start",
+      "mcpServerStatus/list",
+      "thread/unsubscribe",
+      "initialize",
+      "initialized",
+      "thread/start",
+      "mcpServerStatus/list",
+      "mcpServer/tool/call",
+      "thread/unsubscribe",
+      "initialize",
+      "initialized",
+      "thread/start",
+      "mcpServerStatus/list",
+      "thread/unsubscribe",
+      "initialize",
+      "initialized",
+      "thread/start",
+      "mcpServerStatus/list",
+      "mcpServer/tool/call",
+      "thread/unsubscribe"
+    ],
+    "inference_requested": false
+  }
+}

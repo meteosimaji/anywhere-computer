@@ -106,7 +106,7 @@ class RemoteAgent:
                     error="Invalid operation lookup",
                 )
         forwarded = Request(operation_id=internal, tool=request.tool, arguments=arguments)
-        result = await self.engine.execute(forwarded)
+        result = await self.engine.execute(forwarded, peer=identity)
         data = dict(result.data)
         if target_id is not None and result.state == "completed":
             data["operation_id"] = target_id

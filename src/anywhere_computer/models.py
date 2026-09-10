@@ -41,6 +41,7 @@ class CodexSkillRead(Contract):
 
 
 class CodexPluginPage(Contract):
+    session_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     server: str | None = Field(default=None, min_length=1, max_length=200)
     tool: str | None = Field(default=None, min_length=1, max_length=200)
     query: str | None = Field(default=None, min_length=1, max_length=200)
@@ -51,11 +52,21 @@ class CodexPluginPage(Contract):
 
 
 class CodexPluginCall(Contract):
+    session_id: str | None = Field(default=None, pattern=r"^[a-f0-9]{32}$")
     cwd: str = Field(min_length=1, max_length=4096)
     server: str = Field(min_length=1, max_length=200)
     tool: str = Field(min_length=1, max_length=200)
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
     catalog_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+
+
+class OpenPluginSession(Contract):
+    cwd: str = Field(min_length=1, max_length=4096)
+    idle_timeout: int = Field(default=300, ge=30, le=1800)
+
+
+class PluginSessionId(Contract):
+    session_id: str = Field(pattern=r"^[a-f0-9]{32}$")
 
 
 class RuntimeSettings(Contract):

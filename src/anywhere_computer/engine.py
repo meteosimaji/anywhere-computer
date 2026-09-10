@@ -5,6 +5,7 @@ import platform
 import time
 import uuid
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar, cast
@@ -34,8 +35,10 @@ from .models import (
     ListDirectory,
     ListProcesses,
     MoveFile,
+    OpenPluginSession,
     OpenWorkspace,
     OperationId,
+    PluginSessionId,
     ReadBinary,
     ReadDocument,
     ReadFile,
@@ -60,6 +63,7 @@ from .models import (
     WriteDocument,
     WriteFile,
 )
+from .plugin_sessions import PluginSessions
 from .processes import list_processes, stop_process
 from .runtime_identity import runtime_identity
 from .search import Searches
@@ -93,6 +97,10 @@ class Engine:
         self.uploads = Uploads(directory, file_locks=self.files.locks)
         self.downloads = Downloads(directory)
         self.sessions = Sessions()
+        self.plugin_sessions = PluginSessions()
+        # Transport-owned identity, inherited by the durable execution task only.
+        # Tool arguments cannot set this value; None is the local execution scope.
+        self._plugin_owner: ContextVar[str | None] = ContextVar("plugin_owner", default=None)
         self.searches = Searches()
         self.instance_id = uuid.uuid4().hex
         self.runtime_id = runtime_identity()
@@ -124,12 +132,24 @@ class Engine:
 
     def _register_tools(self) -> None:
         async def codex_plugin_tools(args: CodexPluginPage) -> Result:
+            if args.session_id is not None:
+                return await self.plugin_sessions.inspect(
+                    args.session_id, owner=self._plugin_owner.get(), cwd=args.cwd,
+                    limit=args.limit, cursor=args.cursor, server=args.server,
+                    tool=args.tool, query=args.query, summary=args.summary,
+                )
             return await codex_plugins.list_codex_plugin_tools(
                 cwd=args.cwd, limit=args.limit, cursor=args.cursor,
                 server=args.server, tool=args.tool, query=args.query, summary=args.summary,
             )
 
         async def codex_plugin_call(args: CodexPluginCall) -> Result:
+            if args.session_id is not None:
+                return await self.plugin_sessions.call(
+                    args.session_id, owner=self._plugin_owner.get(), cwd=args.cwd,
+                    server=args.server, tool=args.tool, arguments=args.arguments,
+                    catalog_sha256=args.catalog_sha256,
+                )
             return await codex_plugins.call_codex_plugin_tool(
                 cwd=args.cwd, server=args.server, tool=args.tool,
                 arguments=args.arguments, catalog_sha256=args.catalog_sha256,
@@ -141,6 +161,7 @@ class Engine:
             "server and optional tool to obtain schemas and catalog_sha256. Shows runtime/auth "
             "state separately from verified execution. Use an absolute workspace cwd. "
             "Starts installed MCP servers in a temporary Codex context without model inference. "
+            "Optional session_id reuses your explicitly opened context. "
             "Does not call a plugin tool, resume an existing chat or expose credentials.",
             CodexPluginPage, codex_plugin_tools, open_world=True,
         )
@@ -149,8 +170,43 @@ class Engine:
             "exact server, tool, arguments, cwd and catalog_sha256. May change files or external "
             "services; require the user's authorization for the underlying action. Does not "
             "invoke a Codex model. Treat a lost response as unknown and never blindly retry. "
-            "Returns text/data, not another plugin's interactive UI or native app controls.",
+            "Returns text/data and bounded images, not another plugin's interactive UI "
+            "or native app controls. Optional session_id preserves runtime state between calls.",
             CodexPluginCall, codex_plugin_call, destructive=True, open_world=True,
+        )
+
+        async def plugin_session_open(args: OpenPluginSession) -> Result:
+            return await self.plugin_sessions.open(
+                args.cwd, owner=self._plugin_owner.get(), idle_timeout=args.idle_timeout,
+            )
+
+        async def plugin_session_status(args: PluginSessionId) -> Result:
+            return await self.plugin_sessions.status(
+                args.session_id, owner=self._plugin_owner.get(),
+            )
+
+        async def plugin_session_close(args: PluginSessionId) -> Result:
+            return await self.plugin_sessions.stop(args.session_id, owner=self._plugin_owner.get())
+
+        self.register(
+            "codex_plugin_session_open", "Use when several plugin calls must share runtime state. "
+            "Opens an owner-scoped ephemeral Codex context without a model turn. Pass the returned "
+            "session_id and same cwd to codex_plugin_tools/call. Maximum 4 live sessions; idle "
+            "timeout 30-1800 seconds (default 300). Survives client disconnects, not engine "
+            "restarts. Requires authorization for any underlying plugin action.",
+            OpenPluginSession, plugin_session_open, open_world=True,
+        )
+        self.register(
+            "codex_plugin_session_status", "Inspect your plugin session's current lifetime state. "
+            "Does not refresh its idle timeout or restart a lost runtime. Use operations_get "
+            "with the original operation_id to recover a tool result, not this session_id.",
+            PluginSessionId, plugin_session_status, read_only=True,
+        )
+        self.register(
+            "codex_plugin_session_close", "Release your idle plugin context and its owned "
+            "runtime. Refuses while a call is in progress; never retries an uncertain action. "
+            "Closing cannot undo effects already committed by the plugin.",
+            PluginSessionId, plugin_session_close, destructive=True, open_world=True,
         )
 
         async def codex_threads_list(args: CodexThreadPage) -> Result:
@@ -703,7 +759,7 @@ class Engine:
             },
         }
 
-    async def execute(self, request: Request) -> Reply:
+    async def execute(self, request: Request, *, peer: str | None = None) -> Reply:
         tool = self.tools.get(request.tool)
         if tool is None:
             return Reply(operation_id=request.operation_id, state="failed", error="Unknown tool")
@@ -721,10 +777,15 @@ class Engine:
                 result = await tool.handler(arguments)
                 reply = Reply(operation_id=request.operation_id, state="completed", data=result)
             except codex_plugins.PluginPreflightError as error:
+                data: Result = {
+                    "error_code": error.code, "next_action": error.action,
+                    "dispatched": False,
+                }
+                if error.details:
+                    data["details"] = error.details
                 reply = Reply(
-                    operation_id=request.operation_id, state="failed", error=str(error),
-                    data={"error_code": error.code, "next_action": error.action,
-                          "dispatched": False},
+                    operation_id=request.operation_id, state="failed",
+                    error=str(error), data=data,
                 )
             except (UploadOutcomeUnknown, codex_plugins.PluginCallOutcomeUnknown) as error:
                 reply = Reply(operation_id=request.operation_id, state="unknown", error=str(error))
@@ -733,7 +794,14 @@ class Engine:
             self.ledger.finish(reply)
             return reply
 
-        task = asyncio.create_task(run())
+        async def scoped_run() -> Reply:
+            token = self._plugin_owner.set(peer)
+            try:
+                return await run()
+            finally:
+                self._plugin_owner.reset(token)
+
+        task = asyncio.create_task(scoped_run())
         self.inflight[request.operation_id] = task
         task.add_done_callback(lambda _: self.inflight.pop(request.operation_id, None))
         return await asyncio.shield(task)
@@ -741,6 +809,7 @@ class Engine:
     async def close(self) -> None:
         if self.inflight:
             await asyncio.gather(*list(self.inflight.values()), return_exceptions=True)
+        await self.plugin_sessions.close()
         await self.searches.close()
         await self.sessions.close()
         self.ledger.close()

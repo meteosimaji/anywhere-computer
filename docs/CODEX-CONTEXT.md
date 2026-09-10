@@ -24,6 +24,9 @@ PC 上のエージェントがファイル操作やコマンドを実行する�
 
 ## 既存 MCP プラグインの直接実行
 
+複数回の操作で同じ実行環境を保持する場合は、[プラグインセッション](PLUGIN-SESSIONS.md)
+を明示的に開始し、一覧・実行に `session_id` を渡す。省略時は従来の単発実行を維持する。
+
 `codex_plugin_tools(cwd, summary=true, query="目的や名前")` で概要を探し、
 `codex_plugin_tools(cwd, server="正確な名前", tool="正確なツール名")` で
 必要な引数定義だけを取得する。server/tool/query/summary は省略可能で、旧形式も維持する。
@@ -34,10 +37,17 @@ ready_to_callは接続と定義の確認であり、実行成功の証明では�
 カタログが古い場合はcatalog_stale、定義不在はtool_not_found、認証不足は
 authentication_required、検索上限で不在を確定できない場合はcatalog_incompleteを返す。実行前の拒否にはdispatched=falseとnext_actionを付ける。
 一覧への追加引数がChatGPTに見えない場合は接続のツール定義を更新する。
-新しいツール名・権限スコープは追加していないため既存認可を拡張する必要はない。
-選んだ `server`、`tool`、同じ `cwd`、取得した定義の
-`catalog_sha256`、スキーマに従った `arguments` を `codex_plugin_call` に渡す。
+対象を絞った一覧取得の変更自体は、新しい権限を必要としない。
+セッション開始・状態確認・終了の3ツールを使う場合は、その新ツールへの明示認可が別途必要。
+既存 grant はコード更新だけで自動拡張しない。
+各定義の `call_arguments` には、正確な `server`、`tool`、正規化した `cwd`、
+`catalog_sha256` がまとまっている。このオブジェクトにスキーマに従った `arguments`
+を加えて `codex_plugin_call` に渡す。既存の個別引数形式も変わらない。
 呼び出し直前に新しいカタログを取得し、定義が変わっていれば実行せず再選択を求める。
+`catalog_stale` の `details` には受信した指紋と現在の指紋、および実際に照合した
+cwd/server/tool を残す。診断値は自動再試行の許可ではない。定義を再取得して変更内容を
+確認する。単発実行では、実行前に拒否した場合も一時 thread の unsubscribe を試みる。
+明示的なセッションでは、指紋不一致だけで健全な実行環境を閉じない。
 
 公式 app-server の MCP 呼び出しにはロード済みのコンテキストが必要なため、
 専用の `ephemeral` thread を作る。既存会話は再開せず、ユーザーの履歴には保存しない。
@@ -54,10 +64,19 @@ all プロファイルには含まれ、read-only / files には含まれない�
 `unknown` として台帳に保持する。同じ操作 ID の再送は再実行しない。
 外部側に処理が残る場合があるので、新しい ID で無条件にやり直してはならない。
 結果は最大 64 KiB の本文と最大 64 KiB の構造化データを返す。`_meta` は転送しない。
+PNG/JPEG/WebP/GIF のインライン画像は、合計 2 MiB（Base64 復号後）・最大4枚まで
+MCP ImageContent として返す。MIME 型・正規 Base64・形式の先頭バイトを検証するが、
+完全な画像デコーダによる検証ではない。外部 URL を画像として取得する処理はない。
+未対応形式や上限超過には `omitted_image_items` と `truncated=true` を付ける。
+本文の上限に到達しても、その後の画像を検査する。画像の `_meta` や注釈は転送しない。
+MCP の本文・structuredContent には画像の MIME 型、バイト数、SHA-256 だけを表示し、
+Base64 を重複させない。元の画像データは操作台帳に保持され、operations_get では
+元データを回収できる（その照会自体はネイティブ画像表示を行わない）。
 
 対応範囲は、Codex の公式 MCP カタログに現れ、認証済みで直接呼べるツールである。
 スキルだけのプラグインはスキル読込みを使う。Codex 専用のアプリ内部操作、別プラグインの
-ウィジェットや画像/音声結果の完全な転送は含まれない。認証・追加の対話入力が必要な
+ウィジェットや音声結果の転送は含まれない。画像の中継対応はデスクトップの操作権限や
+Codex 固有ランタイムを追加するものではない。認証・追加の対話入力が必要な
 場合は自動承認せず、元のローカルクライアントで完了する必要がある。
 Anywhere Computer 自身への再帰呼び出しも拒否する。
 
@@ -103,3 +122,22 @@ MCP プラグインの共通検索処理が使用する。相対パス、作業�
 2026-09-09: 同梱版の短い PATH では Codex を発見できないことを再現。修正したコードで
 絶対パスを指定し、同じ短い PATH のまま公式 app-server の会話一覧取得が成功した。
 会話本文や一覧内容は検証ログに保存していない。OS ログイン後の実起動とは別の試験。
+
+## 操作 ID の照合
+
+リモート接続では、外部へ返す operation_id とローカル台帳の主キーは異なる。
+`RemoteAgent.internal_id` が接続主体と外部 ID を組み合わせて内部 ID に変換する。
+これは接続間の操作を分離するための仕様であり、不一致だけで回答の捏造とは判断しない。
+同じ接続の `operations_get` には、ChatGPT に返された外部 ID をそのまま渡す。
+ローカル SQL で照合する場合は接続主体を含む変換が必要になるが、その主体や資格情報を
+ChatGPT の回答や公開ログへ出す必要はない。
+
+## 画像中継の実機試験
+
+開発環境の `scripts/verify_plugin_images.py --codex /absolute/path/to/codex` は、
+隔離した CODEX_HOME 内の画像 fixture、実際の Codex App Server、Anywhere Computer の
+エンジン・MCP stdio、公式 MCP SDK を往復する。画像表示用コンテンツ、台帳からの復元、
+誤った指紋の実行前拒否、送信メソッドを確認する。`--installed --cwd /absolute/workspace`
+を明示すると、利用者の openaiDeveloperDocs.list_openai_docs と
+codex_apps の google_calendar.get_colors も読み取り試験する。
+この試験は GUI の操作や ChatGPT 画面での画像表示までを保証するものではない。
