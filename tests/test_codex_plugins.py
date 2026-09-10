@@ -325,3 +325,22 @@ async def test_cleanup_failure_does_not_mask_preflight(stub_catalog, tmp_path, m
     monkeypatch.setattr(codex_plugins._Session, "request", request)
     with pytest.raises(codex_plugins.PluginPreflightError, match="catalog_stale"):
         await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, "0" * 64)
+
+
+@pytest.mark.parametrize("case", ["limit", "cursor", "selection", "digest", "recursive"])
+async def test_invalid_requests_do_not_start_a_runtime(tmp_path, monkeypatch, case):
+    def forbidden(_):
+        pytest.fail("Invalid input must be rejected before launching Codex")
+
+    monkeypatch.setattr(codex_plugins, "_executable", forbidden)
+    with pytest.raises(ValueError):
+        if case == "limit":
+            await list_codex_plugin_tools(str(tmp_path), limit=0)
+        elif case == "cursor":
+            await list_codex_plugin_tools(str(tmp_path), cursor="")
+        elif case == "selection":
+            await list_codex_plugin_tools(str(tmp_path), tool="echo")
+        elif case == "digest":
+            await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, "bad")
+        else:
+            await list_codex_plugin_tools(str(tmp_path), server="anywhere-computer")

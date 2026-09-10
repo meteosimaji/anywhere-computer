@@ -106,6 +106,26 @@ def _strip_meta(value: JsonValue) -> JsonValue:
     return value
 
 
+def _validate_inspection(limit: int, server: str | None, tool: str | None) -> None:
+    if not 1 <= limit <= MAX_CATALOG:
+        raise ValueError("Plugin catalog limit must be between 1 and 30")
+    if tool is not None and server is None:
+        raise PluginPreflightError("invalid_selection", "Specify server with tool")
+    for name in (server, tool):
+        if name is not None and not _SAFE_NAME.fullmatch(name):
+            raise PluginPreflightError("invalid_selection", "Use an exact catalog name")
+    if server is not None:
+        _deny(server, tool or "")
+
+
+def _validate_call(server: str, tool: str, catalog_sha256: str) -> None:
+    if not _SAFE_NAME.fullmatch(server) or not _SAFE_NAME.fullmatch(tool):
+        raise ValueError("Plugin server or tool name is invalid")
+    if not re.fullmatch(r"[a-f0-9]{64}", catalog_sha256):
+        raise ValueError("Plugin catalog digest is invalid")
+    _deny(server, tool)
+
+
 class _Session:
     _ALLOWED = {
         "initialize", "thread/start", "mcpServerStatus/list", "mcpServer/tool/call",
@@ -208,10 +228,7 @@ class _Session:
         await self.notify("initialized", {})
 
 
-async def _start_and_catalog(
-    session: _Session, cwd: str, *, limit: int, cursor: str | None = None,
-    max_pages: int = MAX_PAGES,
-) -> tuple[list[dict[str, JsonValue]], str | None, str]:
+async def _start_thread(session: _Session, cwd: str) -> str:
     started = await session.request("thread/start", {"ephemeral": True, "cwd": cwd})
     thread_id = started.get("threadId", started.get("thread_id"))
     if isinstance(started.get("thread"), dict):
@@ -219,6 +236,15 @@ async def _start_and_catalog(
         thread_id = thread.get("id", thread.get("threadId"))
     if not isinstance(thread_id, str) or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", thread_id) is None:
         raise ValueError("Codex returned an invalid ephemeral thread ID")
+    return thread_id
+
+
+async def _start_and_catalog(
+    session: _Session, cwd: str, *, limit: int, cursor: str | None = None,
+    max_pages: int = MAX_PAGES, thread_id: str | None = None,
+) -> tuple[list[dict[str, JsonValue]], str | None, str]:
+    if thread_id is None:
+        thread_id = await _start_thread(session, cwd)
     servers: list[dict[str, JsonValue]] = []
     seen_servers: set[str] = set()
     page_cursor = cursor
@@ -330,34 +356,20 @@ async def _start_and_catalog(
     return servers, page_cursor, thread_id
 
 
-async def list_codex_plugin_tools(
-    cwd: str, limit: int = MAX_CATALOG, cursor: str | None = None,
+async def _inspect_tools(
+    context: "PluginContext", limit: int = MAX_CATALOG, cursor: str | None = None,
     *, server: str | None = None, tool: str | None = None,
     query: str | None = None, summary: bool = False,
 ) -> dict[str, JsonValue]:
-    if not 1 <= limit <= MAX_CATALOG:
-        raise ValueError("Plugin catalog limit must be between 1 and 30")
-    if tool is not None and server is None:
-        raise PluginPreflightError("invalid_selection", "Specify server with tool")
-    for name in (server, tool):
-        if name is not None and not _SAFE_NAME.fullmatch(name):
-            raise PluginPreflightError("invalid_selection", "Use an exact catalog name")
-    if server is not None:
-        _deny(server, tool or "")
-    clean_cwd = _cwd(cwd)
+    _validate_inspection(limit, server, tool)
+    clean_cwd = context.cwd
     bounded_cursor = _cursor(cursor)
-    async with _Session(_executable(None)) as session:
-        servers, next_cursor, thread_id = await asyncio.wait_for(
-            _start_and_catalog(session, clean_cwd, limit=limit, cursor=bounded_cursor,
-                               max_pages=MAX_PAGES if server else 1),
-            timeout=STARTUP_TIMEOUT,
-        )
-        try:
-            await asyncio.wait_for(
-                session.request("thread/unsubscribe", {"threadId": thread_id}), 1,
-            )
-        except (TimeoutError, ConnectionError, OSError, ValueError, RuntimeError):
-            pass
+    servers, next_cursor, _ = await asyncio.wait_for(
+        _start_and_catalog(
+            context.session, clean_cwd, limit=limit, cursor=bounded_cursor,
+            max_pages=MAX_PAGES if server else 1, thread_id=context.thread_id,
+        ), timeout=STARTUP_TIMEOUT,
+    )
     selected_servers: list[dict[str, JsonValue]] = []
     for row in servers:
         if server is not None and row["server"] != server:
@@ -391,84 +403,165 @@ async def list_codex_plugin_tools(
     return result
 
 
+async def _call_tool(
+    context: "PluginContext", server: str, tool: str,
+    arguments: dict[str, JsonValue], catalog_sha256: str,
+) -> dict[str, JsonValue]:
+    _validate_call(server, tool, catalog_sha256)
+    clean_cwd = context.cwd
+    session, thread_id = context.session, context.thread_id
+    servers, remaining_cursor, _ = await asyncio.wait_for(
+        _start_and_catalog(
+            session, clean_cwd, limit=MAX_CATALOG, max_pages=MAX_PAGES,
+            thread_id=thread_id,
+        ), timeout=STARTUP_TIMEOUT,
+    )
+    selected: dict[str, JsonValue] | None = None
+    for row in servers:
+        if row.get("server") != server:
+            continue
+        raw_tools = row.get("tools", [])
+        if not isinstance(raw_tools, list):
+            continue
+        for candidate in raw_tools:
+            if isinstance(candidate, dict) and candidate.get("name") == tool:
+                if selected is not None:
+                    raise ValueError("Plugin catalog contains duplicate tool names")
+                selected = candidate
+    selected_server = next((row for row in servers if row.get("server") == server), None)
+    if selected_server is not None and selected_server.get("availability") in {
+        "authentication_required", "runtime_not_ready", "unavailable",
+    }:
+        raise PluginPreflightError(
+            str(selected_server["availability"]),
+            "Inspect this server and repair its local authentication/runtime "
+            "before retrying",
+        )
+    if selected is None and remaining_cursor is not None:
+        raise PluginPreflightError(
+            "catalog_incomplete",
+            "Server scan reached its page limit; tool absence is not established. "
+            "Inspect subsequent catalog pages; no plugin call was dispatched",
+        )
+    if selected is None:
+        raise PluginPreflightError(
+            "tool_not_found",
+            "Inspect the exact server/tool; it is absent from the bounded catalog",
+        )
+    if selected.get("catalog_sha256") != catalog_sha256:
+        raise PluginPreflightError(
+            "catalog_stale", "Inspect the tool again and use its new digest",
+            details={
+                "cwd": clean_cwd, "server": server, "tool": tool,
+                "received_catalog_sha256": catalog_sha256,
+                "current_catalog_sha256": selected["catalog_sha256"],
+            },
+        )
+    try:
+        result = await asyncio.wait_for(session.request("mcpServer/tool/call", {
+            "threadId": thread_id, "server": server, "tool": tool,
+            "arguments": arguments,
+        }), timeout=CALL_TIMEOUT)
+    except (
+        TimeoutError, ConnectionError, OSError, ValueError, RuntimeError,
+        json.JSONDecodeError
+    ) as exc:
+        raise PluginCallOutcomeUnknown("Plugin call outcome was not confirmed") from exc
+    try:
+        return _tool_result(result)
+    except (ValueError, TypeError, RuntimeError) as error:
+        raise PluginCallOutcomeUnknown("Plugin returned a malformed result") from error
+
+
+class PluginContext:
+    """One owned App Server process and ephemeral thread; never starts a model turn."""
+
+    def __init__(self, cwd: str) -> None:
+        self.cwd = _cwd(cwd)
+        self._session: _Session | None = None
+        self.thread_id: str | None = None
+
+    @property
+    def session(self) -> _Session:
+        if self._session is None:
+            raise ConnectionError("Plugin context is not open")
+        return self._session
+
+    @property
+    def alive(self) -> bool:
+        process = self._session.process if self._session is not None else None
+        return process is not None and process.returncode is None
+
+    async def open(self) -> None:
+        if self._session is not None:
+            raise RuntimeError("Plugin context is already open")
+        self._session = _Session(_executable(None))
+        try:
+            async with asyncio.timeout(STARTUP_TIMEOUT):
+                await self._session.__aenter__()
+                self.thread_id = await _start_thread(self._session, self.cwd)
+        except BaseException:
+            await self.close()
+            raise
+
+    async def close(self) -> None:
+        if self._session is None:
+            return
+        try:
+            if self.thread_id is not None:
+                try:
+                    await asyncio.wait_for(self._session.request(
+                        "thread/unsubscribe", {"threadId": self.thread_id},
+                    ), timeout=1)
+                except (TimeoutError, ConnectionError, OSError, ValueError, RuntimeError):
+                    pass
+        finally:
+            await self._session.__aexit__()
+            self._session = None
+            self.thread_id = None
+
+    async def __aenter__(self) -> "PluginContext":
+        await self.open()
+        return self
+
+    async def __aexit__(self, *_: object) -> None:
+        await self.close()
+
+    async def inspect(
+        self, *, limit: int = MAX_CATALOG, cursor: str | None = None,
+        server: str | None = None, tool: str | None = None,
+        query: str | None = None, summary: bool = False,
+    ) -> dict[str, JsonValue]:
+        return await _inspect_tools(
+            self, limit, cursor, server=server, tool=tool, query=query, summary=summary,
+        )
+
+    async def call(
+        self, server: str, tool: str, arguments: dict[str, JsonValue], catalog_sha256: str,
+    ) -> dict[str, JsonValue]:
+        return await _call_tool(self, server, tool, arguments, catalog_sha256)
+
+
+async def list_codex_plugin_tools(
+    cwd: str, limit: int = MAX_CATALOG, cursor: str | None = None,
+    *, server: str | None = None, tool: str | None = None,
+    query: str | None = None, summary: bool = False,
+) -> dict[str, JsonValue]:
+    _validate_inspection(limit, server, tool)
+    _cursor(cursor)
+    async with PluginContext(cwd) as context:
+        return await context.inspect(
+            limit=limit, cursor=cursor, server=server, tool=tool, query=query, summary=summary,
+        )
+
+
 async def call_codex_plugin_tool(
     cwd: str, server: str, tool: str, arguments: dict[str, JsonValue], catalog_sha256: str,
 ) -> dict[str, JsonValue]:
-    if not _SAFE_NAME.fullmatch(server) or not _SAFE_NAME.fullmatch(tool):
-        raise ValueError("Plugin server or tool name is invalid")
-    if not re.fullmatch(r"[a-f0-9]{64}", catalog_sha256):
-        raise ValueError("Plugin catalog digest is invalid")
-    _deny(server, tool)
-    clean_cwd = _cwd(cwd)
-    async with _Session(_executable(None)) as session:
-        servers, remaining_cursor, thread_id = await asyncio.wait_for(
-            _start_and_catalog(session, clean_cwd, limit=MAX_CATALOG, max_pages=MAX_PAGES),
-            timeout=STARTUP_TIMEOUT,
-        )
-        try:
-            selected: dict[str, JsonValue] | None = None
-            for row in servers:
-                if row.get("server") != server:
-                    continue
-                raw_tools = row.get("tools", [])
-                if not isinstance(raw_tools, list):
-                    continue
-                for candidate in raw_tools:
-                    if isinstance(candidate, dict) and candidate.get("name") == tool:
-                        if selected is not None:
-                            raise ValueError("Plugin catalog contains duplicate tool names")
-                        selected = candidate
-            selected_server = next((row for row in servers if row.get("server") == server), None)
-            if selected_server is not None and selected_server.get("availability") in {
-                "authentication_required", "runtime_not_ready", "unavailable",
-            }:
-                raise PluginPreflightError(
-                    str(selected_server["availability"]),
-                    "Inspect this server and repair its local authentication/runtime "
-                    "before retrying",
-                )
-            if selected is None and remaining_cursor is not None:
-                raise PluginPreflightError(
-                    "catalog_incomplete",
-                    "Server scan reached its page limit; tool absence is not established. "
-                    "Inspect subsequent catalog pages; no plugin call was dispatched",
-                )
-            if selected is None:
-                raise PluginPreflightError(
-                    "tool_not_found",
-                    "Inspect the exact server/tool; it is absent from the bounded catalog",
-                )
-            if selected.get("catalog_sha256") != catalog_sha256:
-                raise PluginPreflightError(
-                    "catalog_stale", "Inspect the tool again and use its new digest",
-                    details={
-                        "cwd": clean_cwd, "server": server, "tool": tool,
-                        "received_catalog_sha256": catalog_sha256,
-                        "current_catalog_sha256": selected["catalog_sha256"],
-                    },
-                )
-            try:
-                result = await asyncio.wait_for(session.request("mcpServer/tool/call", {
-                    "threadId": thread_id, "server": server, "tool": tool,
-                    "arguments": arguments,
-                }), timeout=CALL_TIMEOUT)
-            except (
-                TimeoutError, ConnectionError, OSError, ValueError, RuntimeError,
-                json.JSONDecodeError
-            ) as exc:
-                raise PluginCallOutcomeUnknown("Plugin call outcome was not confirmed") from exc
-        finally:
-            try:
-                await asyncio.wait_for(
-                    session.request("thread/unsubscribe", {"threadId": thread_id}),
-                    timeout=1,
-                )
-            except (TimeoutError, ConnectionError, OSError, ValueError, RuntimeError):
-                pass
-        try:
-            return _tool_result(result)
-        except (ValueError, TypeError, RuntimeError) as error:
-            raise PluginCallOutcomeUnknown("Plugin returned a malformed result") from error
+    # Reject recursive routes before starting any installed runtime.
+    _validate_call(server, tool, catalog_sha256)
+    async with PluginContext(cwd) as context:
+        return await context.call(server, tool, arguments, catalog_sha256)
 
 
 def _tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:

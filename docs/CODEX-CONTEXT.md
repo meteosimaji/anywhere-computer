@@ -24,6 +24,9 @@ PC 上のエージェントがファイル操作やコマンドを実行する�
 
 ## 既存 MCP プラグインの直接実行
 
+複数回の操作で同じ実行環境を保持する場合は、[プラグインセッション](PLUGIN-SESSIONS.md)
+を明示的に開始し、一覧・実行に `session_id` を渡す。省略時は従来の単発実行を維持する。
+
 `codex_plugin_tools(cwd, summary=true, query="目的や名前")` で概要を探し、
 `codex_plugin_tools(cwd, server="正確な名前", tool="正確なツール名")` で
 必要な引数定義だけを取得する。server/tool/query/summary は省略可能で、旧形式も維持する。
@@ -34,14 +37,17 @@ ready_to_callは接続と定義の確認であり、実行成功の証明では�
 カタログが古い場合はcatalog_stale、定義不在はtool_not_found、認証不足は
 authentication_required、検索上限で不在を確定できない場合はcatalog_incompleteを返す。実行前の拒否にはdispatched=falseとnext_actionを付ける。
 一覧への追加引数がChatGPTに見えない場合は接続のツール定義を更新する。
-新しいツール名・権限スコープは追加していないため既存認可を拡張する必要はない。
+対象を絞った一覧取得の変更自体は、新しい権限を必要としない。
+セッション開始・状態確認・終了の3ツールを使う場合は、その新ツールへの明示認可が別途必要。
+既存 grant はコード更新だけで自動拡張しない。
 各定義の `call_arguments` には、正確な `server`、`tool`、正規化した `cwd`、
 `catalog_sha256` がまとまっている。このオブジェクトにスキーマに従った `arguments`
 を加えて `codex_plugin_call` に渡す。既存の個別引数形式も変わらない。
 呼び出し直前に新しいカタログを取得し、定義が変わっていれば実行せず再選択を求める。
 `catalog_stale` の `details` には受信した指紋と現在の指紋、および実際に照合した
 cwd/server/tool を残す。診断値は自動再試行の許可ではない。定義を再取得して変更内容を
-確認する。実行前に拒否した場合も、一時 thread の unsubscribe を試みる。
+確認する。単発実行では、実行前に拒否した場合も一時 thread の unsubscribe を試みる。
+明示的なセッションでは、指紋不一致だけで健全な実行環境を閉じない。
 
 公式 app-server の MCP 呼び出しにはロード済みのコンテキストが必要なため、
 専用の `ephemeral` thread を作る。既存会話は再開せず、ユーザーの履歴には保存しない。
