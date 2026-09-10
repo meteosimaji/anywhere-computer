@@ -66,9 +66,11 @@ async def main() -> None:
         list_codex_plugin_tools,
     )
 
-    codex = shutil.which("codex")
-    if codex is None or not Path(codex).is_absolute():
-        raise RuntimeError("absolute codex executable not found")
+    # Use the bridge's resolver: launchd may supply an explicit executable while
+    # its PATH deliberately omits the user's interactive-shell commands.
+    codex = bridge._executable(None)
+    if shutil.which(str(codex)) is None:
+        raise RuntimeError("configured Codex executable is not executable")
     with tempfile.TemporaryDirectory(prefix="codex-plugin-smoke-") as raw:
         root = Path(raw)
         home = root / "codex-home"
