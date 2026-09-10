@@ -64,7 +64,7 @@ def _deny(server: str, tool: str = "") -> None:
     lowered = server.casefold()
     if "anywhere-computer" in lowered or "anywhere_computer" in lowered:
         raise ValueError("Anywhere Computer's own server cannot be routed through this bridge")
-    if tool.startswith(_DENIED_TOOL_PREFIXES):
+    if tool.casefold().startswith(_DENIED_TOOL_PREFIXES):
         raise ValueError("Recursive or local tool routing is forbidden")
 
 
@@ -392,7 +392,7 @@ async def call_codex_plugin_tool(
     _deny(server, tool)
     clean_cwd = _cwd(cwd)
     async with _Session(_executable(None)) as session:
-        servers, _, thread_id = await asyncio.wait_for(
+        servers, remaining_cursor, thread_id = await asyncio.wait_for(
             _start_and_catalog(session, clean_cwd, limit=MAX_CATALOG, max_pages=MAX_PAGES),
             timeout=STARTUP_TIMEOUT,
         )
@@ -415,6 +415,12 @@ async def call_codex_plugin_tool(
             raise PluginPreflightError(
                 str(selected_server["availability"]),
                 "Inspect this server and repair its local authentication/runtime before retrying",
+            )
+        if selected is None and remaining_cursor is not None:
+            raise PluginPreflightError(
+                "catalog_incomplete",
+                "Server scan reached its page limit; tool absence is not established. "
+                "Inspect subsequent catalog pages; no plugin call was dispatched",
             )
         if selected is None:
             raise PluginPreflightError(

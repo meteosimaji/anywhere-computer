@@ -230,3 +230,18 @@ async def test_absent_tool_and_stale_catalog_have_distinct_codes(stub_catalog, t
             await call_codex_plugin_tool(str(tmp_path), 'demo', tool, {}, '0' * 64)
         assert caught.value.code == expected
     assert not any(method == 'mcpServer/tool/call' for method, _ in stub_catalog['calls'])
+
+
+@pytest.mark.parametrize("tool", ["Devices_list", "CODEX_PLUGIN_x", "MCP__CODEX_APP__x"])
+async def test_mixed_case_local_routes_are_rejected(fake_codex, tmp_path, tool):
+    with pytest.raises(ValueError, match="forbidden"):
+        await call_codex_plugin_tool(str(tmp_path), "demo", tool, {}, "0" * 64)
+
+
+async def test_incomplete_scan_is_not_tool_absence(stub_catalog, tmp_path, monkeypatch):
+    monkeypatch.setattr(codex_plugins, "MAX_PAGES", 1)
+    stub_catalog["next"] = "next-page"
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(str(tmp_path), "later-server", "echo", {}, "0" * 64)
+    assert caught.value.code == "catalog_incomplete"
+    assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])

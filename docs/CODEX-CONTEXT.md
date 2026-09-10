@@ -32,7 +32,7 @@ PC 上のエージェントがファイル操作やコマンドを実行する�
 認証要求、ランタイム未準備、利用不能、未確認、呼出準備完了をavailabilityで分ける。
 ready_to_callは接続と定義の確認であり、実行成功の証明ではない（execution_verified=false）。
 カタログが古い場合はcatalog_stale、定義不在はtool_not_found、認証不足は
- authentication_requiredを返す。実行前の拒否にはdispatched=falseとnext_actionを付ける。
+authentication_required、検索上限で不在を確定できない場合はcatalog_incompleteを返す。実行前の拒否にはdispatched=falseとnext_actionを付ける。
 一覧への追加引数がChatGPTに見えない場合は接続のツール定義を更新する。
 新しいツール名・権限スコープは追加していないため既存認可を拡張する必要はない。
 選んだ `server`、`tool`、同じ `cwd`、取得した定義の
