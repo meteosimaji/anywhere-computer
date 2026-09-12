@@ -38,7 +38,7 @@ async def test_enabled_catalog_and_selected_read_only(skill_catalog, tmp_path):
     selected = await skills_context.read_codex_skill(
         listed['skills'][0]['skill_id'], cwd=str(tmp_path),
     )
-    assert selected['text'] == first.read_text()
+    assert selected['text'] == first.read_bytes().decode("utf-8")
     assert selected['sha256'] == hashlib.sha256(first.read_bytes()).hexdigest()
     assert 'reference' in selected['instructions']
 

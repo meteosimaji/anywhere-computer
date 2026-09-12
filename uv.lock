@@ -34,7 +34,6 @@ wheels = [
 
 [[package]]
 name = "anywhere-computer"
-version = "0.1.0a1"
 source = { editable = "." }
 dependencies = [
     { name = "keyring" },

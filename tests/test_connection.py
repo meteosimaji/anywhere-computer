@@ -100,3 +100,38 @@ async def test_service_refuses_shutdown_while_session_active(agent):
         {"session_id": session.data["session_id"]},
         credential=credential,
     )
+
+
+async def test_shutdown_rejects_requests_already_waiting_on_a_connection(agent):
+    import json
+
+    from anywhere_computer.connection import load_endpoint
+    from anywhere_computer.models import Reply
+
+    directory, credential = agent
+    port = load_endpoint(directory)["port"]
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    target = directory / "after-stop.txt"
+    packet = json.dumps({
+        "credential": credential,
+        "request": {
+            "operation_id": "b" * 32,
+            "tool": "files_write",
+            "arguments": {"path": str(target), "text": "must not execute"},
+        },
+    }).encode()
+    try:
+        # The accepted connection is retained while shutdown drains existing clients.
+        writer.write(packet)
+        await writer.drain()
+        stopped = await exchange(directory, "__stop", credential=credential)
+        assert stopped.state == "completed"
+        writer.write(b"\n")
+        await writer.drain()
+        reply = Reply.model_validate_json(await asyncio.wait_for(reader.readline(), 2))
+        assert reply.state == "failed"
+        assert "stopping" in reply.error.lower()
+        assert not target.exists()
+    finally:
+        writer.close()
+        await writer.wait_closed()

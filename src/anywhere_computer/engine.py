@@ -737,6 +737,8 @@ class Engine:
         ]
 
     def status(self) -> Result:
+        operations = sum(task.get_name() not in {"computer_status", "operations_get"}
+                         for task in self.inflight.values() if not task.done())
         terminals = sum(s.process.returncode is None for s in self.sessions.sessions.values())
         plugins = sum(
             not entry.cleanup_confirmed for entry in self.plugin_sessions.entries.values()
@@ -744,7 +746,7 @@ class Engine:
         searches = sum(entry.state == "running" for entry in self.searches.searches.values())
         resources: dict[str, JsonValue] = {
             "terminal_sessions": terminals, "plugin_sessions": plugins,
-            "searches": searches, "operations": len(self.inflight),
+            "searches": searches, "operations": operations,
         }
         return {
             "state": "ready",
@@ -754,9 +756,10 @@ class Engine:
             "uptime_seconds": time.monotonic() - self.started,
             "platform": platform.system(),
             "active_sessions": terminals + plugins,
-            "active_operations": len(self.inflight),
+            "active_operations": operations,
             "active_resources": resources,
-            "update_blocked": bool(terminals or plugins or searches or self.inflight),
+            "update_blocked": bool(terminals or plugins or searches or operations),
+            "update_blockers": [name for name, count in resources.items() if count],
             "tools": len(self.tools),
             "transport": "authenticated-loopback",
             "remote_ready": False,
@@ -826,7 +829,7 @@ class Engine:
             finally:
                 self._plugin_owner.reset(token)
 
-        task = asyncio.create_task(scoped_run())
+        task = asyncio.create_task(scoped_run(), name=request.tool)
         self.inflight[request.operation_id] = task
         task.add_done_callback(lambda _: self.inflight.pop(request.operation_id, None))
         return await self._observe(request.operation_id, task)

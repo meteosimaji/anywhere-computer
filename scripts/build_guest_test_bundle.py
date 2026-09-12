@@ -17,9 +17,14 @@ def build_guest_bundle(root: Path, output: Path) -> Path:
     plugin = root / "plugins/anywhere-computer"
     files += [plugin / name for name in (
         ".codex-plugin/plugin.json", ".mcp.json", "LICENSE", "skills/computer-work/SKILL.md",
-        "bundled/checksums.json", "bundled/dependencies.txt",
-        "bundled/anywhere_computer-0.1.0a1-py3-none-any.whl",
+        "bundled/checksums.json", "bundled/dependencies.txt", "bundled/release.json",
     )]
+    checksums = json.loads((plugin / "bundled/checksums.json").read_text())
+    wheels = [name for name in checksums if name.startswith("anywhere_computer-")
+              and name.endswith(".whl") and Path(name).name == name]
+    if len(wheels) != 1:
+        raise ValueError("Plugin checksums must identify exactly one runtime wheel")
+    files.append(plugin / "bundled" / wheels[0])
     payloads = {}
     for source in files:
         if source.is_symlink() or not source.is_file():

@@ -62,8 +62,15 @@ def rpc_error(identity: JsonValue, code: int, message: str) -> dict[str, JsonVal
 def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
     structured = cast(dict[str, JsonValue], reply.model_dump(mode="json"))
     images: list[JsonValue] = []
-    if name == "codex_plugin_call" and reply.state == "completed":
-        data = cast(dict[str, JsonValue], structured["data"])
+    data = cast(dict[str, JsonValue], structured["data"])
+    project = name == "codex_plugin_call" and reply.state == "completed"
+    if name == "operations_get" and reply.state == "completed":
+        # operations_get returns the original Reply. Project its typed content using
+        # the same path; the outer recovery status and inner execution status differ.
+        if data.get("state") == "completed" and isinstance(data.get("data"), dict):
+            data = cast(dict[str, JsonValue], data["data"])
+            project = True
+    if project:
         content = data.get("content")
         if isinstance(content, list):
             projected: list[JsonValue] = []

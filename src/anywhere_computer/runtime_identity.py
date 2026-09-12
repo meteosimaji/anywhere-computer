@@ -3,6 +3,8 @@
 import hashlib
 from pathlib import Path
 
+ENGINE_API_VERSION = 1
+
 
 def runtime_identity() -> str:
     digest = hashlib.sha256()

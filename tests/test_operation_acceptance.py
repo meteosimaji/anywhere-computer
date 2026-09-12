@@ -16,6 +16,17 @@ async def ready(engine):
     return session
 
 
+async def test_idle_status_does_not_block_its_own_update(tmp_path):
+    engine = Engine(tmp_path)
+    try:
+        result = await engine.execute(Request(operation_id=uuid.uuid4().hex,
+                                              tool="computer_status"))
+        assert result.data["update_blocked"] is False
+        assert result.data["active_resources"]["operations"] == 0
+    finally:
+        await engine.close()
+
+
 async def test_known_id_and_early_ack_survive_lost_first_response(tmp_path, monkeypatch):
     monkeypatch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", 0.01)
     engine = Engine(tmp_path)
@@ -43,6 +54,8 @@ async def test_known_id_and_early_ack_survive_lost_first_response(tmp_path, monk
         assert len(calls) == 1
         release.set()
         await asyncio.gather(*engine.inflight.values())
+        # Restore the production observer window for SQLite recovery on slower hosts.
+        monkeypatch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", 5.0)
         recovered = await engine.execute(Request(operation_id=uuid.uuid4().hex,
             tool="operations_get", arguments={"operation_id": known}))
         assert recovered.data["state"] == "completed"

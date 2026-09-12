@@ -12,6 +12,12 @@ def _definition(tmp_path, platform):
                               executable=str(tmp_path / "python"), user="fixture")
 
 
+@pytest.fixture(autouse=True)
+def fixture_macos_user(monkeypatch):
+    # These are command-construction tests; the real macOS user lookup is tested natively.
+    monkeypatch.setattr(native, "_gui_domain", lambda: "gui/501")
+
+
 @pytest.mark.parametrize(("state", "enabled"), [("enabled", True), ("disabled", False)])
 def test_darwin_query_reads_print_disabled_state(tmp_path, monkeypatch, state, enabled):
     definition = _definition(tmp_path, "darwin")

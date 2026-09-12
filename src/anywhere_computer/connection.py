@@ -94,7 +94,15 @@ async def serve(
                 if not isinstance(supplied, str) or not hmac.compare_digest(secret, supplied):
                     return
                 request = Request.model_validate(packet.get("request"))
-                if request.tool == "__status":
+                if stop.is_set():
+                    # A connection may have been accepted before __stop but finish
+                    # reading afterwards. Do not start new work while draining it.
+                    reply = Reply(
+                        operation_id=request.operation_id,
+                        state="failed",
+                        error="Agent is stopping; retry the same operation ID after reconnecting",
+                    )
+                elif request.tool == "__status":
                     reply = Reply(
                         operation_id=request.operation_id, state="completed", data=engine.status()
                     )

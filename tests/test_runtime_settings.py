@@ -14,7 +14,7 @@ async def call(engine, tool, **arguments):
 async def test_settings_persist_apply_and_invalid_update_rolls_back(tmp_path):
     engine = Engine(tmp_path)
     path = tmp_path / "sample"
-    path.write_text("one\ntwo\nthree\n")
+    path.write_text("one\ntwo\nthree\n", newline="")
     try:
         changed = await call(engine, "settings_update", key="file_read_line_limit", value=1)
         assert changed.state == "completed"

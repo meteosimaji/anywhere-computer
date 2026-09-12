@@ -6,9 +6,41 @@ import os
 import sqlite3
 import sys
 import time
+from contextlib import closing
 from pathlib import Path
 
 from .models import Reply, Request
+
+LEDGER_SCHEMA_VERSION = 1
+LEDGER_MIN_SUPPORTED_SCHEMA = 0
+
+
+def require_ledger_compatibility(
+    directory: Path, *, minimum: int = LEDGER_MIN_SUPPORTED_SCHEMA,
+    maximum: int = LEDGER_SCHEMA_VERSION,
+) -> int:
+    """Read-only admission check for a candidate runtime, before switching or migrating.
+
+    The unversioned 8d2e222 checkpoint already uses schema 1. A zero PRAGMA
+    version must not make it appear safe for the five-column legacy runtime.
+    This never restores a database snapshot or discards operation identities.
+    """
+    if minimum < 0 or maximum < minimum:
+        raise ValueError("Invalid supported ledger schema range")
+    database = directory / "operations.sqlite3"
+    if not database.exists():
+        return 0
+    with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro", uri=True)) as db:
+        version = db.execute("PRAGMA user_version").fetchone()[0]
+        columns = {row[1] for row in db.execute("PRAGMA table_info(operations)")}
+        if {"state", "result_sha256"}.intersection(columns):
+            version = max(version, 1)
+        if not minimum <= version <= maximum:
+            raise ValueError(
+                f"Ledger schema {version} is outside runtime support {minimum}..{maximum}; "
+                "use a compatible release. Do not restore an older operation database"
+            )
+        return int(version)
 
 
 def state_directory() -> Path:
@@ -39,40 +71,57 @@ def prepare_directory(directory: Path) -> None:
 
 class Ledger:
     def __init__(self, directory: Path) -> None:
+        require_ledger_compatibility(directory)
         prepare_directory(directory)
         self.connection = sqlite3.connect(directory / "operations.sqlite3")
-        self.connection.execute("PRAGMA journal_mode=WAL")
+        try:
+            self.connection.execute("PRAGMA journal_mode=WAL")
+            # sqlite3's context manager does not begin a transaction for DDL.
+            # Start explicitly so schema, backfill and version commit together.
+            self.connection.execute("BEGIN IMMEDIATE")
+            self._initialize()
+            self.connection.commit()
+        except BaseException:
+            self.connection.rollback()
+            self.connection.close()
+            raise
+
+    def _initialize(self) -> None:
+        version = self.connection.execute("PRAGMA user_version").fetchone()[0]
+        if version > LEDGER_SCHEMA_VERSION:
+            raise ValueError("Ledger schema is newer than this runtime; use a compatible release")
         self.connection.execute(
             "CREATE TABLE IF NOT EXISTS operations ("
             "id TEXT PRIMARY KEY, tool TEXT NOT NULL, digest TEXT NOT NULL, "
             "started REAL NOT NULL, reply TEXT NOT NULL)"
         )
-        with self.connection:
-            self.connection.execute(
-                "CREATE TABLE IF NOT EXISTS operation_results "
-                "(sha256 TEXT PRIMARY KEY, body TEXT NOT NULL)"
-            )
-            columns = {row[1] for row in self.connection.execute("PRAGMA table_info(operations)")}
-            if "state" not in columns:
-                self.connection.execute("ALTER TABLE operations ADD COLUMN state TEXT")
-                self.connection.execute("ALTER TABLE operations ADD COLUMN result_sha256 TEXT")
-                # One transactional migration; later startups query only the state index.
-                rows = self.connection.execute("SELECT reply FROM operations")
-                while batch := rows.fetchmany(100):
-                    for (payload,) in batch:
-                        self._store(Reply.model_validate_json(payload))
-            self.connection.execute(
-                "CREATE INDEX IF NOT EXISTS operations_state ON operations(state)"
-            )
-            self.connection.execute(
-                "CREATE INDEX IF NOT EXISTS operations_started ON operations(started)"
-            )
-            unfinished = self.connection.execute(
-                "SELECT id FROM operations WHERE state IN ('running', 'awaiting_approval')"
-            ).fetchall()
-            for (operation_id,) in unfinished:
-                self._store(Reply(operation_id=operation_id, state="unknown",
-                    error="Agent restarted before the outcome was recorded"))
+        self.connection.execute(
+            "CREATE TABLE IF NOT EXISTS operation_results "
+            "(sha256 TEXT PRIMARY KEY, body TEXT NOT NULL)"
+        )
+        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(operations)")}
+        if "state" not in columns:
+            self.connection.execute("ALTER TABLE operations ADD COLUMN state TEXT")
+        if "result_sha256" not in columns:
+            self.connection.execute("ALTER TABLE operations ADD COLUMN result_sha256 TEXT")
+        # Recover interrupted checkpoint migrations too, not only absent columns.
+        rows = self.connection.execute("SELECT reply FROM operations WHERE state IS NULL")
+        while batch := rows.fetchmany(100):
+            for (payload,) in batch:
+                self._store(Reply.model_validate_json(payload))
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS operations_state ON operations(state)"
+        )
+        self.connection.execute(
+            "CREATE INDEX IF NOT EXISTS operations_started ON operations(started)"
+        )
+        unfinished = self.connection.execute(
+            "SELECT id FROM operations WHERE state IN ('running', 'awaiting_approval')"
+        ).fetchall()
+        for (operation_id,) in unfinished:
+            self._store(Reply(operation_id=operation_id, state="unknown",
+                error="Agent restarted before the outcome was recorded"))
+        self.connection.execute(f"PRAGMA user_version={LEDGER_SCHEMA_VERSION}")
 
     def claim(self, request: Request) -> Reply | None:
         serialized = json.dumps(

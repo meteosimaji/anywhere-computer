@@ -1,5 +1,6 @@
 """Image results must reach MCP clients without base64 in the text envelope."""
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -16,6 +17,67 @@ PNG = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
 
 def image():
     return {"type": "image", "mimeType": "image/png", "data": PNG}
+
+
+@pytest.mark.parametrize("is_error", [False, True])
+def test_recovered_image_is_native_without_losing_original_error(is_error):
+    from anywhere_computer.mcp_server import _reply_result
+
+    original = Reply(operation_id="a" * 32, state="completed",
+                     data=_tool_result({"content": [image()], "isError": is_error}))
+    recovered = Reply(operation_id="b" * 32, state="completed",
+                      data=original.model_dump(mode="json"))
+    result = _reply_result("operations_get", recovered)
+    assert result["content"][1:] == [image()]
+    assert PNG not in result["content"][0]["text"]
+    assert PNG not in json.dumps(result["structuredContent"])
+    assert result["isError"] is False  # Recovery succeeded; inner result retains failure.
+    assert result["structuredContent"]["data"]["data"]["is_error"] is is_error
+    assert original.data["content"] == [image()]
+
+
+async def test_delayed_image_survives_new_mcp_session(tmp_path, monkeypatch):
+    from anywhere_computer import codex_plugins
+    from anywhere_computer import engine as engine_module
+    from anywhere_computer.engine import Engine
+
+    engine = Engine(tmp_path)
+    release = asyncio.Event()
+
+    async def delayed(**_):
+        await release.wait()
+        return _tool_result({"content": [image()]})
+
+    async def catalog():
+        return engine.catalog()
+
+    monkeypatch.setattr(codex_plugins, "call_codex_plugin_tool", delayed)
+    first = MCPSession(catalog, engine.execute)
+    first.initialized = first.ready = True
+    monkeypatch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", 0.01)
+    identity = "f" * 32
+    try:
+        reply = await first.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "codex_plugin_call", "arguments": {
+                "request_id": identity, "cwd": str(tmp_path), "server": "fixture",
+                "tool": "image", "catalog_sha256": "a" * 64,
+            }}})
+        assert reply["result"]["structuredContent"]["state"] == "running"
+        release.set()
+        await asyncio.gather(*engine.inflight.values())
+        monkeypatch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", 5.0)
+        second = MCPSession(catalog, engine.execute)
+        second.initialized = second.ready = True
+        recovered = await second.handle({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": "operations_get", "arguments": {"operation_id": identity}}})
+        result = recovered["result"]
+        assert result["content"][1:] == [image()]
+        assert PNG not in result["content"][0]["text"]
+        assert result["structuredContent"]["data"]["operation_id"] == identity
+        assert engine.ledger.get(identity).data["content"] == [image()]
+    finally:
+        release.set()
+        await engine.close()
 
 
 def test_plugin_result_preserves_image_with_text():

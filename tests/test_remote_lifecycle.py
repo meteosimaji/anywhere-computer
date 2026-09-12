@@ -6,7 +6,6 @@ import os
 import site
 import subprocess
 import sys
-import sysconfig
 import time
 import venv
 from pathlib import Path
@@ -49,16 +48,17 @@ async def test_cli_chain_recovers_http_crash_and_cleans_up_owner_loss(
     # credential backend or source installation is changed; all values are synthetic.
     fixture_environment = tmp_path / "fixture-venv"
     venv.EnvBuilder(with_pip=False, symlinks=sys.platform != "win32").create(fixture_environment)
-    fixture_site = Path(sysconfig.get_path(
-        "purelib", vars={"base": str(fixture_environment), "platbase": str(fixture_environment)},
-    ))
+    interpreter = fixture_environment / (
+        "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
+    )
+    # Query the disposable interpreter: the parent may use Ubuntu's posix_local scheme.
+    fixture_site = Path(subprocess.check_output([
+        str(interpreter), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))",
+    ], text=True).strip())
     fixture_site.mkdir(parents=True, exist_ok=True)
     (fixture_site / "test-dependencies.pth").write_text(
         "\n".join([str(Path(__file__).parents[1] / "src"), *site.getsitepackages()]) + "\n",
         encoding="utf-8",
-    )
-    interpreter = fixture_environment / (
-        "Scripts/python.exe" if sys.platform == "win32" else "bin/python"
     )
     (fixture_site / "sitecustomize.py").write_text(f'''
 import os, sys, json, subprocess

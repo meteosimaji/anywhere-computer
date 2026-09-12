@@ -77,7 +77,14 @@ def build_portable(
         raise ValueError("The build machine needs uv")
     bundled = root / "plugins/anywhere-computer/bundled"
     checksums = json.loads((bundled / "checksums.json").read_text())
-    for name in ("dependencies.txt", "anywhere_computer-0.1.0a1-py3-none-any.whl"):
+    release = json.loads((bundled / "release.json").read_text(encoding="utf-8"))
+    if release.get("artifacts_sha256") != checksums:
+        raise ValueError("Release metadata does not match bundled artifact hashes")
+    wheels = [name for name in checksums if name.startswith("anywhere_computer-")
+              and name.endswith(".whl") and Path(name).name == name]
+    if len(wheels) != 1:
+        raise ValueError("Plugin checksums must identify exactly one runtime wheel")
+    for name in ("dependencies.txt", wheels[0]):
         if hashlib.sha256((bundled / name).read_bytes()).hexdigest() != checksums[name]:
             raise ValueError("Bundled artifact checksum mismatch")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -94,7 +101,7 @@ def build_portable(
         ).strip())
         if not site.resolve().is_relative_to(copied.resolve()):
             raise ValueError("Copied interpreter is not relocatable")
-        wheel = bundled / "anywhere_computer-0.1.0a1-py3-none-any.whl"
+        wheel = bundled / wheels[0]
         requirements = stage / "requirements.txt"
         requirements.write_text((bundled / "dependencies.txt").read_text() +
                                 f"\nanywhere-computer @ {wheel.as_uri()} " +
@@ -128,6 +135,7 @@ def build_portable(
              "'python':sys.version.split()[0]}))"], text=True,
         ))
         manifest = {**runtime_info,
+                    "release": release,
                     "runtime_build": (runtime / "BUILD").read_text().strip(),
                     "bundled_inputs": checksums, "files": {}}
         manifest["files"] = {
