@@ -51,3 +51,32 @@ credentials, endpoint and operation IDs. Add verified stable-release discovery,
 compatibility checks and automatic idle application. Preserve active work and
 provider authorization boundaries. Independent browser/native GUI implementation
 and the remaining five-stage acceptance criteria remain unfinished.
+
+## alpha 4 connection checkpoint
+
+Source commit `75976719f2483b165b8b5b774cb28708f6379f52` and clean bundle
+provenance commit `864f958` were pushed to main. The full local suite before the
+version-only packaging change passed: 756 passed, 5 skipped. Ruff passed for
+src/tests/scripts; mypy passed for 64 source files. After packaging alpha 4,
+24 package/migration/selection tests passed. The macOS portable archive was
+built offline and all 2,260 manifest file hashes matched after extraction.
+
+The native HTTP service was upgraded and started with alpha 4. The existing
+Chat connector returned version `0.1.0a4`, engine API 1, authenticated HTTP,
+instance `6c2e68ad62c7436999556c3c0fd2d68d`, and runtime
+`ce52717d83912225025bcebfb03f661f8cd0656bf06367654b7a48ef2d1b17e6`.
+Status receipt: `62de74b6eb8c440a99dec88f40437cb7`.
+The existing UTF-8 fixture was read with its original SHA-256
+(`aad85ead314744ecb43ee75afae166e2`). The alpha 2 write operation
+`7413366671ff4f02bf109ec846e20680` remained recoverable after this update
+(`0834f6aefadd45618cc485d16db35485`). No reauthorization was performed.
+
+The supported Codex plugin installation command returned version
+`0.1.0-alpha.4`. The local engine was explicitly started with alpha 4, but
+already-running Codex MCP connector processes still had alpha 3 working
+directories at this checkpoint. Installation does not prove those processes
+have reloaded. Shared-state selection has therefore NOT been applied to the
+live installation yet: old connectors must be retired before migration,
+because their old code does not recognize the new state selection. The HTTP
+and local engines remain separate at this checkpoint. Stable automatic
+updates and live shared-engine acceptance remain unfinished.
