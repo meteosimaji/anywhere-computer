@@ -63,7 +63,7 @@ def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
     structured = cast(dict[str, JsonValue], reply.model_dump(mode="json"))
     images: list[JsonValue] = []
     data = cast(dict[str, JsonValue], structured["data"])
-    project = name == "codex_plugin_call" and reply.state == "completed"
+    project = name in {"codex_plugin_call", "mcp_call"} and reply.state == "completed"
     if name == "operations_get" and reply.state == "completed":
         # operations_get returns the original Reply. Project its typed content using
         # the same path; the outer recovery status and inner execution status differ.
@@ -81,6 +81,20 @@ def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
                 else:
                     projected.append(item)
             data["content"] = projected
+            def summarize_duplicate(value: JsonValue) -> JsonValue:
+                if isinstance(value, dict):
+                    for image in images:
+                        if (isinstance(image, dict) and value.get('type') == 'image'
+                                and value.get('data') == image.get('data')
+                                and value.get('mimeType') == image.get('mimeType')):
+                            return image_summary(image)
+                    return {key: summarize_duplicate(item) for key, item in value.items()}
+                if isinstance(value, list):
+                    return [summarize_duplicate(item) for item in value]
+                return value
+
+            if images and 'structured_content' in data:
+                data['structured_content'] = summarize_duplicate(data['structured_content'])
     # Only the wire representation changes; the durable reply retains original image bytes.
     return {
         "content": [{"type": "text", "text": json.dumps(
@@ -89,7 +103,8 @@ def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
         "structuredContent": structured,
         "isError": (
             reply.state not in {"completed", "running"}
-            or (name == "codex_plugin_call" and reply.data.get("is_error") is True)
+            or (name in {"codex_plugin_call", "mcp_call"}
+                and reply.data.get("is_error") is True)
         ),
     }
 

@@ -10,17 +10,16 @@ from typing import cast
 from pydantic import JsonValue
 
 from .codex_context import WIRE_LIMIT, _executable
+from .mcp_results import normalize_tool_result as _tool_result
 from .plugin_diagnostics import (
     STDERR_CHUNK,
     PluginDiagnostics,
     PluginRPCError,
     failure_diagnostic,
 )
-from .plugin_images import IMAGE_LIMIT, MAX_IMAGES, bounded_image
 
 STARTUP_TIMEOUT = 30.0
 CALL_TIMEOUT = 120.0
-TEXT_LIMIT = 64 * 1024
 MAX_PAGES = 10
 MAX_CURSOR = 2048
 MAX_CATALOG = 30
@@ -114,13 +113,6 @@ def _json_object(value: object, message: str) -> dict[str, JsonValue]:
     return cast(dict[str, JsonValue], value)
 
 
-def _bounded_text(value: object, remaining: int) -> tuple[str, bool]:
-    if not isinstance(value, str):
-        return "", False
-    raw = value.encode("utf-8")
-    if len(raw) <= remaining:
-        return value, False
-    return raw[:remaining].decode("utf-8", errors="ignore"), True
 
 
 def _descriptor_digest(server: str, cwd: str, tool: dict[str, JsonValue]) -> str:
@@ -133,12 +125,6 @@ def _descriptor_digest(server: str, cwd: str, tool: dict[str, JsonValue]) -> str
     return hashlib.sha256(payload.encode()).hexdigest()
 
 
-def _strip_meta(value: JsonValue) -> JsonValue:
-    if isinstance(value, dict):
-        return {key: _strip_meta(item) for key, item in value.items() if key != "_meta"}
-    if isinstance(value, list):
-        return [_strip_meta(item) for item in value]
-    return value
 
 
 def _validate_inspection(limit: int, server: str | None, tool: str | None) -> None:
@@ -690,62 +676,3 @@ async def call_codex_plugin_tool(
     _validate_call(server, tool, catalog_sha256)
     async with PluginContext(cwd) as context:
         return await context.call(server, tool, arguments, catalog_sha256)
-
-
-def _tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    content = result.get("content", [])
-    is_error = result.get("isError", False)
-    if not isinstance(content, list) or not isinstance(is_error, bool):
-        raise ValueError("Invalid plugin result")
-    clean_content: list[JsonValue] = []
-    total = 0
-    truncated = False
-    unsupported = 0
-    image_bytes = 0
-    image_count = 0
-    omitted_images = 0
-    for item in content:
-        if not isinstance(item, dict) or not isinstance(item.get("type"), str):
-            raise ValueError("Invalid plugin content")
-        if item["type"] == "image":
-            if image_count >= MAX_IMAGES:
-                omitted_images += 1
-                truncated = True
-                continue
-            image, size = bounded_image(item, IMAGE_LIMIT - image_bytes)
-            if image is None:
-                omitted_images += 1
-                truncated = True
-            else:
-                clean_content.append(image)
-                image_bytes += size
-                image_count += 1
-            continue
-        if item["type"] != "text":
-            unsupported += 1
-            truncated = True
-            continue
-        if not isinstance(item.get("text"), str):
-            raise ValueError("Invalid plugin text")
-        text, cut = _bounded_text(item["text"], TEXT_LIMIT - total)
-        if text:
-            clean_content.append({"type": "text", "text": text})
-            total += len(text.encode("utf-8"))
-        truncated = truncated or cut
-    output: dict[str, JsonValue] = {
-        "content": clean_content, "is_error": is_error, "truncated": truncated,
-    }
-    if omitted_images:
-        output["omitted_image_items"] = omitted_images
-    if unsupported:
-        output["unsupported_content_items"] = unsupported
-    structured = result.get("structuredContent")
-    if structured is not None:
-        if not isinstance(structured, dict):
-            raise ValueError("Invalid plugin structured data")
-        raw = json.dumps(structured, ensure_ascii=False, allow_nan=False).encode()
-        if len(raw) <= TEXT_LIMIT:
-            output["structured_content"] = _strip_meta(structured)
-        else:
-            output["truncated"] = True
-    return output

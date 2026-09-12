@@ -2,6 +2,7 @@ import asyncio
 import subprocess
 import sys
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
 import psutil
 import pytest
@@ -71,6 +72,53 @@ async def test_remote_connector_exit_closes_http(remote_profile, monkeypatch, ex
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_shared_remote_service_owns_update_monitor(remote_profile, monkeypatch, enabled):
+    directory, _ = remote_profile
+    from anywhere_computer.release_supervisor import configure_automatic_updates
+
+    if enabled:
+        configure_automatic_updates(directory, enabled=True)
+    original_service = remote_service.http_service
+    original_popen = subprocess.Popen
+    started, stopped = asyncio.Event(), asyncio.Event()
+
+    @asynccontextmanager
+    async def service(path):
+        async with original_service(path) as running:
+            yield replace(running, config=running.config.model_copy(update={
+                'shared_agent_directory': str(directory / 'shared'),
+            }))
+
+    async def monitor(control):
+        assert control == directory / 'shared'
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            stopped.set()
+
+    def launch(command, **options):
+        return original_popen([sys.executable, '-I', '-c', 'import time; time.sleep(60)'],
+                              **options)
+
+    monkeypatch.setattr(remote_service, 'http_service', service)
+    monkeypatch.setattr(remote_service, 'monitor_release_updates', monitor)
+    monkeypatch.setattr(remote_service.subprocess, 'Popen', launch)
+    task = asyncio.create_task(remote_service.serve_remote(directory))
+    try:
+        if enabled:
+            await asyncio.wait_for(started.wait(), timeout=5)
+        else:
+            await asyncio.sleep(0.3)
+            assert not started.is_set()
+        assert (await diagnose_http(directory))['state'] == 'metadata_reachable'
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+    assert stopped.is_set() == enabled
 
 
 async def test_remote_cancellation_stops_owned_connector(remote_profile, monkeypatch):

@@ -83,3 +83,29 @@ async def test_live_diagnosis_does_not_restart_or_modify_agent(tmp_path, monkeyp
     finally:
         shutdown.set()
         await asyncio.wait_for(task, 5)
+
+
+def test_runtime_diagnosis_exposes_path_resolution_without_environment(tmp_path, monkeypatch):
+    from anywhere_computer.diagnostics import runtime_environment
+
+    monkeypatch.setenv('PATH', str(tmp_path))
+    monkeypatch.setenv('SYNTHETIC_PRIVATE_TOKEN', 'must-not-appear')
+    report = runtime_environment()
+    assert report['executables_on_path'] == {'node': None, 'uv': None, 'codex': None}
+    assert report['scope'] == 'diagnostic_process'
+    assert report['browser_operation_verified'] is False
+    assert 'must-not-appear' not in json.dumps(report)
+
+
+def test_missing_sdk_diagnosis_has_action_without_loading_sdk(monkeypatch):
+    from importlib.metadata import PackageNotFoundError
+
+    from anywhere_computer import diagnostics
+
+    def missing(name):
+        raise PackageNotFoundError(name)
+
+    monkeypatch.setattr(diagnostics, 'version', missing)
+    report = diagnostics.runtime_environment()
+    assert report['direct_mcp_dependency'] == 'missing'
+    assert '--extra mcp' in report['direct_mcp_action']

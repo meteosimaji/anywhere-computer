@@ -271,3 +271,24 @@ class Reply(Contract):
     state: Literal["completed", "failed", "running", "unknown"]
     data: dict[str, JsonValue] = Field(default_factory=dict)
     error: str | None = None
+
+
+class OpenDirectMCPSession(Contract):
+    idle_timeout: int = Field(default=300, ge=30, le=1800)
+    command: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
+        min_length=1, max_length=128,
+    )
+    cwd: str = Field(min_length=1, max_length=4096)
+
+
+class DirectMCPSessionId(Contract):
+    session_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+
+
+class DirectMCPCall(DirectMCPSessionId):
+    name: str = Field(min_length=1, max_length=256)
+    arguments: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+class DirectMCPTools(DirectMCPSessionId):
+    cursor: str | None = Field(default=None, max_length=4096)

@@ -63,6 +63,8 @@ def package_plugin(root: Path) -> Path:
             "export",
             "--locked",
             "--no-dev",
+            "--extra",
+            "mcp",
             "--no-emit-project",
             "--no-header",
             "--output-file",

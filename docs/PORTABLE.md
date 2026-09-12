@@ -1,5 +1,17 @@
 # ランタイム同梱配布物
 
+## 現在の配布状況
+
+2026-09-12時点でリポジトリは公開されていますが、正式stableの実行用ZIPは未公開です。
+GitHubのソースZIPには実行用Pythonは含まれません。以下は同梱ZIPの生成・利用手順です。
+公開alpha 6のQuality CI run 34693834133はmacOS・Windows・Ubuntuすべて成功し、
+ZIP生成・展開後のruntime-only試験・出所証明の生成と検証を通過しました。
+この結果は各OSでの資格情報ストアやChatGPT接続の実機受け入れを代替しません。
+macOSの常駐更新は[更新検証記録](UPDATE-VERIFICATION-2026-09-12.md)、更新手順は
+[更新ガイド](UPDATING.md)を参照してください。日付付きの記録はその時点の検証範囲です。
+
+## ビルドと利用
+
 開発機の信頼済み python-build-standalone と、プラグインのチェックサム付き wheel・
 固定依存一覧から ZIP を作る。利用者の PC に Python/uv の手動導入は不要。
 本体コードは共通だが、Python とネイティブ依存のため OS/CPU ごとの配布物が必要になる。
@@ -73,7 +85,7 @@ Quality CI では三 OS のそれぞれで同梱 ZIP を生成し、日本語・
 `verify_portable.py --runtime-only` を実行する。このモードはファイル操作と分離した
 子 Python の実行を検査し、`native_agent_tested: false` を明示する。CI の資格情報ストア
 可用性に依存せず配布構造を検査するためのモードであり、通常モードの実エージェント・
-Keychain/Windows Vault/Secret Service 検証を代替しない。成功した ZIP は private repo の
+Keychain/Windows Vault/Secret Service 検証を代替しない。成功した ZIP はリポジトリの
 Actions artifact として 14 日保持する。ジョブ定義の追加だけでは Windows/Linux の成功
 実績としない。実際のジョブ結果は別途確認する。
 

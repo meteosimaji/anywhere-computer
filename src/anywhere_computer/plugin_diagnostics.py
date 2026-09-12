@@ -12,6 +12,7 @@ from pydantic import JsonValue
 STDERR_CHUNK = 4096
 MAX_EVENTS = 32
 _MESSAGES = {
+    "sender process is not authenticated": "sender_process_not_authenticated",
     "missing required codex turn metadata": "turn_metadata_required",
     "computer use is not active": "computer_use_inactive",
     "method not found": "method_not_found",

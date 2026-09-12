@@ -1,5 +1,8 @@
 """Read-only connection diagnosis without starting, stopping or repairing an agent."""
 
+import shutil
+import sys
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import psutil
@@ -10,9 +13,33 @@ from .credentials import local_credential
 from .runtime_identity import runtime_identity
 
 
+def runtime_environment() -> dict[str, JsonValue]:
+    """Inspect this process, without launching tools or disclosing environment values."""
+    try:
+        sdk_version = version('mcp')
+    except PackageNotFoundError:
+        sdk_version = None
+    executables: dict[str, JsonValue] = {
+        name: shutil.which(name) for name in ('node', 'uv', 'codex')
+    }
+    return {
+        'scope': 'diagnostic_process',
+        'python': sys.executable,
+        'python_version': sys.version.split()[0],
+        'executables_on_path': executables,
+        'mcp_sdk_version': sdk_version,
+        'direct_mcp_dependency': 'ready' if sdk_version == '1.30.0' else (
+            'missing' if sdk_version is None else 'untested_version'),
+        'direct_mcp_action': 'No dependency action required.' if sdk_version == '1.30.0' else
+            'From source, run uv sync --locked --extra mcp; then use that Python runtime.',
+        'browser_operation_verified': False,
+    }
+
+
 async def diagnose(directory: Path) -> dict[str, JsonValue]:
     def report(state: str, action: str, **details: JsonValue) -> dict[str, JsonValue]:
-        return {"state": state, "action": action, "changed": False, **details}
+        return {"state": state, "action": action, "changed": False,
+                "runtime_environment": runtime_environment(), **details}
 
     try:
         endpoint = load_endpoint(directory)

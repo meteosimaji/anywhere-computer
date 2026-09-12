@@ -1,275 +1,157 @@
 # Anywhere Computer
 
-**Your computer, available through a dependable connection.**
+ChatGPT・CodexなどのMCPクライアントから、自分のPCのファイル・検索・文書・端末を扱うための、セルフホスト型の実行エージェントです。
+判断は接続したAIが行い、PC上のAnywhere Computerが操作を実行します。ファイルや端末の基本機能にCodexのモデル実行は必要ありません。
 
-ChatGPT・Codex などの MCP クライアントから、ファイル・検索・端末作業を行う
-独立エージェント。Linux、Windows、macOS に共通の Python コードを使います。
+公開開発中のalpha版です。現在の公開パッケージは `0.1.0a6`、Codex Pluginの表記は `0.1.0-alpha.6` です。正式stableリリースはまだありません。
 
-開発中の **0.1.0 alpha** です。ローカルエージェントの47ツールと、端末選択3つ・接続設定3つのローカル専用コネクターツールを
-実装しています。TLS リモート通信と HTTP MCP の内部実装・ループバック試験もあります。
-Word・Excel・PowerPoint の本文/セル読取を実装しています。
-Word の表内の段落には表番号・行番号・セル番号を付け、入れ子の表も区別します。
-セル番号は XML 内の並びであり、結合セルの見た目の列位置やページ描画を表すものではありません。
-一時 HTTPS 接続口を通るファイル読み書き・認可失効を macOS で実証しています。
-HTTP クライアントの認証更新・セッション再接続・応答喪失後の結果照会も
-macOS で公開 HTTPS 経由の試験を行っています。
-常用リモート接続、文書の編集/描画、GUI 操作は今後の開発対象です。
+## できること
 
-Codex の会話・スキル参照と、対応する既存 MCP ツールの直接呼び出しも備えます。
-Codex のモデルを起動しない仕組みと制限は [Codex context](docs/CODEX-CONTEXT.md) を参照してください。
-ChatGPT アプリへの接続・認証は別途必要であり、Codex へのインストールだけでは完了しません。
+| 機能 | 公開alphaでの対応 |
+|---|---|
+| ファイル | 一覧・検索・部分読取・書込・限定置換・移動・バックアップ・復元 |
+| ファイル受け渡し | 分割アップロード／ダウンロード、ハッシュ確認、中断後の再開 |
+| 文書 | Word・Excel・PowerPointのテキスト／セル読取、単純なDOCX・XLSX生成 |
+| 端末 | コマンド起動、追加入力、出力の続きの取得、一覧、停止。現在はpipe方式 |
+| 作業の継続 | クライアント切断後のセッション維持、操作IDによる結果回収・重複防止 |
+| ChatGPTとの接続 | 認証付きHTTP MCP、再接続、認証更新、任意のCloudflareトンネル連携 |
+| Codexとの連携 | 選択した会話・スキルの参照、対応Pluginの呼び出しとセッション保持 |
+| 共通エンジン | Chat側のHTTP入口とCodex側のローカル入口から同じエンジンを利用可能 |
 
-macOS arm64 と Linux arm64 では、Python/uv の手動導入を不要にするランタイム同梱 ZIP を生成・
-移動起動検証しました。[同梱配布物の手順と対応状況](docs/PORTABLE.md) を参照してください。
+ネイティブGUI操作と、Plugin標準のブラウザー操作はまだ使えません。独立ブラウザーは開発中で、直接MCP経由の隔離ブラウザー操作まで検証していますが、既存タブ・ログイン状態の利用や公開ツールへの組込みは未完了です。文書の描画や書式を保った編集、PTYも今後の対象です。
 
-## ChatGPT 用の接続設定
+Codexのツールを呼び出せることは、Codex専用の画面操作文脈も利用できることを意味しません。既知の非対応Computer Use経路は、実行前に理由を返します。[Codex連携の対応範囲](docs/CODEX-CONTEXT.md)
 
-実行環境を準備した後は、次のコマンドで ChatGPT 用の設定を開始できます。
+Claude Code・Gemini CLIなどの接続設定と検証範囲は[MCPクライアント接続ガイド](docs/MCP-CLIENTS.md)を参照してください。
+
+開発版alpha7では、独立した既存MCPを使うGUI操作を検証しています。macOSのPeekabooで、
+認証付きHTTPから電卓の連続操作と結果回収を確認しました。導入条件、公開alphaとの違い、
+更新後のツール追加手順は[GUI用MCP接続ガイド](docs/GUI-MCP.md)を参照してください。
+
+## 入手方法
+
+このリポジトリは[GitHubで公開](https://github.com/meteosimaji/anywhere-computer)しています。ソースは任意のタイミングで取得できます。
 
 ```sh
-uv run anywhere chatgpt-setup --state-dir ./local-state/chatgpt
+git clone https://github.com/meteosimaji/anywhere-computer.git
+cd anywhere-computer
 ```
 
-公開 HTTPS の MCP URL と権限を選び、パスワード・トンネル資格情報はローカルの
-非表示入力で設定します。クライアント ID と ChatGPT の戻り先は自動入力されます。
-中断時は同じコマンドで再開できます。異なるクライアントの既存設定は上書きしません。
-これは接続設定の開始コマンドであり、Python/uv の導入、公開 URL の発行、常駐起動、
-ChatGPT への追加・認証までを自動完了するインストーラーではありません。
-詳細は [セットアップ](docs/SETUP-CONTROLLER.md#chatgpt-preset-and-issuer-identification) を参照してください。
+現在、正式stableのダウンロード配布は未公開です。GitHubの「Download ZIP」はソース一式であり、Python同梱の実行用ZIPとは異なります。実行用ZIPはCIで生成・検証しており、配布構造とビルド方法は[ランタイム同梱配布物](docs/PORTABLE.md)にまとめています。
 
-## 起動
+## ソースから起動する
 
-Python 3.12 と [uv](https://docs.astral.sh/uv/) を利用します。
+[uv](https://docs.astral.sh/uv/)と、利用可能なOS資格情報ストアが必要です。Python 3.12と固定依存を準備してから起動します。
 
 ```sh
 uv sync --locked --python 3.12
-uv run anywhere start
-uv run anywhere status
+uv run --locked anywhere start
+uv run --locked anywhere status
 ```
 
-MCP クライアントには、このリポジトリを作業ディレクトリにして
-`uv run --locked anywhere mcp` を設定します。エージェントが停止していれば起動します。
-資格情報は OS の保管機能を利用します。Linux では Secret Service/KWallet などの
-利用可能な保管機能が必要です。
+macOSはKeychain、WindowsはWindows Credential Manager、LinuxはSecret Service／KWalletなどを使用します。Linuxのheadless環境でも、利用可能で解錠済みの資格情報ストアが必要です。
+
+MCPクライアントには、このリポジトリを作業ディレクトリとして次のコマンドを設定します。
 
 ```sh
-uv run anywhere doctor
-uv run anywhere stop
+uv run --locked anywhere mcp
 ```
 
-実行中の端末セッションがある場合、`stop` は停止せず理由を返します。
-`start` はログイン時の自動起動を設定しません。OS管理の常駐には
-`autostart-install` を使います。[常駐モード・停止・移行の仕様](docs/PERSISTENCE.md) を参照してください。
-
-`uv run anywhere autostart-preview --state-dir <設定ディレクトリ>` で、同じ
-`remote-watch` を macOS の LaunchAgent、Linux のユーザー unit、Windows の
-ログイン時タスクから起動する定義を JSON 内で確認できます。ファイル作成やサービス登録は
-行いません。`registration_state: unverified` は登録状態を調べていないことを示します。
-定義の生成だけでは、資格情報ストアへのアクセスや接続の準備完了を確認できません。
-登録・解除には `autostart-install`、`autostart-uninstall`、状態確認には
-`autostart-status` を追加しています。いずれも同じ `--state-dir` を指定します。
-登録には HTTP 設定、所有者の資格情報、トンネル資格情報、利用可能な接続子が必要です。
-登録記録と OS の定義が一致しない場合は変更を拒否し、解除を確認できない場合は記録を
-保持します。解除しても資格情報は削除しません。`native_running` は OS 側の実行状態であり、
-公開 URL への接続成功を意味しません。三 OS の隔離 CI で試験プロセスの実登録・起動・
-停止・解除と最終照会での不在を確認済みです。
-新規登録は常駐ポリシー2を使用します。`autostart-start` は停止済みの一致する登録を
-明示的に開始し、`autostart-upgrade` は実行中のPythonへ登録を移行します。
-macOSの現在のログインセッションでは実接続と監督プロセス異常終了後の復旧を確認しました。
-実際の再ログイン・OS再起動・スリープ復帰は未検証です。
-macOS の状態照会は `launchctl print` の出力解析を含みます。この形式は安定した API として
-保証されていないため、OS 更新後は実機試験が必要です。認識できない定義は変更を拒否します。
-Windows のログイン時タスクはログオン済みのユーザーセッションで動作します。
-登録できても即時起動できない環境があり、登録状態と `native_running` を別々に確認します。
-Windows の起動定義では、スケジューラーによる環境変数展開を防ぐため `%` を含む
-実行パス・設定パスを拒否し、長さを 260 UTF-16 単位以内に制限します。
-
-ログイン時とシェルの `PATH` が異なる環境では、`remote-watch`、`remote-serve`、
-`tunnel-run` に `--connector <接続子の絶対パス>` を指定できます。監督プロセスの
-再起動後も同じ指定を引き継ぎ、指定先のバージョン検証・実行に失敗した場合は
-別の接続子へ切り替えません。`autostart-preview` にも同じオプションを指定でき、
-起動定義に保存する引数を確認できます。プレビューはバイナリを実行しません。
-`remote-doctor --connector <同じ絶対パス>` では、そのパスの実行ファイルを確認できます。
-診断は接続子を実行せず、バージョンとプロセスの稼働状態は `unverified` として返します。
-
-`remote-watch` の起動時に、選択済みの資格情報ストアの読み取りが失敗した場合は、
-1・2・4・8・16 秒の待機を挟んで最大 6 回確認します。未登録・破損は再試行せず、
-別の保管先への切り替えや資格情報の再作成もしません。待機は Ctrl+C で中断できます。
-待機中は同じ設定の別サーバー起動とトンネル資格情報の変更を拒否します。
-これらを変更する場合は、先に待機を中断してください。
-これは読み取りの試行回数と待機時間の制限です。OS 側の読み取り呼び出し自体の停止や、
-資格情報バックエンドの選択に失敗した場合の復旧は、この処理の対象に含みません。
-
-`http-watch` と `remote-watch` は、子プロセスの起動・再起動待ち・上限到達・正常終了・
-中断・起動失敗の最後の観測を状態ディレクトリへ保存します。`http-doctor` と
-`remote-doctor` の `supervisor_history` から、観測時刻、再起動回数、最後の終了コードを
-確認できます。保存するのは最新の一件で、コマンド引数、資格情報、標準エラー本文は含みません。
-これは過去の観測です。強制終了などで更新されない場合があるため、現在の稼働状態は
-`current_process_state: unverified` とし、到達性の診断と分けています。
-`remote-watch` は、選択済み資格情報ストアの確認中・利用不可・資格情報の拒否・確認成功も
-同じ記録に保存します。`startup_attempt` は資格情報の確認回数で、子プロセスの
-`restart_attempts` と区別します。資格情報自体や例外本文は保存しません。
-設定の読込、保管先の選択、接続子の初期バージョン検査の失敗も、それぞれ
-`configuration_error`、`credential_backend_error`、`connector_check_error` として記録します。
-別の HTTP サーバーや接続子が必要なロックを保持している場合は `startup_conflict` を残し、
-既存のプロセスを引き継いだり停止したりせず終了します。
-記録を残すため、`remote-watch` は指定した状態ディレクトリを作成してから起動を試みます。
-接続子内部の詳細原因や、プロセスが生きたまま公開経路が切れた状態は、この記録だけでは
-判定できません。
-`remote-doctor` の `connector.history` には、接続子を監督する処理の最後の観測も表示します。
-上限停止時の回数・終了コードに加え、`last_failure_kind` の `child_exit` は非ゼロの
-プロセス終了、`connector_error` は起動や資格情報の受け渡しなどでのエラーを示します。
-資格情報ストアの利用不可と、秘密の受け渡し用資源を解放できなかった場合も区別します。
-接続子の出力本文は記録しないため、DNS や提供元の認証などの詳細には別の確認が必要です。
-
-`doctor` は起動・停止・設定変更をせず、停止中、古い接続情報、資格情報ストアの
-利用不可、プロセスは存在するが応答しない状態、別ビルドの稼働を区別します。
-JSON の `state` と `action` に結果と対処を返し、`ready` 以外は終了コード 1 です。
-`unresponsive` だけでは停止や認証失敗の原因は断定せず、作業を保持します。
-
-既存の SSH 接続先に同じ版を導入している場合は、次の MCP 起動経路も使えます。
-接続先の `anywhere` コマンド、認証設定、信頼済みホスト鍵が必要です。
+この入口は、エージェントが停止していれば起動します。通常接続は互換性のある稼働エンジンを再利用し、接続しただけで別ビルドへ置き換えません。
 
 ```sh
-anywhere remote-mcp --ssh-host windows-lab
+uv run --locked anywhere doctor
+uv run --locked anywhere stop
 ```
 
-事前に認可済みの HTTP 接続プロフィールには、次の起動経路もあります。
-同じ接続先に所有者認証とクライアント登録を設定済みの場合、まずブラウザーで
-許可する機能を確認します。認証情報のコピーは不要で、OS の資格情報ストアへ保存します。
-サーバーの設定・起動は [HTTP サーバーの手順](docs/HTTP-SERVER.md) を参照してください。
-常設 HTTPS の接続口と証明書管理の自動構築は引き続き開発中です。
+`doctor`は診断用です。`stop`は作業中なら停止せず、その理由を返します。起動・常駐登録・停止・複数端末の詳細は[運用ガイド](docs/OPERATIONS.md)を参照してください。
+
+## ChatGPTから接続する
+
+CodexへのPluginインストールだけでは、ChatGPT側の接続は完了しません。実行環境を用意した後、ChatGPT用の設定を開始します。
 
 ```sh
-anywhere login --resource https://your-agent.example/mcp --client-id registered-client --profile laptop --scope files_read --scope files_write --scope operations_get
-anywhere http-mcp --resource https://your-agent.example/mcp --client-id registered-client --profile laptop
+uv run --locked anywhere chatgpt-setup --state-dir ./local-state/chatgpt
 ```
 
-認可の戻り先は、その都度空いているローカルポートを使います。サーバーには
-`http://127.0.0.1/oauth/callback` と `http://[::1]/oauth/callback` を登録します。
-コマンドは外部ブラウザーを開き、最長5分間承認を待ちます。待受は接続開始時だけ
-ローカル IP に作られ、完了・拒否・失敗・時間切れで閉じます。
+公開HTTPSのMCP URLと認証設定が必要です。ChatGPT用のクライアントIDと戻り先は自動入力されます。パスワード・トンネル資格情報はローカルの非表示入力で設定し、中断した場合は同じコマンドで再開できます。
 
-HTTP 応答を失った操作は再送せず、既知の操作 ID と `unknown` 状態を返します。
-接続を作り直して `operations_get` で結果を照会できます。詳しい前提と制限は
-[HTTP クライアント](docs/REMOTE-TRANSPORT.md#http-client-and-stdio-connector)を参照してください。
+セットアップ完了時に表示される起動・診断コマンドを使い、そのMCP URLをChatGPT側に登録して認証します。公開URL・DNS・トンネルの作成、OSの常駐登録、ChatGPT側の追加までをすべて自動完了するインストーラーではありません。
 
-## 複数端末
+- [ChatGPT用セットアップ](docs/SETUP-CONTROLLER.md#chatgpt-preset-and-issuer-identification)
+- [HTTPサーバーと認証](docs/HTTP-SERVER.md)
+- [任意のCloudflareトンネル連携](docs/CLOUDFLARE-TUNNEL.md)
+- [ログイン時の常駐起動](docs/PERSISTENCE.md)
 
-ローカル接続では `devices_list` → `devices_tools` → `devices_call` の順に、登録した
-端末を明示的なIDで指定できます。通常のツールはローカルを対象としたままです。
-認証・再送の契約は [会話からの端末指定](docs/DEVICE-ROUTING.md) を参照してください。
+接続認証と操作ごとの確認は別です。接続するAIクライアント側の権限設定を使い、Anywhere Computer独自の毎回の操作承認画面は追加しない方針です。OSや外部サービスが必要とする認証・権限設定は残ります。
 
-既存の SSH 設定のホスト名、または HTTP の接続プロフィールを名前で登録します。
-秘密鍵・パスワード・トークンは登録情報に含めません。
+## 更新と接続の引き継ぎ
 
-```sh
-anywhere device-add --name "Windows Lab" --ssh-host windows-lab
-anywhere device-add --name "Linux Lab" --ssh-host linux-lab
-anywhere device-add-http --name "Home" --resource https://computer.example/mcp --client-id desktop-client --profile home
-anywhere login --device-name Home --scope files_read
-anywhere http-mcp --device-name Home
-anywhere devices
-anywhere device-status --device-name Home
-anywhere remote-mcp --device <登録時に返されたID>
-anywhere device-rename --device <ID> --name "Windows Arm64"
-anywhere device-remove --device <ID>
-```
+公開alphaには、GitHub stableを自動取得・適用する機能はまだありません。更新は利用者が選んだタイミングで行います。開発中の自動更新も既定は無効で、希望する利用者だけが明示的に有効化します。
 
-表示名を変更しても ID と認証プロフィールは維持されます。`--device` は ID、
-`--device-name` は表示名を指定し、両方の同時指定はできません。
-HTTP 接続先を名前や ID で選ぶ場合、resource/client/profile の上書き指定は拒否します。
-同じ resource/client/profile の重複登録も拒否します。登録は接続プロフィール単位であり、
-登録件数が物理端末の台数を証明するものではありません。
+現在は、更新したインストールから `anywhere start` を実行すると、作業がない場合にエンジンを切り替えます。状態保存先を変えなければ、資格情報・設定・操作履歴を引き継ぎます。稼働中の端末やPluginセッションは、切替前に完了・終了する必要があります。
 
-状態確認は明示的に実行します。HTTP は MCP の接続確立とツール一覧だけを確認し、
-端末操作ツールは実行しません。確認中に認証トークンを更新する場合は OS 資格情報ストアを更新します。
-`ready` は確認した時点での応答を意味し、60 秒後は現在の状態を `unknown` とし、
-最終確認結果と時刻を残します。時計が巻き戻った場合も `unknown` です。
-同時確認の表示は最後に完了した結果を採用します。
-SSH の失敗した確認は `unreachable` です。端末の電源断、
-SSH 認証失敗、リモートコマンド失敗のどれかは、この結果だけでは断定しません。
-HTTP は再認可が必要なら `authorization_required`、資格情報ストアを使えなければ
-`credential_unavailable`、通信や応答を検証できなければ `not_ready` です。
-`authorization_required` には更新結果不明も含まれ、権限失効を断定する表示ではありません。
-`device-remove` はローカル登録の削除であり、認証権限の失効、資格情報の削除、
-リモートエージェントの停止は行いません。同じ resource/client/profile を同じ状態ディレクトリへ
-再登録すると、保存済み資格情報を再利用します。既存の SSH 登録 DB は初回起動時に
-トランザクション内で移行し、ID・名前・接続先・観測記録を保持します。
+常駐サービスの登録も新しい実行場所へ移す場合は、同じHTTP設定ディレクトリを指定して `autostart-upgrade`、続いて `autostart-start` を実行します。新しい版がその場所を使うため、選択中の実行フォルダーを削除・移動しないでください。
 
-## 現在使えるもの
+開発中の `anywhere update` は、配布物検証・待機・中断復旧をまとめるコマンドです。公開alphaにはまだ含まれません。[更新の対応状況と手順](docs/UPDATING.md)
 
-- [永続転送 ID によるアップロード](docs/UPLOADS.md)。宣言上限1 GiB、チャンクを永続化し、
-  全体ハッシュを確認して未使用の保存先へ公開します。
-- バイナリの分割読み書きと復元。読み取り1 GiB、単純書き込み16 MiB、1チャンク256 KiBまで。
-  [中断後の確認・再開手順](docs/BINARY-TRANSFER.md)を用意しています。
-- Word 本文、Excel 保存済みセルと数式、PowerPoint スライド本文のページ読取。
-- テキストの部分読取・複数読取、内容 hash、競合検知つき書込・限定置換、バックアップと復元。
-- フォルダ一覧と作成、ファイル情報、同一 filesystem 内の通常ファイル移動。
-- 非同期のファイル名・テキスト検索、結果のページ取得とキャンセル。
-- 対話プロセスの起動、入力、出力 cursor、一覧、プロセス群の停止。
-- 操作 ID の重複検査、結果照会、内容を含まない履歴一覧。
-- クライアント切断に影響されないエージェントと端末セッション。
-- 認証したローカル通信、OS 資格情報保管、起動時の状態診断。
+macOSでは、共通エンジンへの移行と更新後に、既存のHTTP接続から再認証なしで接続し、過去の操作結果を回収できることを確認しています。ただし、既に起動しているすべてのCodexタスクが自動でPluginを再読込するとは限りません。[更新・再接続の検証記録](docs/UPDATE-VERIFICATION-2026-09-12.md)
 
-[リモート通信の実装範囲と残作業](docs/REMOTE-TRANSPORT.md) /
-[端末認可の実装範囲](docs/AUTHORIZATION.md) /
-[公開 HTTPS 経由の試験と制限](docs/INTERNET-TESTING.md)
+## 対応環境と確認範囲
 
-既存の常設トンネルを使うための [任意の Cloudflare 接続アダプター](docs/CLOUDFLARE-TUNNEL.md)
-も用意しています。認証情報を OS の資格情報ストアからパイプで渡し、子プロセスの
-異常終了時に上限付きで再起動します。トンネルや DNS の作成、自動起動の設定、
-公開経路の正常性確認は別途必要です。
+共通のPythonコードをmacOS・Windows・Linuxで使います。同梱ランタイムはOS／CPU別です。
 
-開発用の固定ホスト名では、公開 HTTPS 経由の認証、17 MiB の全量転送、接続子プロセスの
-強制終了後に同じ認可セッションで復帰する試験まで確認しました。
-[固定接続の試験範囲と記録](docs/INTERNET-TESTING.md#dedicated-constant-tunnel-mode)
-を参照してください。試験終了後は試験用サーバーを停止しており、本番の常駐運用は未完成です。
+| 確認対象 | 確認できている範囲 |
+|---|---|
+| macOS | 実エージェント、認証付きHTTP、端末再接続、常駐版更新、共通エンジン移行 |
+| Windows・Ubuntu CI | 共通テスト、配布ZIP生成、展開後のランタイム試験、配布物の出所証明検証 |
+| Linux ARM64 | 過去の隔離ゲストで、Secret Serviceを使った実エージェント試験 |
+| 全OSの初回導入・再ログイン・スリープ復帰 | 一般利用者の環境での受け入れは未完了 |
 
-## 依存方針
+CI成功は、すべての実機でGUI操作・ログイン後の自動接続ができることの証明ではありません。詳細は[配布ガイド](docs/PORTABLE.md)と[実装記録](docs/EXECUTION-ROADMAP.md)を参照してください。
 
-実行時の直接依存は現在 pydantic・psutil・keyring の3つです。
-MCP の stdio 接続、TLS 通信、プロセス間ロック、保存先判定は独自実装です。
-公式 MCP SDK は互換性試験用の開発依存にのみ含めます。起動時に自動更新せず、
-uv.lock の固定した組合せで検証します。残る依存の削減も段階的に進めます。
+## 困ったとき
+
+| 状態 | 最初に確認すること |
+|---|---|
+| コマンドが見つからない | 端末と常駐環境のPATHの違い。選択したPython・uv・接続子の絶対パスを使う |
+| 起動できない | `anywhere doctor` の `state` と `action`、OS資格情報ストアの利用可否 |
+| ローカルは動くがChatからつながらない | 同じHTTP設定を使った `remote-doctor --probe-public` とChat側の認証 |
+| 更新できない | 実行中の端末・Plugin・検索などが残っていないか |
+| 操作の応答が途切れた | 同じ操作を新しいIDで繰り返す前に、既知のIDで `operations_get` を確認する |
+| GUI操作が拒否される | 現在の公開alphaでは未対応。拒否ガードを外しても操作可能にはならない |
+
+報告にはOS／CPU、版、再現手順、診断の状態を添えてください。パスワード・トークン・個人ファイルの内容は含めないでください。[Issues](https://github.com/meteosimaji/anywhere-computer/issues)
 
 ## 開発
 
+基本実行時の直接依存はpydantic・psutil・keyringです。直接MCPとブラウザー向けの任意依存は別に定義しています。サーバー側の既存MCP入口は独自実装で、開発中の直接MCPクライアントは公式MCP SDKを使います。
+
+変更に対応する小さなテストから実行し、影響範囲に応じて検査を広げます。
+
 ```sh
-uv run ruff check src tests
-uv run mypy
-uv run pytest -q
+uv run --locked pytest tests/test_connection.py -q
+uv run --locked ruff check src tests scripts
+uv run --locked mypy
+uv run --locked pytest -q
 uv build
 ```
 
-[共通ランタイムの構成と制限](docs/ARCHITECTURE.md) / [製品要件](docs/PRODUCT.md)
-
-## 配布
-
-private リポジトリで開発しています。GitHub 配布と ChatGPT/Codex の公式公開
-ディレクトリへの掲載を目標にしています。現時点では公開申請していません。
-自作コードは [MIT](LICENSE) です。
-
-`plugins/anywhere-computer` にローカル Codex 用 alpha パッケージを用意しています。
-uv と利用可能な OS 資格情報ストアが必要です。初回は Python と固定依存の取得に
-ネットワークを使います。キャッシュ準備後のオフライン起動は別途検証しています。
-ソースを変更した際は `uv run python scripts/package_plugin.py` で同梱 wheel を
-更新してください。pytest が同梱コードとソースの一致を検査します。
-
-エージェントは実装の hash を返します。別ビルドへ更新する際、実行中の作業が
-あれば停止せず理由を返します。作業がない場合だけ旧ビルドを終了して切り替えます。
-
-検索の絞り込み・上限・中断の仕様は [検索ガイド](docs/SEARCH.md) を参照してください。
-
-リモート接続の初期設定は対話コマンドで進められます。公開 HTTPS アドレスと
-トンネル経路を用意したうえで、同じ state directory を使います。
+本体ソースを変更した場合は、検証前に同梱Pluginを再生成します。
 
 ```sh
-uv run anywhere remote-setup --state-dir /absolute/path/to/state
-uv run anywhere remote-watch --state-dir /absolute/path/to/state
-uv run anywhere remote-doctor --state-dir /absolute/path/to/state --probe-public
+uv run --locked python scripts/package_plugin.py
 ```
 
-初期設定は中断後に再開でき、保存済みの設定・認可・資格情報を保持します。
-設定、起動、公開経路の診断はそれぞれ結果を確認できます。
-[接続手順とライフサイクルの制限](docs/CLOUDFLARE-TUNNEL.md)を参照してください。
+同梱wheelとソースの一致はテストで確認します。詳細な運用仕様・設計・検証記録は次を参照してください。
+
+- [構成と制限](docs/ARCHITECTURE.md)
+- [製品要件](docs/PRODUCT.md)
+- [5段階の実装記録](docs/EXECUTION-ROADMAP.md)
+- [変更履歴](CHANGELOG.md)
+- [転送と再開](docs/BINARY-TRANSFER.md)・[アップロード](docs/UPLOADS.md)
+- [検索](docs/SEARCH.md)・[複数端末](docs/DEVICE-ROUTING.md)
+
+## ライセンス
+
+自作部分は[MIT License](LICENSE)です。同梱Python・第三者ライブラリにはそれぞれのライセンスが適用され、その表示を配布物内に保持します。

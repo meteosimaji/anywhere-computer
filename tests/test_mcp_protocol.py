@@ -80,7 +80,9 @@ async def main():
 asyncio.run(main())
 """
     parameters = StdioServerParameters(
-        command=sys.executable, args=["-u", "-c", program, str(tmp_path / "agent")]
+        command=sys.executable, args=["-u", "-c", program, str(tmp_path / "agent")],
+        env={"PATH": str(tmp_path / "empty-path"),
+             "ANYWHERE_CODEX_EXECUTABLE": str(tmp_path / "missing-codex")},
     )
     async with asyncio.timeout(15):
         async with stdio_client(parameters) as (reader, writer):
@@ -88,12 +90,21 @@ asyncio.run(main())
                 initialized = await client.initialize()
                 assert initialized.serverInfo.name == "anywhere-computer"
                 tools = await client.list_tools()
-                assert len(tools.tools) == 50
+                assert len(tools.tools) == 55
+                # An unavailable optional integration must not disable core tools.
+                unavailable = await client.call_tool("codex_skills_list", {"cwd": str(tmp_path)})
+                assert unavailable.isError
                 path = str(tmp_path / "MCP 日本語.txt")
                 written = await client.call_tool("files_write", {"path": path, "text": "stdio"})
                 assert not written.isError
                 read = await client.call_tool("files_read", {"path": path})
                 assert read.structuredContent["data"]["text"] == "stdio"
+                recovered = await client.call_tool("operations_get", {
+                    "operation_id": read.structuredContent["operation_id"],
+                })
+                assert not recovered.isError
+                assert recovered.structuredContent["data"]["data"]["text"] == "stdio"
+
                 await client.send_ping()
                 bad = await client.call_tool("files_read", {"path": path, "limit": -1})
                 assert bad.isError

@@ -232,6 +232,12 @@ async def serve(
 
 def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, JsonValue]:
     prepare_directory(directory)
+    if not replace_idle:
+        # The candidate's explicit start acquires startup.lock itself. Recover
+        # before taking that lock, and never recursively recover explicit start.
+        from .release_update import resume_pending_release
+
+        resume_pending_release(directory)
     expected_runtime = runtime_identity()
     with ProcessLock(directory / "startup.lock", timeout=15):
         engine_directory(directory)  # Never start against a half-switched or missing store.
