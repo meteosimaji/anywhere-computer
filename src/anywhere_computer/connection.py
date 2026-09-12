@@ -6,6 +6,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -21,6 +22,13 @@ from .locking import ProcessLock
 from .models import Contract, Reply, Request
 from .runtime_identity import ENGINE_API_VERSION, runtime_identity
 from .runtime_launch import python_module_command
+from .runtime_selection import (
+    RuntimeSelection,
+    begin_runtime_update,
+    cancel_runtime_update,
+    load_runtime_selection,
+    save_runtime_selection,
+)
 from .state import prepare_directory
 
 WIRE_LIMIT = 8 * 1024 * 1024
@@ -227,11 +235,20 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
     expected_runtime = runtime_identity()
     with ProcessLock(directory / "startup.lock", timeout=15):
         engine_directory(directory)  # Never start against a half-switched or missing store.
+        candidate = RuntimeSelection(executable=os.path.abspath(sys.executable),
+                                     runtime_id=expected_runtime) if replace_idle else None
+        selection = load_runtime_selection(directory, recovery=candidate)
+        if replace_idle:
+            selection = candidate
+        elif selection is not None:
+            expected_runtime = selection.runtime_id
         credential = local_credential(directory, create=True)
         try:
             reply = asyncio.run(exchange(directory, "__status", timeout=2, credential=credential))
             if reply.state == "completed":
                 if reply.data.get("runtime_id") == expected_runtime:
+                    if replace_idle and selection is not None:
+                        save_runtime_selection(directory, selection)
                     return reply.data
                 if not replace_idle:
                     api = reply.data.get("engine_api_version")
@@ -247,8 +264,12 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
                         "A different agent build has active work. Finish it with the previous "
                         "installation before upgrading; no process was stopped."
                     )
+                if selection is not None:
+                    begin_runtime_update(directory, selection)
                 stopped = asyncio.run(exchange(directory, "__stop", credential=credential))
                 if stopped.state != "completed":
+                    if selection is not None:
+                        cancel_runtime_update(directory, selection)
                     raise RuntimeError("Agent became busy during upgrade; no restart performed")
                 deadline = time.monotonic() + 5
                 while (directory / "agent.json").exists() and time.monotonic() < deadline:
@@ -268,7 +289,12 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
                     )
         except (OSError, ValueError, psutil.NoSuchProcess):
             pass
-        command = python_module_command("anywhere_computer", "serve", "--state-dir", str(directory))
+        if replace_idle and selection is not None:
+            begin_runtime_update(directory, selection)
+        command = python_module_command(
+            "anywhere_computer", "serve", "--state-dir", str(directory),
+            executable=selection.executable if selection is not None else None,
+        )
         subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
@@ -284,6 +310,10 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
                     exchange(directory, "__status", timeout=1, credential=credential)
                 )
                 if reply.state == "completed":
+                    if reply.data.get("runtime_id") != expected_runtime:
+                        raise RuntimeError('Started runtime differs from the selected installation')
+                    if replace_idle and selection is not None:
+                        save_runtime_selection(directory, selection)
                     return reply.data
             except (OSError, ValueError, TimeoutError):
                 pass
