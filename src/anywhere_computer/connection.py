@@ -12,13 +12,14 @@ from pathlib import Path
 from typing import cast
 
 import psutil
-from pydantic import JsonValue
+from pydantic import Field, JsonValue
 
 from .credentials import local_credential
 from .engine import Engine
+from .engine_selection import engine_directory
 from .locking import ProcessLock
-from .models import Reply, Request
-from .runtime_identity import runtime_identity
+from .models import Contract, Reply, Request
+from .runtime_identity import ENGINE_API_VERSION, runtime_identity
 from .runtime_launch import python_module_command
 from .state import prepare_directory
 
@@ -26,6 +27,25 @@ WIRE_LIMIT = 8 * 1024 * 1024
 # Includes unauthenticated readers. Admission happens synchronously before a task
 # can retain a full legacy credential-bearing frame (8 MiB per connection).
 MAX_CONNECTIONS = 8
+
+
+class GrantedRequest(Contract):
+    """Trusted local gateway envelope; never registered as a public MCP tool."""
+
+    identity: str = Field(min_length=1, max_length=128, pattern=r"^[\x21-\x7e]+$")
+    tools: list[str] = Field(max_length=64)
+    request: Request
+
+
+async def exchange_remote(
+    directory: Path, identity: str, allowed: frozenset[str], request: Request,
+    *, credential: str | None = None,
+) -> Reply:
+    envelope = GrantedRequest(identity=identity, tools=sorted(allowed), request=request)
+    return await exchange(
+        directory, "__remote", cast(dict[str, JsonValue], envelope.model_dump(mode="json")),
+        operation_id=request.operation_id, credential=credential,
+    )
 
 
 def load_endpoint(directory: Path) -> dict[str, JsonValue]:
@@ -81,7 +101,7 @@ async def serve(
     secret = credential if credential is not None else local_credential(directory)
     stop = shutdown or asyncio.Event()
     with ProcessLock(directory / "agent.lock", timeout=0):
-        engine = Engine(directory)
+        engine = Engine(engine_directory(directory), file_locks=directory / "file-locks")
         connections: set[asyncio.Task[None]] = set()
 
         async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -112,6 +132,18 @@ async def serve(
                         state="completed",
                         data={"tools": engine.catalog()},
                     )
+                elif request.tool == "__remote":
+                    from .remote_bridge import RemoteAgent
+
+                    granted = GrantedRequest.model_validate(request.arguments)
+                    if granted.request.operation_id != request.operation_id:
+                        raise ValueError("Forwarded operation ID differs from envelope")
+                    bridge = RemoteAgent(
+                        engine, {granted.identity: frozenset(granted.tools)}, transport="http",
+                    )
+                    reply = Reply.model_validate_json(await bridge.dispatch(
+                        granted.identity, granted.request.model_dump_json().encode(),
+                    ))
                 elif request.tool == "__stop":
                     if engine.status()["update_blocked"]:
                         reply = Reply(
@@ -190,16 +222,25 @@ async def serve(
             (directory / "agent.json").unlink(missing_ok=True)
 
 
-def ensure_agent(directory: Path) -> dict[str, JsonValue]:
+def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, JsonValue]:
     prepare_directory(directory)
     expected_runtime = runtime_identity()
     with ProcessLock(directory / "startup.lock", timeout=15):
+        engine_directory(directory)  # Never start against a half-switched or missing store.
         credential = local_credential(directory, create=True)
         try:
             reply = asyncio.run(exchange(directory, "__status", timeout=2, credential=credential))
             if reply.state == "completed":
                 if reply.data.get("runtime_id") == expected_runtime:
                     return reply.data
+                if not replace_idle:
+                    api = reply.data.get("engine_api_version")
+                    if type(api) is int and api == ENGINE_API_VERSION:
+                        return reply.data
+                    raise RuntimeError(
+                        "Running engine API is incompatible or undeclared. Update the engine "
+                        "through its launcher; this connector did not stop or replace it."
+                    )
                 if (reply.data.get("update_blocked") or reply.data.get("active_sessions")
                         or reply.data.get("active_operations")):
                     raise RuntimeError(

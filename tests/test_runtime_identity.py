@@ -53,5 +53,42 @@ def test_build_upgrade_refuses_to_stop_active_work(tmp_path, monkeypatch):
     )
     monkeypatch.setattr("anywhere_computer.connection.exchange", exchange)
     with pytest.raises(RuntimeError, match="active work"):
-        ensure_agent(tmp_path)
+        ensure_agent(tmp_path, replace_idle=True)
     assert calls == ["__status"]
+
+
+@pytest.mark.parametrize('busy', [False, True])
+def test_connector_reuses_compatible_other_build_without_replacing_it(tmp_path, monkeypatch, busy):
+    from anywhere_computer.runtime_identity import ENGINE_API_VERSION
+
+    calls = []
+
+    async def exchange(directory, tool, **kwargs):
+        calls.append(tool)
+        return Reply(operation_id='0' * 32, state='completed', data={
+            'runtime_id': 'another-installed-build', 'engine_api_version': ENGINE_API_VERSION,
+            'update_blocked': busy, 'active_sessions': int(busy),
+        })
+
+    monkeypatch.setattr('anywhere_computer.connection.local_credential', lambda *a, **kw: 'fixture')
+    monkeypatch.setattr('anywhere_computer.connection.exchange', exchange)
+    result = ensure_agent(tmp_path, replace_idle=False)
+    assert result['runtime_id'] == 'another-installed-build'
+    assert calls == ['__status']
+
+
+@pytest.mark.parametrize('api', [None, 2, True, '1'])
+def test_connector_rejects_unknown_protocol_without_stopping_server(tmp_path, monkeypatch, api):
+    calls = []
+
+    async def exchange(directory, tool, **kwargs):
+        calls.append(tool)
+        return Reply(operation_id='0' * 32, state='completed', data={
+            'runtime_id': 'another-installed-build', 'engine_api_version': api,
+        })
+
+    monkeypatch.setattr('anywhere_computer.connection.local_credential', lambda *a, **kw: 'fixture')
+    monkeypatch.setattr('anywhere_computer.connection.exchange', exchange)
+    with pytest.raises(RuntimeError, match='API'):
+        ensure_agent(tmp_path, replace_idle=False)
+    assert calls == ['__status']

@@ -1,13 +1,32 @@
+import asyncio
+
 import httpx
+import pytest
 
 from anywhere_computer.authorization import AuthorizationStore, pkce_s256
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
+from anywhere_computer.connection import exchange, serve
 from anywhere_computer.engine import Engine
 from anywhere_computer.http_mcp import HTTPMCP
 
 
-async def test_real_http_enforces_device_scope_and_revocation(tmp_path):
+@pytest.mark.parametrize("shared", [False, True])
+async def test_real_http_enforces_device_scope_and_revocation(tmp_path, monkeypatch, shared):
     engine = Engine(tmp_path / "agent")
+    shared_directory = tmp_path / "shared-agent"
+    stopped = asyncio.Event()
+    service = None
+    if shared:
+        monkeypatch.setattr("anywhere_computer.connection.local_credential",
+                            lambda *a, **kw: "shared-agent-fixture")
+        service = asyncio.create_task(serve(
+            shared_directory, credential="shared-agent-fixture", shutdown=stopped,
+        ))
+        async with asyncio.timeout(5):
+            while not (shared_directory / "agent.json").exists():
+                if service.done():
+                    await service
+                await asyncio.sleep(0.01)
     resource = "https://computer.example/mcp"
     redirect = "https://client.example/callback"
     authority = AuthorizationStore(
@@ -54,7 +73,10 @@ async def test_real_http_enforces_device_scope_and_revocation(tmp_path):
         authority, engine, owner="owner", device="device", client="other"
     )
     assert await another_client.authenticate(read_token) is None
-    backend = AuthorizedDeviceMCP(authority, engine, owner="owner", device="device")
+    backend = AuthorizedDeviceMCP(
+        authority, None if shared else engine,
+        agent_directory=shared_directory if shared else None, owner="owner", device="device",
+    )
     adapter = HTTPMCP(backend.authenticate, backend.session)
     port = await adapter.start()
     initialize = {
@@ -102,6 +124,14 @@ async def test_real_http_enforces_device_scope_and_revocation(tmp_path):
                 "files_read",
                 "operations_get",
             }
+            if shared:
+                local = await exchange(shared_directory, "__status")
+                remote = (await http.post("/mcp", json={
+                    "jsonrpc": "2.0", "id": "same-engine", "method": "tools/call",
+                    "params": {"name": "computer_status", "arguments": {}},
+                })).json()["result"]["structuredContent"]
+                assert remote["data"]["instance_id"] == local.data["instance_id"]
+                assert remote["data"]["transport"] == "http"
             target = tmp_path / "scope.txt"
             write = {
                 "jsonrpc": "2.0",
@@ -166,3 +196,6 @@ async def test_real_http_enforces_device_scope_and_revocation(tmp_path):
         await adapter.close()
         authority.close()
         await engine.close()
+        if service is not None:
+            stopped.set()
+            await asyncio.wait_for(service, 10)

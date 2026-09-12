@@ -65,7 +65,7 @@ from .models import (
 )
 from .plugin_sessions import PluginSessions
 from .processes import list_processes, stop_process
-from .runtime_identity import runtime_identity
+from .runtime_identity import ENGINE_API_VERSION, runtime_identity
 from .search import Searches
 from .sessions import Sessions
 from .state import Ledger
@@ -751,6 +751,7 @@ class Engine:
         return {
             "state": "ready",
             "version": __version__,
+            "engine_api_version": ENGINE_API_VERSION,
             "instance_id": self.instance_id,
             "runtime_id": self.runtime_id,
             "uptime_seconds": time.monotonic() - self.started,

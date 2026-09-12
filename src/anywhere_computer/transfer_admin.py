@@ -7,6 +7,8 @@ from typing import Literal
 from pydantic import JsonValue
 
 from .downloads import Downloads
+from .engine_selection import engine_directory, require_no_migration
+from .http_service import load_http_config
 from .models import TransferId
 from .uploads import Uploads
 
@@ -14,10 +16,23 @@ TransferArea = Literal["local", "http"]
 TransferKind = Literal["upload", "download"]
 
 
-def _database(directory: Path, area: TransferArea, kind: TransferKind) -> tuple[Path, Path]:
+def _database(directory: Path, area: TransferArea, kind: TransferKind) -> tuple[Path, Path, str]:
     if area not in {"local", "http"} or kind not in {"upload", "download"}:
         raise ValueError("Unknown transfer area or kind")
-    engine = directory / "http-server" / "engine" if area == "http" else directory
+    require_no_migration(directory)
+    scope: str = area
+    if area == "http":
+        engine = directory / "http-server" / "engine"
+        config_path = directory / "http-server/config.json"
+        if config_path.exists() or config_path.is_symlink():
+            shared = load_http_config(directory).shared_agent_directory
+            if shared is not None:
+                engine = engine_directory(Path(shared))
+                scope = "shared"
+    else:
+        engine = engine_directory(directory)
+        if engine != directory:
+            scope = "shared"
     database = engine / (kind + "s") / (kind + "s.sqlite3")
     # Reject existing symlinks. State is owned by a trusted local user; this
     # is not atomic protection against that user replacing paths during access.
@@ -26,7 +41,7 @@ def _database(directory: Path, area: TransferArea, kind: TransferKind) -> tuple[
             raise ValueError("Transfer registry must not be a symbolic link")
     if area == "http" and (directory / "http-server").is_symlink():
         raise ValueError("HTTP state must not be a symbolic link")
-    return engine, database
+    return engine, database, scope
 
 
 def list_transfers(
@@ -41,10 +56,11 @@ def list_transfers(
         TransferId(transfer_id=after)
     if not 1 <= limit <= 100:
         raise ValueError("Transfer page limit must be 1–100")
-    _, database = _database(directory, area, kind)
+    _, database, scope = _database(directory, area, kind)
     if not database.exists():
         return {
             "area": area,
+            "storage_scope": scope,
             "kind": kind,
             "registry_exists": False,
             "transfers": [],
@@ -74,6 +90,7 @@ def list_transfers(
             ]
             return {
                 "area": area,
+                "storage_scope": scope,
                 "kind": kind,
                 "registry_exists": True,
                 "transfers": entries,
@@ -93,7 +110,7 @@ def release_transfer(
     storage_id: str,
 ) -> dict[str, JsonValue]:
     identity = TransferId(transfer_id=storage_id)
-    engine, database = _database(directory, area, kind)
+    engine, database, scope = _database(directory, area, kind)
     if not database.is_file():
         raise ValueError("Transfer registry does not exist")
     try:
@@ -101,6 +118,7 @@ def release_transfer(
             result = Downloads(engine).close(identity)
         else:
             result = Uploads(engine, file_locks=directory / "file-locks").abort(identity)
-        return {"area": area, "kind": kind, "storage_id": storage_id, **result}
+        return {"area": area, "storage_scope": scope, "kind": kind,
+                "storage_id": storage_id, **result}
     except sqlite3.Error as error:
         raise ValueError("Transfer registry cannot be updated") from error

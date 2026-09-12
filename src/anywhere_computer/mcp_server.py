@@ -287,7 +287,7 @@ async def run_mcp(directory: Path) -> None:
         return raw
 
     async def execute(request: Request) -> Reply:
-        await asyncio.to_thread(ensure_agent, directory)
+        await asyncio.to_thread(ensure_agent, directory, replace_idle=False)
         return await exchange(
             directory, request.tool, request.arguments, operation_id=request.operation_id
         )

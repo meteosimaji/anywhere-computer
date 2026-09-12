@@ -17,7 +17,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_valid
 from .authorization import AuthorizationStore, validate_authorization_url
 from .authorized_http import AuthorizedDeviceMCP
 from .browser_authorization import BrowserAuthorization
+from .connection import ensure_agent, exchange
 from .engine import Engine
+from .engine_selection import require_no_migration
 from .files import read_bytes
 from .http_mcp import HTTPMCP
 from .locking import ProcessLock
@@ -36,6 +38,14 @@ class HTTPServiceConfig(BaseModel):
     port: int = Field(ge=1, le=65535)
     scopes: frozenset[str] = Field(min_length=1, max_length=64)
     redirects: frozenset[str] = Field(min_length=1, max_length=10)
+    shared_agent_directory: str | None = Field(default=None, max_length=4096)
+
+    @field_validator("shared_agent_directory")
+    @classmethod
+    def check_agent_directory(cls, value: str | None) -> str | None:
+        if value is not None and not Path(value).is_absolute():
+            raise ValueError("Shared agent directory must be absolute")
+        return value
 
     @field_serializer("scopes", "redirects", when_used="json")
     def ordered_values(self, values: frozenset[str]) -> list[str]:
@@ -162,10 +172,14 @@ async def http_service(
     directory: Path,
     *,
     credentials: OwnerCredentials | None = None,
+    agent_directory: Path | None = None,
 ) -> AsyncIterator[RunningHTTPService]:
     prepare_directory(directory)
     with ProcessLock(directory / "http-server.lock"):
+        require_no_migration(directory)
         config = load_http_config(directory)
+        if agent_directory is None and config.shared_agent_directory is not None:
+            agent_directory = Path(config.shared_agent_directory)
         owner = credentials or OwnerCredentials(
             directory, resource=config.resource, owner=config.owner
         )
@@ -180,18 +194,36 @@ async def http_service(
         database = service_directory / "authorization" / "authorization.sqlite3"
         if not database.is_file() or database.is_symlink():
             raise ValueError("HTTP authorization database is missing; refusing to recreate it")
-        engine = Engine(service_directory / "engine", file_locks=directory / "file-locks")
+        # Existing installations retain their ledger until an explicit migration.
+        # The launcher can select the shared local agent without creating another Engine.
+        engine = None
+        if agent_directory is None:
+            engine = Engine(service_directory / "engine", file_locks=directory / "file-locks")
+            known_tools = frozenset(engine.tools)
+        else:
+            await asyncio.to_thread(ensure_agent, agent_directory)
+            catalog = await exchange(agent_directory, "__catalog")
+            entries = catalog.data.get("tools")
+            if catalog.state != "completed" or not isinstance(entries, list):
+                raise ValueError("Shared agent catalog is invalid")
+            names: set[str] = set()
+            for entry in entries:
+                if not isinstance(entry, dict) or not isinstance(name := entry.get("name"), str):
+                    raise ValueError("Shared agent catalog is invalid")
+                names.add(name)
+            known_tools = frozenset(names)
         try:
             store = AuthorizationStore(
                 service_directory / "authorization",
                 resource=config.resource,
-                known_tools=frozenset(engine.tools),
+                known_tools=known_tools,
             )
             try:
                 _check_enrollment(store, config)
                 backend = AuthorizedDeviceMCP(
                     store,
                     engine,
+                    agent_directory=agent_directory,
                     owner=config.owner,
                     device=config.device,
                     client=config.client,
@@ -217,7 +249,8 @@ async def http_service(
             finally:
                 store.close()
         finally:
-            await engine.close()
+            if engine is not None:
+                await engine.close()
 
 
 @contextmanager

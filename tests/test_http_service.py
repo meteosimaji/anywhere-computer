@@ -357,3 +357,55 @@ async def test_http_and_local_engines_share_write_lock_without_sharing_ledger(
                         pytest.fail("HTTP and local writes did not share their lock")
     finally:
         await local.close()
+
+
+async def test_shared_http_restart_keeps_agent_and_deduplication(configured, tmp_path, monkeypatch):
+    from anywhere_computer.connection import exchange, serve
+
+    config, owner = configured
+    directory = tmp_path / 'shared'
+    selected = config.model_copy(update={'shared_agent_directory': str(directory)})
+    (tmp_path / 'http-server/config.json').write_text(selected.model_dump_json())
+    stop = asyncio.Event()
+    monkeypatch.setattr('anywhere_computer.connection.local_credential',
+                        lambda *a, **kw: 'shared-service-fixture')
+    agent = asyncio.create_task(serve(
+        directory, credential='shared-service-fixture', shutdown=stop,
+    ))
+    try:
+        async with asyncio.timeout(5):
+            while not (directory / 'agent.json').exists():
+                if agent.done():
+                    await agent
+                await asyncio.sleep(0.01)
+        before = await exchange(directory, '__status')
+
+        def forbidden_engine(*a, **kw):
+            pytest.fail('Shared HTTP frontend must not instantiate its own Engine')
+
+        monkeypatch.setattr(service_module, 'Engine', forbidden_engine)
+        target = tmp_path / 'shared-result.txt'
+        request = {'jsonrpc': '2.0', 'id': 'write', 'method': 'tools/call', 'params': {
+            'name': 'files_write', 'arguments': {
+                'request_id': 'c' * 32, 'path': str(target), 'text': 'first',
+            },
+        }}
+        async with httpx.AsyncClient(base_url=f'http://127.0.0.1:{config.port}',
+                                     trust_env=False) as http:
+            async with http_service(tmp_path, credentials=owner):
+                token = await authenticate(http)
+                headers = await initialize(http, token)
+                result = (await http.post('/mcp', headers=headers, json=request)).json()
+                assert result['result']['structuredContent']['state'] == 'completed'
+            # Closing HTTP must leave the separately owned agent alive.
+            after = await exchange(directory, '__status')
+            assert after.data['instance_id'] == before.data['instance_id']
+            target.write_text('external change')
+            async with http_service(tmp_path, credentials=owner):
+                headers = await initialize(http, token)
+                result = (await http.post('/mcp', headers=headers, json=request)).json()
+                assert result['result']['structuredContent']['state'] == 'completed'
+                assert target.read_text() == 'external change'
+    finally:
+        stop.set()
+        await asyncio.wait_for(agent, 10)

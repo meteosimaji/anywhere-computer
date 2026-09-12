@@ -17,6 +17,7 @@ from .connection import ensure_agent, exchange, serve
 from .credentials import has_interactive_input
 from .devices import DeviceStore
 from .diagnostics import diagnose
+from .engine_migration import migrate_engine
 from .http_client import run_http_mcp
 from .http_diagnostics import diagnose_http, diagnose_remote
 from .http_service import (
@@ -59,6 +60,7 @@ def main() -> None:
             "status",
             "doctor",
             "stop",
+            "engine-unify",
             "remote-mcp",
             "http-mcp",
             "owner-init",
@@ -100,6 +102,8 @@ def main() -> None:
         ],
     )
     parser.add_argument("--state-dir", type=Path, default=None)
+    parser.add_argument("--http-state-dir", type=Path,
+                        help="Existing HTTP state directory for offline engine-unify")
     parser.add_argument("--connector", help="Absolute path to the optional tunnel executable")
     parser.add_argument("--ssh-host", help="An existing SSH host alias")
     selection = parser.add_mutually_exclusive_group()
@@ -128,6 +132,11 @@ def main() -> None:
     parser.add_argument("--startup-id", help=argparse.SUPPRESS)
     parser.add_argument("--codex-executable", help="Pinned Codex CLI for remote services")
     args = parser.parse_args()
+    if args.command == "engine-unify":
+        if args.http_state_dir is None or not args.http_state_dir.is_absolute():
+            parser.error("engine-unify requires an absolute --http-state-dir")
+    elif args.http_state_dir is not None:
+        parser.error("--http-state-dir is only valid for engine-unify")
     if args.codex_executable is not None:
         if args.command not in {"remote-watch", "remote-serve"}:
             parser.error("--codex-executable is only valid for remote services")
@@ -295,7 +304,10 @@ def main() -> None:
                 store.close()
             if args.command.startswith("device"):
                 return
-        if args.command == "autostart-preview":
+        if args.command == "engine-unify":
+            assert args.http_state_dir is not None  # Validated before any command dispatch.
+            print(json.dumps(migrate_engine(directory, args.http_state_dir), indent=2))
+        elif args.command == "autostart-preview":
             print(json.dumps(preview_startup(directory, connector=args.connector),
                              ensure_ascii=True, indent=2))
         elif args.command == "autostart-install":
@@ -447,7 +459,7 @@ def main() -> None:
         elif args.command == "serve":
             asyncio.run(serve(directory))
         elif args.command == "start":
-            print(json.dumps(ensure_agent(directory), indent=2))
+            print(json.dumps(ensure_agent(directory, replace_idle=True), indent=2))
         elif args.command == "doctor":
             diagnosis = asyncio.run(diagnose(directory))
             print(json.dumps(diagnosis, ensure_ascii=False, indent=2))

@@ -135,3 +135,43 @@ async def test_shutdown_rejects_requests_already_waiting_on_a_connection(agent):
     finally:
         writer.close()
         await writer.wait_closed()
+
+
+async def test_older_connector_keeps_real_compatible_engine_and_operation(agent, monkeypatch):
+    import anywhere_computer.connection as connection
+
+    directory, credential = agent
+    before = await exchange(directory, '__status', credential=credential)
+    identity = 'd' * 32
+    written = await exchange(directory, 'files_write',
+        {'path': str(directory / 'keep.txt'), 'text': 'preserve'},
+        operation_id=identity, credential=credential)
+    assert written.state == 'completed'
+    monkeypatch.setattr(connection, 'runtime_identity', lambda: 'older-connector-build')
+    monkeypatch.setattr(connection, 'local_credential', lambda *a, **kw: credential)
+    connected = await asyncio.to_thread(connection.ensure_agent, directory)
+    assert connected['instance_id'] == before.data['instance_id']
+    recovered = await exchange(directory, 'operations_get',
+        {'operation_id': identity}, credential=credential)
+    assert recovered.data['operation_id'] == identity
+    assert recovered.data['data']['sha256'] == written.data['sha256']
+
+
+async def test_shared_gateway_requires_local_authentication_and_granted_tool(agent):
+    from anywhere_computer.connection import exchange_remote
+    from anywhere_computer.models import Request
+
+    directory, credential = agent
+    target = directory / 'unauthorized.txt'
+    request = Request(operation_id='e' * 32, tool='files_write',
+                      arguments={'path': str(target), 'text': 'denied'})
+    with pytest.raises(ConnectionError):
+        await exchange_remote(directory, 'grant', frozenset({'files_write'}), request,
+                              credential='invalid')
+    assert not target.exists()
+    denied = await exchange_remote(directory, 'grant', frozenset({'files_read'}), request,
+                                   credential=credential)
+    assert denied.state == 'failed'
+    assert not target.exists()
+    catalog = await exchange(directory, '__catalog', credential=credential)
+    assert '__remote' not in {entry['name'] for entry in catalog.data['tools']}
