@@ -73,6 +73,7 @@ from .uploads import UploadOutcomeUnknown, Uploads
 
 Input = TypeVar("Input", bound=Contract)
 Result = dict[str, JsonValue]
+OBSERVER_WAIT_SECONDS = 5.0
 
 
 @dataclass(frozen=True)
@@ -159,7 +160,9 @@ class Engine:
             "codex_plugin_tools", "Use when the user wants to use an installed Codex MCP "
             "plugin from this chat. Start with summary=true and optional query; inspect with exact "
             "server and optional tool to obtain schemas and catalog_sha256. Shows runtime/auth "
-            "state separately from verified execution. Use an absolute workspace cwd. "
+            "state separately from verified execution and Computer Use context compatibility. "
+            "Exact server/tool inspection returns the full description. "
+            "Use an absolute workspace cwd. "
             "Starts installed MCP servers in a temporary Codex context without model inference. "
             "Optional session_id reuses your explicitly opened context. "
             "Does not call a plugin tool, resume an existing chat or expose credentials.",
@@ -734,6 +737,15 @@ class Engine:
         ]
 
     def status(self) -> Result:
+        terminals = sum(s.process.returncode is None for s in self.sessions.sessions.values())
+        plugins = sum(
+            not entry.cleanup_confirmed for entry in self.plugin_sessions.entries.values()
+        )
+        searches = sum(entry.state == "running" for entry in self.searches.searches.values())
+        resources: dict[str, JsonValue] = {
+            "terminal_sessions": terminals, "plugin_sessions": plugins,
+            "searches": searches, "operations": len(self.inflight),
+        }
         return {
             "state": "ready",
             "version": __version__,
@@ -741,10 +753,10 @@ class Engine:
             "runtime_id": self.runtime_id,
             "uptime_seconds": time.monotonic() - self.started,
             "platform": platform.system(),
-            "active_sessions": sum(
-                s.process.returncode is None for s in self.sessions.sessions.values()
-            ),
+            "active_sessions": terminals + plugins,
             "active_operations": len(self.inflight),
+            "active_resources": resources,
+            "update_blocked": bool(terminals or plugins or searches or self.inflight),
             "tools": len(self.tools),
             "transport": "authenticated-loopback",
             "remote_ready": False,
@@ -770,7 +782,7 @@ class Engine:
             return Reply(operation_id=request.operation_id, state="failed", error=str(error))
         if previous is not None:
             running = self.inflight.get(request.operation_id)
-            return await asyncio.shield(running) if running else previous
+            return await self._observe(request.operation_id, running) if running else previous
 
         async def run() -> Reply:
             try:
@@ -780,6 +792,8 @@ class Engine:
                 data: Result = {
                     "error_code": error.code, "next_action": error.action,
                     "dispatched": False,
+                    "failure_stage": error.details.get("failure_stage", "before_dispatch"),
+                    "execution_state": "not_dispatched",
                 }
                 if error.details:
                     data["details"] = error.details
@@ -787,7 +801,18 @@ class Engine:
                     operation_id=request.operation_id, state="failed",
                     error=str(error), data=data,
                 )
-            except (UploadOutcomeUnknown, codex_plugins.PluginCallOutcomeUnknown) as error:
+            except codex_plugins.PluginCallOutcomeUnknown as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state="unknown", error=str(error),
+                    data={
+                        "error_code": "plugin_outcome_unknown", "failure_stage": "after_dispatch",
+                        "dispatched": None, "execution_state": "unknown",
+                        "next_action": "Inspect this operation with operations_get and check the "
+                        "target before any new call; do not automatically retry",
+                        "details": error.details,
+                    },
+                )
+            except UploadOutcomeUnknown as error:
                 reply = Reply(operation_id=request.operation_id, state="unknown", error=str(error))
             except Exception as error:
                 reply = Reply(operation_id=request.operation_id, state="failed", error=str(error))
@@ -804,7 +829,17 @@ class Engine:
         task = asyncio.create_task(scoped_run())
         self.inflight[request.operation_id] = task
         task.add_done_callback(lambda _: self.inflight.pop(request.operation_id, None))
-        return await asyncio.shield(task)
+        return await self._observe(request.operation_id, task)
+
+    async def _observe(self, operation_id: str, task: asyncio.Task[Reply]) -> Reply:
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), OBSERVER_WAIT_SECONDS)
+        except TimeoutError:
+            return Reply(operation_id=operation_id, state="running", data={
+                "next_action": "Poll operations_get with this operation_id; "
+                "do not issue a new call",
+                "result_pending": True,
+            })
 
     async def close(self) -> None:
         if self.inflight:

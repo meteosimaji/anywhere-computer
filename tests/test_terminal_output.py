@@ -6,6 +6,30 @@ from anywhere_computer.models import SessionOutput, StartSession
 from anywhere_computer.sessions import Sessions
 
 
+async def test_utf8_pages_preserve_characters_even_with_one_byte_limit(tmp_path):
+    sessions = Sessions()
+    executable = f'"{sys.executable}"' if sys.platform == "win32" else shlex.quote(sys.executable)
+    started = await sessions.start(StartSession(
+        command=executable + ' -c "import sys; sys.stdout.buffer.write(bytes.fromhex('
+        "'e697a5e69cace8aa9ef09f9982'" + '))"', cwd=str(tmp_path),
+    ))
+    identity = started["session_id"]
+    try:
+        await asyncio.wait_for(sessions.get(identity).reader, 5)
+        cursor, pieces = 0, []
+        for _ in range(20):
+            page = sessions.output(SessionOutput(session_id=identity, cursor=cursor, limit=1))
+            if cursor == page["end_cursor"]:
+                break
+            assert page["next_cursor"] > cursor
+            pieces.append(page["text"])
+            cursor = page["next_cursor"]
+        assert ''.join(pieces) == "日本語🙂"
+        assert cursor == 13
+    finally:
+        await sessions.close()
+
+
 async def test_tail_cursor_and_absolute_continuation(tmp_path):
     sessions = Sessions()
     executable = f'"{sys.executable}"' if sys.platform == "win32" else shlex.quote(sys.executable)

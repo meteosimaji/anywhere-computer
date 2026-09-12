@@ -44,25 +44,33 @@ async def test_monitor_does_not_contact_unapproved_resource(tmp_path, monkeypatc
         await cancel_monitor(task)
 
 
-async def test_monitor_records_outage_and_recovery(tmp_path, monkeypatch):
+@pytest.mark.parametrize("outage", ["unreachable", "http_error"])
+async def test_monitor_records_outage_and_recovery(tmp_path, monkeypatch, outage):
     monkeypatch.setattr(
         remote_health, "load_http_config", lambda _: SimpleNamespace(resource="same")
     )
     remote_health.configure_public_monitor(tmp_path, enabled=True)
-    states = iter(["metadata_reachable", "unreachable", "metadata_reachable"])
+    states = iter(["metadata_reachable", outage, "metadata_reachable"])
     recorded = []
     complete = asyncio.Event()
     original_write = remote_health._write_monitor_file
 
     def save(path, observation):
         original_write(path, observation)
+        if observation.public_state == "http_error":
+            assert observation.public_http_status == 530
+            assert observation.public_provider_subcode == 1033
         recorded.append(observation.consecutive_failures)
         if len(recorded) == 3:
             complete.set()
 
     async def probe(*args, **kwargs):
         assert kwargs == {"probe_public": True, "expected_resource": "same"}
-        return {"loopback": {"state": "metadata_reachable"}, "public": {"state": next(states)}}
+        state = next(states)
+        public = {"state": state}
+        if state == "http_error":
+            public.update(http_status=530, provider_subcode=1033)
+        return {"loopback": {"state": "metadata_reachable"}, "public": public}
 
     monkeypatch.setattr(remote_health, "_write_monitor_file", save)
     monkeypatch.setattr(http_diagnostics, "diagnose_remote", probe)

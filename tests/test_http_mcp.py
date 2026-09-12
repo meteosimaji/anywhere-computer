@@ -254,7 +254,22 @@ async def test_terminal_maximum_wait_returns_result_over_http(http_agent, tmp_pa
                     'wait_ms': 30000, 'wait_for_prompt': 'never printed>',
                 })
                 assert not response.isError
-                data = response.structuredContent['data']
+                receipt = response.structuredContent
+                assert receipt['state'] == 'running'
+                assert receipt['data']['result_pending'] is True
+                # The short acceptance response must not cancel the real 30-second wait.
+                async with asyncio.timeout(40):
+                    while True:
+                        recovered = await client.call_tool('operations_get', {
+                            'operation_id': receipt['operation_id'],
+                        })
+                        assert not recovered.isError
+                        result = recovered.structuredContent['data']
+                        if result['state'] != 'running':
+                            break
+                        await asyncio.sleep(0.5)
+                assert result['state'] == 'completed'
+                data = result['data']
                 assert data['wait_reason'] == 'timeout'
                 assert data['state'] == 'running'
                 assert data['bytes_sent'] == 3

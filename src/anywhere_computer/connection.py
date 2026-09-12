@@ -23,6 +23,9 @@ from .runtime_launch import python_module_command
 from .state import prepare_directory
 
 WIRE_LIMIT = 8 * 1024 * 1024
+# Includes unauthenticated readers. Admission happens synchronously before a task
+# can retain a full legacy credential-bearing frame (8 MiB per connection).
+MAX_CONNECTIONS = 8
 
 
 def load_endpoint(directory: Path) -> dict[str, JsonValue]:
@@ -83,10 +86,10 @@ async def serve(
 
         async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             current = asyncio.current_task()
-            if current:
-                connections.add(current)
             try:
                 packet = json.loads(await asyncio.wait_for(reader.readline(), 10))
+                if not isinstance(packet, dict):
+                    return
                 supplied = packet.get("credential")
                 if not isinstance(supplied, str) or not hmac.compare_digest(secret, supplied):
                     return
@@ -102,11 +105,12 @@ async def serve(
                         data={"tools": engine.catalog()},
                     )
                 elif request.tool == "__stop":
-                    if engine.status()["active_sessions"] or engine.inflight:
+                    if engine.status()["update_blocked"]:
                         reply = Reply(
                             operation_id=request.operation_id,
                             state="failed",
                             error="Active work exists; stop sessions before stopping agent",
+                            data={"active_resources": engine.status()["active_resources"]},
                         )
                     else:
                         reply = Reply(
@@ -131,20 +135,26 @@ async def serve(
                     )
                     response += b"\n"
                 writer.write(response)
-                await writer.drain()
+                await asyncio.wait_for(writer.drain(), 5)
             except (ValueError, OSError, TimeoutError):
                 # Do not log packet contents: they may contain credentials or private files.
                 pass
             finally:
                 writer.close()
                 try:
-                    await writer.wait_closed()
-                except OSError:
-                    pass
+                    await asyncio.wait_for(writer.wait_closed(), 2)
+                except (OSError, TimeoutError):
+                    writer.transport.abort()
                 if current:
                     connections.discard(current)
 
-        server = await asyncio.start_server(handle, "127.0.0.1", 0, limit=WIRE_LIMIT)
+        def accept(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+            if len(connections) >= MAX_CONNECTIONS or stop.is_set():
+                writer.transport.abort()
+                return
+            connections.add(asyncio.create_task(handle(reader, writer)))
+
+        server = await asyncio.start_server(accept, "127.0.0.1", 0, limit=WIRE_LIMIT)
         port = server.sockets[0].getsockname()[1]
         metadata = {
             "port": port,
@@ -182,7 +192,8 @@ def ensure_agent(directory: Path) -> dict[str, JsonValue]:
             if reply.state == "completed":
                 if reply.data.get("runtime_id") == expected_runtime:
                     return reply.data
-                if reply.data.get("active_sessions") or reply.data.get("active_operations"):
+                if (reply.data.get("update_blocked") or reply.data.get("active_sessions")
+                        or reply.data.get("active_operations")):
                     raise RuntimeError(
                         "A different agent build has active work. Finish it with the previous "
                         "installation before upgrading; no process was stopped."

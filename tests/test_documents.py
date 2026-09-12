@@ -8,6 +8,37 @@ from anywhere_computer.models import ReadDocument
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 
+def test_repeated_slide_expansion_is_bounded_before_pagination(tmp_path, monkeypatch):
+    import anywhere_computer.documents as documents
+
+    path = package(tmp_path / "repeat.pptx", "ppt/presentation.xml", {
+        "ppt/presentation.xml": f'<p:presentation xmlns:p="{PRESENT[1:-1]}" xmlns:r="{R}">'
+        '<p:sldIdLst>' + '<p:sldId r:id="same"/>' * 32
+        + '</p:sldIdLst></p:presentation>',
+        "ppt/_rels/presentation.xml.rels": f'<Relationships xmlns="{REL}">'
+        f'<Relationship Id="same" Type="{R}/slide" Target="slides/one.xml"/>'
+        '</Relationships>',
+        "ppt/slides/one.xml": f'<a:p xmlns:a="{DRAW[1:-1]}"><a:t>'
+        + 'x' * 1024 + '</a:t></a:p>',
+    })
+    monkeypatch.setattr(documents, "EXTRACTION_TEXT_LIMIT", 8192, raising=False)
+    with pytest.raises(ValueError, match="extraction.*limit"):
+        read_document(ReadDocument(path=str(path), limit=1))
+
+
+def test_nested_paragraph_expansion_is_bounded(tmp_path, monkeypatch):
+    import anywhere_computer.documents as documents
+
+    path = package(tmp_path / "nested.docx", "word/document.xml", {
+        "word/document.xml": f'<w:document xmlns:w="{WORD[1:-1]}"><w:body>'
+        + '<w:p>' * 32 + '<w:t>' + 'x' * 1024 + '</w:t>'
+        + '</w:p>' * 32 + '</w:body></w:document>',
+    })
+    monkeypatch.setattr(documents, "EXTRACTION_TEXT_LIMIT", 8192, raising=False)
+    with pytest.raises(ValueError, match="extraction.*limit"):
+        read_document(ReadDocument(path=str(path), limit=1))
+
+
 def package(path, main, parts, extra_rel=""):
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr(

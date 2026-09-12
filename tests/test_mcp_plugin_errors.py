@@ -20,7 +20,7 @@ from anywhere_computer.models import Reply
     ("codex_plugin_tools", "completed", {"is_error": True}, False),
     ("codex_plugin_call", "failed", {"is_error": False}, True),
     ("codex_plugin_call", "unknown", {"is_error": False}, True),
-    ("codex_plugin_call", "running", {"is_error": False}, True),
+    ("codex_plugin_call", "running", {"is_error": False}, False),
     ("files_read", "failed", {}, True),
 ])
 async def test_plugin_error_flag_does_not_replace_operation_state(name, state, data, expected):

@@ -7,6 +7,31 @@ import pytest
 from anywhere_computer.connection import exchange, serve
 
 
+async def test_partial_unauthenticated_connections_have_an_admission_bound(agent, monkeypatch):
+    import anywhere_computer.connection as connection
+
+    directory, credential = agent
+    monkeypatch.setattr(connection, "MAX_CONNECTIONS", 2, raising=False)
+    port = connection.load_endpoint(directory)["port"]
+    clients = []
+    try:
+        for _ in range(2):
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            clients.append((reader, writer))
+            writer.write(b'{')
+            await writer.drain()
+        extra_reader, extra_writer = await asyncio.open_connection("127.0.0.1", port)
+        clients.append((extra_reader, extra_writer))
+        assert await asyncio.wait_for(extra_reader.read(1), 0.5) == b""
+    finally:
+        for _, writer in clients:
+            writer.close()
+            await writer.wait_closed()
+    # Let the server release the two partial frames before the authenticated call.
+    await asyncio.sleep(0.02)
+    assert (await exchange(directory, "__status", credential=credential)).state == "completed"
+
+
 @pytest.fixture
 async def agent(tmp_path):
     credential = secrets.token_urlsafe(32)

@@ -37,8 +37,10 @@ class PublicMonitorObservation(BaseModel):
     ]
     public_state: Literal[
         "metadata_reachable", "unreachable", "unexpected_response", "resource_mismatch",
-        "certificate_verification_failed", "not_requested",
+        "certificate_verification_failed", "not_requested", "http_error",
     ]
+    public_http_status: int | None = Field(default=None, ge=100, le=599)
+    public_provider_subcode: int | None = Field(default=None, ge=1000, le=1999)
     consecutive_failures: int = Field(ge=0, le=2147483647)
 
 
@@ -151,6 +153,8 @@ async def monitor_public_health(directory: Path, *, interval: float = 30) -> Non
                     "resource": settings.resource, "updated_at": time.time(),
                     "loopback_state": local["state"], "public_state": public["state"],
                     "consecutive_failures": failures,
+                    "public_http_status": public.get("http_status"),
+                    "public_provider_subcode": public.get("provider_subcode"),
                 })
                 # A disable or changed endpoint invalidates an in-flight result.
                 if (_read_monitor_file(directory / "remote-health.json", PublicMonitorSettings)

@@ -1,6 +1,7 @@
 """Small MCP stdio implementation; the SDK is used only for interoperability tests."""
 
 import asyncio
+import copy
 import json
 import re
 import sys
@@ -22,11 +23,36 @@ Execute = Callable[[Request], Awaitable[Reply]]
 PROTOCOL_VERSION = "2025-11-25"
 OPERATION_CAPABILITY = "io.github.meteosimaji.anywhere-computer"
 OPERATION_META = OPERATION_CAPABILITY + "/operation_id"
+REQUEST_ID_ARGUMENT = "request_id"
+REQUEST_ID_SCHEMA: dict[str, JsonValue] = {
+    "type": "string", "pattern": "^[a-f0-9]{32}$",
+    "description": "Choose this ID before sending to recover even a lost first response. "
+    "Use the same ID only for the identical call. Poll operations_get with this ID.",
+}
 INSTRUCTIONS = (
     "Check computer_status before operating. Use absolute paths. Existing writes require "
     "the SHA-256 from a recent read. Terminal sessions survive this connection. After a "
-    "lost response, inspect the operation ID rather than repeating a write."
+    "lost response, inspect the operation ID rather than repeating a write. "
+    "For recoverable calls, choose a 32-character lowercase hex request_id before sending, "
+    "pass it as a normal tool argument, and use it with operations_get. A running reply is "
+    "an acknowledgement; poll operations_get for completion."
 )
+
+
+def with_request_id(tools: list[JsonValue]) -> list[JsonValue]:
+    result = copy.deepcopy(tools)
+    for tool in result:
+        if not isinstance(tool, dict) or not isinstance(tool.get("inputSchema"), dict):
+            continue
+        schema = cast(dict[str, JsonValue], tool["inputSchema"])
+        properties = schema.setdefault("properties", {})
+        if not isinstance(properties, dict):
+            raise ValueError("Tool schema conflicts with the transport request_id argument")
+        if (REQUEST_ID_ARGUMENT in properties
+                and properties[REQUEST_ID_ARGUMENT] != REQUEST_ID_SCHEMA):
+            raise ValueError("Tool schema conflicts with the transport request_id argument")
+        properties[REQUEST_ID_ARGUMENT] = dict(REQUEST_ID_SCHEMA)
+    return result
 
 
 def rpc_error(identity: JsonValue, code: int, message: str) -> dict[str, JsonValue]:
@@ -55,7 +81,7 @@ def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
         )}, *images],
         "structuredContent": structured,
         "isError": (
-            reply.state != "completed"
+            reply.state not in {"completed", "running"}
             or (name == "codex_plugin_call" and reply.data.get("is_error") is True)
         ),
     }
@@ -123,7 +149,9 @@ class MCPSession:
         elif method == "tools/list":
             if params.get("cursor") is not None:
                 return rpc_error(identity, -32602, "No continuation cursor exists")
-            result = {"tools": with_ui_metadata(await self.catalog(), enabled=self.ui_enabled)}
+            result = {"tools": with_ui_metadata(
+                with_request_id(await self.catalog()), enabled=self.ui_enabled,
+            )}
         elif method in {"resources/list", "resources/read", "resources/templates/list"}:
             if not self.ui_enabled:
                 return rpc_error(identity, -32601, "UI resources were not negotiated")
@@ -155,7 +183,23 @@ class MCPSession:
             metadata = params.get("_meta", {})
             if not isinstance(metadata, dict):
                 return rpc_error(identity, -32602, "Invalid tool metadata")
-            operation_id = metadata.get(OPERATION_META, uuid.uuid4().hex)
+            arguments = dict(arguments)
+            if REQUEST_ID_ARGUMENT in arguments and not isinstance(
+                arguments[REQUEST_ID_ARGUMENT], str,
+            ):
+                return rpc_error(identity, -32602, "Invalid request_id")
+            supplied_id = arguments.pop(REQUEST_ID_ARGUMENT, None)
+            metadata_id = metadata.get(OPERATION_META)
+            if OPERATION_META in metadata and (
+                not isinstance(metadata_id, str)
+                or re.fullmatch(r"[a-f0-9]{32}", metadata_id) is None
+            ):
+                return rpc_error(identity, -32602, "Invalid operation ID")
+            if supplied_id is not None and metadata_id is not None and supplied_id != metadata_id:
+                return rpc_error(identity, -32602, "Conflicting request_id and operation metadata")
+            operation_id = supplied_id if supplied_id is not None else (
+                metadata_id if metadata_id is not None else uuid.uuid4().hex
+            )
             if (
                 not isinstance(operation_id, str)
                 or re.fullmatch(r"[a-f0-9]{32}", operation_id) is None

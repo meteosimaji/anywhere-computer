@@ -1,6 +1,7 @@
 """Agent-owned processes outlive individual MCP clients."""
 
 import asyncio
+import codecs
 import os
 import signal
 import sys
@@ -26,6 +27,7 @@ class Session:
     output: bytearray = field(default_factory=bytearray)
     first_cursor: int = 0
     reader: asyncio.Task[None] | None = None
+    output_eof: bool = False
     input_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -86,6 +88,7 @@ class Sessions:
             if overflow > 0:
                 del session.output[:overflow]
                 session.first_cursor += overflow
+        session.output_eof = True
         await session.process.wait()
 
     def get(self, session_id: str) -> Session:
@@ -99,6 +102,7 @@ class Sessions:
             "pid": session.process.pid,
             "state": "running" if session.process.returncode is None else "exited",
             "exit_code": session.process.returncode,
+            "output_eof": session.output_eof,
             "started": session.created,
             "first_cursor": session.first_cursor,
             "end_cursor": session.first_cursor + len(session.output),
@@ -180,10 +184,24 @@ class Sessions:
         start = max(requested, session.first_cursor)
         position = start - session.first_cursor
         chunk = bytes(session.output[position : position + args.limit])
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        text = decoder.decode(chunk, final=session.output_eof and position + len(chunk)
+                              >= len(session.output))
+        # A tiny page may need up to three extra bytes to return one whole code point.
+        # Otherwise leave the incomplete suffix for the next cursor/poll.
+        while not text and decoder.getstate()[0] and len(chunk) < args.limit + 3:
+            index = position + len(chunk)
+            if index >= len(session.output):
+                break
+            extra = bytes(session.output[index:index + 1])
+            chunk += extra
+            text += decoder.decode(extra, final=session.output_eof
+                                   and index + 1 == len(session.output))
+        consumed = len(chunk) - len(decoder.getstate()[0])
         return {
             **self.describe(session),
-            "text": chunk.decode("utf-8", errors="replace"),
-            "next_cursor": start + len(chunk),
+            "text": text,
+            "next_cursor": start + consumed,
             "dropped_bytes": max(0, start - max(0, requested)),
         }
 

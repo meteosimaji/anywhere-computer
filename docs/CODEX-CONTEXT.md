@@ -80,6 +80,53 @@ Codex 固有ランタイムを追加するものではない。認証・追加�
 場合は自動承認せず、元のローカルクライアントで完了する必要がある。
 Anywhere Computer 自身への再帰呼び出しも拒否する。
 
+### 詳細取得・Computer Use の適合状態・診断
+
+正確な server/tool を指定し summary=false（既定）で取得した説明文は全文を返す。
+tool を省略した一覧では説明文を1,000文字に制限し、description_truncated=true を付ける。
+summary=true は従来どおり件数と名前の概要を返す。検索と catalog_sha256 の計算は
+切断前の説明文を使う。カタログ全体の2 MiB制限と通信の8 MiB制限は維持する。
+上限超過は plugin_catalog_failed として失敗し、途中までの定義を完全な定義として
+返さない。この全体上限を超えるカタログへの継続取得は未対応である。
+
+サーバーの availability は接続・認証状態である。既知の cua_repl / unified-computer-use
+経路は、別の compatibility（概要では computer_use_compatibility）に
+screen_read=unverified、native_actions / browser_actions=unsupported_execution_context
+を返す。画面の読取成功を操作の成功へ読み替えない。現在の直接実行経路ではこの提供元の
+呼び出し全体を unsupported_execution_context、dispatched=false で拒否する。
+JavaScript 本文を推測して読取だけ許可する実装ではない。その他の通常の Plugin は
+従来どおり呼び出せるが、その内部から Computer Use を間接使用できることは保証しない。
+
+2026-09-12 に Codex 0.154.0-alpha.6.2 の generate-ts --experimental で生成した
+McpServerToolCallParams は threadId/server/tool/arguments/_meta を持つ。
+_meta は任意の JSON を渡す欄であり、正規の turn 文脈を発行・有効化できる証拠ではない。
+生成定義と公式仕様の確認では、モデルを開始せず Computer Use に必要な文脈を用意する
+正式な経路を確認できなかった。架空の session_id/turn_id の注入、既存会話の再開、
+turn/start による回避は行わない。新しい Codex 版でこの互換性判定を解除する前に、
+正式 API と読取後の実操作を再検証する必要がある。
+
+自己呼び出し検査は、サーバー名に加え、anywhere_computer.tool、
+anywhere-computer.tool、mcp__anywhere_computer__tool などの提供元成分を
+大文字小文字・ハイフン表記を正規化して調べる。一覧生成、正確な選択、単発・セッション
+実行の事前検査に同じ検査を適用する。他の提供元のドット付きツール名は拒否しない。
+
+診断の failure_stage は startup / catalog / before_dispatch / after_dispatch を区別する。
+送信後に確定結果を得られない場合は state=unknown、execution_state=unknown、
+dispatched=null とし、RPC エラーでも未実行を断定しない。自動再送しない。
+実行前の拒否は execution_state=not_dispatched、dispatched=false である。
+RPC の数値コード、固定分類 message_kind、data_present、復旧案を保持する。
+秘密を含み得る元の message/data、stderr 本文、パス、引数、認証情報は診断に保存しない。
+既知のエラー語句は固定ラベルへ変換し、その他の本文は redacted に置き換える。
+分類は観測した語句であり、根本原因の証明ではない。
+
+stderr は4 KiBずつ並行して排出し、最新32チャンク分の分類と飽和カウンターのみ保持する。
+容量を超えてもパイプを読み続け、子の出力詰まりを防ぐ。改行のない出力も対象にする。
+チャンク境界をまたぐ語句は分類されない場合がある。複数サーバーが共有する stderr から
+特定のサーバーの原因は断定しない。runtime_diagnostics はカタログ結果・失敗 details に
+添付され、既存のローカル操作台帳へ保存される。独立した生ログファイルは作らない。
+operations_get に同じ外部操作 ID を渡すと、元の結果と診断を再取得できる。
+各診断のサイズは制限するが、操作台帳全体の保持方針は従来のままである。
+
 ## 接続と保存
 
 ネイティブの `codex` コマンドが PC の絶対 PATH 上に必要。普段の Codex クライアントと

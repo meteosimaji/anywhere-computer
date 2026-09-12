@@ -30,6 +30,9 @@ def test_packaged_runtime_matches_current_source_and_checksums():
         for asset in (ROOT / "src/anywhere_computer/web").glob("*"):
             assert archive.read("anywhere_computer/web/" + asset.name) == asset.read_bytes()
         metadata = archive.read("anywhere_computer-0.1.0a1.dist-info/METADATA").decode()
-        assert "Requires-Dist: mcp" not in metadata
+        # Direct MCP is optional; the base plugin must still start without that SDK.
+        mcp_requirements = [line for line in metadata.splitlines()
+                            if line.startswith("Requires-Dist: mcp")]
+        assert mcp_requirements == ["Requires-Dist: mcp==1.30.0; extra == 'mcp'"]
         assert "Requires-Dist: filelock" not in metadata
         assert "Requires-Dist: platformdirs" not in metadata

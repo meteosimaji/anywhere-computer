@@ -134,7 +134,8 @@ class PluginSessions:
                 raise PluginPreflightError(
                     "session_start_failed", "Check the installed Codex runtime and local MCP setup",
                     details={"session_id": entry.session_id,
-                             "cleanup_confirmed": entry.cleanup_confirmed},
+                             "cleanup_confirmed": entry.cleanup_confirmed,
+                             **(error.details if isinstance(error, PluginPreflightError) else {})},
                 ) from error
         return self._describe(entry)
 
@@ -164,7 +165,11 @@ class PluginSessions:
             except PluginCallOutcomeUnknown:
                 await self._retire(entry, "unusable")
                 raise
-            except PluginPreflightError:
+            except PluginPreflightError as error:
+                if error.code == "plugin_catalog_failed":
+                    # Transport/catalog failure can leave unread RPC responses behind.
+                    # Preserve stale-selection errors, but do not reuse a broken context.
+                    await self._retire(entry, "unusable")
                 raise
             except asyncio.CancelledError:
                 await self._retire(entry, "unusable")

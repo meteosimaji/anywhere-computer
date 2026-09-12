@@ -10,6 +10,12 @@ from typing import cast
 from pydantic import JsonValue
 
 from .codex_context import WIRE_LIMIT, _executable
+from .plugin_diagnostics import (
+    STDERR_CHUNK,
+    PluginDiagnostics,
+    PluginRPCError,
+    failure_diagnostic,
+)
 from .plugin_images import IMAGE_LIMIT, MAX_IMAGES, bounded_image
 
 STARTUP_TIMEOUT = 30.0
@@ -51,6 +57,26 @@ def _availability(row: dict[str, JsonValue], has_tools: bool) -> str:
 class PluginCallOutcomeUnknown(RuntimeError):
     """The plugin call may have dispatched, but its outcome was not confirmed."""
 
+    def __init__(self, message: str, *, details: dict[str, JsonValue] | None = None) -> None:
+        self.details = dict(details or {})
+        super().__init__(message)
+
+
+def _computer_use_route(server: str, tool: str) -> bool:
+    names = re.split(r"[.:/]|__", f"{server}.{tool}".casefold().replace("-", "_"))
+    return bool({"cua_repl", "unified_computer_use"}.intersection(names))
+
+
+def _computer_use_compatibility() -> dict[str, JsonValue]:
+    return {
+        "state": "unsupported_execution_context",
+        "screen_read": "unverified", "native_actions": "unsupported_execution_context",
+        "browser_actions": "unsupported_execution_context",
+        "turn_context": "not_provided", "inference_requested": False,
+        "next_action": "Use Computer Use in its owning Codex client. This direct bridge "
+        "has no verified non-inference API to activate its required execution context.",
+    }
+
 
 def _cwd(value: str) -> str:
     path = Path(value)
@@ -68,9 +94,18 @@ def _cursor(value: str | None) -> str | None:
 def _deny(server: str, tool: str = "") -> None:
     lowered = server.casefold()
     if "anywhere-computer" in lowered or "anywhere_computer" in lowered:
-        raise ValueError("Anywhere Computer's own server cannot be routed through this bridge")
-    if tool.casefold().startswith(_DENIED_TOOL_PREFIXES):
-        raise ValueError("Recursive or local tool routing is forbidden")
+        raise PluginPreflightError(
+            "recursive_route_forbidden",
+            "Anywhere Computer's own server cannot be routed through this bridge",
+        )
+    normalized = tool.casefold().replace("-", "_")
+    # Codex Apps uses provider.tool; MCP clients can expose mcp__provider__tool.
+    # Match a complete provider component, not every dotted third-party name.
+    namespaces = re.split(r"[.:/]|__", normalized)
+    if "anywhere_computer" in namespaces[:-1] or normalized.startswith(_DENIED_TOOL_PREFIXES):
+        raise PluginPreflightError(
+            "recursive_route_forbidden", "Recursive or local tool routing is forbidden",
+        )
 
 
 def _json_object(value: object, message: str) -> dict[str, JsonValue]:
@@ -124,6 +159,12 @@ def _validate_call(server: str, tool: str, catalog_sha256: str) -> None:
     if not re.fullmatch(r"[a-f0-9]{64}", catalog_sha256):
         raise ValueError("Plugin catalog digest is invalid")
     _deny(server, tool)
+    if _computer_use_route(server, tool):
+        raise PluginPreflightError(
+            "unsupported_execution_context", str(_computer_use_compatibility()["next_action"]),
+            details={"failure_stage": "before_dispatch",
+                     "compatibility": _computer_use_compatibility()},
+        )
 
 
 class _Session:
@@ -136,13 +177,16 @@ class _Session:
         self.executable = executable
         self.process: asyncio.subprocess.Process | None = None
         self.next_id = 0
+        self.diagnostics = PluginDiagnostics()
+        self._stderr_task: asyncio.Task[None] | None = None
 
     async def __aenter__(self) -> "_Session":
         self.process = await asyncio.create_subprocess_exec(
             str(self.executable), "app-server", "--listen", "stdio://",
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL, cwd=str(Path.home()), limit=WIRE_LIMIT,
+            stderr=asyncio.subprocess.PIPE, cwd=str(Path.home()), limit=WIRE_LIMIT,
         )
+        self._stderr_task = asyncio.create_task(self._drain_stderr())
         try:
             await asyncio.wait_for(self._initialize(), timeout=STARTUP_TIMEOUT)
             return self
@@ -154,6 +198,26 @@ class _Session:
         await self._close()
 
     async def _close(self) -> None:
+        try:
+            await self._close_process()
+        finally:
+            if self._stderr_task is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(self._stderr_task), timeout=0.1)
+                except TimeoutError:
+                    self._stderr_task.cancel()
+                    await asyncio.gather(self._stderr_task, return_exceptions=True)
+                self._stderr_task = None
+
+    async def _drain_stderr(self) -> None:
+        assert self.process is not None and self.process.stderr is not None
+        try:
+            while chunk := await self.process.stderr.read(STDERR_CHUNK):
+                self.diagnostics.feed(chunk)
+        except (OSError, ValueError):
+            self.diagnostics.capture_failed = True
+
+    async def _close_process(self) -> None:
         if self.process is None or self.process.returncode is not None:
             return
         try:
@@ -201,7 +265,7 @@ class _Session:
             if type(message.get("id")) is not int or message["id"] != expected:
                 continue
             if "error" in message:
-                raise RuntimeError("Codex app server rejected the plugin request")
+                raise PluginRPCError(message["error"])
             return _json_object(message.get("result"), "Invalid plugin response")
 
     async def request(self, method: str, params: dict[str, JsonValue]) -> dict[str, JsonValue]:
@@ -242,6 +306,7 @@ async def _start_thread(session: _Session, cwd: str) -> str:
 async def _start_and_catalog(
     session: _Session, cwd: str, *, limit: int, cursor: str | None = None,
     max_pages: int = MAX_PAGES, thread_id: str | None = None,
+    target_server: str | None = None, target_tool: str | None = None,
 ) -> tuple[list[dict[str, JsonValue]], str | None, str]:
     if thread_id is None:
         thread_id = await _start_thread(session, cwd)
@@ -275,12 +340,21 @@ async def _start_and_catalog(
             if server in seen_servers:
                 raise ValueError("Plugin catalog contains duplicate servers")
             seen_servers.add(server)
+            if target_server is not None and server != target_server:
+                continue
             raw_tools = row.get("tools", [])
             if isinstance(raw_tools, dict):
                 raw_tools = [dict(value, name=key) for key, value in raw_tools.items()
                              if isinstance(value, dict)]
-            if not isinstance(raw_tools, list) or len(raw_tools) > 1000:
-                continue
+            if not isinstance(raw_tools, list):
+                raise ValueError("Invalid plugin tool catalog")
+            complete = target_tool is not None or len(raw_tools) <= 1000
+            received_count = len(raw_tools)
+            if target_tool is not None:
+                raw_tools = [item for item in raw_tools
+                             if isinstance(item, dict) and item.get("name") == target_tool]
+            else:
+                raw_tools = raw_tools[:1000]
             tools: list[JsonValue] = []
             seen_tools: set[str] = set()
             for raw_tool in raw_tools:
@@ -322,12 +396,13 @@ async def _start_and_catalog(
                     "cwd": cwd, "server": server, "tool": name,
                     "catalog_sha256": clean["catalog_sha256"],
                 }
-                if len(description) > 1000:
-                    clean["description"] = description[:1000]
-                    clean["description_truncated"] = True
+                if _computer_use_route(server, name):
+                    clean["compatibility"] = _computer_use_compatibility()
                 tools.append(clean)
             servers.append({
                 "server": server, "tools": tools,
+                "catalog_complete": complete, "received_tool_count": received_count,
+                "omitted_tool_count": max(0, received_count - 1000) if not complete else 0,
                 "availability": _availability(row, bool(tools)),
                 "runtime_status": row.get("runtimeStatus")
                 if row.get("runtimeStatus") in {
@@ -368,6 +443,7 @@ async def _inspect_tools(
         _start_and_catalog(
             context.session, clean_cwd, limit=limit, cursor=bounded_cursor,
             max_pages=MAX_PAGES if server else 1, thread_id=context.thread_id,
+            target_server=server, target_tool=tool,
         ), timeout=STARTUP_TIMEOUT,
     )
     selected_servers: list[dict[str, JsonValue]] = []
@@ -385,11 +461,21 @@ async def _inspect_tools(
         clean_row = dict(row)
         clean_row["tool_count"] = len(selected)
         clean_row["inspect_arguments"] = {"cwd": clean_cwd, "server": row["server"]}
+        if any("compatibility" in item for item in selected):
+            clean_row["computer_use_compatibility"] = _computer_use_compatibility()
         if summary:
             clean_row["tools"] = []
             clean_row["tool_names_preview"] = [item["name"] for item in selected[:10]]
         else:
-            clean_row["tools"] = cast(JsonValue, selected)
+            rendered: list[JsonValue] = []
+            for item in selected:
+                preview = dict(item)
+                description = cast(str, item["description"])
+                if tool is None and len(description) > 1000:
+                    preview["description"] = description[:1000]
+                    preview["description_truncated"] = True
+                rendered.append(preview)
+            clean_row["tools"] = rendered
         selected_servers.append(clean_row)
     result: dict[str, JsonValue] = {
         "cwd": clean_cwd, "servers": cast(JsonValue, selected_servers),
@@ -398,6 +484,9 @@ async def _inspect_tools(
         "copy the selected tool\'s call_arguments into codex_plugin_call and add arguments. "
         "Registration and schemas do not prove successful execution.",
     }
+    diagnostics = getattr(context.session, "diagnostics", None)
+    if isinstance(diagnostics, PluginDiagnostics):
+        result["runtime_diagnostics"] = diagnostics.snapshot()
     if next_cursor is not None:
         result["next_cursor"] = next_cursor
     return result
@@ -413,7 +502,7 @@ async def _call_tool(
     servers, remaining_cursor, _ = await asyncio.wait_for(
         _start_and_catalog(
             session, clean_cwd, limit=MAX_CATALOG, max_pages=MAX_PAGES,
-            thread_id=thread_id,
+            thread_id=thread_id, target_server=server, target_tool=tool,
         ), timeout=STARTUP_TIMEOUT,
     )
     selected: dict[str, JsonValue] | None = None
@@ -466,11 +555,17 @@ async def _call_tool(
         TimeoutError, ConnectionError, OSError, ValueError, RuntimeError,
         json.JSONDecodeError
     ) as exc:
-        raise PluginCallOutcomeUnknown("Plugin call outcome was not confirmed") from exc
+        raise PluginCallOutcomeUnknown(
+            "Plugin call outcome was not confirmed",
+            details=context.failure_details(exc, "after_dispatch"),
+        ) from exc
     try:
         return _tool_result(result)
     except (ValueError, TypeError, RuntimeError) as error:
-        raise PluginCallOutcomeUnknown("Plugin returned a malformed result") from error
+        raise PluginCallOutcomeUnknown(
+            "Plugin returned a malformed result",
+            details=context.failure_details(error, "after_dispatch"),
+        ) from error
 
 
 class PluginContext:
@@ -495,11 +590,18 @@ class PluginContext:
     async def open(self) -> None:
         if self._session is not None:
             raise RuntimeError("Plugin context is already open")
-        self._session = _Session(_executable(None))
         try:
+            self._session = _Session(_executable(None))
             async with asyncio.timeout(STARTUP_TIMEOUT):
                 await self._session.__aenter__()
                 self.thread_id = await _start_thread(self._session, self.cwd)
+        except (OSError, ValueError, RuntimeError, TimeoutError) as error:
+            details = self.failure_details(error, "startup")
+            await self.close()
+            raise PluginPreflightError(
+                "plugin_start_failed", "Check the installed Codex runtime and local MCP setup",
+                details=details,
+            ) from error
         except BaseException:
             await self.close()
             raise
@@ -532,14 +634,40 @@ class PluginContext:
         server: str | None = None, tool: str | None = None,
         query: str | None = None, summary: bool = False,
     ) -> dict[str, JsonValue]:
-        return await _inspect_tools(
-            self, limit, cursor, server=server, tool=tool, query=query, summary=summary,
-        )
+        try:
+            return await _inspect_tools(
+                self, limit, cursor, server=server, tool=tool, query=query, summary=summary,
+            )
+        except PluginPreflightError:
+            raise
+        except (OSError, ValueError, RuntimeError, TimeoutError) as error:
+            raise PluginPreflightError(
+                "plugin_catalog_failed", "Inspect local MCP runtime diagnostics before retrying",
+                details=self.failure_details(error, "catalog"),
+            ) from error
+
+    def failure_details(self, error: BaseException, stage: str) -> dict[str, JsonValue]:
+        details = failure_diagnostic(error, stage)
+        if self._session is not None:
+            # Test doubles may implement only the transport interface.
+            diagnostics = getattr(self._session, "diagnostics", None)
+            if isinstance(diagnostics, PluginDiagnostics):
+                details["runtime_diagnostics"] = diagnostics.snapshot()
+        return details
 
     async def call(
         self, server: str, tool: str, arguments: dict[str, JsonValue], catalog_sha256: str,
     ) -> dict[str, JsonValue]:
-        return await _call_tool(self, server, tool, arguments, catalog_sha256)
+        _validate_call(server, tool, catalog_sha256)
+        try:
+            return await _call_tool(self, server, tool, arguments, catalog_sha256)
+        except (PluginPreflightError, PluginCallOutcomeUnknown):
+            raise
+        except (OSError, ValueError, RuntimeError, TimeoutError) as error:
+            raise PluginPreflightError(
+                "plugin_catalog_failed", "Inspect local MCP runtime diagnostics before retrying",
+                details=self.failure_details(error, "catalog"),
+            ) from error
 
 
 async def list_codex_plugin_tools(

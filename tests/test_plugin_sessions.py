@@ -389,3 +389,52 @@ async def test_closed_metadata_is_bounded(contexts, tmp_path, monkeypatch):
         assert len(pool.entries) == 2 and not any(item.alive for item in contexts)
     finally:
         await pool.close()
+
+
+@pytest.mark.parametrize("server,tool", [
+    ("codex_apps", "anywhere_computer.codex_plugin_call"), ("cua_repl", "js"),
+])
+async def test_session_cannot_bypass_route_preflight(contexts, tmp_path, server, tool):
+    pool = PluginSessions()
+    try:
+        session_id = (await pool.open(str(tmp_path), owner=None))["session_id"]
+        with pytest.raises(ValueError):
+            await pool.call(session_id, owner=None, cwd=str(tmp_path), server=server,
+                            tool=tool, arguments={}, catalog_sha256="1" * 64)
+        assert contexts[0].calls == 0
+        assert (await pool.status(session_id, owner=None))["state"] == "open"
+    finally:
+        await pool.close()
+
+
+async def test_classified_catalog_failure_invalidates_session(contexts, tmp_path):
+    pool = PluginSessions()
+    try:
+        session_id = (await pool.open(str(tmp_path), owner=None))["session_id"]
+
+        async def fail(**kwargs):
+            raise PluginPreflightError("plugin_catalog_failed", "Check local runtime",
+                                       details={"failure_stage": "catalog", "rpc_code": -32602})
+
+        contexts[0].inspect = fail
+        with pytest.raises(PluginPreflightError) as caught:
+            await pool.inspect(session_id, owner=None, cwd=str(tmp_path))
+        assert caught.value.details["rpc_code"] == -32602
+        assert (await pool.status(session_id, owner=None))["state"] == "unusable"
+        assert not contexts[0].alive and contexts[0].calls == 0
+    finally:
+        await pool.close()
+
+
+async def test_idle_plugin_state_blocks_update_and_reports_resource(contexts, tmp_path):
+    engine = Engine(tmp_path)
+    try:
+        opened = await engine.plugin_sessions.open(str(tmp_path), owner=None)
+        status = engine.status()
+        assert status["active_sessions"] == 1
+        assert status["active_resources"]["plugin_sessions"] == 1
+        assert status["update_blocked"] is True
+        await engine.plugin_sessions.stop(opened["session_id"], owner=None)
+        assert engine.status()["update_blocked"] is False
+    finally:
+        await engine.close()

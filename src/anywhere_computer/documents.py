@@ -5,6 +5,7 @@ import json
 import posixpath
 import re
 import zipfile
+from dataclasses import dataclass
 from urllib.parse import unquote
 from xml.etree import ElementTree as ET
 
@@ -20,6 +21,46 @@ SHEET = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 PRESENT = "{http://schemas.openxmlformats.org/presentationml/2006/main}"
 DRAW = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 XML_LIMIT = 4 * 1024 * 1024
+EXTRACTION_XML_LIMIT = 64 * 1024 * 1024
+EXTRACTION_TEXT_LIMIT = 16 * 1024 * 1024
+EXTRACTION_NODE_LIMIT = 500000
+EXTRACTION_ENTRY_LIMIT = 100000
+
+
+@dataclass
+class ExtractionBudget:
+    """Charge repeated work, not just unique ZIP members, before accumulating it."""
+
+    xml_bytes: int = 0
+    text_bytes: int = 0
+    nodes: int = 0
+    entries: int = 0
+
+    def xml(self, size: int) -> None:
+        self.xml_bytes += size
+        if self.xml_bytes > EXTRACTION_XML_LIMIT:
+            raise ValueError("Document extraction XML limit exceeded")
+
+    def visit(self) -> None:
+        self.nodes += 1
+        if self.nodes > EXTRACTION_NODE_LIMIT:
+            raise ValueError("Document extraction traversal limit exceeded")
+
+    def text(self, value: str) -> None:
+        # Four bytes per Unicode code point bounds UTF-8 and Python's string storage,
+        # without allocating a second encoded copy merely to measure hostile text.
+        self.text_bytes += len(value) * 4
+        if self.text_bytes > EXTRACTION_TEXT_LIMIT:
+            raise ValueError("Document extraction text limit exceeded")
+
+    def append(self, entries: list[JsonValue], entry: dict[str, JsonValue]) -> None:
+        self.entries += 1
+        if self.entries > EXTRACTION_ENTRY_LIMIT:
+            raise ValueError("Document extraction entry limit exceeded")
+        for value in entry.values():
+            if isinstance(value, str):
+                self.text(value)
+        entries.append(entry)
 
 
 def cell_position(reference: str) -> tuple[int, int]:
@@ -47,6 +88,7 @@ def cell_bounds(value: str) -> tuple[int, int, int, int]:
 
 class OfficePackage:
     def __init__(self, content: bytes) -> None:
+        self.budget = ExtractionBudget()
         self.archive = zipfile.ZipFile(io.BytesIO(content))
         items = self.archive.infolist()
         names = [item.filename for item in items]
@@ -61,6 +103,7 @@ class OfficePackage:
         info = self.archive.getinfo(part)
         if info.file_size > XML_LIMIT:
             raise ValueError("XML part exceeds 4 MiB")
+        self.budget.xml(info.file_size)
         with self.archive.open(info) as stream:
             raw = stream.read(XML_LIMIT + 1)
         if len(raw) > XML_LIMIT:
@@ -69,7 +112,10 @@ class OfficePackage:
         text = raw.decode("utf-8-sig")
         if "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():
             raise ValueError("XML entity and document type declarations are unsupported")
-        return ET.fromstring(text)
+        root = ET.fromstring(text)
+        for _ in root.iter():
+            self.budget.visit()
+        return root
 
     def relationships(self, part: str) -> dict[str, tuple[str, str]]:
         base, name = posixpath.split(part)
@@ -103,31 +149,37 @@ class OfficePackage:
         return matches[0]
 
 
-def text_runs(element: ET.Element, namespace: str) -> str:
+def text_runs(element: ET.Element, namespace: str, budget: ExtractionBudget) -> str:
     pieces = []
     for child in element.iter():
+        budget.visit()
         if child.tag == namespace + "t":
-            pieces.append(child.text or "")
+            piece = child.text or ""
         elif child.tag == namespace + "tab":
-            pieces.append("\t")
+            piece = "\t"
         elif child.tag in (namespace + "br", namespace + "cr"):
-            pieces.append("\n")
+            piece = "\n"
+        else:
+            continue
+        budget.text(piece)
+        pieces.append(piece)
     return "".join(pieces)
 
 
-def word_paragraphs(body: ET.Element) -> list[JsonValue]:
+def word_paragraphs(body: ET.Element, budget: ExtractionBudget) -> list[JsonValue]:
     """Keep document order and nearest table cell without recursively walking XML."""
     entries: list[JsonValue] = []
     pending: list[tuple[ET.Element, dict[str, JsonValue]]] = [(body, {})]
     table_count = 0
     while pending:
         element, location = pending.pop()
+        budget.visit()
         if element.tag == WORD + "tbl":
             table_count += 1
             location = {"table": table_count}
         if element.tag == WORD + "p":
-            entries.append({"paragraph": len(entries) + 1,
-                            "text": text_runs(element, WORD), **location})
+            budget.append(entries, {"paragraph": len(entries) + 1,
+                                    "text": text_runs(element, WORD, budget), **location})
         children = []
         row_index = cell_index = 0
         for child in element:
@@ -147,6 +199,7 @@ def read_document(args: ReadDocument) -> dict[str, JsonValue]:
     path = absolute_path(args.path)
     content = read_bytes(path)
     package = OfficePackage(content)
+    budget = package.budget
     try:
         part = package.main_part()
         root = package.xml(part)
@@ -163,7 +216,7 @@ def read_document(args: ReadDocument) -> dict[str, JsonValue]:
             body = root.find(WORD + "body")
             if body is None:
                 raise ValueError("Word document has no body")
-            entries = word_paragraphs(body)
+            entries = word_paragraphs(body, budget)
         elif root.tag == SHEET + "workbook":
             kind = "xlsx"
             relations = package.relationships(part)
@@ -174,12 +227,13 @@ def read_document(args: ReadDocument) -> dict[str, JsonValue]:
             for relation_kind, target in relations.values():
                 if relation_kind.endswith("/sharedStrings"):
                     shared = [
-                        text_runs(item, SHEET) for item in package.xml(target).findall(SHEET + "si")
+                        text_runs(item, SHEET, budget)
+                        for item in package.xml(target).findall(SHEET + "si")
                     ]
             selected = None
             for sheet in sheets:
                 name = sheet.get("name", "")
-                sections.append({"name": name, "state": sheet.get("state", "visible")})
+                budget.append(sections, {"name": name, "state": sheet.get("state", "visible")})
                 if (args.section is None and selected is None) or args.section == name:
                     selected = sheet
             if selected is None:
@@ -204,8 +258,8 @@ def read_document(args: ReadDocument) -> dict[str, JsonValue]:
                                 raise ValueError("Invalid shared string reference")
                             value = shared[index]
                         elif cell_type == "inlineStr":
-                            value = text_runs(cell, SHEET)
-                        entries.append(
+                            value = text_runs(cell, SHEET, budget)
+                        budget.append(entries,
                             {
                                 "sheet": selected.get("name", ""),
                                 "cell": cell.get("r", ""),
@@ -222,14 +276,15 @@ def read_document(args: ReadDocument) -> dict[str, JsonValue]:
             if slides is not None:
                 for index, slide in enumerate(slides):
                     number = str(index + 1)
-                    sections.append({"name": number})
+                    budget.append(sections, {"name": number})
                     if args.section is not None and args.section != number:
                         continue
                     relation_kind, target = relations[slide.get(RID, "")]
                     if not relation_kind.endswith("/slide"):
                         raise ValueError("Presentation references a non-slide part")
                     for paragraph in package.xml(target).iter(DRAW + "p"):
-                        entries.append({"slide": index + 1, "text": text_runs(paragraph, DRAW)})
+                        budget.append(entries, {"slide": index + 1,
+                                                "text": text_runs(paragraph, DRAW, budget)})
             if args.section is not None and not any(
                 item == {"name": args.section} for item in sections
             ):

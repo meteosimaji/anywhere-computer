@@ -140,8 +140,10 @@ async def test_duplicate_and_changed_annotation_prevent_dispatch(stub_catalog, t
         await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
     assert not any(m == "mcpServer/tool/call" for m, _ in stub_catalog["calls"])
     stub_catalog["rows"].append(copy.deepcopy(stub_catalog["rows"][0]))
-    with pytest.raises(ValueError, match="duplicate"):
+    with pytest.raises(codex_plugins.PluginPreflightError, match="plugin_catalog_failed") as caught:
         await list_codex_plugin_tools(str(tmp_path))
+    assert caught.value.details["failure_kind"] == "invalid_response"
+    assert "duplicate" in str(caught.value.__cause__)
 
 
 @pytest.mark.parametrize("failure", [TimeoutError(), ConnectionError(), RuntimeError()])
@@ -344,3 +346,180 @@ async def test_invalid_requests_do_not_start_a_runtime(tmp_path, monkeypatch, ca
             await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, "bad")
         else:
             await list_codex_plugin_tools(str(tmp_path), server="anywhere-computer")
+
+
+@pytest.mark.parametrize("name", [
+    "anywhere_computer.codex_plugin_call", "Anywhere_Computer.files_read",
+    "anywhere-computer.devices_call", "mcp__anywhere_computer__files_read",
+])
+async def test_namespaced_self_tools_are_hidden_and_never_dispatched(stub_catalog, tmp_path, name):
+    stub_catalog["rows"][0]["name"] = "codex_apps"
+    stub_catalog["rows"][0]["tools"][name] = {
+        "description": "self", "inputSchema": {"type": "object"},
+    }
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    assert [t["name"] for t in catalog["servers"][0]["tools"]] == ["echo"]
+    stub_catalog["calls"].clear()
+    with pytest.raises(ValueError):
+        await call_codex_plugin_tool(str(tmp_path), "codex_apps", name, {}, "0" * 64)
+    assert stub_catalog["calls"] == []
+    with pytest.raises(ValueError):
+        await list_codex_plugin_tools(str(tmp_path), server="codex_apps", tool=name)
+    assert stub_catalog["calls"] == []
+
+
+@pytest.mark.parametrize("name", [
+    "google_calendar.get_colors", "other.anywhere_computer", "other_anywhere_computer.echo",
+])
+async def test_other_plugin_namespace_remains_callable(stub_catalog, tmp_path, name):
+    stub_catalog["rows"][0]["tools"] = {
+        name: {"description": "Colors", "inputSchema": {}},
+    }
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    descriptor = catalog["servers"][0]["tools"][0]
+    assert (await call_codex_plugin_tool(**descriptor["call_arguments"], arguments={}))[
+        "is_error"
+    ] is False
+
+
+async def test_full_description_detail_tail_search_and_digest(stub_catalog, tmp_path):
+    description = "使い方" * 700 + " tail-only-search-word"
+    stub_catalog["rows"][0]["tools"]["echo"]["description"] = description
+    detail = await list_codex_plugin_tools(str(tmp_path), server="demo", tool="echo")
+    descriptor = detail["servers"][0]["tools"][0]
+    assert descriptor["description"] == description
+    assert not descriptor.get("description_truncated", False)
+    summary = await list_codex_plugin_tools(
+        str(tmp_path), query="tail-only-search-word", summary=True,
+    )
+    assert summary["servers"][0]["tool_count"] == 1
+    broad = await list_codex_plugin_tools(str(tmp_path))
+    preview = broad["servers"][0]["tools"][0]
+    assert preview["description_truncated"] is True
+    assert len(preview["description"]) == 1000
+    assert preview["catalog_sha256"] == descriptor["catalog_sha256"]
+    stub_catalog["rows"][0]["tools"]["echo"]["description"] += " changed"
+    with pytest.raises(codex_plugins.PluginPreflightError, match="catalog_stale"):
+        await call_codex_plugin_tool(**descriptor["call_arguments"], arguments={})
+
+
+@pytest.mark.parametrize("server,tool", [
+    ("cua_repl", "js"), ("codex_apps", "cua_repl.js"),
+    ("unified-computer-use", "js"), ("codex_apps", "mcp__cua_repl__js"),
+])
+async def test_computer_use_reports_context_and_blocks_before_runtime(
+    stub_catalog, tmp_path, server, tool,
+):
+    stub_catalog["rows"] = [{"name": server, "runtimeStatus": "connected", "tools": {
+        tool: {"description": "Computer Use", "inputSchema": {}},
+    }}]
+    catalog = await list_codex_plugin_tools(str(tmp_path), server=server, tool=tool)
+    row = catalog["servers"][0]
+    assert row["availability"] == "ready_to_call"
+    descriptor = row["tools"][0]
+    assert descriptor["compatibility"]["screen_read"] == "unverified"
+    assert descriptor["compatibility"]["native_actions"] == "unsupported_execution_context"
+    assert descriptor["compatibility"]["browser_actions"] == "unsupported_execution_context"
+    summary = await list_codex_plugin_tools(str(tmp_path), server=server, summary=True)
+    assert summary["servers"][0]["computer_use_compatibility"] == descriptor["compatibility"]
+    stub_catalog["calls"].clear()
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(**descriptor["call_arguments"], arguments={"code": "1+1"})
+    assert caught.value.code == "unsupported_execution_context"
+    assert stub_catalog["calls"] == []
+
+
+@pytest.mark.parametrize("method,stage", [
+    ("initialize", "startup"), ("mcpServerStatus/list", "catalog"),
+    ("mcpServer/tool/call", "after_dispatch"),
+])
+async def test_rpc_diagnostics_are_redacted_and_recoverable(fake_codex, tmp_path, method, stage):
+    from anywhere_computer.engine import Engine
+    from anywhere_computer.models import Request
+
+    # A real subprocess writes more than pipe capacity, then rejects one request.
+    # No newline is needed for stderr draining and no provider text is persisted.
+    catalog = await list_codex_plugin_tools(str(tmp_path), server="demo", tool="echo")
+    args = catalog["servers"][0]["tools"][0]["call_arguments"]
+    source = fake_codex.read_text()
+    source = source.replace(
+        "    if m == 'initialize': r={}",
+        f"""    if m == {method!r}:
+        sys.stderr.write('fixture-private-secret' * 20000)
+        sys.stderr.flush()
+        print(json.dumps({{'id':p['id'], 'error':{{'code':-32602,
+            'message':'Invalid params fixture-private-secret',
+            'data':{{'token':'fixture-private-secret'}}}}}}), flush=True)
+        continue
+    if m == 'initialize': r={{}}""",
+    )
+    fake_codex.write_text(source)
+    engine = Engine(tmp_path / "engine")
+    request = Request(operation_id="b" * 32, tool="codex_plugin_call",
+                      arguments={**args, "arguments": {}})
+    try:
+        reply = await engine.execute(request)
+        assert reply.state == ("unknown" if stage == "after_dispatch" else "failed")
+        assert reply.data["failure_stage"] == stage
+        details = reply.data["details"]
+        assert details["rpc_code"] == -32602
+        assert details["message_kind"] == "invalid_params"
+        assert details["data_present"] is True
+        diagnostic = details["runtime_diagnostics"]
+        assert diagnostic["stderr_bytes_seen"] >= 300000
+        assert len(diagnostic["stderr_events"]) <= 32
+        assert diagnostic["events_dropped"] is True
+        assert "fixture-private-secret" not in reply.model_dump_json()
+        assert await engine.execute(request) == reply
+        recovered = await engine.execute(Request(
+            operation_id="c" * 32, tool="operations_get",
+            arguments={"operation_id": request.operation_id},
+        ))
+        assert recovered.data["data"] == reply.data
+    finally:
+        await engine.close()
+
+
+async def test_runtime_launch_failure_is_classified_without_raw_exception(tmp_path, monkeypatch):
+    def fail(_):
+        raise FileNotFoundError("private-path-or-secret")
+
+    monkeypatch.setattr(codex_plugins, "_executable", fail)
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await list_codex_plugin_tools(str(tmp_path))
+    assert caught.value.details["failure_stage"] == "startup"
+    assert "private-path-or-secret" not in str(caught.value)
+
+
+async def test_oversized_catalog_fails_instead_of_returning_partial_definition(
+    stub_catalog, tmp_path,
+):
+    stub_catalog["rows"][0]["tools"]["echo"]["description"] = "x" * (2 * 1024 * 1024)
+    with pytest.raises(codex_plugins.PluginPreflightError, match="plugin_catalog_failed") as caught:
+        await list_codex_plugin_tools(str(tmp_path), server="demo", tool="echo")
+    assert caught.value.details["failure_stage"] == "catalog"
+    assert not any(m == "mcpServer/tool/call" for m, _ in stub_catalog["calls"])
+
+
+async def test_over_thousand_catalog_is_visible_and_exact_selection_works(stub_catalog, tmp_path):
+    stub_catalog["rows"][0]["tools"] = {
+        f"tool{i}": {"description": "Small", "inputSchema": {}} for i in range(1001)
+    }
+    broad = await list_codex_plugin_tools(str(tmp_path), summary=True)
+    row = broad["servers"][0]
+    assert row["catalog_complete"] is False
+    assert row["omitted_tool_count"] == 1
+    detail = await list_codex_plugin_tools(str(tmp_path), server="demo", tool="tool1000")
+    descriptor = detail["servers"][0]["tools"][0]
+    assert descriptor["name"] == "tool1000"
+    assert (await call_codex_plugin_tool(**descriptor["call_arguments"], arguments={}))[
+        "is_error"
+    ] is False
+
+
+async def test_unrelated_large_catalog_does_not_block_exact_tool(stub_catalog, tmp_path):
+    stub_catalog["rows"].append({"name": "large", "tools": {
+        "huge": {"description": "x" * (3 * 1024 * 1024), "inputSchema": {}},
+    }})
+    result = await list_codex_plugin_tools(str(tmp_path), server="demo", tool="echo")
+    assert result["servers"][0]["tools"][0]["name"] == "echo"

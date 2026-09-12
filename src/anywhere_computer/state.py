@@ -47,17 +47,32 @@ class Ledger:
             "id TEXT PRIMARY KEY, tool TEXT NOT NULL, digest TEXT NOT NULL, "
             "started REAL NOT NULL, reply TEXT NOT NULL)"
         )
-        # A process restart cannot tell whether an interrupted external effect happened.
-        for operation_id, payload in self.connection.execute("SELECT id, reply FROM operations"):
-            reply = Reply.model_validate_json(payload)
-            if reply.state == "running":
-                self.finish(
-                    Reply(
-                        operation_id=operation_id,
-                        state="unknown",
-                        error="Agent restarted before the outcome was recorded",
-                    )
-                )
+        with self.connection:
+            self.connection.execute(
+                "CREATE TABLE IF NOT EXISTS operation_results "
+                "(sha256 TEXT PRIMARY KEY, body TEXT NOT NULL)"
+            )
+            columns = {row[1] for row in self.connection.execute("PRAGMA table_info(operations)")}
+            if "state" not in columns:
+                self.connection.execute("ALTER TABLE operations ADD COLUMN state TEXT")
+                self.connection.execute("ALTER TABLE operations ADD COLUMN result_sha256 TEXT")
+                # One transactional migration; later startups query only the state index.
+                rows = self.connection.execute("SELECT reply FROM operations")
+                while batch := rows.fetchmany(100):
+                    for (payload,) in batch:
+                        self._store(Reply.model_validate_json(payload))
+            self.connection.execute(
+                "CREATE INDEX IF NOT EXISTS operations_state ON operations(state)"
+            )
+            self.connection.execute(
+                "CREATE INDEX IF NOT EXISTS operations_started ON operations(started)"
+            )
+            unfinished = self.connection.execute(
+                "SELECT id FROM operations WHERE state IN ('running', 'awaiting_approval')"
+            ).fetchall()
+            for (operation_id,) in unfinished:
+                self._store(Reply(operation_id=operation_id, state="unknown",
+                    error="Agent restarted before the outcome was recorded"))
 
     def claim(self, request: Request) -> Reply | None:
         serialized = json.dumps(
@@ -68,43 +83,77 @@ class Ledger:
         )
         digest = hashlib.sha256(serialized.encode()).hexdigest()
         existing = self.connection.execute(
-            "SELECT digest, reply FROM operations WHERE id=?", (request.operation_id,)
+            "SELECT digest FROM operations WHERE id=?", (request.operation_id,)
         ).fetchone()
         if existing:
             if existing[0] != digest:
                 raise ValueError("Operation ID was already used for different arguments")
-            return Reply.model_validate_json(existing[1])
+            return self.get(request.operation_id)
         reply = Reply(operation_id=request.operation_id, state="running")
         with self.connection:
             self.connection.execute(
-                "INSERT INTO operations VALUES (?,?,?,?,?)",
+                "INSERT INTO operations (id,tool,digest,started,reply,state) VALUES (?,?,?,?,?,?)",
                 (
                     request.operation_id,
                     request.tool,
                     digest,
                     time.time(),
                     reply.model_dump_json(),
+                    reply.state,
                 ),
             )
         return None
 
+    def _store(self, reply: Reply) -> None:
+        body = json.dumps(reply.data, ensure_ascii=False, sort_keys=True,
+                          separators=(",", ":"), allow_nan=False)
+        key = hashlib.sha256(body.encode()).hexdigest()
+        self.connection.execute(
+            "INSERT OR IGNORE INTO operation_results VALUES (?,?)", (key, body),
+        )
+        metadata = reply.model_copy(update={"data": {}}).model_dump_json()
+        self.connection.execute(
+            "UPDATE operations SET reply=?,state=?,result_sha256=? WHERE id=?",
+            (metadata, reply.state, key, reply.operation_id),
+        )
+
     def finish(self, reply: Reply) -> None:
         with self.connection:
-            self.connection.execute(
-                "UPDATE operations SET reply=? WHERE id=?",
-                (
-                    reply.model_dump_json(),
-                    reply.operation_id,
-                ),
-            )
+            self._store(reply)
 
     def get(self, operation_id: str) -> Reply:
         row = self.connection.execute(
-            "SELECT reply FROM operations WHERE id=?", (operation_id,)
+            "SELECT o.reply,o.result_sha256,r.body FROM operations o "
+            "LEFT JOIN operation_results r ON r.sha256=o.result_sha256 WHERE o.id=?",
+            (operation_id,),
         ).fetchone()
         if row is None:
             raise ValueError("Unknown operation ID")
-        return Reply.model_validate_json(row[0])
+        reply = Reply.model_validate_json(row[0])
+        if row[1] is None:
+            return reply
+        if row[2] is None:
+            return reply.model_copy(update={"data": {
+                "result_expired": True, "result_sha256": row[1],
+                "next_action": "The operation ID remains reserved; do not repeat its side effects",
+            }})
+        if hashlib.sha256(row[2].encode()).hexdigest() != row[1]:
+            raise ValueError("Operation result failed integrity validation")
+        return reply.model_copy(update={"data": json.loads(row[2])})
+
+    def expire_results(self, before: float) -> int:
+        """Explicit retention: remove bodies only when no newer or active record needs them.
+
+        Operation identity/digest metadata is retained indefinitely for duplicate protection.
+        No automatic expiry runs at startup.
+        """
+        with self.connection:
+            cursor = self.connection.execute(
+                "DELETE FROM operation_results WHERE sha256 NOT IN "
+                "(SELECT result_sha256 FROM operations WHERE result_sha256 IS NOT NULL "
+                "AND (started>=? OR state IN ('running','awaiting_approval')))", (before,),
+            )
+        return cursor.rowcount
 
     def tool_for(self, operation_id: str) -> str | None:
         row = self.connection.execute(
@@ -121,10 +170,10 @@ class Ledger:
                 "operation_id": row[0],
                 "tool": row[1],
                 "started": row[2],
-                "state": Reply.model_validate_json(row[3]).state,
+                "state": row[3],
             }
             for row in self.connection.execute(
-                "SELECT id, tool, started, reply FROM operations "
+                "SELECT id, tool, started, state FROM operations "
                 "WHERE (? IS NULL OR tool=?) AND (? IS NULL OR started>=?) "
                 "ORDER BY started DESC, id DESC LIMIT ?",
                 (tool_name, tool_name, since, since, limit),
@@ -138,7 +187,6 @@ class Ledger:
         return [
             {"tool": tool, "state": state, "count": count}
             for tool, state, count in self.connection.execute(
-                "SELECT tool,json_extract(reply,'$.state'),count(*) FROM operations "
-                "GROUP BY tool,json_extract(reply,'$.state') ORDER BY tool,2"
+                "SELECT tool,state,count(*) FROM operations GROUP BY tool,state ORDER BY tool,2"
             )
         ]
