@@ -30,6 +30,7 @@ from .http_service import (
     serve_http,
 )
 from .http_supervisor import watch_http
+from .http_tool_upgrade import add_http_tools
 from .mcp_server import run_mcp
 from .native_login import login
 from .owner_credentials import OwnerCredentials
@@ -70,6 +71,7 @@ def main() -> None:
             "owner-change",
             "login",
             "http-configure",
+            "http-add-tools",
             "http-serve",
             "http-watch",
             "remote-serve",
@@ -201,8 +203,10 @@ def main() -> None:
         parser.error("--client-id is only valid for HTTP connection setup")
     if args.profile is not None and args.command not in {"http-mcp", "login", "device-add-http"}:
         parser.error("--profile is only valid for HTTP client setup")
-    if args.scope is not None and args.command not in {"login", "http-configure"}:
-        parser.error("--scope is only valid for login and http-configure")
+    if args.scope is not None and args.command not in {"login", "http-configure", "http-add-tools"}:
+        parser.error("--scope is only valid for login, http-configure and http-add-tools")
+    if args.command == "http-add-tools" and not args.scope:
+        parser.error("http-add-tools requires at least one --scope tool")
     if args.command == "login" and not args.scope:
         parser.error("login requires at least one --scope tool")
     if args.owner is not None and args.command not in {
@@ -355,6 +359,9 @@ def main() -> None:
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)
             stop = watch_parent_pipe() if args.watch_parent else None
             raise SystemExit(run_tunnel(directory, stop=stop, connector=args.connector))
+        elif args.command == "http-add-tools":
+            result = asyncio.run(add_http_tools(directory, frozenset(args.scope)))
+            print(json.dumps(result, indent=2))
         elif args.command == "http-configure":
             config = asyncio.run(
                 configure_http(

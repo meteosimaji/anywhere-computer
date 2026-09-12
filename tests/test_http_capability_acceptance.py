@@ -1,0 +1,292 @@
+"""Chat-like HTTP workflows over real files/processes and synthetic Codex data.
+
+No model generation, private conversation reads or production settings changes.
+The Codex app-server peer is a subprocess protocol fixture; this is not a claim
+that every installed third-party plugin or OS GUI action was tested.
+"""
+
+import asyncio
+import base64
+import hashlib
+import os
+import sys
+import uuid
+
+import httpx
+import psutil
+import pytest
+from test_http_service import initialize
+
+from anywhere_computer.authorization import LOCAL_ONLY_TOOLS, AuthorizationStore, pkce_s256
+from anywhere_computer.authorized_http import AuthorizedDeviceMCP
+from anywhere_computer.engine import Engine
+from anywhere_computer.http_mcp import HTTPMCP
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX app-server executable fixture")
+async def test_every_remote_engine_tool_in_chat_like_http_workflows(tmp_path, monkeypatch):
+    skill = tmp_path / "skill/SKILL.md"
+    skill.parent.mkdir()
+    skill.write_text("Read reference.txt for the fixture.\n", encoding="utf-8")
+    (skill.parent / "reference.txt").write_text("reference fixture", encoding="utf-8")
+    executable = tmp_path / "codex-fixture"
+    executable.write_text(
+        "#!/usr/bin/env python3\n"
+        + f"SKILL={str(skill)!r}\n"
+        + """
+import json,sys
+n=40
+for line in sys.stdin:
+ p=json.loads(line);m=p.get('method')
+ if 'id' not in p:continue
+ if m=='initialize':r={}
+ elif m=='thread/start':
+  assert p['params']['ephemeral'] is True
+  r={'thread':{'id':'fixture','ephemeral':True}}
+ elif m=='thread/list':r={'data':[{'id':'fixture','title':'Acceptance fixture'}]}
+ elif m=='thread/turns/list':
+  r={'threadId':'fixture','data':[{'items':[{'id':'u','type':'userMessage',
+     'content':[{'type':'input_text','text':'fixture message'}]}]}]}
+ elif m=='skills/list':
+  r={'data':[{'errors':[],'skills':[{'path':SKILL,'name':'fixture','description':'fixture',
+                        'enabled':True}]}]}
+ elif m=='mcpServerStatus/list':
+  r={'data':[{'name':'fixture','runtimeStatus':'connected','tools':[{
+     'name':'increment','description':'Increment a counter',
+     'inputSchema':{'type':'object','properties':{}}}]}]}
+ elif m=='mcpServer/tool/call':
+  n+=1;r={'content':[{'type':'text','text':str(n)}],'isError':False}
+ elif m=='thread/unsubscribe':r={}
+ else:raise RuntimeError('Unexpected method: '+str(m))
+ print(json.dumps({'jsonrpc':'2.0','id':p['id'],'result':r}),flush=True)
+""",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+    monkeypatch.setenv("ANYWHERE_CODEX_EXECUTABLE", str(executable))
+    monkeypatch.setenv("PATH", str(os.path.dirname(sys.executable)) + os.pathsep + os.defpath)
+    engine = Engine(tmp_path / "engine")
+    known = frozenset(engine.tools) - LOCAL_ONLY_TOOLS
+    authority = AuthorizationStore(
+        tmp_path / "auth", resource="https://fixture.test/mcp", known_tools=known
+    )
+    authority.register_client("chat", frozenset({"https://fixture.test/callback"}))
+    authority.enroll_device("owner", "fixture", known)
+    code = authority.approve(
+        owner="owner",
+        device="fixture",
+        client="chat",
+        redirect="https://fixture.test/callback",
+        resource=authority.resource,
+        tools=known,
+        challenge=pkce_s256("v" * 43),
+    )
+    token = authority.exchange_code(
+        code=code,
+        verifier="v" * 43,
+        client="chat",
+        redirect="https://fixture.test/callback",
+        resource=authority.resource,
+    ).value
+    backend = AuthorizedDeviceMCP(authority, engine, owner="owner", device="fixture", client="chat")
+    adapter = HTTPMCP(backend.authenticate, backend.session)
+    port = await adapter.start()
+    covered = set()
+    process = None
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=40) as http:
+            headers = await initialize(http, token)
+
+            async def call(name, args=None, *, operation=None, expected="completed"):
+                response = await http.post(
+                    "/mcp",
+                    headers=headers,
+                    json={
+                        "jsonrpc": "2.0",
+                        "id": uuid.uuid4().hex,
+                        "method": "tools/call",
+                        "params": {
+                            "name": name,
+                            "arguments": args or {},
+                            "_meta": {
+                                "io.github.meteosimaji.anywhere-computer/operation_id": operation
+                                or uuid.uuid4().hex,
+                            },
+                        },
+                    },
+                )
+                assert response.status_code == 200
+                result = response.json()["result"]["structuredContent"]
+                assert result["state"] == expected, (name, result)
+                covered.add(name)
+                return result["data"]
+
+            status = await call("computer_status")
+            assert status["active_sessions"] == 0
+            await call("workspace_open", {"path": str(tmp_path)})
+            await call("settings_get")
+            await call("settings_update", {"key": "file_read_line_limit", "value": 123})
+            await call("directories_create", {"path": str(tmp_path / "work")})
+            path = str(tmp_path / "work/日本語.txt")
+            text = "日本語 🚀\n40\n"
+            write_id = uuid.uuid4().hex
+            await call("files_write", {"path": path, "text": text}, operation=write_id)
+            await call("files_write", {"path": path, "text": text}, operation=write_id)
+            read = await call("files_read", {"path": path})
+            assert read["text"] == text
+            edited = await call(
+                "files_edit",
+                {
+                    "path": path,
+                    "old_text": "40",
+                    "new_text": "42",
+                    "expected_sha256": read["sha256"],
+                },
+            )
+            await call(
+                "files_restore",
+                {
+                    "path": path,
+                    "backup_id": edited["backup_id"],
+                    "expected_sha256": edited["sha256"],
+                },
+            )
+            assert (await call("files_read", {"path": path}))["text"] == text
+            await call("files_read_many", {"paths": [path]})
+            await call("files_info", {"path": path})
+            moved = str(tmp_path / "work/moved.txt")
+            await call("files_move", {"source": path, "destination": moved})
+            assert not os.path.exists(path) and os.path.isfile(moved)
+            await call("directories_list", {"path": str(tmp_path / "work")})
+            payload = b"\x00binary\xff" * 40
+            encoded = base64.b64encode(payload).decode()
+            binary = str(tmp_path / "binary.dat")
+            await call("files_write_binary", {"path": binary, "data_base64": encoded})
+            data = await call("files_read_binary", {"path": binary})
+            assert base64.b64decode(data["data_base64"]) == payload
+            download = {"transfer_id": uuid.uuid4().hex}
+            await call("download_begin", {**download, "path": binary})
+            await call("download_status", download)
+            assert (
+                base64.b64decode((await call("download_read", download))["data_base64"]) == payload
+            )
+            await call("download_close", download)
+            upload = {"transfer_id": uuid.uuid4().hex}
+            target = tmp_path / "uploaded.bin"
+            await call(
+                "upload_begin",
+                {
+                    **upload,
+                    "path": str(target),
+                    "total_bytes": len(payload),
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                },
+            )
+            await call("upload_chunk", {**upload, "offset": 0, "data_base64": encoded})
+            await call("upload_status", upload)
+            await call("upload_commit", upload)
+            assert target.read_bytes() == payload
+            await call(
+                "upload_resolve", {**upload, "action": "confirm_published"}, expected="failed"
+            )  # Completed uploads cannot be resolved again.
+            abandoned = {"transfer_id": uuid.uuid4().hex}
+            await call(
+                "upload_begin",
+                {
+                    **abandoned,
+                    "path": str(tmp_path / "aborted"),
+                    "total_bytes": 0,
+                    "sha256": hashlib.sha256(b"").hexdigest(),
+                },
+            )
+            await call("upload_abort", abandoned)
+            for format_ in ("docx", "xlsx"):
+                document = str(tmp_path / ("document." + format_))
+                content = {"text": "Document 日本語"} if format_ == "docx" else {"rows": [[40, 42]]}
+                await call("documents_write", {"path": document, "format": format_, **content})
+                result = await call("documents_read", {"path": document})
+                assert "Document" in str(result) if format_ == "docx" else "42" in str(result)
+            search = await call(
+                "search_start",
+                {"path": str(tmp_path / "work"), "pattern": "日本語", "kind": "text"},
+            )
+            sid = {"search_id": search["search_id"]}
+            async with asyncio.timeout(5):
+                while True:
+                    page = await call("search_results", sid)
+                    if page.get("results"):
+                        break
+                    await asyncio.sleep(0.02)
+            await call("search_list")
+            await call("search_stop", sid)
+            terminal = await call(
+                "terminal_start", {"command": "/bin/cat", "shell": "/bin/sh", "cwd": str(tmp_path)}
+            )
+            tid = {"session_id": terminal["session_id"]}
+            await call("terminal_input", {**tid, "text": "acceptance-42\n", "wait_ms": 200})
+            output = await call("terminal_output", {**tid, "wait_ms": 200})
+            assert "acceptance-42" in str(output)
+            await call("terminal_list")
+            await call("terminal_stop", tid)
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-c", "import time;time.sleep(60)"
+            )
+            created = psutil.Process(process.pid).create_time()
+            await call("processes_list", {"after_pid": max(0, process.pid - 1), "limit": 1})
+            await call("processes_stop", {"pid": process.pid, "created": created})
+            await asyncio.wait_for(process.wait(), 5)
+            await call("codex_threads_list")
+            thread = await call("codex_thread_read", {"thread_id": "fixture"})
+            assert thread["messages"][0]["text"] == "fixture message"
+            skills = await call("codex_skills_list", {"cwd": str(tmp_path)})
+            body = await call(
+                "codex_skill_read",
+                {"cwd": str(tmp_path), "skill_id": skills["skills"][0]["skill_id"]},
+            )
+            assert body["skill_directory"] == str(skill.parent.resolve())
+            await call("files_read", {"path": str(skill.parent / "reference.txt")})
+            plugin = await call("codex_plugin_session_open", {"cwd": str(tmp_path)})
+            psid = {"session_id": plugin["session_id"]}
+            selection = {**psid, "cwd": str(tmp_path), "server": "fixture", "tool": "increment"}
+            catalog = await call("codex_plugin_tools", selection)
+            tool = catalog["servers"][0]["tools"][0]
+            for value in (41, 42):
+                result = await call(
+                    "codex_plugin_call", {**selection, "catalog_sha256": tool["catalog_sha256"]}
+                )
+                assert result["content"][0]["text"] == str(value)
+            assert (await call("codex_plugin_session_status", psid))["state"] == "open"
+            assert (await call("codex_plugin_session_close", psid))["cleanup_confirmed"]
+            mcp = tmp_path / "peer.py"
+            mcp.write_text(
+                "from mcp.server.fastmcp import FastMCP\nm=FastMCP('fixture')\nn=40\n"
+                "@m.tool()\ndef increment()->int:\n global n\n n+=1\n return n\n"
+                "m.run(transport='stdio')\n"
+            )
+            direct = await call(
+                "mcp_session_open",
+                {
+                    "command": [sys.executable, "-I", str(mcp)],
+                    "cwd": str(tmp_path),
+                },
+            )
+            dsid = {"session_id": direct["session_id"]}
+            await call("mcp_tools", dsid)
+            for value in (41, 42):
+                result = await call("mcp_call", {**dsid, "name": "increment"})
+                assert result["content"][0]["text"] == str(value)
+            await call("mcp_session_status", dsid)
+            assert (await call("mcp_session_close", dsid))["cleanup_confirmed"]
+            assert (await call("operations_get", {"operation_id": write_id}))[
+                "state"
+            ] == "completed"
+            await call("usage_stats")
+            assert covered == known, {"uncovered": sorted(known - covered)}
+            assert (await call("computer_status"))["active_sessions"] == 0
+    finally:
+        if process is not None and process.returncode is None:
+            process.kill()
+            await process.wait()
+        await adapter.close()
+        authority.close()
+        await engine.close()

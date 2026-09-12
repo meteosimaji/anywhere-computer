@@ -24,6 +24,10 @@ Codexのツールを呼び出せることは、Codex専用の画面操作文脈�
 
 Claude Code・Gemini CLIなどの接続設定と検証範囲は[MCPクライアント接続ガイド](docs/MCP-CLIENTS.md)を参照してください。
 
+開発版alpha7では、独立した既存MCPを使うGUI操作を検証しています。macOSのPeekabooで、
+認証付きHTTPから電卓の連続操作と結果回収を確認しました。導入条件、公開alphaとの違い、
+更新後のツール追加手順は[GUI用MCP接続ガイド](docs/GUI-MCP.md)を参照してください。
+
 ## 入手方法
 
 このリポジトリは[GitHubで公開](https://github.com/meteosimaji/anywhere-computer)しています。ソースは任意のタイミングで取得できます。

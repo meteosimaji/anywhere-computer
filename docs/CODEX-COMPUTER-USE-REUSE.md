@@ -1,5 +1,43 @@
 # Installed Codex Computer Use reuse investigation
 
+## 2026-09-13 differential diagnosis
+
+The owning Codex client's `cua_repl` successfully observed Calculator, entered
+12 + 30, observed 42, then in another call entered + 8 and observed 50. This
+establishes short native action continuity in the owning client, not in the
+Anywhere Computer bridge.
+
+The installed client and desktop-bundled client have identical SHA-256:
+`b759a59f0d35f82eb771c5d7ff6e5139d294e714c2f5313e2f75fe85c99156d6`.
+Both service bundles report CFBundleVersion 1000968. A mismatched copy is not
+supported as the explanation for this comparison.
+
+The shipped Mac JavaScript transport uses `nodeRepl.nativePipe.createConnection`,
+requires the trusted nodeRepl runtime, and can request service startup through
+host services or `nodeRepl.launchServices`. It is not the standalone stdio MCP
+launcher. `SkyComputerUseClient_Parent.coderequirement` declares the signing team
+`2DC432GLL2`, matching the client's observed signing team. This is evidence of a
+parent identity requirement; inspecting this resource does not establish every
+authorization check performed by the native service.
+
+A fresh direct stdio probe initialized and listed ten tools, then its single
+`list_apps` call ended with `DirectMCPOutcomeUnknown`. Cleanup was confirmed.
+Do not report this probe as a newly observed authentication error: the explicit
+sender-authentication rejection below belongs to the earlier probe. No action
+request was sent in this diagnostic.
+
+There are distinct failure layers: Anywhere Computer proactively rejects the
+known unsupported `cua_repl` context; registered `computer-use` is unavailable
+according to the child app-server; and a standalone native MCP client previously
+received a service sender-authentication rejection. Removing the first guard
+does not repair the other layers. No supported external enrollment procedure was
+found in the bounded local help and official-documentation search. This remains
+an unresolved integration dependency, not proof that an external API cannot exist.
+
+The diagnostic classifier now recognizes the exact sender-authentication phrase
+without retaining its free-form message or data. This improves diagnosis only;
+it does not enable GUI operations or change authorization.
+
 Local inspection on 2026-09-12. This is evidence about the installed version, not a
 supported integration contract or redistribution permission.
 

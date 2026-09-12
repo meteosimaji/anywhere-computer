@@ -53,6 +53,16 @@ returned nextCursor as cursor for subsequent mcp_tools pages. Images are bounded
 can be recovered with operations_get. Authentication rejection is not permission to
 invent host metadata or retry through another interface to evade the rejection.
 
+An independently installed GUI MCP can be selected explicitly for GUI work. On macOS,
+Peekaboo's stdio server has been tested with direct MCP sessions, without Codex inference.
+Inspect its schema, keep the same session, and target the requested application explicitly.
+After each input action, observe the actual result. If the UI has not settled, repeat only
+the observation within a short deadline, never blindly repeat input. Peekaboo's agent/analyze
+tools can invoke another model; do not use them for a local-only GUI request.
+capabilities.gui=false refers to the absent built-in GUI backend; an external MCP's
+availability must be checked separately. Existing HTTP connections may need the local
+http-add-tools upgrade before newly introduced direct-MCP tools become discoverable.
+
 Codex Computer Use currently exposes a discoverable MCP catalog, but direct execution
 has returned "Sender process is not authenticated" in local verification. Catalog
 discovery does not establish GUI operation support. Report the actual failure and use
