@@ -116,3 +116,30 @@ with receipt `1a594543aacc42f2bae8d910f7886aeb`.
 This proves shared live routing and preservation of both histories, but does
 not prove restoration of this task's closed tool transport, stable automatic
 updates, GUI operation, or the remaining five-stage acceptance criteria.
+
+## Alpha 5 update with an existing MCP session
+
+The manual-archive migration correction was published in `f1aa686`, with
+clean alpha 5 provenance in `137b785`. Nineteen targeted migration/package
+tests passed; full Ruff and mypy (64 sources) passed. The offline macOS
+portable build's 2,260 file hashes matched after extraction.
+
+A real official-SDK session launched from the installed alpha 4 MCP plugin
+remained open during an explicit idle engine update to alpha 5. Before:
+`161aacb6cbbb4d2e9884e81162c66719` (alpha 4). After, on the same MCP session:
+`f2764b5043f941c4b87482a4d2d59236` (alpha 5). Recovery of the before result
+returned the identical original reply (`ced22aac69ce4b2b8f4ec4b779316d8e`),
+and ping succeeded without reinitialization.
+
+The existing authenticated Chat HTTP entrance, still running alpha 4 gateway
+code at that moment, reached the same alpha 5 engine: status receipt
+`7615e6b008314da0b4919ca143069e6d`, instance
+`4c2600125de749a4b5659856cfa05c00`, runtime
+`c35f7f9830265f3b22981fc39c152c583a2d3962aa01b65544dc120131dc1d72`.
+The native startup registration was subsequently upgraded to alpha 5 and
+started; the supported Codex plugin installer returned alpha 5 as well.
+This proves a compatible engine update can preserve an open MCP session;
+it does not prove recovery of an already-closed Codex task transport or
+completion of stable discovery/automatic application. Bootstrap still needs
+a persistent current-runtime selection so older compatible connectors cannot
+start an older engine when no engine is running.
