@@ -40,6 +40,8 @@ async def test_enabled_catalog_and_selected_read_only(skill_catalog, tmp_path):
     )
     assert selected['text'] == first.read_bytes().decode("utf-8")
     assert selected['sha256'] == hashlib.sha256(first.read_bytes()).hexdigest()
+    assert selected['skill_path'] == str(first.resolve())
+    assert selected['skill_directory'] == str(first.parent.resolve())
     assert 'reference' in selected['instructions']
 
 

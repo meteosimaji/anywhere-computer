@@ -47,4 +47,4 @@ packages = ["src/anywhere_computer"]
 path = "src/anywhere_computer/__init__.py"
 
 [tool.hatch.build.targets.sdist]
-include = ["/src", "/tests", "/plugins", "/scripts", "/pyproject.toml", "/uv.lock", "/README.md", "/LICENSE", "/docs/ARCHITECTURE.md"]
+include = ["/src", "/tests", "/plugins", "/scripts", "/pyproject.toml", "/uv.lock", "/README.md", "/CHANGELOG.md", "/LICENSE", "/docs"]

@@ -20,6 +20,7 @@ from .http_service import http_service, load_http_config
 from .http_supervisor import _stop_child, supervise
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
+from .release_supervisor import automatic_updates_enabled, monitor_release_updates
 from .remote_health import monitor_public_health
 from .runtime_launch import python_module_command
 from .state import prepare_directory
@@ -100,6 +101,10 @@ async def serve_remote(
                 creationflags=flags,
             )
             health_task = asyncio.create_task(monitor_public_health(directory))
+            update_task = (asyncio.create_task(monitor_release_updates(
+                Path(running.config.shared_agent_directory),
+            )) if running.config.shared_agent_directory is not None
+                  and automatic_updates_enabled(directory) else None)
             try:
                 # Polling avoids an uncancellable executor thread blocked in
                 # wait(), which would otherwise delay asyncio.run shutdown.
@@ -115,12 +120,21 @@ async def serve_remote(
                 # Connector shutdown precedes HTTP shutdown. SIGINT/Ctrl+Break
                 # lets the runner clean up its own cloudflared child first.
                 health_task.cancel()
+                if update_task is not None:
+                    update_task.cancel()
                 try:
                     await health_task
                 except asyncio.CancelledError:
                     pass
                 finally:
-                    stop_remote_connector(child)
+                    try:
+                        if update_task is not None:
+                            try:
+                                await update_task
+                            except asyncio.CancelledError:
+                                pass
+                    finally:
+                        stop_remote_connector(child)
 
 
 def record_remote_startup(path: Path, event: WatchEvent, attempt: int | None = None) -> None:

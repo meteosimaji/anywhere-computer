@@ -13,10 +13,13 @@ from typing import TypeVar, cast
 from pydantic import JsonValue
 
 from . import __version__, codex_context, codex_plugins, skills_context
+from .direct_mcp import DirectMCPOutcomeUnknown
+from .direct_mcp_sessions import DirectMCPSessions
 from .document_writer import write_document
 from .documents import read_document
 from .downloads import Downloads
 from .files import Files, absolute_path, inspect_file
+from .mcp_results import normalize_tool_result
 from .models import (
     BeginDownload,
     BeginUpload,
@@ -27,6 +30,9 @@ from .models import (
     CodexThreadPage,
     CodexThreadRead,
     Contract,
+    DirectMCPCall,
+    DirectMCPSessionId,
+    DirectMCPTools,
     DownloadRange,
     EditFile,
     Empty,
@@ -35,6 +41,7 @@ from .models import (
     ListDirectory,
     ListProcesses,
     MoveFile,
+    OpenDirectMCPSession,
     OpenPluginSession,
     OpenWorkspace,
     OperationId,
@@ -99,6 +106,7 @@ class Engine:
         self.downloads = Downloads(directory)
         self.sessions = Sessions()
         self.plugin_sessions = PluginSessions()
+        self.direct_mcp_sessions = DirectMCPSessions()
         # Transport-owned identity, inherited by the durable execution task only.
         # Tool arguments cannot set this value; None is the local execution scope.
         self._plugin_owner: ContextVar[str | None] = ContextVar("plugin_owner", default=None)
@@ -132,6 +140,61 @@ class Engine:
         )
 
     def _register_tools(self) -> None:
+        async def direct_open(args: OpenDirectMCPSession) -> Result:
+            return await self.direct_mcp_sessions.open(
+                args.command, Path(args.cwd), owner=self._plugin_owner.get(),
+                idle_timeout=args.idle_timeout,
+            )
+
+        async def direct_status(args: DirectMCPSessionId) -> Result:
+            return self.direct_mcp_sessions.status(args.session_id, owner=self._plugin_owner.get())
+
+        async def direct_close(args: DirectMCPSessionId) -> Result:
+            return await self.direct_mcp_sessions.stop(
+                args.session_id, owner=self._plugin_owner.get(),
+            )
+
+        async def direct_tools(args: DirectMCPTools) -> Result:
+            return await self.direct_mcp_sessions.tools(
+                args.session_id, owner=self._plugin_owner.get(), cursor=args.cursor,
+            )
+
+        async def direct_call(args: DirectMCPCall) -> Result:
+            result = await self.direct_mcp_sessions.call(
+                args.session_id, args.name, args.arguments, owner=self._plugin_owner.get(),
+            )
+            try:
+                # Same bounded content contract as the optional Codex bridge;
+                # this pure conversion does not start or contact Codex.
+                return normalize_tool_result(result)
+            except ValueError:
+                raise DirectMCPOutcomeUnknown(
+                    'Direct MCP returned invalid content after execution; inspect the target '
+                    'before another call',
+                ) from None
+
+        self.register(
+            'mcp_session_open', 'Start an installed stdio MCP server directly, without Codex. '
+            'Requires the optional MCP runtime, absolute executable argv and absolute cwd. '
+            'The server runs with local user access. Do not put secrets in argv. '
+            'Returns an owner-scoped session ID; close it when finished. Maximum 4 sessions. '
+            'Idle timeout 30-1800 seconds, default 300; active calls are not expired.',
+            OpenDirectMCPSession, direct_open, destructive=True, open_world=True,
+        )
+        self.register('mcp_session_status', 'Inspect your direct MCP session state.',
+                      DirectMCPSessionId, direct_status, read_only=True)
+        self.register('mcp_session_close', 'Close your direct MCP session and its server process.',
+                      DirectMCPSessionId, direct_close, destructive=True)
+        self.register('mcp_tools', 'Read direct MCP tool names and argument schemas. '
+                      'Pass a returned nextCursor as cursor to fetch the next page.',
+                      DirectMCPTools, direct_tools, open_world=True)
+        self.register(
+            'mcp_call', 'Call a tool from mcp_tools in your direct MCP session. May change local '
+            'files or external services. Recover a lost response using the original operation ID; '
+            'never blindly repeat a call. Returns MCP content as structured data.',
+            DirectMCPCall, direct_call, destructive=True, open_world=True,
+        )
+
         async def codex_plugin_tools(args: CodexPluginPage) -> Result:
             if args.session_id is not None:
                 return await self.plugin_sessions.inspect(
@@ -248,7 +311,7 @@ class Engine:
         )
         self.register(
             "codex_skill_read", "Use when the user wants to use a skill selected from "
-            "codex_skills_list. Reads that SKILL.md as reference instructions only. "
+            "codex_skills_list. Returns SKILL.md and its directory for resolving supporting files. "
             "Does not execute scripts or grant access to otherwise unavailable tools.",
             CodexSkillRead, codex_skill_read, read_only=True,
         )
@@ -744,8 +807,10 @@ class Engine:
             not entry.cleanup_confirmed for entry in self.plugin_sessions.entries.values()
         )
         searches = sum(entry.state == "running" for entry in self.searches.searches.values())
+        direct_mcp = self.direct_mcp_sessions.active_count
         resources: dict[str, JsonValue] = {
             "terminal_sessions": terminals, "plugin_sessions": plugins,
+            "direct_mcp_sessions": direct_mcp,
             "searches": searches, "operations": operations,
         }
         return {
@@ -756,10 +821,10 @@ class Engine:
             "runtime_id": self.runtime_id,
             "uptime_seconds": time.monotonic() - self.started,
             "platform": platform.system(),
-            "active_sessions": terminals + plugins,
+            "active_sessions": terminals + plugins + direct_mcp,
             "active_operations": operations,
             "active_resources": resources,
-            "update_blocked": bool(terminals or plugins or searches or operations),
+            "update_blocked": bool(terminals or plugins or direct_mcp or searches or operations),
             "update_blockers": [name for name, count in resources.items() if count],
             "tools": len(self.tools),
             "transport": "authenticated-loopback",
@@ -816,6 +881,15 @@ class Engine:
                         "details": error.details,
                     },
                 )
+            except DirectMCPOutcomeUnknown as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state='unknown', error=str(error),
+                    data={'error_code': 'direct_mcp_outcome_unknown', 'dispatched': None,
+                          'failure_kind': error.failure_kind,
+                          'execution_state': 'unknown',
+                          'next_action': 'Recover this operation with operations_get and inspect '
+                                         'the target before making another call'},
+                )
             except UploadOutcomeUnknown as error:
                 reply = Reply(operation_id=request.operation_id, state="unknown", error=str(error))
             except Exception as error:
@@ -849,6 +923,7 @@ class Engine:
         if self.inflight:
             await asyncio.gather(*list(self.inflight.values()), return_exceptions=True)
         await self.plugin_sessions.close()
+        await self.direct_mcp_sessions.close()
         await self.searches.close()
         await self.sessions.close()
         self.ledger.close()

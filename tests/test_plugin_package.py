@@ -21,6 +21,8 @@ def test_packaged_runtime_matches_current_source_and_checksums():
     ]
     assert config["command"] == "uv" and config["cwd"] == "."
     checksums = json.loads((plugin / "bundled/checksums.json").read_text(encoding="utf-8"))
+    dependencies = (plugin / "bundled/dependencies.txt").read_text(encoding="utf-8")
+    assert re.search(r'^mcp==1\.30\.0\s', dependencies, re.MULTILINE)
     release = json.loads((plugin / "bundled/release.json").read_text(encoding="utf-8"))
     assert release["artifacts_sha256"] == checksums
     assert release["python_version"] == __version__

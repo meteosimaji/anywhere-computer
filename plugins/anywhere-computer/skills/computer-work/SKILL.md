@@ -21,7 +21,11 @@ does not execute its scripts or make its plugin's tools available. Check the act
 catalog before using specialized capabilities; never invent a tool or reuse private
 client credentials. Codex context tools require a locally installed native Codex executable.
 
-To use an installed MCP plugin, call codex_plugin_tools with the workspace's absolute cwd.
+To reuse Codex's registered MCP servers (both direct registrations and plugin-provided
+servers), start with codex_plugin_tools, summary=true and the workspace's absolute cwd.
+Use query to narrow discovery, then request the exact server/tool. Do not load every
+tool description when a small selection is sufficient. Enabled configuration is not
+proof of a connected server: inspect runtime_status and availability.
 Select its exact server/tool and use the returned input schema to build arguments. Pass its
 catalog_sha256 and the same cwd to codex_plugin_call. These calls use an ephemeral tool
 context without a Codex model turn. Do not call this bridge recursively or assume native
@@ -30,6 +34,29 @@ The underlying action still needs the user's authorization. Authentication and e
 must be completed through the appropriate local client; the bridge never approves them.
 After unknown execution, retain the operation ID and inspect operations_get; do not retry
 with a new ID. A read-only HTTP grant does not include this execution bridge.
+
+When multiple calls need shared state, open codex_plugin_session_open first, and pass
+its session_id and the same cwd to codex_plugin_tools and codex_plugin_call. Use
+codex_plugin_session_status for lifetime state and close the session when finished.
+Sessions survive client disconnects, not engine restarts. A closed session is not
+silently replaced. For example, a registered node_repl needs the same session to retain
+JavaScript variables across calls.
+
+For an explicitly selected standalone stdio MCP executable, the development runtime
+also exposes mcp_session_open, mcp_tools, mcp_call, mcp_session_status and
+mcp_session_close. Check the actual catalog before using them; older installed alpha
+versions do not contain these tools. Supply an absolute executable argv and cwd, never
+secrets in argv. No installation occurs as part of opening a session. Prefer existing
+Codex registration discovery when the user asks to use a Codex MCP or plugin.
+Direct sessions default to 300 seconds idle time; active calls are protected. Use the
+returned nextCursor as cursor for subsequent mcp_tools pages. Images are bounded and
+can be recovered with operations_get. Authentication rejection is not permission to
+invent host metadata or retry through another interface to evade the rejection.
+
+Codex Computer Use currently exposes a discoverable MCP catalog, but direct execution
+has returned "Sender process is not authenticated" in local verification. Catalog
+discovery does not establish GUI operation support. Report the actual failure and use
+the owning client's supported authentication flow; do not claim Computer Use is ready.
 
 Use paginated reads and searches. search_start supports filename_glob,
 excluded_directories, whole_word, max_files and max_depth. Inspect truncated,
@@ -102,3 +129,11 @@ provider revocation and DNS are separate. These commands do not provision a publ
 or managed internet relay. http-doctor probes only configured loopback metadata;
 metadata_reachable does not prove authenticated readiness or public HTTPS reachability. GUI interaction and OCR are not implemented. Explain
 those limits when they affect the requested task.
+
+
+Resolve a selected skill's relative references, scripts, and assets against the
+`skill_directory` returned by `codex_skill_read`. Use the existing file tools to
+inspect supporting files and terminal tools to run a script when the user's task
+calls for it. Reading a skill does not install its dependencies or provide missing
+Work/Codex-only tools. Keep model generation separate from local tool execution;
+do not promise account quota behavior merely because a skill can be read.

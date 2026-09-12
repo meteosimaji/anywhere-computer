@@ -55,6 +55,9 @@ def main() -> None:
         "command",
         choices=[
             "start",
+            "update",
+            "auto-update-enable",
+            "auto-update-disable",
             "serve",
             "mcp",
             "status",
@@ -102,6 +105,8 @@ def main() -> None:
         ],
     )
     parser.add_argument("--state-dir", type=Path, default=None)
+    parser.add_argument("--verifier", type=Path,
+                        help="Absolute path to GitHub CLI for release attestation (update only)")
     parser.add_argument("--http-state-dir", type=Path,
                         help="Existing HTTP state directory for offline engine-unify")
     parser.add_argument("--connector", help="Absolute path to the optional tunnel executable")
@@ -132,6 +137,11 @@ def main() -> None:
     parser.add_argument("--startup-id", help=argparse.SUPPRESS)
     parser.add_argument("--codex-executable", help="Pinned Codex CLI for remote services")
     args = parser.parse_args()
+    if args.command == 'update':
+        if args.verifier is None or not args.verifier.is_absolute():
+            parser.error('update requires an absolute --verifier path')
+    elif args.verifier is not None:
+        parser.error('--verifier is only valid for update')
     if args.command == "engine-unify":
         if args.http_state_dir is None or not args.http_state_dir.is_absolute():
             parser.error("engine-unify requires an absolute --http-state-dir")
@@ -460,6 +470,17 @@ def main() -> None:
             asyncio.run(serve(directory))
         elif args.command == "start":
             print(json.dumps(ensure_agent(directory, replace_idle=True), indent=2))
+        elif args.command in {"auto-update-enable", "auto-update-disable"}:
+            from .release_supervisor import configure_automatic_updates
+
+            print(json.dumps(configure_automatic_updates(
+                directory, enabled=args.command == "auto-update-enable",
+            ), indent=2))
+        elif args.command == "update":
+            from .release_update import update_once
+
+            assert args.verifier is not None  # Required by command validation above.
+            print(json.dumps(update_once(directory, verifier=args.verifier), indent=2))
         elif args.command == "doctor":
             diagnosis = asyncio.run(diagnose(directory))
             print(json.dumps(diagnosis, ensure_ascii=False, indent=2))

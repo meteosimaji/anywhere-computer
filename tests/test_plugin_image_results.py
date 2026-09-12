@@ -159,25 +159,26 @@ def test_image_count_is_bounded():
 
 
 def test_image_byte_budget_is_shared(monkeypatch):
-    from anywhere_computer import codex_plugins
+    from anywhere_computer import mcp_results
 
     size = len(base64.b64decode(PNG))
-    monkeypatch.setattr(codex_plugins, "IMAGE_LIMIT", size * 2)
+    monkeypatch.setattr(mcp_results, "IMAGE_LIMIT", size * 2)
     result = _tool_result({"content": [image(), image(), image()]})
     assert result["content"] == [image(), image()]
     assert result["omitted_image_items"] == 1
 
 
 def test_oversized_image_does_not_hide_subsequent_text(monkeypatch):
-    from anywhere_computer import codex_plugins
+    from anywhere_computer import mcp_results
 
-    monkeypatch.setattr(codex_plugins, "IMAGE_LIMIT", 1)
+    monkeypatch.setattr(mcp_results, "IMAGE_LIMIT", 1)
     result = _tool_result({"content": [image(), {"type": "text", "text": "done"}]})
     assert result["content"] == [{"type": "text", "text": "done"}]
     assert result["omitted_image_items"] == 1
 
 
-def test_native_image_result_matches_official_sdk_schema():
+@pytest.mark.parametrize('name', ['codex_plugin_call', 'mcp_call'])
+def test_native_image_result_matches_official_sdk_schema(name):
     from mcp.types import CallToolResult, ImageContent
 
     from anywhere_computer.mcp_server import _reply_result
@@ -185,7 +186,7 @@ def test_native_image_result_matches_official_sdk_schema():
     reply = Reply(operation_id="b" * 32, state="completed", data=_tool_result({
         "content": [image()],
     }))
-    result = CallToolResult.model_validate(_reply_result("codex_plugin_call", reply))
+    result = CallToolResult.model_validate(_reply_result(name, reply))
     assert isinstance(result.content[1], ImageContent)
     summary = result.structuredContent["data"]["content"][0]
     assert summary["bytes"] == len(base64.b64decode(PNG))
