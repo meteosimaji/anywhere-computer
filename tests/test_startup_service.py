@@ -327,3 +327,28 @@ def test_upgrade_failure_restores_verified_prior_registration(registration, monk
         service.upgrade_startup(directory)
     assert service._record(directory) == old
     assert service.startup_status(directory)['native_running'] is True
+
+
+def test_uninstall_waits_for_matching_native_job_to_disappear(registration, monkeypatch):
+    directory, native, calls, _ = registration
+    service.install_startup(directory)
+    queries = 0
+    removing = False
+
+    def uninstall(self, snapshot):
+        nonlocal removing
+        calls.append('uninstall')
+        removing = True
+
+    def query(self):
+        nonlocal queries
+        if removing:
+            queries += 1
+            if queries >= 3:
+                native['snapshot'] = StartupSnapshot(False)
+        return native['snapshot']
+
+    monkeypatch.setattr(service.NativeStartup, 'uninstall', uninstall)
+    monkeypatch.setattr(service.NativeStartup, 'query', query)
+    assert service.uninstall_startup(directory)['state'] == 'uninstalled'
+    assert calls.count('uninstall') == 1

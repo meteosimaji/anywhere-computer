@@ -273,6 +273,16 @@ def _uninstall_startup_locked(directory: Path) -> dict[str, str | bool]:
         backend.uninstall(snapshot)
     after = backend.query()
     _check_snapshot(record, after)
+    # Native removal may acknowledge before the owned job disappears. Observe
+    # completion without issuing another removal or accepting a replacement job.
+    deadline = time.monotonic() + 5
+    while (after.running or after.enabled or
+           (after.present and definition.platform != "linux")):
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(0.05)
+        after = backend.query()
+        _check_snapshot(record, after)
     if after.running or after.enabled or (after.present and definition.platform != "linux"):
         raise RuntimeError("OS startup removal was not confirmed; receipt preserved")
     _wait_stopped(directory)
