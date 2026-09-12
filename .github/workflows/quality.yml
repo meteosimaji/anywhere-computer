@@ -4,6 +4,10 @@ permissions:
   contents: read
 jobs:
   shared-runtime:
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -49,6 +53,23 @@ jobs:
                       (destination / member.filename).chmod((member.external_attr >> 16) & 0o777)
           PY
           uv run python scripts/verify_portable.py 'dist/relocation 日本語/Anywhere Computer' --runtime-only
+      - name: Attest the verified portable archive
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/portable-${{ matrix.os }}.zip
+          create-storage-record: false
+      - name: Verify portable provenance identity
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh attestation verify dist/portable-${{ matrix.os }}.zip
+          --repo meteosimaji/anywhere-computer
+          --signer-workflow meteosimaji/anywhere-computer/.github/workflows/quality.yml
+          --source-digest ${{ github.sha }}
+          --source-ref refs/heads/main
+          --deny-self-hosted-runners
       - uses: actions/upload-artifact@v4
         with:
           name: portable-${{ matrix.os }}
