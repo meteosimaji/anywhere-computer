@@ -27,7 +27,7 @@ async def test_shared_state_keeps_operations_backups_and_transfer_chunks(tmp_pat
         engine = Engine(source)
         target = tmp_path / f'file-{index}.txt'
         original = f'original {index}🙂'
-        target.write_text(original)
+        target.write_text(original, encoding='utf-8')
         digest = hashlib.sha256(original.encode()).hexdigest()
         try:
             record = await execute(engine, str(index + 1), 'files_write',
@@ -66,7 +66,7 @@ async def test_shared_state_keeps_operations_backups_and_transfer_chunks(tmp_pat
                     'expected_sha256': record.data['sha256'],
                 }))
             assert restored['restored_backup_id'] == record.data['backup_id']
-            assert target.read_text() == original
+            assert target.read_text(encoding='utf-8') == original
             # Download still serves its prepared copy, although the source was restored.
             data = await merged.tools['download_read'].handler(
                 merged.tools['download_read'].schema.model_validate({
