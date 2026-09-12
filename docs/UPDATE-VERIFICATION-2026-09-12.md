@@ -143,3 +143,29 @@ it does not prove recovery of an already-closed Codex task transport or
 completion of stable discovery/automatic application. Bootstrap still needs
 a persistent current-runtime selection so older compatible connectors cannot
 start an older engine when no engine is running.
+
+## Alpha 6 selected-runtime deployment
+
+Runtime selection and interrupted-update recovery were published in
+`e188e72`, with clean alpha 6 provenance in `117e9c2`. Forty-three targeted
+connection/selection/HTTP/package tests passed, as did Ruff and mypy for
+65 source files. The macOS portable archive was built offline, and all
+2,261 manifest file hashes matched after extraction.
+
+The idle shared live engine was explicitly updated to alpha 6; its selected
+interpreter was persisted under the existing control directory. The pending
+update marker was absent after completion. Native startup was upgraded and
+started with the same portable installation; the supported Codex plugin
+installer returned `0.1.0-alpha.6`.
+
+Existing authenticated Chat HTTP status `aa7e04ca62444c068277cdb603e1f84c`
+returned alpha 6, instance `81b2668883ce4258846f6687130fce72`, runtime
+`b0e1cd9e801eae911036954fe7dbe2f5c96f286bc3f73e4209ce455166d91bfe`.
+The prior alpha 5 operation `e72f17d7a9d546bc9187d888842d2f4b` remained
+recoverable (`7eccb509ea29421bb9245c17b54c681c`). No reauthorization was
+performed. A prior isolated real-process test verified restarting from the
+saved interpreter and resuming a pending update; this deployment did not
+reboot the operating system. Older connectors that predate runtime selection
+still require an initial upgrade. Stable release discovery and automatic
+application remain unfinished; alpha 6 is not being represented as a
+CI-verified stable release.
