@@ -102,7 +102,7 @@ async def test_interrupted_config_publication_is_recoverable_by_same_upgrade(
     replace = http_tool_upgrade.os.replace
 
     def fail_publication(source, destination):
-        if str(destination).endswith("http-server/config.json"):
+        if destination == tmp_path / "http-server" / "config.json":
             raise OSError("synthetic failure")
         return replace(source, destination)
 
