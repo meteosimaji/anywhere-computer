@@ -13,7 +13,7 @@ from .http_service import HTTPServiceConfig, load_http_config
 from .locking import ProcessLock
 from .models import Contract
 from .state import prepare_directory
-from .state_migration import DATABASES, _stage_shared_engine_locked
+from .state_migration import DATABASES, _stage_shared_engine_locked, backup_entries
 
 PENDING = 'engine-migration.pending.json'
 
@@ -74,10 +74,7 @@ def _digest(*directories: Path) -> str:
     for directory in directories:
         names = {relative + suffix for relative in DATABASES for suffix in ('', '-wal')}
         backups = directory / 'backups'
-        if backups.is_symlink():
-            raise ValueError('Migration backup directory must not be a symbolic link')
-        if backups.exists():
-            names.update('backups/' + path.name for path in backups.iterdir())
+        names.update('backups/' + path.name for path in backup_entries(backups))
         digest.update(str(directory).encode() + b'\0')
         for name in sorted(names):
             path = directory / name

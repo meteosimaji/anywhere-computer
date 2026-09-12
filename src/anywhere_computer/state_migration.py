@@ -78,15 +78,26 @@ def _merge_database(source: Path, target: Path, tables: tuple[str, ...]) -> None
                         writer.execute(f'INSERT INTO {table} VALUES ({placeholders})', row)
 
 
-def _copy_backups(source: Path, target: Path) -> None:
-    if not source.exists():
-        return
+def backup_entries(source: Path) -> list[Path]:
+    """Select the content-addressed store, leaving manual archives in the source."""
     if source.is_symlink():
         raise ValueError('Backup directory must not be a symbolic link')
-    prepare_directory(target)
+    if not source.exists():
+        return []
+    entries = []
     for path in source.iterdir():
-        if path.is_symlink() or not path.is_file() or not re.fullmatch('[a-f0-9]{64}', path.name):
+        if not re.fullmatch('[a-f0-9]{64}', path.name):
+            continue
+        if path.is_symlink() or not path.is_file():
             raise ValueError('Unexpected backup entry; source preserved')
+        entries.append(path)
+    return entries
+
+
+def _copy_backups(source: Path, target: Path) -> None:
+    entries = backup_entries(source)
+    prepare_directory(target)
+    for path in entries:
         with path.open('rb') as stream:
             if hashlib.file_digest(stream, 'sha256').hexdigest() != path.name:
                 raise ValueError('Backup failed integrity validation')

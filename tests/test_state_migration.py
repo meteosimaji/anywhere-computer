@@ -158,3 +158,27 @@ async def test_invalid_source_never_publishes_shared_state(tmp_path, damage):
         stage_shared_engine(local, http, tmp_path / 'combined')
     assert not (tmp_path / 'combined').exists()
     assert (local / 'operations.sqlite3').read_bytes() == before
+
+
+async def test_manual_archives_stay_in_source_while_owned_backups_migrate(tmp_path):
+    from anywhere_computer.engine_migration import _digest
+
+    local, http = tmp_path / 'local', tmp_path / 'http'
+    for source in (local, http / 'http-server/engine'):
+        engine = Engine(source)
+        await engine.close()
+    archive = local / 'backups/pre-upgrade'
+    archive.mkdir()
+    preserved = archive / 'manual.txt'
+    preserved.write_bytes(b'manual archive')
+    content = b'owned backup'
+    name = hashlib.sha256(content).hexdigest()
+    (local / 'backups' / name).write_bytes(content)
+    before = _digest(local)
+    preserved.write_bytes(b'manual archive retained')
+    assert _digest(local) == before
+    destination = tmp_path / 'combined'
+    stage_shared_engine(local, http, destination)
+    assert (destination / 'backups' / name).read_bytes() == content
+    assert not (destination / 'backups/pre-upgrade').exists()
+    assert preserved.read_bytes() == b'manual archive retained'

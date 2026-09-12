@@ -80,3 +80,39 @@ live installation yet: old connectors must be retired before migration,
 because their old code does not recognize the new state selection. The HTTP
 and local engines remain separate at this checkpoint. Stable automatic
 updates and live shared-engine acceptance remain unfinished.
+
+## Shared-engine live migration follow-up
+
+The old alpha 3 Codex MCP connector processes were terminated, leaving the
+engine and stored results intact. This task's already-bound tool transport
+then returned `Transport closed`; automatic reconnection in the same task
+was not observed.
+
+The first offline migration refused an unrelated manual archive directory
+`backups/pre-main-integrated-20260910`. Selection was not published; services
+were restarted and authenticated HTTP readiness was confirmed. The local
+migration code now selects SHA-256 backup names only, leaving unrelated
+manual archives in their original location. Owned backup entries still reject
+symlinks, non-files and content/hash mismatches. The regression first failed
+on the original code; after correction, 18 migration tests and the package
+consistency test passed. Targeted Ruff and mypy passed. This correction has
+not yet been published or installed as a new runtime release.
+
+Using the corrected local migration command with both services stopped,
+shared selection completed. The existing installed alpha 4 runtime then
+started against that selected store, and the native HTTP service was restored.
+No credentials or original databases were replaced with older copies.
+
+Existing authenticated Chat HTTP status receipt
+`d921d103051a4178841725a08e7a6283` and a fresh MCP subprocess launched from
+the installed alpha 4 plugin configuration (receipt
+`411c3ad2d8854b5fa3a88564505a5f21`) both returned instance
+`9b00b5fbc11c483c8551e08e5f4fe30c` and runtime
+`ce52717d83912225025bcebfb03f661f8cd0656bf06367654b7a48ef2d1b17e6`.
+The HTTP alpha 2 write was recovered with receipt
+`53eecea5794f463bb58ae2f2f4f1447e`; the local alpha 3 status operation
+`59ed6e98c3b24d5bb706a730fae500cb` was recovered via the fresh MCP subprocess
+with receipt `1a594543aacc42f2bae8d910f7886aeb`.
+This proves shared live routing and preservation of both histories, but does
+not prove restoration of this task's closed tool transport, stable automatic
+updates, GUI operation, or the remaining five-stage acceptance criteria.
