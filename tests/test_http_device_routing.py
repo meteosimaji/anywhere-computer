@@ -35,56 +35,58 @@ async def test_chat_http_routes_and_recovers_without_cross_grant_access(
     stopped = asyncio.Event()
     service = None
     local_instance = local.instance_id
-    if shared:
-        monkeypatch.setattr("anywhere_computer.connection.local_credential",
-                            lambda *a, **kw: "routing-fixture-credential")
-        service = asyncio.create_task(serve(
-            shared_directory, credential="routing-fixture-credential", shutdown=stopped,
-        ))
-        async with asyncio.timeout(5):
-            while not (shared_directory / "agent.json").exists():
-                if service.done():
-                    await service
-                await asyncio.sleep(0.01)
-        local_instance = (await exchange(shared_directory, "__status")).data["instance_id"]
-    registry = tmp_path / "devices"
-    devices = DeviceStore(registry)
-    remote_id = devices.add_http(
-        "Windows fixture", target.tokens.resource, target.tokens.client, "vm",
-    )["device_id"]
-    devices.close()
-    monkeypatch.setattr(DeviceRouter, "_backend", lambda self, device: HTTPBackend(
-        target.tokens, wire=target.wire,
-    ))
-    permissions = ROUTER_TOOLS | {"computer_status", "operations_get"}
-    authority = AuthorizationStore(
-        tmp_path / "gateway-auth", resource="https://gateway.example/mcp",
-        known_tools=frozenset(local.tools) | ROUTER_TOOLS,
-    )
-    redirect = "https://chat.example/callback"
-    authority.register_client("chat", frozenset({redirect}))
-    authority.enroll_device("owner", "gateway", permissions)
-
-    def token(tools):
-        code = authority.approve(
-            owner="owner", device="gateway", client="chat", redirect=redirect,
-            resource=authority.resource, tools=frozenset(tools), challenge=pkce_s256("v" * 43),
-        )
-        return authority.exchange_code(
-            code=code, verifier="v" * 43, client="chat", redirect=redirect,
-            resource=authority.resource,
-        ).value
-
-    first, second = token(permissions), token(permissions)
-    restricted = token({"computer_status"})
-    backend = AuthorizedDeviceMCP(
-        authority, None if shared else local, owner="owner", device="gateway", client="chat",
-        agent_directory=shared_directory if shared else None,
-        device_directory=registry,
-    )
-    adapter = HTTPMCP(backend.authenticate, backend.session)
-    port = await adapter.start()
+    authority = None
+    adapter = None
     try:
+        if shared:
+            monkeypatch.setattr("anywhere_computer.connection.local_credential",
+                                lambda *a, **kw: "routing-fixture-credential")
+            service = asyncio.create_task(serve(
+                shared_directory, credential="routing-fixture-credential", shutdown=stopped,
+            ))
+            async with asyncio.timeout(5):
+                while not (shared_directory / "agent.json").exists():
+                    if service.done():
+                        await service
+                    await asyncio.sleep(0.01)
+            local_instance = (await exchange(shared_directory, "__status")).data["instance_id"]
+        registry = tmp_path / "devices"
+        devices = DeviceStore(registry)
+        remote_id = devices.add_http(
+            "Windows fixture", target.tokens.resource, target.tokens.client, "vm",
+        )["device_id"]
+        devices.close()
+        monkeypatch.setattr(DeviceRouter, "_backend", lambda self, device: HTTPBackend(
+            target.tokens, wire=target.wire,
+        ))
+        permissions = ROUTER_TOOLS | {"computer_status", "operations_get"}
+        authority = AuthorizationStore(
+            tmp_path / "gateway-auth", resource="https://gateway.example/mcp",
+            known_tools=frozenset(local.tools) | ROUTER_TOOLS,
+        )
+        redirect = "https://chat.example/callback"
+        authority.register_client("chat", frozenset({redirect}))
+        authority.enroll_device("owner", "gateway", permissions)
+
+        def token(tools):
+            code = authority.approve(
+                owner="owner", device="gateway", client="chat", redirect=redirect,
+                resource=authority.resource, tools=frozenset(tools), challenge=pkce_s256("v" * 43),
+            )
+            return authority.exchange_code(
+                code=code, verifier="v" * 43, client="chat", redirect=redirect,
+                resource=authority.resource,
+            ).value
+
+        first, second = token(permissions), token(permissions)
+        restricted = token({"computer_status"})
+        backend = AuthorizedDeviceMCP(
+            authority, None if shared else local, owner="owner", device="gateway", client="chat",
+            agent_directory=shared_directory if shared else None,
+            device_directory=registry,
+        )
+        adapter = HTTPMCP(backend.authenticate, backend.session)
+        port = await adapter.start()
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=15) as http:
             headers = await initialize(http, first)
 
@@ -179,9 +181,30 @@ async def test_chat_http_routes_and_recovers_without_cross_grant_access(
             })
             assert denied.json()["error"]["code"] == -32602
     finally:
-        await adapter.close()
-        authority.close()
-        await local.close()
-        if service is not None:
-            stopped.set()
-            await asyncio.wait_for(service, 10)
+        try:
+            if adapter is not None:
+                await adapter.close()
+        finally:
+            if authority is not None:
+                authority.close()
+            try:
+                await local.close()
+            finally:
+                if service is not None:
+                    stopped.set()
+                    await asyncio.wait_for(service, 10)
+
+
+async def test_shared_startup_timeout_stops_service(tmp_path, monkeypatch, http_remote):
+    cleaned = asyncio.Event()
+
+    async def unpublished_service(directory, *, credential, shutdown):
+        await shutdown.wait()
+        cleaned.set()
+
+    monkeypatch.setattr(__name__ + ".serve", unpublished_service)
+    with pytest.raises(TimeoutError):
+        await test_chat_http_routes_and_recovers_without_cross_grant_access(
+            tmp_path, monkeypatch, http_remote, True,
+        )
+    assert cleaned.is_set()

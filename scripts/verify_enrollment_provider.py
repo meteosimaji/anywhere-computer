@@ -151,6 +151,13 @@ def verify(issuer, certificate, *, check_expiry=False):
                 assert bool(vault.values) == (outcome == "approve")
                 assert client.poll() == result and calls == ["device", "token"]
                 if outcome == "approve":
+                    reopened = EnrollmentCredentials(
+                        Path(directory), issuer=issuer, client=provider.client_id,
+                        profile=outcome, vault=vault,
+                    )
+                    assert reopened.access_token(
+                        attempt_id=initial.attempt_id, scope=provider.scope,
+                    )
                     replay = https_enrollment_form(provider.token_endpoint, {
                         "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                         "client_id": provider.client_id, "device_code": codes[0],
@@ -177,7 +184,7 @@ def verify(issuer, certificate, *, check_expiry=False):
                          "passed": True})
     return {"provider": "Keycloak", "fixture_only": True, "issuer": issuer,
             "rendered_browser_test": False, "native_vault_test": False,
-            "used_code_rejected": True, "cases": receipts}
+            "saved_grant_reopened": True, "used_code_rejected": True, "cases": receipts}
 
 
 def main():
