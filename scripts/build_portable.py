@@ -45,7 +45,7 @@ def write_setup_launcher(app: Path, *, windows: bool) -> None:
     if windows:
         (app / "Setup ChatGPT.cmd").write_text(
             '@echo off\nsetlocal DisableDelayedExpansion\n'
-            '"%~dp0runtime\\python.exe" -I "%~dp0setup_chatgpt.py" %*\n',
+            '"%~dp0runtime\\python.exe" -I -X utf8 "%~dp0setup_chatgpt.py" %*\n',
             encoding="utf-8",
         )
     else:
@@ -112,7 +112,7 @@ def build_portable(
                         "-r", str(requirements)], check=True)
         if os.name == "nt":
             (app / "anywhere.cmd").write_text(
-                '@echo off\r\n"%~dp0runtime\\python.exe" -I -m anywhere_computer %*\r\n')
+                '@echo off\r\n"%~dp0runtime\\python.exe" -I -X utf8 -m anywhere_computer %*\r\n')
         else:
             launcher = app / "anywhere"
             launcher.write_text('#!/bin/sh\n'

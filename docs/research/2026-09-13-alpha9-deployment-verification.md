@@ -25,6 +25,37 @@ CI のコマンド表示には両分岐が含まれるため、判定には実�
 Windows GUI、HVCI、ゲームの動作を証明しない。過去の試験とは件数が異なるため、
 今回の所要時間を同一条件の速度比較として扱わない。
 
+### Windows ARM64 VM での追加確認
+
+同日、上記配布 ZIP を Windows ARM64 VM に転送し、転送前後の SHA-256
+`ed55c0fe3de88cf593a062619a763723552ae308ac7b5f7c7835e6a6eb447642`
+の一致を確認した。配布 Python は x64 版であり、ARM64 ネイティブ Python の試験ではない。
+
+Windows 側の担当が対話ログオン環境で実行した `verify_portable.py --worker` の
+結果ファイルを Mac 側から SSH で独立して読み戻した。終了コードは 0、
+`agent_started`、`files_roundtrip`、`regex_child`、`terminal_reconnected`、
+`busy_stop_refused`、`agent_exited`、`fixture_credential_removed` はすべて true だった。
+これは配布物の非 GUI エージェント試験であり、ChatGPT から Windows への通し試験や
+インストール済み Windows Codex Plugin の受け入れ完了ではない。
+
+OpenSSH ログオンでの同じ worker は Credential Manager の `CredRead` が
+WinError 1312 となった。一方、対話ログオンでの worker は成功した。
+`connection.exchange()` は既存エージェントへ接続する前にも
+`local_credential()` を呼ぶため、対話側エージェントを起動するだけで
+SSH 側の資格情報読み取り問題が解消するとは扱えない。
+既存 HTTP クライアントも証明書検証付き HTTPS と OAuth が前提であり、
+単なる HTTP の SSH トンネルへの置き換えは未対応。Windows の Plugin 登録と
+認証を維持した複数端末経路の検証は継続中である。
+
+同じ VM の検証用配布 Python で `-I -m anywhere_computer --help` を実行すると、
+日本語 Windows の出力エンコーディングによる `UnicodeEncodeError` で終了コード 1
+となった。`-I -X utf8 -m anywhere_computer --help` は終了コード 0。
+この比較は SSH から同じ実行ファイルを起動して確認した。
+配布生成スクリプトの Windows 用 `anywhere.cmd` と `Setup ChatGPT.cmd` に
+`-X utf8` を追加した。`-I` は Python の環境変数を無視するため、環境変数でなく
+起動引数で指定する。既存 ZIP の更新・Windows インストール済み Plugin の反映を
+このソース修正だけで完了とは扱わない。
+
 ## インストール済み Codex Plugin
 
 インストール済み `0.1.0-alpha.9` の `.mcp.json` にある引数と作業ディレクトリで
