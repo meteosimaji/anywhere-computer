@@ -2,7 +2,7 @@
 
 ## 現在の配布状況
 
-2026-09-12時点でリポジトリは公開されていますが、正式stableの実行用ZIPは未公開です。
+[公開alpha9](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0a9)でOS別の実行用ZIPを配布します。正式stable版ではありません。
 GitHubのソースZIPには実行用Pythonは含まれません。以下は同梱ZIPの生成・利用手順です。
 公開alpha 6のQuality CI run 34693834133はmacOS・Windows・Ubuntuすべて成功し、
 ZIP生成・展開後のruntime-only試験・出所証明の生成と検証を通過しました。
@@ -35,7 +35,7 @@ Python と第三者依存のライセンスは runtime 内に保持し、本体�
 
 上は macOS の例。Windows は `anywhere.cmd`、Linux は `./anywhere` を使い、
 利用者の状態保存ディレクトリを明示する。公開 HTTPS、所有者認証、ChatGPT 側の
-接続登録は別途必要。GUI インストーラー・署名・公証・公開配布はまだ含まない。
+接続登録は別途必要。GUI インストーラー・OSコード署名・公証は含まない。GitHubの配布物出所証明とは別です。
 macOS は実行権限を保つ標準のアーカイブユーティリティまたは ditto で展開する。
 
 2026-09-09: macOS arm64 / CPython 3.12.13 で実物を生成し、日本語と空白を含む
@@ -43,7 +43,7 @@ macOS は実行権限を保つ標準のアーカイブユーティリティま�
 PYTHONPATH を無効な場所に向けても CLI 起動・依存 import・日本語ファイルの書込/読込・
 別 Python プロセスを使う正規表現検索が成功した。Linux ARM64 同梱版も Ubuntu の隔離
 ゲストで生成・検証済み（詳細は `research/2026-09-09-linux-guest-verification.md`）。
-Windows の同梱配布物は実機未検証。
+Windowsのalpha9同梱配布物はWindows VMで起動・Plugin接続・ファイル/端末操作を検証済みです。詳細は[Windows受け入れ記録](research/2026-09-13-windows-owner-pipe-acceptance.md)を参照してください。
 
 配布物自体のエージェント試験は次で再実行できる。信頼済み ZIP を展開したディレクトリを
 指定する。実行時に OS 資格情報ストアへのアクセスが必要で、試験専用の一時資格情報を

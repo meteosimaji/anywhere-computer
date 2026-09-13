@@ -3,9 +3,10 @@
 ChatGPT・CodexなどのMCPクライアントから、自分のPCのファイル・検索・文書・端末を扱うための、セルフホスト型の実行エージェントです。
 判断は接続したAIが行い、PC上のAnywhere Computerが操作を実行します。ファイルや端末の基本機能にCodexのモデル実行は必要ありません。
 
-公開開発中のalpha版です。現在の公開パッケージは `0.1.0a6`、Codex Pluginの表記は `0.1.0-alpha.6` です。正式stableリリースはまだありません。
-このリポジトリの開発版は `0.1.0a9` / `0.1.0-alpha.9` です。監査の4件の実行管理修正、
-直接MCPの要約・検索、Peekaboo向け型付きGUI操作、HTTP経由の複数端末指定を含みます。公開済みalpha6の機能とは区別してください。
+公開版は `0.1.0a9`、Codex Pluginの表記は `0.1.0-alpha.9` です。
+[alpha9をダウンロード](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0a9)。
+誰でも取得できる公開alphaリリースです。正式stable版ではありません。
+監査の4件の実行管理修正、直接MCPの要約・検索、Peekaboo向け型付きGUI操作、HTTP経由の複数端末指定を含みます。
 
 ## できること
 
@@ -20,22 +21,22 @@ ChatGPT・CodexなどのMCPクライアントから、自分のPCのファイル
 | Codexとの連携 | 選択した会話・スキルの参照、対応Pluginの呼び出しとセッション保持 |
 | 共通エンジン | Chat側のHTTP入口とCodex側のローカル入口から同じエンジンを利用可能 |
 
-公開alpha6ではネイティブGUI操作と、Plugin標準のブラウザー操作はまだ使えません。独立ブラウザーは開発中で、直接MCP経由の隔離ブラウザー操作まで検証していますが、既存タブ・ログイン状態の利用や公開ツールへの組込みは未完了です。文書の描画や書式を保った編集、PTYも今後の対象です。
+組込みのネイティブGUIと、Plugin標準のブラウザー操作は提供しません。macOSのGUIは別途導入したPeekaboo MCPへ接続します。独立ブラウザーは開発中で、直接MCP経由の隔離ブラウザー操作まで検証していますが、既存タブ・ログイン状態の利用や公開ツールへの組込みは未完了です。文書の描画や書式を保った編集、PTYも今後の対象です。
 
 Codexのツールを呼び出せることは、Codex専用の画面操作文脈も利用できることを意味しません。既知の非対応Computer Use経路は、実行前に理由を返します。[Codex連携の対応範囲](docs/CODEX-CONTEXT.md)
 
 Claude Code・Gemini CLIなどの接続設定と検証範囲は[MCPクライアント接続ガイド](docs/MCP-CLIENTS.md)を参照してください。
 
-開発版alpha8では、独立した既存MCPを使う型付きGUI操作を検証しています。macOSのPeekabooで、
+alpha9に含まれるGUIアダプターでは、独立した既存MCPを使う型付きGUI操作を検証しています。macOSのPeekabooで、
 認証付きHTTPから電卓の連続操作と結果回収を確認しました。ChatGPTのGPT-5.6 Sol（中程度）でも
 観測→Escape→入力→再観測で42を確認済みです。[修正・更新検証記録](docs/UPDATE-VERIFICATION-ALPHA8-2026-09-13.md)。
-導入条件、公開alphaとの違い、
+導入条件と、
 更新後のツール追加手順は[GUI用MCP接続ガイド](docs/GUI-MCP.md)を参照してください。
 
-開発版alpha9は、同じChatGPT接続から登録済みの別PCを明示指定するHTTP端末ルーターを追加しています。
+alpha9は、同じChatGPT接続から登録済みの別PCを明示指定するHTTP端末ルーターを追加しています。
 Windows VMも、そのゲスト内のAnywhere ComputerをSSHまたは認証付きHTTPで登録する操作先です。
 接続方法と機械試験・実機試験の区別は[複数端末の操作](docs/DEVICE-ROUTING.md)を参照してください。
-開発版では、ChatGPTからWindows VMのファイル作成・条件付き追記・端末実行・
+ChatGPTからWindows VMのファイル作成・条件付き追記・端末実行・
 結果回収まで実機検証しています。GUIとVM再起動後の自動復旧は別の確認項目です。
 [Windows実操作の検証記録](docs/research/2026-09-13-windows-owner-pipe-acceptance.md)
 
@@ -48,7 +49,7 @@ git clone https://github.com/meteosimaji/anywhere-computer.git
 cd anywhere-computer
 ```
 
-現在、正式stableのダウンロード配布は未公開です。GitHubの「Download ZIP」はソース一式であり、Python同梱の実行用ZIPとは異なります。実行用ZIPはCIで生成・検証しており、配布構造とビルド方法は[ランタイム同梱配布物](docs/PORTABLE.md)にまとめています。
+[GitHub Releases](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0a9)からOS別のPython同梱ZIPとCodex Plugin ZIPを取得できます。GitHubの「Download ZIP」はソース一式であり、Python同梱の実行用ZIPとは異なります。実行用ZIPはCIで生成・検証しており、配布構造とビルド方法は[ランタイム同梱配布物](docs/PORTABLE.md)にまとめています。
 
 ## ソースから起動する
 
@@ -98,13 +99,13 @@ uv run --locked anywhere chatgpt-setup --state-dir ./local-state/chatgpt
 
 ## 更新と接続の引き継ぎ
 
-公開alphaには、GitHub stableを自動取得・適用する機能はまだありません。更新は利用者が選んだタイミングで行います。開発中の自動更新も既定は無効で、希望する利用者だけが明示的に有効化します。
+更新は利用者が選んだタイミングで行います。alpha9にはstable更新用コマンドを含みますが、正式stable候補はまだありません。自動更新は既定で無効です。alpha9は手動で取得し、希望する利用者だけが将来のstable自動更新を明示的に有効化します。
 
 現在は、更新したインストールから `anywhere start` を実行すると、作業がない場合にエンジンを切り替えます。状態保存先を変えなければ、資格情報・設定・操作履歴を引き継ぎます。稼働中の端末やPluginセッションは、切替前に完了・終了する必要があります。
 
 常駐サービスの登録も新しい実行場所へ移す場合は、同じHTTP設定ディレクトリを指定して `autostart-upgrade`、続いて `autostart-start` を実行します。新しい版がその場所を使うため、選択中の実行フォルダーを削除・移動しないでください。
 
-開発中の `anywhere update` は、配布物検証・待機・中断復旧をまとめるコマンドです。公開alphaにはまだ含まれません。[更新の対応状況と手順](docs/UPDATING.md)
+`anywhere update` は、stable配布物の検証・待機・中断復旧をまとめるコマンドです。alphaリリースは自動適用しません。[更新の対応状況と手順](docs/UPDATING.md)
 
 macOSでは、共通エンジンへの移行と更新後に、既存のHTTP接続から再認証なしで接続し、過去の操作結果を回収できることを確認しています。ただし、既に起動しているすべてのCodexタスクが自動でPluginを再読込するとは限りません。[更新・再接続の検証記録](docs/UPDATE-VERIFICATION-2026-09-12.md)
 
@@ -115,7 +116,7 @@ macOSでは、共通エンジンへの移行と更新後に、既存のHTTP接�
 | 確認対象 | 確認できている範囲 |
 |---|---|
 | macOS | 実エージェント、認証付きHTTP、端末再接続、常駐版更新、共通エンジン移行 |
-| Windows VM（開発版） | ChatGPTから明示端末指定でファイル・端末・結果回収、更新後の保存データ継続、インストール済みPluginコマンド実行 |
+| Windows VM | ChatGPTから明示端末指定でファイル・端末・結果回収、更新後の保存データ継続、インストール済みPluginコマンド実行 |
 | Windows・Ubuntu CI | 共通テスト、配布ZIP生成、展開後のランタイム試験、配布物の出所証明検証 |
 | Linux ARM64 | 過去の隔離ゲストで、Secret Serviceを使った実エージェント試験 |
 | 全OSの初回導入・再ログイン・スリープ復帰 | 一般利用者の環境での受け入れは未完了 |
@@ -131,13 +132,13 @@ CI成功は、すべての実機でGUI操作・ログイン後の自動接続が
 | ローカルは動くがChatからつながらない | 同じHTTP設定を使った `remote-doctor --probe-public` とChat側の認証 |
 | 更新できない | 実行中の端末・Plugin・検索などが残っていないか |
 | 操作の応答が途切れた | 同じ操作を新しいIDで繰り返す前に、既知のIDで `operations_get` を確認する |
-| GUI操作が拒否される | 現在の公開alphaでは未対応。拒否ガードを外しても操作可能にはならない |
+| GUI操作が拒否される | Peekabooの導入・OS権限・対応schemaを確認。Codex専用の非対応経路は拒否ガードを外しても利用可能にはならない |
 
 報告にはOS／CPU、版、再現手順、診断の状態を添えてください。パスワード・トークン・個人ファイルの内容は含めないでください。[Issues](https://github.com/meteosimaji/anywhere-computer/issues)
 
 ## 開発
 
-基本実行時の直接依存はpydantic・psutil・keyringです。直接MCPとブラウザー向けの任意依存は別に定義しています。サーバー側の既存MCP入口は独自実装で、開発中の直接MCPクライアントは公式MCP SDKを使います。
+基本実行時の直接依存はpydantic・psutil・keyringです。直接MCPとブラウザー向けの任意依存は別に定義しています。サーバー側の既存MCP入口は独自実装で、直接MCPクライアントは公式MCP SDKを使います。
 
 変更に対応する小さなテストから実行し、影響範囲に応じて検査を広げます。
 

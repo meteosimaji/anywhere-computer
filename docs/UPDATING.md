@@ -1,6 +1,6 @@
 # 更新と接続の引き継ぎ
 
-2026-09-12時点の公開版はPython `0.1.0a6` / Codex Plugin `0.1.0-alpha.6`。
+公開版はPython `0.1.0a9` / Codex Plugin `0.1.0-alpha.9`。
 正式stableリリースと一般向け自動更新の受け入れは未完了です。
 
 ## 公開alphaを手動で更新する
@@ -72,9 +72,9 @@ instance IDが異なるのが正常です。同じalpha版の修正でもruntime
 インストールの `start` を実行し、両入口の応答で更新を確認しています。
 [検証記録](research/2026-09-13-final-acceptance-progress.md)
 
-## 開発中の更新コマンド
+## stable向け更新コマンド
 
-以下は未公開の開発コードです。公開alpha 6では使用できません。
+以下はalpha9に含まれます。alpha版は自動適用せず、正式stable候補だけを対象にします。
 
 ```sh
 uv run --locked anywhere update --state-dir <ローカル状態保存先> --verifier <ghの絶対パス>
@@ -113,8 +113,8 @@ uv run --locked anywhere autostart-start --state-dir <既存のHTTP設定保存�
 
 有効時は通常1時間、作業待機・失敗時60秒でstableを再確認します。ghがない場合は
 検証を省略せず `verifier_unavailable` を記録します。更新前には実行中の作業を確認します。
-この機能は未公開で、本番には適用していません。検証ツールの同梱と正式stableを使った
-更新の受け入れも残っています。
+正式stable候補はまだありません。自動更新を本番で実運用したという意味ではありません。
+検証には別途ghが必要です。正式stableを使った更新の受け入れは残っています。
 
 ## 証拠と未確認事項
 
