@@ -268,3 +268,23 @@ async def test_probe_recovery_rejects_another_operations_result():
     with pytest.raises(RuntimeError, match='identity mismatch'):
         await helper['complete_probe_operation'](SimpleNamespace(execute=execute),
             Reply(operation_id='a' * 32, state='running'))
+
+
+async def test_probe_waits_for_pending_lookup_using_its_original_identity():
+    from anywhere_computer.models import Reply
+    helper = runpy.run_path(str(Path(__file__).parents[1] / 'scripts/verify_internet.py'))
+    calls = []
+    identity = 'a' * 32
+    async def execute(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return Reply(operation_id=request.operation_id, state='running')
+        assert request == calls[0]
+        return Reply(operation_id=request.operation_id, state='completed', data={
+            'operation_id': identity, 'state': 'completed', 'data': {'verified': True},
+        })
+    reply = await helper['complete_probe_operation'](SimpleNamespace(execute=execute),
+        Reply(operation_id=identity, state='running'), timeout=1)
+    assert reply.state == 'completed' and reply.data == {'verified': True}
+    assert len(calls) == 2 and calls[0].tool == 'operations_get'
+    assert calls[0].arguments == {'operation_id': identity}

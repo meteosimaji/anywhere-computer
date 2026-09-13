@@ -56,13 +56,16 @@ class DNSNotReady(RuntimeError):
 async def complete_probe_operation(backend, reply, *, timeout=60):
     """Collect a pending result by ID; never reissue the original operation."""
     identity = reply.operation_id
+    lookup_request = None
     async with asyncio.timeout(timeout):
         while reply.state == "running":
             await asyncio.sleep(0.05)
-            lookup = await backend.execute(Request(
-                operation_id=secrets.token_hex(16), tool="operations_get",
-                arguments={"operation_id": identity},
-            ))
+            if lookup_request is None:
+                lookup_request = Request(
+                    operation_id=secrets.token_hex(16), tool="operations_get",
+                    arguments={"operation_id": identity},
+                )
+            lookup = await backend.execute(lookup_request)
             if lookup.state == "running":
                 continue
             if lookup.state != "completed":
@@ -70,6 +73,7 @@ async def complete_probe_operation(backend, reply, *, timeout=60):
             reply = Reply.model_validate(lookup.data)
             if reply.operation_id != identity:
                 raise RuntimeError("Probe operation result identity mismatch")
+            lookup_request = None
     return reply
 
 
