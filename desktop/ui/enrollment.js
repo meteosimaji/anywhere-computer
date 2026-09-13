@@ -3,7 +3,7 @@
   const methods = ["progress", "start", "restart", "poll", "retry_save", "register", "cancel"];
   const element = id => document.getElementById(`enrollment-${id}`);
   let busy = false, snapshot = null;
-  const phases = {new:"認証を開始できます",starting:"認証を開始しています",waiting:"ブラウザーでの認証を待っています",requesting:"認証結果を確認しています",grant_saved:"認証情報を保存しました。端末名を入力して登録してください",denied:"認証が拒否されました",expired:"認証コードの期限が切れました",cancelled:"認証を中止しました",failed:"認証に失敗しました",uncertain:"認証結果が未確認です",credential_error:"認証情報を保存できませんでした"};
+  const phases = {new:"認証を開始できます",starting:"認証を開始しています",waiting:"ブラウザーでの認証を待っています",requesting:"認証結果を確認しています",grant_saved:"認証情報を保存しました。端末名を入力して登録してください",denied:"認証が拒否されました",expired:"認証コードの期限が切れました",cancelled:"認証を中止しました",failed:"認証に失敗しました",uncertain:"認証結果が未確認です",credential_error:"認証情報を利用できません。期限や資格情報ストアの状態を確認してください"};
   function controls() {
     const phase = snapshot?.authorization?.phase;
     const saved = snapshot?.registration;
@@ -12,7 +12,7 @@
         || method === "start" && phase === "new" && !saved
         || method === "restart" && ["denied","expired","cancelled","failed"].includes(phase) && !saved
         || method === "poll" && phase === "waiting"
-        || method === "retry_save" && phase === "credential_error"
+        || method === "retry_save" && phase === "credential_error" && snapshot.authorization.can_retry_save === true
         || method === "register" && !saved?.device && (phase === "grant_saved" || saved) && element("name").value.trim().length > 0
         || method === "cancel" && ["waiting","credential_error"].includes(phase);
       element(method).disabled = busy || !allowed;

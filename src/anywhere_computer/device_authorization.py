@@ -68,6 +68,7 @@ class EnrollmentProgress(BaseModel):
     phase: EnrollmentPhase
     attempt_id: str
     retry_after: float = 0
+    can_retry_save: bool = False
     user_code: str | None = Field(default=None, repr=False)
     verification_uri: str | None = None
     verification_uri_complete: str | None = Field(default=None, repr=False)
@@ -107,7 +108,7 @@ class DeviceAuthorizationClient:
         self._progress = EnrollmentProgress(phase=phase, attempt_id=self._progress.attempt_id)
         if phase not in {"waiting", "requesting"}:
             self._code = None
-        return self._progress
+        return self.progress()
 
     def progress(self) -> EnrollmentProgress:
         with self._lock:
@@ -118,6 +119,14 @@ class DeviceAuthorizationClient:
                 self._progress = self._progress.model_copy(
                     update={"retry_after": state.retry_after},
                 )
+            retryable = False
+            if self._pending is not None and self._progress.phase == "credential_error":
+                token, requested_at = self._pending
+                now = self._wall_clock()
+                retryable = math.isfinite(now) and requested_at <= now < (
+                    requested_at + token.expires_in
+                )
+            self._progress = self._progress.model_copy(update={"can_retry_save": retryable})
             return self._progress
 
     def restore_saved(self) -> EnrollmentProgress:

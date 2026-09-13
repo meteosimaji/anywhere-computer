@@ -200,3 +200,8 @@ development-venv attempt timed out while Python was initializing its paths
 (sampled in `getpath_readlines`/`open`); the precise environmental cause remains
 unconfirmed. No OS permission was changed. The successful UI check did not
 start provider authorization, save a grant or register a device.
+
+The worker reports `authorization.can_retry_save` only while it still holds an
+unexpired received grant awaiting vault publication. The card does not offer a
+save retry merely because existing credentials are unreadable or expired.
+Progress re-evaluates the pending grant's lifetime without another token request.

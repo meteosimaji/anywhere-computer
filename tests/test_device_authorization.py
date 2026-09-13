@@ -266,6 +266,7 @@ def test_failed_vault_publication_reconciles_without_network(tmp_path, endpoint,
     clock.value = 5
     failed = client.poll()
     assert failed.phase == "credential_error" and failed.credential_reference is None
+    assert failed.can_retry_save is True
     assert "synthetic" not in failed.model_dump_json()
     assert client.poll() == failed
     assert client.retry_save().phase == "grant_saved"
@@ -285,6 +286,7 @@ def test_other_enrollment_and_existing_ai_credentials_are_preserved(tmp_path, en
     assert vault.get_password(SERVICE, ai.account) == "synthetic-existing-ai-credential"
     second = DeviceAuthorizationClient(provider, store, wire=endpoint[3])
     assert second.start().phase == "credential_error"
+    assert second.progress().can_retry_save is False
     assert len(endpoint[2]) == 2
 
 
@@ -466,3 +468,18 @@ def test_new_attempt_isolated_from_cancelled_inflight_reply(tmp_path, endpoint):
         assert future.result(timeout=3).phase == "cancelled"
         assert replacement.progress() == fresh
         assert not vault.data
+
+
+def test_save_retry_capability_expires_without_another_token_request(tmp_path, endpoint):
+    class UnwritableVault(MemoryVault):
+        def set_password(self, service, account, value):
+            raise RuntimeError("fixture unavailable")
+
+    client, _, vault, clock = client_for(tmp_path, endpoint, UnwritableVault())
+    client.start()
+    clock.value = 5
+    assert client.poll().can_retry_save is True
+    clock.value = 905
+    assert client.progress().phase == "credential_error"
+    assert client.progress().can_retry_save is False
+    assert len(endpoint[2]) == 2 and not vault.data

@@ -46,5 +46,9 @@ const snapshot = phase => ({schema_version:1,authorization:{phase},registration:
   response=snapshot('waiting'); await click('restart');
   assert.equal(calls.at(-1).args.method,'restart');
   assert.equal(get('enrollment-restart').disabled,true);
+  response=snapshot('credential_error'); await click('progress');
+  assert.equal(get('enrollment-retry_save').disabled,true);
+  response.authorization.can_retry_save=true; await click('progress');
+  assert.equal(get('enrollment-retry_save').disabled,false);
   console.log('Enrollment UI state and recovery checks passed');
 })().catch(error => {console.error(error);process.exitCode=1;});
