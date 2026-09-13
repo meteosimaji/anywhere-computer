@@ -38,6 +38,15 @@ impl ManagementHost {
 
 #[tauri::command]
 async fn management_snapshot(host: tauri::State<'_, ManagementHost>) -> Result<String, String> {
+    run_management(&host, false).await
+}
+
+#[tauri::command]
+async fn management_start(host: tauri::State<'_, ManagementHost>) -> Result<String, String> {
+    run_management(&host, true).await
+}
+
+async fn run_management(host: &ManagementHost, start: bool) -> Result<String, String> {
     let mut child = tokio::process::Command::new(&host.python)
         .args([
             "-I",
@@ -45,7 +54,11 @@ async fn management_snapshot(host: tauri::State<'_, ManagementHost>) -> Result<S
             "utf8",
             "-m",
             "anywhere_computer",
-            "management-status",
+            if start {
+                "management-start"
+            } else {
+                "management-status"
+            },
             "--state-dir",
         ])
         .arg(&host.directory)
@@ -55,7 +68,7 @@ async fn management_snapshot(host: tauri::State<'_, ManagementHost>) -> Result<S
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| "管理用ランタイムを起動できません。導入先を確認してください。")?;
-    collect_snapshot(&mut child, Duration::from_secs(15)).await
+    collect_snapshot(&mut child, Duration::from_secs(if start { 60 } else { 15 })).await
 }
 
 async fn collect_snapshot(
@@ -85,7 +98,7 @@ async fn collect_snapshot(
     let result = tokio::time::timeout(timeout, operation)
         .await
         .unwrap_or(Err(
-            "状態確認がタイムアウトしました。エージェントは停止していません。",
+            "応答がタイムアウトしました。結果は未確認です。状態を更新して確認してください。",
         ));
     if result.is_err() {
         // Reap this short-lived reader explicitly; never address the engine PID.
@@ -103,7 +116,10 @@ fn main() {
     });
     tauri::Builder::default()
         .manage(host)
-        .invoke_handler(tauri::generate_handler![management_snapshot])
+        .invoke_handler(tauri::generate_handler![
+            management_snapshot,
+            management_start
+        ])
         .run(tauri::generate_context!())
         .expect("Management window could not start");
 }
