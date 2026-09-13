@@ -1,0 +1,122 @@
+"""Relay-owned device records, separate from personal SSH/HTTP configuration.
+
+Callers must authenticate the account and enrollment permission before invoking
+this storage layer. It does not validate bearer tokens or authorize tool calls.
+"""
+
+import sqlite3
+import uuid
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from .authorization import validate_authorization_url
+from .devices import device_name
+from .state import prepare_directory
+
+
+class RelayAccount(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid",
+                              revalidate_instances="always")
+    issuer: str
+    subject: str = Field(min_length=1, max_length=255, pattern=r"^[\x21-\x7e]+$")
+
+
+class RelayDevice(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+    device_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    enrollment_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    name: str
+    state: Literal["registered", "revoked"]
+
+
+class RelayRegistry:
+    """Synchronous transaction boundary; one connection per worker thread.
+
+    Registration is durable, not evidence that a transport or engine is ready.
+    Revoked records remain as tombstones so replay cannot resurrect a device.
+    """
+
+    def __init__(self, directory: Path) -> None:
+        prepare_directory(directory)
+        path = directory / "relay-devices.sqlite3"
+        if path.is_symlink():
+            raise ValueError("Relay registry must not be a symbolic link")
+        self.db = sqlite3.connect(path, timeout=5)
+        self.db.row_factory = sqlite3.Row
+        try:
+            with self.db:
+                self.db.execute("BEGIN IMMEDIATE")
+                version = self.db.execute("PRAGMA user_version").fetchone()[0]
+                if version not in (0, 1):
+                    raise ValueError("Unsupported relay registry schema")
+                self.db.execute(
+                    "CREATE TABLE IF NOT EXISTS relay_devices ("
+                    "device_id TEXT PRIMARY KEY, issuer TEXT NOT NULL, subject TEXT NOT NULL,"
+                    "enrollment_id TEXT NOT NULL, name TEXT NOT NULL,"
+                    "state TEXT NOT NULL CHECK(state IN ('registered','revoked')),"
+                    "UNIQUE(issuer,subject,enrollment_id))"
+                )
+                self.db.execute("PRAGMA user_version=1")
+        except BaseException:
+            self.db.close()
+            raise
+
+    def close(self) -> None:
+        self.db.close()
+
+    @staticmethod
+    def _account(account: RelayAccount) -> RelayAccount:
+        account = RelayAccount.model_validate(account)
+        validate_authorization_url(account.issuer)
+        return account
+
+    @staticmethod
+    def _device(row: sqlite3.Row) -> RelayDevice:
+        return RelayDevice(device_id=row["device_id"], enrollment_id=row["enrollment_id"],
+                           name=row["name"], state=row["state"])
+
+    def register(self, account: RelayAccount, *, enrollment_id: str, name: str) -> RelayDevice:
+        account = self._account(account)
+        proposed = RelayDevice(device_id=uuid.uuid4().hex, enrollment_id=enrollment_id,
+                               name=device_name(name), state="registered")
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            existing = self.db.execute(
+                "SELECT * FROM relay_devices WHERE issuer=? AND subject=? AND enrollment_id=?",
+                (account.issuer, account.subject, enrollment_id),
+            ).fetchone()
+            if existing is not None:
+                device = self._device(existing)
+                if device.name != proposed.name:
+                    raise ValueError("Enrollment request conflicts with its saved registration")
+                return device
+            self.db.execute(
+                "INSERT INTO relay_devices VALUES(?,?,?,?,?,?)",
+                (proposed.device_id, account.issuer, account.subject, enrollment_id,
+                 proposed.name, proposed.state),
+            )
+        return proposed
+
+    def get(self, account: RelayAccount, device_id: str) -> RelayDevice:
+        account = self._account(account)
+        row = self.db.execute(
+            "SELECT * FROM relay_devices WHERE issuer=? AND subject=? AND device_id=?",
+            (account.issuer, account.subject, device_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Device is not registered to this account")
+        return self._device(row)
+
+    def revoke(self, account: RelayAccount, device_id: str) -> RelayDevice:
+        account = self._account(account)
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            self.get(account, device_id)
+            self.db.execute(
+                "UPDATE relay_devices SET state='revoked' "
+                "WHERE issuer=? AND subject=? AND device_id=?",
+                (account.issuer, account.subject, device_id),
+            )
+            return self.get(account, device_id)
