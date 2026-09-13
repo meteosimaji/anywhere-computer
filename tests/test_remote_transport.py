@@ -317,3 +317,61 @@ async def test_remote_operation_ids_are_separate_per_peer(tmp_path):
         assert (tmp_path / "second").read_text(encoding="utf-8") == "second"
     finally:
         await engine.close()
+
+
+async def test_expiring_peer_grant_blocks_execution_catalog_and_recovery(tmp_path):
+    from anywhere_computer.remote_bridge import RemoteAgent
+
+    engine = Engine(tmp_path / "engine")
+    now = [100.0]
+    bridge = RemoteAgent(engine, {}, clock=lambda: now[0])
+    tools = frozenset({"files_write", "operations_get"})
+    bridge.grant("grant-a", tools, expires_at=110)
+
+    async def dispatch(peer, operation):
+        return Reply.model_validate_json(
+            await bridge.dispatch(peer, operation.model_dump_json().encode())
+        )
+
+    try:
+        original = request("files_write", path=str(tmp_path / "written"), text="kept")
+        assert (await dispatch("grant-a", original)).state == "completed"
+        now[0] = 110
+        denied = request("files_write", path=str(tmp_path / "denied"), text="never")
+        lookup = request("operations_get", operation_id=original.operation_id)
+        for operation in (denied, lookup, request("__catalog")):
+            assert (await dispatch("grant-a", operation)).state == "failed"
+        assert not (tmp_path / "denied").exists()
+        assert (tmp_path / "written").read_text() == "kept"
+        now[0] = 101  # Clock rollback cannot resurrect an observed expired grant.
+        assert (await dispatch("grant-a", denied)).state == "failed"
+        bridge.grant("grant-b", tools, expires_at=120)
+        assert (await dispatch("grant-b", lookup)).state == "failed"
+        bridge.grant("grant-a", tools, expires_at=120)  # Explicit verified refresh.
+        recovered = await dispatch("grant-a", lookup)
+        assert recovered.state == "completed"
+        assert recovered.data["operation_id"] == original.operation_id
+        bridge.revoke("grant-a")
+        assert (await dispatch("grant-a", request("__catalog"))).state == "failed"
+    finally:
+        await engine.close()
+
+
+@pytest.mark.parametrize("expiry", [True, float("nan"), float("inf"), 99, 100])
+async def test_invalid_expiry_preserves_existing_grant(tmp_path, expiry):
+    from anywhere_computer.remote_bridge import RemoteAgent
+
+    engine = Engine(tmp_path / "engine")
+    bridge = RemoteAgent(engine, {}, clock=lambda: 100)
+    tools = frozenset({"computer_status"})
+    try:
+        bridge.grant("peer", tools, expires_at=120)
+        with pytest.raises(ValueError):
+            bridge.grant("peer", frozenset(), expires_at=expiry)
+        catalog = Reply.model_validate_json(await bridge.dispatch(
+            "peer", request("__catalog").model_dump_json().encode(),
+        ))
+        assert catalog.state == "completed"
+        assert {item["name"] for item in catalog.data["tools"]} == tools
+    finally:
+        await engine.close()

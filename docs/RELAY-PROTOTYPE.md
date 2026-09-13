@@ -255,7 +255,7 @@ Windows worker execution, or browser-based enrollment acceptance.
 ## Native manager integration (development)
 
 The Tauri manager now owns one persistent enrollment worker and exposes only
-seven fixed commands to its registration card. The native host selects Python,
+nine fixed commands to its registration card. The native host selects Python,
 the state directory and `enrollment-provider.json`; the WebView cannot choose
 an executable, endpoint, state path or arbitrary command. Requests are serial,
 responses are bounded to 32 KiB and an exchange has a 45-second deadline.
@@ -301,3 +301,54 @@ and an oversized third response causes worker disposal. Reintroducing the old
 condition that discarded a worker on an ordinary command rejection makes this
 test fail. The fixture tests native IPC lifecycle, not provider authentication;
 it is launched by the parent test rather than run standalone in the suite.
+
+## Next transport boundary: implementation decision
+
+The current registration receipt is not a PC channel credential. No outbound
+channel is implemented by this document. The next isolated implementation must
+connect to the existing engine rather than introduce another executor or result
+database.
+
+The existing `remote_transport` provides verified mutual TLS, bounded frames and
+stream cleanup, but its listener runs on the PC and handles one inbound request.
+Using it unchanged would retain the requirement for PC-side reachability.
+`DeviceRouter` also opens SSH/HTTP backends on demand; a registered account alone
+cannot turn either backend into an outbound connection. Its operation binding
+and no-repeat semantics remain requirements, not a ready-made reverse transport.
+
+Evaluate a PC-initiated WebSocket channel for the deployed path, because it can
+share an HTTPS ingress without opening a port on the PC. Raw reverse TLS would
+reuse more framing code but introduces a distinct ingress protocol and proxy
+compatibility burden. Do not install a WebSocket dependency or claim proxy
+compatibility until its supported version and an actual loopback exchange have
+been checked. AI-facing MCP remains a separate protocol and authorization layer.
+
+The first channel slice must bind an authenticated PC credential to an existing,
+non-revoked registry device. A channel replacement must invalidate the old
+connection generation. Tool requests require a separately verified, expiring
+AI grant bound to account, device and allowed tools; the PC must validate that
+grant too. The registration token is rejected by both operation boundaries.
+`RemoteAgent` checks allowed tools and namespaces operation IDs. Its trusted
+`grant` API now accepts an absolute `expires_at`, checked for each incoming
+request including catalog and result lookup. Once observed expired, the entry
+is removed, so clock rollback does not resurrect it. Refresh is explicit and
+retains the original namespace only when the caller verifies the same grant.
+Invalid refresh parameters leave the previous grant intact. Existing enrolled
+TLS peers can still omit expiry; a relay integration must supply verified expiry
+and must not silently use this legacy unlimited form. This helper does not
+validate tokens, bind accounts/devices or cancel work already dispatched.
+
+Keep only bounded in-flight correlation in the relay. Offline requests fail
+before dispatch; a lost in-flight reply is unknown and is never queued for
+automatic delivery after reconnect. Recovery queries the original operation ID
+through the same account/grant/device binding. Existing engine ledger records
+remain the authority for execution and results. Do not interpret reconnected
+transport as restored terminal or REPL state.
+
+Before exposing the channel to the manager, exercise two real local engine
+processes through a loopback relay: explicit target selection, file mutation and
+readback, same-ID recovery after reply loss, disconnect without delayed writes,
+expired/revoked grants, cross-account device IDs and cross-grant result lookup.
+Synthetic identity fixtures establish protocol behavior only; fresh Mac/Windows
+installation, real OAuth client integration and public ingress require their
+own acceptance evidence.

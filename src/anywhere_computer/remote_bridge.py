@@ -5,10 +5,12 @@ process or multi-user isolation. Remote operation IDs are isolated per peer.
 """
 
 import hashlib
+import math
 import re
 import ssl
+import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -30,24 +32,52 @@ class RemoteAgent:
         grants: Mapping[str, frozenset[str]],
         *,
         transport: Literal["mutual-tls", "http"] = "mutual-tls",
+        clock: Callable[[], float] = time.time,
     ) -> None:
         self.engine = engine
         self.transport = transport
+        self._clock = clock
+        self._expires: dict[str, float] = {}
         self.grants: dict[str, frozenset[str]] = {}
         for identity, tools in grants.items():
             self.grant(identity, tools)
 
-    def grant(self, identity: str, tools: frozenset[str]) -> None:
+    def grant(self, identity: str, tools: frozenset[str], *,
+              expires_at: float | None = None) -> None:
+        """Install trusted permissions; token validation belongs to the caller.
+
+        Existing enrolled TLS peers may omit expiry. Relay grants must supply
+        their verified absolute expiry; refreshing them is an explicit action.
+        """
         if not identity or len(identity) > 128:
             raise ValueError("Invalid enrolled identity")
         if tools - self.engine.tools.keys():
             raise ValueError("Grant contains unknown tools")
         if tools & LOCAL_ONLY_TOOLS:
             raise ValueError("Global history is not exposed to remote peers")
+        if expires_at is not None:
+            now = self._clock()
+            if (isinstance(expires_at, bool) or not math.isfinite(expires_at)
+                    or not math.isfinite(now) or expires_at <= now):
+                raise ValueError("Grant expiry must be finite and in the future")
         self.grants[identity] = tools
+        if expires_at is None:
+            self._expires.pop(identity, None)
+        else:
+            self._expires[identity] = expires_at
 
     def revoke(self, identity: str) -> None:
         self.grants.pop(identity, None)
+        self._expires.pop(identity, None)
+
+    def _allowed(self, identity: str) -> frozenset[str] | None:
+        expiry = self._expires.get(identity)
+        if expiry is not None:
+            now = self._clock()
+            if not math.isfinite(now) or now >= expiry:
+                self.revoke(identity)
+                return None
+        return self.grants.get(identity)
 
     @staticmethod
     def internal_id(identity: str, external_id: str) -> str:
@@ -57,9 +87,10 @@ class RemoteAgent:
 
     async def dispatch(self, identity: str, payload: bytes) -> bytes:
         request = Request.model_validate_json(payload)
-        allowed = self.grants.get(identity)
+        allowed = self._allowed(identity)
         if allowed is None:
-            reply = Reply(operation_id=request.operation_id, state="failed", error="Peer revoked")
+            reply = Reply(operation_id=request.operation_id, state="failed",
+                          error="Peer authorization is absent, expired or revoked")
         elif request.tool == "__catalog":
             reply = Reply(
                 operation_id=request.operation_id,
@@ -93,7 +124,7 @@ class RemoteAgent:
                 target_id = OperationId.model_validate(arguments).operation_id
                 arguments["operation_id"] = self.internal_id(identity, target_id)
                 target_tool = self.engine.ledger.tool_for(str(arguments["operation_id"]))
-                if target_tool not in self.grants.get(identity, frozenset()):
+                if target_tool not in (self._allowed(identity) or frozenset()):
                     return Reply(
                         operation_id=request.operation_id,
                         state="failed",
