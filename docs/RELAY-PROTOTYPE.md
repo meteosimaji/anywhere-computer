@@ -25,6 +25,16 @@ it to registered state. Cross-account lookup and revocation both fail without
 changing the owner's record. `registered` means only that ownership was stored;
 it does not mean transport connected, authentication current, or engine ready.
 
+The isolated `test_registered_certificate_revocation_after_tls_connect` connects
+the registry to the existing mutual-TLS listener. A real verified client
+certificate resolves to its registered device; after revocation, a frame sent on
+an already authenticated socket is rejected before the test handler receives it.
+The listener's static peer entry is deliberately retained, so the assertion
+exercises the durable registry check rather than merely closing enrollment in
+the listener. Certificates are disposable test fixtures. This proves the lookup
+boundary over TLS, not outbound WebSocket transport, production provisioning,
+engine execution, or a Windows-to-relay acceptance test.
+
 Stored data includes issuer, subject, display name, device ID, enrollment ID and
 revocation state. There are no passwords, bearer tokens, tool arguments or results
 in this database. Records currently persist until the isolated database is
@@ -255,7 +265,7 @@ Windows worker execution, or browser-based enrollment acceptance.
 ## Native manager integration (development)
 
 The Tauri manager now owns one persistent enrollment worker and exposes only
-seven fixed commands to its registration card. The native host selects Python,
+nine fixed commands to its registration card. The native host selects Python,
 the state directory and `enrollment-provider.json`; the WebView cannot choose
 an executable, endpoint, state path or arbitrary command. Requests are serial,
 responses are bounded to 32 KiB and an exchange has a 45-second deadline.
@@ -301,3 +311,90 @@ and an oversized third response causes worker disposal. Reintroducing the old
 condition that discarded a worker on an ordinary command rejection makes this
 test fail. The fixture tests native IPC lifecycle, not provider authentication;
 it is launched by the parent test rather than run standalone in the suite.
+
+## Next transport boundary: implementation decision
+
+The current registration receipt is not a PC channel credential. No outbound
+channel is implemented by this document. The next isolated implementation must
+connect to the existing engine rather than introduce another executor or result
+database.
+
+The existing `remote_transport` provides verified mutual TLS, bounded frames and
+stream cleanup, but its listener runs on the PC and handles one inbound request.
+Using it unchanged would retain the requirement for PC-side reachability.
+`DeviceRouter` also opens SSH/HTTP backends on demand; a registered account alone
+cannot turn either backend into an outbound connection. Its operation binding
+and no-repeat semantics remain requirements, not a ready-made reverse transport.
+
+Evaluate a PC-initiated WebSocket channel for the deployed path, because it can
+share an HTTPS ingress without opening a port on the PC. Raw reverse TLS would
+reuse more framing code but introduces a distinct ingress protocol and proxy
+compatibility burden. Do not install a WebSocket dependency or claim proxy
+compatibility until its supported version and an actual loopback exchange have
+been checked. AI-facing MCP remains a separate protocol and authorization layer.
+
+An isolated 2026-09-14 evaluation used websockets 17.0.1 in a disposable Python
+environment, without adding it to the project runtime. Verified-server WSS on
+loopback carried requests from a test relay to two sequential PC-initiated
+connections. Two real `Engine` instances with separate state directories created
+Japanese/emoji files and recovered each write through `operations_get`; the
+other engine's ledger did not contain that operation. Both engines ran in one
+process, and grants were synthetic. PC authentication, reconnect/reply-loss,
+concurrent routing, public proxy compatibility and separate-process acceptance
+were not tested by this experiment. It establishes feasibility of reusing the
+engine behind an outbound channel, not completion of the relay.
+
+A follow-up ran the two PC clients as separate Python subprocesses, each owning
+its own engine and state directory. Both initiated WSS, executed the file write,
+recovered its original operation ID and exited with code 0; the relay ran in the
+parent process. This removes the shared-process limitation for that sequential
+happy-path check only. It still uses synthetic grants and server-authenticated
+TLS without PC authentication, and does not establish concurrent routing,
+reconnect/reply-loss recovery, Windows execution or public ingress readiness.
+
+The first channel slice must bind an authenticated PC credential to an existing,
+non-revoked registry device. A channel replacement must invalidate the old
+connection generation. Tool requests require a separately verified, expiring
+AI grant bound to account, device and allowed tools; the PC must validate that
+grant too. The registration token is rejected by both operation boundaries.
+`RemoteAgent` checks allowed tools and namespaces operation IDs. Its trusted
+`grant` API now accepts an absolute `expires_at`, checked for each incoming
+request including catalog and result lookup. Once observed expired, the entry
+is removed, so clock rollback does not resurrect it. Refresh is explicit and
+retains the original namespace only when the caller verifies the same grant.
+Invalid refresh parameters leave the previous grant intact. Existing enrolled
+TLS peers can still omit expiry; a relay integration must supply verified expiry
+and must not silently use this legacy unlimited form. This helper does not
+validate tokens, bind accounts/devices or cancel work already dispatched.
+
+Keep only bounded in-flight correlation in the relay. Offline requests fail
+before dispatch; a lost in-flight reply is unknown and is never queued for
+automatic delivery after reconnect. Recovery queries the original operation ID
+through the same account/grant/device binding. Existing engine ledger records
+remain the authority for execution and results. Do not interpret reconnected
+transport as restored terminal or REPL state.
+
+Before exposing the channel to the manager, exercise two real local engine
+processes through a loopback relay: explicit target selection, file mutation and
+readback, same-ID recovery after reply loss, disconnect without delayed writes,
+expired/revoked grants, cross-account device IDs and cross-grant result lookup.
+Synthetic identity fixtures establish protocol behavior only; fresh Mac/Windows
+installation, real OAuth client integration and public ingress require their
+own acceptance evidence.
+
+### Durable PC certificate binding (isolated building block)
+
+Registry schema 2 adds a one-to-one binding from a verified SHA-256 peer
+certificate fingerprint to a registered device ID. `bind_channel` requires
+the authenticated account and rejects revoked devices, cross-account binding,
+certificate reuse by another device and silent replacement of an existing
+binding. An identical provisioning retry is idempotent. Existing device records
+and revocation tombstones survive migration from schema 1.
+
+`channel_device` resolves the account and device from that fingerprint and
+rechecks current revocation on every call. Its caller must obtain the fingerprint
+from an authenticated TLS peer, not a client-supplied message field. These are
+trusted storage APIs, not public enrollment endpoints or proof-of-possession
+verification. No private key or bearer credential is stored in this table.
+Certificate issuance, OS-vault private-key handling, explicit rotation and the
+outbound WebSocket integration are still unimplemented.

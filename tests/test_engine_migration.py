@@ -47,11 +47,19 @@ async def verify_connections(prepared, monkeypatch):
                         lambda *a, **kw: 'migration-fixture')
     agent = asyncio.create_task(serve(local, credential='migration-fixture', shutdown=stop))
     try:
-        async with asyncio.timeout(5):
-            while not (local / 'agent.json').exists():
-                if agent.done():
-                    await agent
-                await asyncio.sleep(0.01)
+        try:
+            async with asyncio.timeout(5):
+                while not (local / 'agent.json').exists():
+                    if agent.done():
+                        await agent
+                        pytest.fail('Agent exited before publishing startup information')
+                    await asyncio.sleep(0.01)
+        except TimeoutError:
+            # Record code locations only, never frame locals or credentials.
+            locations = [f'{frame.f_code.co_name}:{frame.f_lineno}'
+                         for frame in agent.get_stack(limit=8)]
+            pytest.fail(f'Agent startup exceeded 5 seconds; done={agent.done()}; '
+                        f'cancelled={agent.cancelled()}; stack={locations}', pytrace=False)
         old = await exchange(local, 'operations_get', {'operation_id': 'a' * 32})
         assert old.data['state'] == 'completed'
         async with http_service(http, credentials=owner):

@@ -14,6 +14,8 @@ from anywhere_computer.remote_transport import (
     FRAME_LIMIT,
     RemoteListener,
     check_tls,
+    close_stream,
+    read_frame,
     remote_exchange,
     write_frame,
 )
@@ -317,3 +319,146 @@ async def test_remote_operation_ids_are_separate_per_peer(tmp_path):
         assert (tmp_path / "second").read_text(encoding="utf-8") == "second"
     finally:
         await engine.close()
+
+
+async def test_expiring_peer_grant_blocks_execution_catalog_and_recovery(tmp_path):
+    from anywhere_computer.remote_bridge import RemoteAgent
+
+    engine = Engine(tmp_path / "engine")
+    now = [100.0]
+    bridge = RemoteAgent(engine, {}, clock=lambda: now[0])
+    tools = frozenset({"files_write", "operations_get"})
+    bridge.grant("grant-a", tools, expires_at=110)
+
+    async def dispatch(peer, operation):
+        return Reply.model_validate_json(
+            await bridge.dispatch(peer, operation.model_dump_json().encode())
+        )
+
+    try:
+        original = request("files_write", path=str(tmp_path / "written"), text="kept")
+        assert (await dispatch("grant-a", original)).state == "completed"
+        now[0] = 110
+        denied = request("files_write", path=str(tmp_path / "denied"), text="never")
+        lookup = request("operations_get", operation_id=original.operation_id)
+        for operation in (denied, lookup, request("__catalog")):
+            assert (await dispatch("grant-a", operation)).state == "failed"
+        assert not (tmp_path / "denied").exists()
+        assert (tmp_path / "written").read_text() == "kept"
+        now[0] = 101  # Clock rollback cannot resurrect an observed expired grant.
+        assert (await dispatch("grant-a", denied)).state == "failed"
+        bridge.grant("grant-b", tools, expires_at=120)
+        assert (await dispatch("grant-b", lookup)).state == "failed"
+        bridge.grant("grant-a", tools, expires_at=120)  # Explicit verified refresh.
+        recovered = await dispatch("grant-a", lookup)
+        assert recovered.state == "completed"
+        assert recovered.data["operation_id"] == original.operation_id
+        bridge.revoke("grant-a")
+        assert (await dispatch("grant-a", request("__catalog"))).state == "failed"
+    finally:
+        await engine.close()
+
+
+@pytest.mark.parametrize("expiry", [True, float("nan"), float("inf"), 99, 100])
+async def test_invalid_expiry_preserves_existing_grant(tmp_path, expiry):
+    from anywhere_computer.remote_bridge import RemoteAgent
+
+    engine = Engine(tmp_path / "engine")
+    bridge = RemoteAgent(engine, {}, clock=lambda: 100)
+    tools = frozenset({"computer_status"})
+    try:
+        bridge.grant("peer", tools, expires_at=120)
+        with pytest.raises(ValueError):
+            bridge.grant("peer", frozenset(), expires_at=expiry)
+        catalog = Reply.model_validate_json(await bridge.dispatch(
+            "peer", request("__catalog").model_dump_json().encode(),
+        ))
+        assert catalog.state == "completed"
+        assert {item["name"] for item in catalog.data["tools"]} == tools
+    finally:
+        await engine.close()
+
+
+async def test_peer_expiry_after_tls_connect_prevents_file_dispatch(certificates, tmp_path):
+    from anywhere_computer.remote_bridge import RemoteAgent
+
+    context, fingerprint = certificates
+    now = [100.0]
+    engine = Engine(tmp_path / "engine")
+    bridge = RemoteAgent(engine, {}, clock=lambda: now[0])
+    bridge.grant("peer", frozenset({"files_write"}), expires_at=110)
+    listener = RemoteListener(
+        context("server", False), {fingerprint("client"): "peer"}, bridge.dispatch,
+    )
+    port = await listener.start("127.0.0.1", 0)
+    tls = context("client", True)
+    check_tls(tls, client=True)
+    writer = None
+    try:
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", port, ssl=tls, server_hostname="localhost",
+            ssl_handshake_timeout=5,
+        )
+        now[0] = 110  # An authenticated open channel is not a lasting tool grant.
+        path = tmp_path / "must-not-exist"
+        operation = request("files_write", path=str(path), text="never")
+        await write_frame(writer, operation.model_dump_json().encode())
+        reply = Reply.model_validate_json(await asyncio.wait_for(read_frame(reader), 5))
+        assert reply.operation_id == operation.operation_id
+        assert reply.state == "failed"
+        assert not path.exists()
+        assert engine.ledger.tool_for(bridge.internal_id("peer", operation.operation_id)) is None
+    finally:
+        if writer is not None:
+            await close_stream(writer)
+        await listener.close()
+        await engine.close()
+
+
+async def test_registered_certificate_revocation_after_tls_connect(certificates, tmp_path):
+    """Real peer identity reaches the registry; no claimed identity comes from JSON."""
+    from anywhere_computer.relay_registry import RelayAccount, RelayRegistry
+
+    context, fingerprint = certificates
+    registry = RelayRegistry(tmp_path / "registry")
+    owner = RelayAccount(issuer="https://issuer.example", subject="owner")
+    device = registry.register(owner, enrollment_id=uuid.uuid4().hex, name="Test PC")
+    registry.bind_channel(owner, device.device_id, fingerprint=fingerprint("client"))
+    received = []
+
+    async def dispatch(verified_fingerprint, payload):
+        account, current = registry.channel_device(verified_fingerprint)
+        assert account == owner
+        received.append((current.device_id, payload))
+        return current.device_id.encode()
+
+    # The transport supplies only the fingerprint obtained from the TLS peer.
+    listener = RemoteListener(context("server", False),
+                              {fingerprint("client"): fingerprint("client")}, dispatch)
+    port = await listener.start("127.0.0.1", 0)
+    writer = None
+    try:
+        response = await remote_exchange(
+            "127.0.0.1", port, b"probe", context=context("client", True),
+            server_name="localhost", expected_fingerprint=fingerprint("server"), timeout=5,
+        )
+        assert response == device.device_id.encode()
+        assert received == [(device.device_id, b"probe")]
+        tls = context("client", True)
+        check_tls(tls, client=True)
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", port, ssl=tls, server_hostname="localhost",
+            ssl_handshake_timeout=5,
+        )
+        registry.revoke(owner, device.device_id)
+        await write_frame(writer, b"claimed-active-device")
+        # Static transport enrollment is still present. The durable registry
+        # must reject before delivery even on this already connected socket.
+        assert fingerprint("client") in listener.peers
+        assert await asyncio.wait_for(reader.read(), 5) == b""
+        assert received == [(device.device_id, b"probe")]
+    finally:
+        if writer is not None:
+            await close_stream(writer)
+        await listener.close()
+        registry.close()
