@@ -61,3 +61,23 @@ relay, dispatch-once replay, stale-catalog rejection, grant isolation/revocation
 and cleanup. The recorded methods contained no model-turn start or steer calls.
 These tests use isolated fixture MCP servers and credentials; they prove the
 bridge protocol and lifecycle, not every installed third-party Plugin.
+
+## Updated HTTP Skill and live GUI checks
+
+The installed authenticated HTTP connector resolved the Cloudflare Skill body
+and its `references/workers/README.md` through the returned `skill_directory`.
+Operations `aff379ce52a3442ca3ec702407410afa` and
+`35df6fb9a6c8441993c3457d26b87a80` both completed. Independent local SHA-256
+checks matched the returned body hash
+`89bcccbb0b6dc77bec5e348f54a5ed8f1943d6ce56c33231a71fd2cd6bb05714`
+and reference hash
+`4e00df1c6d64cd393c909430769c183b7027b4fe1db0c2dbb31090987baff14c`.
+This read reference material only; no Cloudflare deployment was performed.
+
+`verify_gui_http.py --typed`, with the installed `/opt/homebrew/bin/peekaboo`,
+completed Calculator input and observation of 42, 50, 51, 52, 53 and 54 in one
+session. Every observation was recovered from the operation ledger, the session
+remained open through the sequence, and explicit closure confirmed cleanup.
+This is a real macOS GUI test through an isolated authenticated loopback HTTP
+server and the typed GUI API, with no model inference. It does not establish
+Windows GUI support or replace the incomplete new ChatGPT acceptance trial.
