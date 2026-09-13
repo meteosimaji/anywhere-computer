@@ -63,6 +63,7 @@ def main() -> None:
             "mcp",
             "status",
             "doctor",
+            "management-status",
             "stop",
             "engine-unify",
             "remote-mcp",
@@ -488,6 +489,11 @@ def main() -> None:
 
             assert args.verifier is not None  # Required by command validation above.
             print(json.dumps(update_once(directory, verifier=args.verifier), indent=2))
+        elif args.command == "management-status":
+            from .management import ManagementController
+
+            snapshot = asyncio.run(ManagementController(directory).snapshot())
+            print(snapshot.model_dump_json(indent=2))
         elif args.command == "doctor":
             diagnosis = asyncio.run(diagnose(directory))
             print(json.dumps(diagnosis, ensure_ascii=False, indent=2))

@@ -17,3 +17,5 @@ research-sources/
 
 .playwright-cli/
 output/
+desktop/target/
+desktop/gen/
