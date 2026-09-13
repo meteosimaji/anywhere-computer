@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from test_client_tokens import MemoryVault
 from test_enrollment_credentials import saved
@@ -98,5 +100,30 @@ def test_unconfirmed_reply_keeps_original_attempt(tmp_path, kind):
             client.register(attempt_id="a" * 32, name="PC")
         assert "synthetic-private-grant" not in str(caught.value)
         assert client.current() is not None and client.current().device is None
+    finally:
+        client.close()
+
+
+def test_mismatched_cached_receipt_is_not_returned_as_registered(tmp_path):
+    credentials = saved(tmp_path / "credentials", MemoryVault())
+    calls = []
+
+    def wire(endpoint, fields, token):
+        calls.append(fields)
+        return EnrollmentHTTPReply(200, {**fields, "device_id": "b" * 32, "state": "registered"})
+
+    client = RegistrationClient(tmp_path / "registration", credentials,
+                                endpoint="https://relay.example/register", wire=wire)
+    try:
+        result = client.register(attempt_id="a" * 32, name="PC")
+        corrupted = result.model_dump()
+        corrupted["device"]["enrollment_id"] = "c" * 32
+        with client._db:
+            client._db.execute("UPDATE registration SET record=?", (json.dumps(corrupted),))
+        with pytest.raises(ValueError):
+            client.current()
+        with pytest.raises(ValueError):
+            client.register(attempt_id="a" * 32, name="PC")
+        assert len(calls) == 1
     finally:
         client.close()

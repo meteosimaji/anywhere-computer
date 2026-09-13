@@ -6,7 +6,7 @@ from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .authorization import validate_authorization_url
 from .devices import device_name
@@ -18,11 +18,21 @@ from .state import prepare_directory
 
 
 class RegistrationAttempt(BaseModel):
-    model_config = ConfigDict(strict=True, frozen=True, extra="forbid")
+    model_config = ConfigDict(strict=True, frozen=True, extra="forbid", hide_input_in_errors=True)
     attempt_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     enrollment_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     name: str
     device: RelayDevice | None = None
+
+    @model_validator(mode="after")
+    def consistent_receipt(self) -> "RegistrationAttempt":
+        if self.name != device_name(self.name):
+            raise ValueError("Saved registration name is not normalized")
+        if self.device is not None and (
+            self.device.enrollment_id != self.enrollment_id or self.device.name != self.name
+        ):
+            raise ValueError("Saved device receipt differs from its registration request")
+        return self
 
 
 RegistrationWire = Callable[[str, dict[str, str], str], EnrollmentHTTPReply]
