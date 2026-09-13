@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "Anywhere Computer",
     "shortDescription": "Computer work and your Codex context.",
-    "longDescription": "Files, searches and terminal work, with selected Codex conversations, skills and compatible MCP tools. Development alpha; ChatGPT setup is required. Internet hosting and graphical desktop control are not included.",
+    "longDescription": "Files, searches and terminal work, with selected Codex conversations, skills and compatible MCP tools. Public alpha. ChatGPT requires HTTPS setup; macOS GUI requires a separately installed compatible Peekaboo MCP. Hosting is not included.",
     "developerName": "\u3081\u3066\u304a",
     "category": "Productivity",
     "capabilities": [
