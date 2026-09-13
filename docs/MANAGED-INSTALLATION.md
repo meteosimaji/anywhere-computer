@@ -536,6 +536,25 @@ provides PKCE and a bounded loopback callback for personal HTTP client login;
 enrollment integration must reuse that behavior without reusing its AI tokens.
 No public relay, endpoint, native permission or production credential changed.
 
+### Recovering a saved enrollment grant (2026-09-14)
+
+The trusted registration client can reopen the same enrollment vault namespace
+and request its access token with the original attempt ID and exact scope.
+Loading validates the saved format, issuer, client, attempt, scope and lifetime;
+an expired grant, a clock earlier than its issuance, malformed storage or a vault
+failure returns a redacted credential error. Reading never rotates, removes or
+replaces credentials and never redeems the original device code again. The
+returned token is internal and must not enter management IPC or MCP responses.
+Server-side audience, account and device authorization are still required: this
+does not implement device registration or indicate that a PC is connected.
+
+The targeted credential and device-authorization suites passed 52 tests on Mac.
+The isolated Keycloak runner also reopened its actual received grant with a new
+credential-store object and rejected reuse of the consumed device code. That
+runner uses synthetic credentials in memory; it is not a native-vault restart
+test or a rendered manager acceptance test. Server expiry was not repeated for
+this change; its earlier separate receipt remains the expiry evidence.
+
 The next provider compatibility check is documented in
 [ENROLLMENT-PROVIDER-TEST.md](ENROLLMENT-PROVIDER-TEST.md). It uses an isolated
 Keycloak release and the actual device-flow HTTP endpoints, with a synthetic
