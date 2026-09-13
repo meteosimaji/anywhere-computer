@@ -34,11 +34,22 @@ def device_name(value: str) -> str:
 
 
 class DeviceStore:
-    def __init__(self, directory: Path) -> None:
-        prepare_directory(directory)
+    def __init__(self, directory: Path, *, read_only: bool = False) -> None:
+        if not read_only:
+            prepare_directory(directory)
         self.directory = directory.resolve()
-        self.db = sqlite3.connect(directory / "devices.sqlite3", timeout=10)
+        database = directory / "devices.sqlite3"
+        if read_only and database.is_symlink():
+            raise ValueError("Device registry must not be a symbolic link")
+        self.db = (
+            sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
+            if read_only else sqlite3.connect(database, timeout=10)
+        )
         try:
+            if read_only:
+                if self.db.execute("PRAGMA user_version").fetchone()[0] != 2:
+                    raise ValueError("Device registry requires an explicit migration")
+                return
             with self.db:
                 self.db.execute("BEGIN IMMEDIATE")
                 version = self.db.execute("PRAGMA user_version").fetchone()[0]

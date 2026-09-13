@@ -6,6 +6,22 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  management-preview:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record desktop build toolchain
+        run: rustc --version --verbose
+      - name: Check desktop formatting
+        run: cargo fmt --manifest-path desktop/Cargo.toml -- --check
+      - name: Verify desktop host
+        run: cargo test --locked --manifest-path desktop/Cargo.toml
+      - name: Build native preview
+        run: cargo build --locked --manifest-path desktop/Cargo.toml
   shared-runtime:
     permissions:
       contents: read

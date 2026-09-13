@@ -1,0 +1,5 @@
+{
+  "identifier": "management-window",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
