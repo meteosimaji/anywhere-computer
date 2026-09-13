@@ -92,6 +92,10 @@ jobs:
       - run: uv run ruff check src tests scripts
       - run: uv run mypy
       - run: openssl version
+      - name: Check Node runtime and workspace recovery before parallel workers
+        run: |
+          node --version
+          uv run pytest -v tests/test_workspace_ui.py::test_workspace_mutation_recovery_in_javascript --junitxml="${{ runner.temp }}/pytest-workspace.xml"
       - run: uv run pytest -ra tests/test_startup_native.py --junitxml="${{ runner.temp }}/pytest-native.xml"
       - name: Check terminal ownership and continuous work before the full suite
         run: uv run pytest -v tests/test_terminal_children.py tests/test_file_search_terminal_workflow.py
