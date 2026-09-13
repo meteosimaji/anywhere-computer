@@ -20,7 +20,7 @@ from anywhere_computer.remote_transport import (
 
 
 @pytest.fixture(scope="module")
-def certificates(tmp_path_factory):
+def certificates(tmp_path_factory, request):
     executable = shutil.which("openssl")
     if executable is None:
         pytest.fail("TLS integration tests require the openssl test certificate tool")
@@ -48,7 +48,7 @@ def certificates(tmp_path_factory):
         "basicConstraints=critical,CA:FALSE\n"
         "keyUsage=critical,digitalSignature,keyEncipherment\n"
         "extendedKeyUsage=serverAuth,clientAuth\n"
-        "subjectAltName=DNS:localhost\n"
+        f"subjectAltName={getattr(request, 'param', 'DNS:localhost')}\n"
     )
     for name in ("server", "client", "stranger"):
         openssl(
