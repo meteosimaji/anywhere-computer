@@ -56,6 +56,25 @@ SSH 側の資格情報読み取り問題が解消するとは扱えない。
 起動引数で指定する。既存 ZIP の更新・Windows インストール済み Plugin の反映を
 このソース修正だけで完了とは扱わない。
 
+### Windows インストール済み Plugin の受け入れ
+
+Windows 側が保存した `installed-plugin-exact-acceptance-result.json`
+（観測時刻 `2026-09-13T04:48:21.501671+00:00`）を Mac 側から SFTP で取得した。
+試験はインストール済み `.mcp.json` の実コマンドと引数を使用している。
+
+- `anywhere-computer@personal` / `0.1.0-alpha.9`: installed、enabled。
+- initialize、tools/list（65 tools）、computer_status が成功。
+- server version `0.1.0a9`、platform `Windows`。
+- 専用作業領域でファイル新規作成・読戻しが成功し、MCP プロセス終了コードは 0。
+- 同じ Python の `--help` 比較も、`-X utf8` ありは成功、なしは失敗。
+
+この記録のホスト名は Mac の SSH 接続先と一致した。ただし SSH 側では
+報告されたユーザー領域の `Programs` ディレクトリを取得できない一方、
+プロセス一覧にはその配下の Python 実行ファイルが表示された。
+インストール先の見え方の差は未解決であり、別ホストと断定しない。
+対話ログオンでの Plugin 受け入れと、SSH／ChatGPT から同じエージェントへの
+接続成功は別の判定で、後者はまだ未達。
+
 ## インストール済み Codex Plugin
 
 インストール済み `0.1.0-alpha.9` の `.mcp.json` にある引数と作業ディレクトリで
