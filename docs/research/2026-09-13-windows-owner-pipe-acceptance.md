@@ -100,3 +100,43 @@ returned a catalog with no nested request_id, completed Windows status, and
 recovered that exact completed status by operation ID. This verifies the revised
 source against the installed Windows agent; deployment of the gateway and a fresh
 ChatGPT acceptance are separate remaining gates.
+
+## ChatGPT Windows file and terminal acceptance passed
+
+The Mac portable was rebuilt offline from the b33bab0 bundle, manifest/runtime
+verified (3,114 files; file and regex checks passed), and installed alongside the
+preserved f111c76 runtime. Idle engine replacement and the existing startup
+upgrade command selected the new interpreter; native startup was verified running.
+
+A fresh ChatGPT conversation used GPT-5.6 Sol / medium. The Windows status, isolated
+directory creation, Japanese/emoji file creation and read-back, hash-conditioned
+append and read-back, original operation recovery, terminal execution, separate
+output retrieval and cleanup all completed. Independent Windows ledger retrieval
+confirmed the actual terminal session 59d28f3d1889425bbd95541afdc535a1 returned
+`ANYWHERE_WINDOWS_42\r\n`, exit 0 and EOF, and that recovery returned the original
+56-byte creation result. Direct file read-back matched the chat's final SHA-256:
+`1628875a60b2f00563e58cae3280b9b09c634aa6cf0c3893d2874cba3e232064`.
+Final Windows status reported zero active sessions and operations. The chat's Mac
+instance claim was not used as deployment evidence; native startup and live engine
+receipts establish the selected Mac runtime separately.
+
+This acceptance does not cover GUI or VM reboot continuity. Nested `cmd /c echo`
+trailing-quote behavior was independently reproduced using Python subprocess on
+Windows without Anywhere Computer; plain `echo` does not exhibit it. Windows
+Codex's cached plugin command still points to the older installation and remains
+a separate update task, even though the SSH wrapper uses the working agent.
+
+## Windows installed Plugin updated
+
+Windows was staged with the b33bab0 bundle in a separate portable installation.
+The 4,620-file manifest, file round trip and regex child checks passed. The idle
+interactive agent was replaced without restarting the VM. Its new instance is
+8a8bd23d0fab4836bbc193df8b595f4d and runtime fingerprint is
+42f10d9ce185a8ad96cd9f90d2e5b4aeaa472ac94a4b4ce09154b47c85f03314.
+The previous Plugin cache and wrapper were backed up; the verified Plugin archive,
+Windows-specific MCP command and SSH wrapper were updated. Executing the actual
+installed .mcp.json command through MCP initialize and computer_status returned
+that same new instance. This verifies the saved Plugin configuration, not a claim
+that an already-open Codex conversation refreshed its cached tools.
+
+CI run 34742801352 completed successfully on macOS, Windows and Ubuntu.
