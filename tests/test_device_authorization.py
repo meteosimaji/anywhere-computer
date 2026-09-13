@@ -17,6 +17,10 @@ from anywhere_computer.device_authorization import DeviceAuthorizationClient, En
 from anywhere_computer.enrollment_credentials import EnrollmentCredentials, EnrollmentToken
 from anywhere_computer.enrollment_http import EnrollmentTransportError, https_enrollment_form
 
+# Match the IPv4-only fixture listener, avoiding Windows' IPv6 localhost fallback.
+# The certificate still validates the actual endpoint; localhost is a negative test.
+pytestmark = pytest.mark.parametrize("certificates", ["IP:127.0.0.1"], indirect=True)
+
 
 class Clock:
     value = 0.0
@@ -69,7 +73,7 @@ def endpoint(certificates):
     server.socket = context("server", False).wrap_socket(server.socket, server_side=True)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
-    issuer = f"https://localhost:{server.server_port}"
+    issuer = f"https://127.0.0.1:{server.server_port}"
     provider = EnrollmentProvider(
         issuer=issuer, device_authorization_endpoint=issuer + "/device",
         token_endpoint=issuer + "/token", client_id="desktop", scope="device:enroll",
@@ -292,7 +296,7 @@ def test_tls_hostname_ca_and_disabled_verification_rejected(endpoint):
     fields = {"client_id": "desktop"}
     with pytest.raises(EnrollmentTransportError) as caught:
         https_enrollment_form(
-            provider.device_authorization_endpoint.replace("localhost", "127.0.0.1"),
+            provider.device_authorization_endpoint.replace("127.0.0.1", "localhost"),
             fields, context=tls,
         )
     assert not caught.value.dispatched
