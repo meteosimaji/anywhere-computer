@@ -508,13 +508,30 @@ readback failures, and isolation from existing credentials. Together with the
 polling, existing native PKCE login, token and setup-controller suites, 89 tests
 passed on macOS. Ruff passed for `src tests scripts`; strict mypy passed for
 86 source files. A separate macOS native Keychain check saved and read back one
-disposable synthetic enrollment grant, then verified its removal. This proves
-the OS-vault layer separately, not a real account authorization.
+disposable synthetic enrollment grant, then verified its removal. A separate
+Windows VM check at `81af9bd` ran the same isolated save/readback/removal through
+Anywhere Computer's routed terminal with the real `keyring.backends.Windows`
+backend, returning exit code 0 and confirmed cleanup. These checks prove the
+OS-vault layer separately, not a real account authorization.
+
+The Windows TLS fixture initially exceeded its two-second request-arrival wait:
+an IPv4-only listener addressed as `localhost` first tried IPv6. A Windows VM
+probe measured 2.063 seconds for `localhost` versus less than a millisecond for
+`127.0.0.1`. The fixture now uses the literal IPv4 endpoint and a matching
+temporary certificate SAN; a hostname mismatch still fails verification.
+The related 46 tests passed locally after this correction. A separate existing
+JavaScript CI timeout did not reproduce in five Windows VM runs (0.08–0.17
+seconds each); this is not evidence that its CI cause has been established.
+Both push and pull-request CI subsequently passed all ten checks at `81af9bd`,
+including the Windows full suite (979 passed, 27 platform/fixture skips in the
+push run), portable build, relocated runtime verification, and provenance
+verification. PR 7 merged as `8ca7692`. These are CI and isolated OS receipts;
+the enrollment client is still not installed into the production manager flow.
 
 Still pending: account authentication with a maintained authorization server,
 server-enforced one-use codes and rate limits, actual device registration and
 PC-to-relay credentials, registration/result recovery across restart, manager
-wiring, and Windows native-vault acceptance. Existing `native_login` already
+wiring. Existing `native_login` already
 provides PKCE and a bounded loopback callback for personal HTTP client login;
 enrollment integration must reuse that behavior without reusing its AI tokens.
 No public relay, endpoint, native permission or production credential changed.
