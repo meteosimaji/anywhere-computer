@@ -5,7 +5,7 @@
 alpha8にはPeekaboo向けの薄いアダプターを追加した。先に既存の実行ファイルを
 `mcp_session_open`で明示的に選ぶ。別のMCPが同じ名前のツールを持つだけでは互換性を保証しない。
 
-- `gui_observe(session_id, app)`で対象アプリを観測し、observation_idを受け取る。
+- `gui_observe(session_id, app)`で対象アプリを前面化・観測し、observation_idを受け取る。
 - `gui_click(session_id, observation_id, element_id)`で観測中の要素をクリックする。
 - `gui_type(session_id, observation_id, text, press_return)`は対象アプリを前面化して入力する。
 - `gui_key(session_id, observation_id, keys)`は対象アプリを前面化してキーを押す。
@@ -182,3 +182,11 @@ uv run python scripts/verify_gui_http.py \
 返す子プロセスを使います。外部Plugin全件の実操作やChatGPT UIの試験とは区別します。
 
 参考: [Peekaboo MCP documentation](https://peekaboo.sh/MCP.html)
+
+開発版の観測は、指定アプリを前面化した後に `see(app_target="frontmost")` を使う。
+Peekaboo 3.0.0-beta3のアプリ指定経路が固定ウィンドウ番号0を選び、
+Chromeで1920×30の帯を返した実機事例に対応する。前面経路では961×979の
+Chrome画面を取得できた。返却されたApplication行が指定名と一意に完全一致しない場合は
+`action_ready=false`、`observed_application_mismatch`とし、操作用IDを発行しない。
+アプリ名は実際の表示名を指定する。PID・bundle ID・翻訳名の別名解決は行わない。
+この変更は同一アプリ内の特定ウィンドウへの固定や、入力結果の成功を保証しない。

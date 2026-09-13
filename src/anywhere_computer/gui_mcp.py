@@ -103,8 +103,13 @@ class GUIMCP:
     async def _observe(self, args: GUIObserve, *, owner: str | None) -> dict[str, JsonValue]:
         self.sessions.status(args.session_id, owner=owner)
         self.observations.pop(args.session_id, None)
+        focused = normalized(await self.sessions.call(
+            args.session_id, 'app', {'action': 'focus', 'name': args.app}, owner=owner,
+        ))
+        if focused['is_error']:
+            return {**focused, 'action_ready': False, 'stage': 'focus'}
         raw = await self.sessions.call(
-            args.session_id, 'see', {'app_target': args.app}, owner=owner,
+            args.session_id, 'see', {'app_target': 'frontmost'}, owner=owner,
         )
         result = normalized(raw)
         if result['is_error']:
@@ -117,6 +122,10 @@ class GUIMCP:
                 if isinstance(value, str):
                     texts.append(value)
         text = '\n'.join(texts)
+        applications = re.findall(r'^Application: (.+)$', text, re.MULTILINE)
+        if applications != [args.app]:
+            return {**result, 'action_ready': False,
+                    'reason': 'observed_application_mismatch'}
         match = re.search(r'^Snapshot ID: ([A-Za-z0-9_-]{1,128})$', text, re.MULTILINE)
         if match is None:
             return {**result, 'action_ready': False, 'reason': 'snapshot_reference_unavailable'}

@@ -11,6 +11,7 @@ class Peer:
         self.calls = []
         self.entries = {'a' * 32: object()}
         self.metadata = None
+        self.app = None
 
     def status(self, session_id, *, owner):
         if owner != 'owner':
@@ -19,7 +20,10 @@ class Peer:
     async def call(self, session_id, name, arguments, *, owner):
         self.status(session_id, owner=owner)
         self.calls.append((name, arguments))
-        text = 'Snapshot ID: snapshot-1\n  elem_1 - button' if name == 'see' else 'done'
+        if name == 'app':
+            self.app = arguments['name']
+        text = (f'Snapshot ID: snapshot-1\nApplication: {self.app}\n  elem_1 - button'
+                if name == 'see' else 'done')
         return {'content': [{'type': 'text', 'text': text}], 'isError': False,
                 '_meta': self.metadata}
 
@@ -35,18 +39,18 @@ async def test_observation_owner_staleness_and_consumption():
     action = GUIClick(session_id=sid, observation_id=seen['observation_id'], element_id='elem_1')
     with pytest.raises(ValueError, match='another connection'):
         await gui.act(action, owner='other')
-    assert len(peer.calls) == 1
+    assert len(peer.calls) == 2
     gui.observations[sid].created = time.monotonic() - 61
     with pytest.raises(ValueError, match='stale'):
         await gui.act(action, owner='owner')
-    assert len(peer.calls) == 1
+    assert len(peer.calls) == 2
     seen = await gui.observe(GUIObserve(session_id=sid, app='Calculator'), owner='owner')
     action.observation_id = seen['observation_id']
     await gui.act(action, owner='owner')
     assert peer.calls[-1] == ('click', {'on': 'elem_1', 'snapshot': 'snapshot-1'})
     with pytest.raises(ValueError, match='missing'):
         await gui.act(action, owner='owner')
-    assert len(peer.calls) == 3
+    assert len(peer.calls) == 5
 
 
 async def test_focus_and_keys_are_explicit_and_only_valid_elements_dispatch():
@@ -59,7 +63,7 @@ async def test_focus_and_keys_are_explicit_and_only_valid_elements_dispatch():
         await gui.act(GUIClick(**common, element_id='invented'), owner='owner')
     with pytest.raises(ValueError, match='key'):
         await gui.act(GUIKey(**common, keys=['unknown']), owner='owner')
-    assert len(peer.calls) == 1
+    assert len(peer.calls) == 2
     await gui.act(GUIType(**common, text='12+30', press_return=True), owner='owner')
     assert peer.calls[-2] == ('app', {'action': 'focus', 'name': 'Calculator'})
     assert peer.calls[-1] == ('type', {'text': '12+30', 'press_return': True,
@@ -173,11 +177,11 @@ async def test_engine_records_busy_without_replaying_input(tmp_path):
             await release.wait()
         return result
 
-    peer.call = delayed
     running = None
     try:
         observed = await engine.execute(Request(operation_id='1' * 32, tool='gui_observe',
             arguments={'session_id': 'a' * 32, 'app': 'Editor'}), peer='owner')
+        peer.call = delayed
         arguments = {'session_id': 'a' * 32,
                      'observation_id': observed.data['observation_id'], 'text': 'hello'}
         running = asyncio.create_task(engine.execute(Request(
@@ -200,3 +204,32 @@ async def test_engine_records_busy_without_replaying_input(tmp_path):
         if running is not None:
             await running
         await engine.close()
+
+
+async def test_observe_focuses_requested_app_and_captures_frontmost():
+    peer = Peer()
+    gui = GUIMCP(peer)
+    result = await gui.observe(GUIObserve(session_id='a' * 32, app='Editor'), owner='owner')
+    assert peer.calls == [('app', {'action': 'focus', 'name': 'Editor'}),
+                          ('see', {'app_target': 'frontmost'})]
+    assert result['action_ready']
+
+
+@pytest.mark.parametrize('application', ['Other', '', 'Editor\nApplication: Other'])
+async def test_observation_of_different_frontmost_app_cannot_authorize_input(application):
+    peer = Peer()
+    original = peer.call
+
+    async def switched(session_id, name, arguments, *, owner):
+        result = await original(session_id, name, arguments, owner=owner)
+        if name == 'see':
+            result['content'][0]['text'] = (
+                f'Snapshot ID: snapshot-1\nApplication: {application}\n  elem_1 - button')
+        return result
+
+    peer.call = switched
+    gui = GUIMCP(peer)
+    result = await gui.observe(GUIObserve(session_id='a' * 32, app='Editor'), owner='owner')
+    assert result['action_ready'] is False
+    assert result['reason'] == 'observed_application_mismatch'
+    assert not gui.observations
