@@ -112,6 +112,69 @@ async def serve(
         engine = Engine(engine_directory(directory), file_locks=directory / "file-locks")
         connections: set[asyncio.Task[None]] = set()
 
+        async def dispatch(request: Request) -> bytes:
+            if stop.is_set():
+                # A connection may have been accepted before __stop but finish
+                # reading afterwards. Do not start new work while draining it.
+                reply = Reply(
+                    operation_id=request.operation_id,
+                    state="failed",
+                    error="Agent is stopping; retry the same operation ID after reconnecting",
+                )
+            elif request.tool == "__status":
+                reply = Reply(
+                    operation_id=request.operation_id, state="completed", data=engine.status()
+                )
+            elif request.tool == "__catalog":
+                reply = Reply(
+                    operation_id=request.operation_id,
+                    state="completed",
+                    data={"tools": engine.catalog()},
+                )
+            elif request.tool == "__remote":
+                from .remote_bridge import RemoteAgent
+
+                granted = GrantedRequest.model_validate(request.arguments)
+                if granted.request.operation_id != request.operation_id:
+                    raise ValueError("Forwarded operation ID differs from envelope")
+                bridge = RemoteAgent(
+                    engine, {granted.identity: frozenset(granted.tools)}, transport="http",
+                )
+                reply = Reply.model_validate_json(await bridge.dispatch(
+                    granted.identity, granted.request.model_dump_json().encode(),
+                ))
+            elif request.tool == "__stop":
+                if engine.status()["update_blocked"]:
+                    reply = Reply(
+                        operation_id=request.operation_id,
+                        state="failed",
+                        error="Active work exists; stop sessions before stopping agent",
+                        data={"active_resources": engine.status()["active_resources"]},
+                    )
+                else:
+                    reply = Reply(
+                        operation_id=request.operation_id,
+                        state="completed",
+                        data={"state": "stopping"},
+                    )
+                    stop.set()
+            else:
+                reply = await engine.execute(request)
+            response = reply.model_dump_json().encode() + b"\n"
+            if len(response) > WIRE_LIMIT:
+                response = (
+                    Reply(
+                        operation_id=request.operation_id,
+                        state="unknown",
+                        error="Result exceeded the transport limit; query operation "
+                        "status or request a smaller page",
+                    )
+                    .model_dump_json()
+                    .encode()
+                )
+                response += b"\n"
+            return response
+
         async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
             current = asyncio.current_task()
             try:
@@ -122,66 +185,7 @@ async def serve(
                 if not isinstance(supplied, str) or not hmac.compare_digest(secret, supplied):
                     return
                 request = Request.model_validate(packet.get("request"))
-                if stop.is_set():
-                    # A connection may have been accepted before __stop but finish
-                    # reading afterwards. Do not start new work while draining it.
-                    reply = Reply(
-                        operation_id=request.operation_id,
-                        state="failed",
-                        error="Agent is stopping; retry the same operation ID after reconnecting",
-                    )
-                elif request.tool == "__status":
-                    reply = Reply(
-                        operation_id=request.operation_id, state="completed", data=engine.status()
-                    )
-                elif request.tool == "__catalog":
-                    reply = Reply(
-                        operation_id=request.operation_id,
-                        state="completed",
-                        data={"tools": engine.catalog()},
-                    )
-                elif request.tool == "__remote":
-                    from .remote_bridge import RemoteAgent
-
-                    granted = GrantedRequest.model_validate(request.arguments)
-                    if granted.request.operation_id != request.operation_id:
-                        raise ValueError("Forwarded operation ID differs from envelope")
-                    bridge = RemoteAgent(
-                        engine, {granted.identity: frozenset(granted.tools)}, transport="http",
-                    )
-                    reply = Reply.model_validate_json(await bridge.dispatch(
-                        granted.identity, granted.request.model_dump_json().encode(),
-                    ))
-                elif request.tool == "__stop":
-                    if engine.status()["update_blocked"]:
-                        reply = Reply(
-                            operation_id=request.operation_id,
-                            state="failed",
-                            error="Active work exists; stop sessions before stopping agent",
-                            data={"active_resources": engine.status()["active_resources"]},
-                        )
-                    else:
-                        reply = Reply(
-                            operation_id=request.operation_id,
-                            state="completed",
-                            data={"state": "stopping"},
-                        )
-                        stop.set()
-                else:
-                    reply = await engine.execute(request)
-                response = reply.model_dump_json().encode() + b"\n"
-                if len(response) > WIRE_LIMIT:
-                    response = (
-                        Reply(
-                            operation_id=request.operation_id,
-                            state="unknown",
-                            error="Result exceeded the transport limit; query operation "
-                            "status or request a smaller page",
-                        )
-                        .model_dump_json()
-                        .encode()
-                    )
-                    response += b"\n"
+                response = await dispatch(request)
                 writer.write(response)
                 await asyncio.wait_for(writer.drain(), 5)
             except (ValueError, OSError, TimeoutError):
