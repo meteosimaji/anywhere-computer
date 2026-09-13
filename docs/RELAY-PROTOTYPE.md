@@ -1,7 +1,8 @@
 # Isolated relay development
 
-The relay is not deployed and no manager pairing workflow uses it yet. Local
-MCP and personal SSH/HTTP connections remain unchanged.
+The relay is not deployed. The native manager has a development registration
+card, but its end-to-end pairing workflow has not passed acceptance. Local MCP
+and personal SSH/HTTP connections remain unchanged.
 
 ## Device ownership storage
 
@@ -161,3 +162,28 @@ returned `new` then `cancelled`, both with `connection_state: not_checked`; EOF
 terminated the child with exit code 0. No real-account authorization was started.
 This establishes the native Python entry point, not Tauri pipe integration,
 Windows worker execution, or browser-based enrollment acceptance.
+
+## Native manager integration (development)
+
+The Tauri manager now owns one persistent enrollment worker and exposes only
+six fixed commands to its registration card. The native host selects Python,
+the state directory and `enrollment-provider.json`; the WebView cannot choose
+an executable, endpoint, state path or arbitrary command. Requests are serial,
+responses are bounded to 32 KiB and an exchange has a 45-second deadline.
+A normal rejected command preserves the worker and its authorization state.
+A broken pipe, invalid reply or deadline discards the worker without automatically
+resending a potentially dispatched registration.
+
+The card displays the public user code and verification URL, obtains a device
+name and distinguishes a stored registration from a live connection. It does
+not expose access tokens or credential references. After an uncertain response,
+only explicit state inspection is enabled; a durable pending registration reuses
+its original name and enrollment ID. Completed authorization attempts currently
+require restarting the manager to start a new attempt. Reauthentication and
+recovery of a saved grant before registration preparation remain unfinished.
+
+Rust framing/cleanup tests, Python worker tests and JavaScript state tests cover
+these layers separately. They do not establish a rendered Tauri-to-provider
+end-to-end acceptance result. The feature requires an explicitly selected state
+directory and native provider configuration; default installation/pairing and
+public relay transport are not complete.
