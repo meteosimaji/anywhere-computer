@@ -166,7 +166,7 @@ Windows worker execution, or browser-based enrollment acceptance.
 ## Native manager integration (development)
 
 The Tauri manager now owns one persistent enrollment worker and exposes only
-six fixed commands to its registration card. The native host selects Python,
+seven fixed commands to its registration card. The native host selects Python,
 the state directory and `enrollment-provider.json`; the WebView cannot choose
 an executable, endpoint, state path or arbitrary command. Requests are serial,
 responses are bounded to 32 KiB and an exchange has a 45-second deadline.
@@ -178,9 +178,11 @@ The card displays the public user code and verification URL, obtains a device
 name and distinguishes a stored registration from a live connection. It does
 not expose access tokens or credential references. After an uncertain response,
 only explicit state inspection is enabled; a durable pending registration reuses
-its original name and enrollment ID. Completed authorization attempts currently
-require restarting the manager to start a new attempt. Reauthentication and
-recovery of a saved grant before registration preparation remain unfinished.
+its original name and enrollment ID. Denied, expired, cancelled or failed attempts can be explicitly restarted in
+the same manager. A fresh authorization object isolates late cancelled replies.
+Active or uncertain attempts, existing vault grants and saved registrations are
+not reset or deleted. Reauthentication of existing grants and recovery of a saved
+grant before registration preparation remain unfinished.
 
 Rust framing/cleanup tests, Python worker tests and JavaScript state tests cover
 these layers separately. They do not establish a rendered Tauri-to-provider

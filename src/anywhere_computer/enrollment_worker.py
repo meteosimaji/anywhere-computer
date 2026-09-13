@@ -44,6 +44,11 @@ class EnrollmentWorker:
             raise ValueError("Unexpected enrollment argument")
         if method == "start":
             self._authorization.start()
+        elif method == "restart":
+            if self._registration.current() is not None:
+                raise ValueError("Recover the saved registration before reauthorizing")
+            self._authorization = self._authorization.new_attempt()
+            self._authorization.start()
         elif method == "poll":
             self._authorization.poll()
         elif method == "cancel":

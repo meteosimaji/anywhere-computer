@@ -98,3 +98,24 @@ def test_native_configuration_rejects_wrong_boundary(invalid):
         values["command"] = "unexpected"
     with pytest.raises(ValueError):
         NativeEnrollmentConfig.model_validate(values)
+
+
+def test_explicit_restart_after_cancel_keeps_worker_and_changes_attempt(tmp_path):
+    worker, clock, calls = worker_for(tmp_path)
+    try:
+        first = worker.handle("start")
+        with pytest.raises(ValueError):
+            worker.handle("restart")
+        worker.handle("cancel")
+        second = worker.handle("restart")
+        assert second["authorization"]["phase"] == "waiting"
+        assert first["authorization"]["attempt_id"] != second["authorization"]["attempt_id"]
+        assert len(calls) == 2
+        clock.value = 6
+        worker.handle("poll")
+        worker.handle("register", name="Restarted PC")
+        with pytest.raises(ValueError):
+            worker.handle("restart")
+        assert len(calls) == 4
+    finally:
+        worker.close()

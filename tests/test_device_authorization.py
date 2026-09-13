@@ -443,3 +443,26 @@ def test_credential_profiles_are_isolated(tmp_path, endpoint):
             "issuer": store.issuer, "client": store.client, "profile": "new-pc", **changes,
         })
         assert other.reference != store.reference
+
+
+def test_new_attempt_isolated_from_cancelled_inflight_reply(tmp_path, endpoint):
+    client, _, vault, _ = client_for(tmp_path, endpoint)
+    _, options, _, _, received, release, _ = endpoint
+    options["pause"] = "/device"
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(client.start)
+        try:
+            assert received.wait(timeout=2)
+            with pytest.raises(ValueError):
+                client.new_attempt()
+            client.cancel()
+            replacement = client.new_attempt()
+            options["pause"] = None
+            fresh = replacement.start()
+            assert fresh.phase == "waiting"
+            assert fresh.attempt_id != client.progress().attempt_id
+        finally:
+            release.set()
+        assert future.result(timeout=3).phase == "cancelled"
+        assert replacement.progress() == fresh
+        assert not vault.data

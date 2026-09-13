@@ -166,6 +166,21 @@ class DeviceAuthorizationClient:
                     return self._progress
                 return self._set("failed")
 
+    def new_attempt(self) -> "DeviceAuthorizationClient":
+        """Explicitly replace a finished attempt without deleting any grant.
+
+        Return a separate client so late replies from a cancelled request stay
+        bound to the old cancelled object and cannot overwrite the new attempt.
+        """
+        with self._lock:
+            if self.progress().phase not in {"denied", "expired", "cancelled", "failed"}:
+                raise ValueError("The authorization attempt is not safely restartable")
+            self._credentials.require_empty()
+            return DeviceAuthorizationClient(
+                self._provider, self._credentials, wire=self._wire,
+                clock=self._clock, wall_clock=self._wall_clock,
+            )
+
     def cancel(self) -> EnrollmentProgress:
         with self._lock:
             if self._progress.phase in {"new", "starting", "waiting", "requesting",

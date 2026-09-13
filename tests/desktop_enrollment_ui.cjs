@@ -41,6 +41,10 @@ const snapshot = phase => ({schema_version:1,authorization:{phase},registration:
   assert.equal(get('enrollment-register').disabled,true);
   assert.match(get('enrollment-state').textContent,/未確認/);
   response=snapshot('cancelled'); await click('progress');
-  assert.equal(get('enrollment-start').disabled,true); // worker cannot restart a finished attempt
+  assert.equal(get('enrollment-start').disabled,true); // initial start is separate from explicit restart
+  assert.equal(get('enrollment-restart').disabled,false);
+  response=snapshot('waiting'); await click('restart');
+  assert.equal(calls.at(-1).args.method,'restart');
+  assert.equal(get('enrollment-restart').disabled,true);
   console.log('Enrollment UI state and recovery checks passed');
 })().catch(error => {console.error(error);process.exitCode=1;});

@@ -17,7 +17,7 @@ struct Worker {
 fn request(method: &str, name: Option<&str>) -> Result<Vec<u8>, String> {
     if !matches!(
         method,
-        "progress" | "start" | "poll" | "cancel" | "retry_save" | "register"
+        "progress" | "start" | "restart" | "poll" | "cancel" | "retry_save" | "register"
     ) {
         return Err("対応していない登録操作です。".into());
     }
