@@ -344,6 +344,14 @@ concurrent routing, public proxy compatibility and separate-process acceptance
 were not tested by this experiment. It establishes feasibility of reusing the
 engine behind an outbound channel, not completion of the relay.
 
+A follow-up ran the two PC clients as separate Python subprocesses, each owning
+its own engine and state directory. Both initiated WSS, executed the file write,
+recovered its original operation ID and exited with code 0; the relay ran in the
+parent process. This removes the shared-process limitation for that sequential
+happy-path check only. It still uses synthetic grants and server-authenticated
+TLS without PC authentication, and does not establish concurrent routing,
+reconnect/reply-loss recovery, Windows execution or public ingress readiness.
+
 The first channel slice must bind an authenticated PC credential to an existing,
 non-revoked registry device. A channel replacement must invalidate the old
 connection generation. Tool requests require a separately verified, expiring
