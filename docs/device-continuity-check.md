@@ -31,8 +31,18 @@ coordinated restart. A pass without an actual VM restart proves only current
 connectivity and data continuity. It does not prove automatic VM recovery, GUI,
 HVCI, EAC, or VRChat operation.
 
-On the current development Windows-for-Mac VM, SSH uses a loopback forwarding
-rule added to the running QEMU instance. The normal shared-NAT launch plan does
-not include that rule. Therefore VM-restart connectivity remains unqualified
-until an explicit persisted forwarding configuration is implemented and tested.
-Do not restart that VM based on this probe alone.
+On the current development Windows-for-Mac VM, SSH still uses a loopback
+forwarding rule added to the running QEMU instance. Windows-for-Mac commit
+`e4c0c2b` adds an explicit `--ssh-forward-port` launch option, restricted to
+shared NAT and loopback binding. A new app and a hash-bound launch profile have
+been prepared, but the running VM has not yet switched to them. Actual
+VM-restart connectivity therefore remains unqualified.
+
+The guest also needs its local engine available after interactive login.
+Anywhere Computer's existing `autostart-install` starts the HTTP/tunnel service;
+it is not a local-only SSH-agent startup command. Do not apply it to an
+SSH-only guest without the required HTTP configuration. A saved Plugin command
+proves how the engine can be started by that client, not that Windows starts it
+automatically after login. Verify both the host forwarding and guest startup
+before relying on unattended reconnection. Do not restart that VM based on this
+probe alone.
