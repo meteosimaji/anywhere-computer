@@ -40,6 +40,9 @@ impl ManagementHost {
 async fn management_snapshot(host: tauri::State<'_, ManagementHost>) -> Result<String, String> {
     let mut child = tokio::process::Command::new(&host.python)
         .args([
+            "-I",
+            "-X",
+            "utf8",
             "-m",
             "anywhere_computer",
             "management-status",

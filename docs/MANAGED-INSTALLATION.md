@@ -74,6 +74,9 @@ and relocation must still be qualified.
 The native host exports only `management_snapshot`, with no JavaScript-controlled
 command/path arguments. It runs the selected interpreter directly, uses bounded
 stdout and a timeout, discards stderr from the UI, and accepts snapshot schema 1.
+Python uses the same `-I -X utf8` isolation/encoding flags as internal engine
+launchers, so working-directory imports, PYTHON settings, and the Windows locale
+cannot select an unintended module or alter snapshot encoding.
 The WebView receives no shell/filesystem plugin. Remote content is not loaded.
 The fixed Python selection is currently a development-only native command-line
 argument, not a finished installation mechanism. Production will use a verified
@@ -104,6 +107,15 @@ These developer commands are explicitly not the proposed public installation
 experience. Bundle generation is disabled until packaged-runtime qualification.
 
 ## Next bounded changes
+
+Startup integration finding: `startup_service._install_startup_locked` currently
+requires `cloudflared_executable`, HTTP owner setup, and `TunnelCredential`, while
+`autostart.startup_definition` always launches `remote-watch`. Local management
+must not call that path as a universal installer. Extend the existing owned
+startup receipt/definition contract with an explicit connection mode and matching
+prerequisites, retaining old Cloudflare receipts and recovery behavior. Reuse
+`connection.ensure_agent` for local runtime selection and busy-update refusal;
+do not duplicate its restart or credential logic inside the desktop host.
 
 1. Verify the native preview and its non-mutating status contract on both OSes.
 2. Connect startup, existing setup planning, and update controllers with typed
