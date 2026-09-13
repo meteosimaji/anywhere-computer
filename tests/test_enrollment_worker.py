@@ -67,7 +67,10 @@ def worker_for(tmp_path, *, vault=None, clock=None, account_binding=False,
                             if account_binding else None), clock, calls
 
 
-def test_worker_reauthorizes_expired_pending_registration_and_reopens_new_grant(tmp_path):
+def test_worker_reauthorizes_expired_pending_registration_and_reopens_new_grant(
+    tmp_path, monkeypatch,
+):
+    from anywhere_computer.client_tokens import ClientCredentialError
     vault, clock, losses = MemoryVault(), Clock(), [1]
 
     def opened():
@@ -88,6 +91,8 @@ def test_worker_reauthorizes_expired_pending_registration_and_reopens_new_grant(
     expired = worker.handle("progress")
     assert expired["authorization"]["phase"] == "credential_error"
     assert expired["can_reauthorize"] is True and calls == []
+    with pytest.raises(ValueError):
+        worker.handle("cleanup")
     started = worker.handle("reauthorize")
     assert started["authorization"]["phase"] == "waiting"
     assert started["can_reauthorize"] is False
@@ -111,11 +116,24 @@ def test_worker_reauthorizes_expired_pending_registration_and_reopens_new_grant(
         assert result["registration"]["attempt_id"] == original["attempt_id"]
         assert result["registration"]["device"]["device_id"] == "b" * 32
         assert result["can_reauthorize"] is False
+        assert result["can_cleanup"] is True
         assert calls == ["https://relay.example/account", "https://relay.example/enroll"]
         assert vault.writes == 2
         assert all(vault.data[key] == value for key, value in old_vault.items())
         public = json.dumps([expired, started, restored, result])
         assert "synthetic-private" not in public and '"owner"' not in public
+        deletion = vault.delete_password
+        monkeypatch.setattr(vault, "delete_password", lambda *args: None)
+        with pytest.raises(ClientCredentialError):
+            worker.handle("cleanup")
+        assert worker.handle("progress")["can_cleanup"] is True
+        assert worker.handle("progress")["registration"] == result["registration"]
+        monkeypatch.setattr(vault, "delete_password", deletion)
+        cleaned = worker.handle("cleanup")
+        assert cleaned["can_cleanup"] is False
+        assert cleaned["registration"] == result["registration"]
+        assert vault.data == old_vault
+        assert worker.handle("cleanup")["registration"] == result["registration"]
     finally:
         worker.close()
 

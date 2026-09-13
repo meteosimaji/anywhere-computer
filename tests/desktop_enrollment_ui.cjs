@@ -60,6 +60,12 @@ const snapshot = phase => ({schema_version:1,authorization:{phase},registration:
   response.registration.device={state:'registered'}; await click('register');
   assert.equal(get('enrollment-register').disabled,true);
   assert.match(get('enrollment-state').textContent,/未確認/);
+  assert.equal(get('enrollment-cleanup').disabled,true);
+  response.can_cleanup=true; await click('progress');
+  assert.equal(get('enrollment-cleanup').disabled,false);
+  response.can_cleanup=false; await click('cleanup');
+  assert.equal(calls.at(-1).args.method,'cleanup');
+  assert.equal(get('enrollment-cleanup').disabled,true);
   response=snapshot('cancelled'); await click('progress');
   assert.equal(get('enrollment-start').disabled,true); // initial start is separate from explicit restart
   assert.equal(get('enrollment-restart').disabled,false);

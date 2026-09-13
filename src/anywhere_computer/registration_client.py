@@ -131,6 +131,23 @@ class RegistrationClient:
                                  (self._credentials.reference, slot))
             return slot
 
+    def cleanup_reauthorizations(self, forget: Callable[[str], None]) -> int:
+        """Release recorded recovery slots only after a receipt was persisted."""
+        with ProcessLock(self._lock, timeout=0):
+            current = self.current()
+            if current is None or current.device is None:
+                raise ValueError("Confirm registration before cleaning recovery credentials")
+            rows = self._db.execute("SELECT slot FROM reauthorizations WHERE credential=?",
+                                    (self._credentials.reference,)).fetchall()
+            for (slot,) in rows:
+                if not isinstance(slot, str) or uuid.UUID(hex=slot).hex != slot:
+                    raise ValueError("Invalid saved reauthorization slot")
+                forget(slot)
+                with self._db:
+                    self._db.execute("DELETE FROM reauthorizations WHERE credential=? AND slot=?",
+                                     (self._credentials.reference, slot))
+            return len(rows)
+
     def recover(self, credentials: EnrollmentCredentials, *,
                 attempt_id: str) -> RegistrationAttempt:
         """Recover a pending registration with a separately saved fresh grant.

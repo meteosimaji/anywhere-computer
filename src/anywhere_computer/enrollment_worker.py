@@ -43,6 +43,7 @@ class EnrollmentWorker:
                      [str], tuple[DeviceAuthorizationClient, EnrollmentCredentials]
                  ] | None = None) -> None:
         self._authorization, self._registration = authorization, registration
+        self._original_authorization = authorization
         self._reauthorization = reauthorization
         self._recovery_credentials: EnrollmentCredentials | None = None
         slot = registration.reauthorization_slot()
@@ -66,6 +67,19 @@ class EnrollmentWorker:
             self._authorization.restore_saved()
         if method == "start":
             self._authorization.start()
+        elif method == "cleanup":
+            factory = self._reauthorization
+            if factory is None:
+                raise ValueError("Recovery credential cleanup requires its native provider")
+
+            def forget(slot: str) -> None:
+                _, credentials = factory(slot)
+                credentials.forget(scope="device:enroll")
+
+            self._registration.cleanup_reauthorizations(forget)
+            self._authorization.cancel()
+            self._authorization = self._original_authorization
+            self._recovery_credentials = None
         elif method == "reauthorize":
             if not self._can_reauthorize() or self._reauthorization is None:
                 raise ValueError("Reauthorization cannot start in the current state")
@@ -107,6 +121,9 @@ class EnrollmentWorker:
         registration = self._registration.current()
         return {"schema_version": 1, "authorization": authorization,
                 "can_reauthorize": self._can_reauthorize(),
+                "can_cleanup": bool(self._reauthorization is not None and registration is not None
+                                    and registration.device is not None
+                                    and self._registration.reauthorization_slot() is not None),
                 "registration": registration.model_dump(exclude={"owner", "account_endpoint"})
                 if registration is not None else None,
                 "connection_state": "not_checked"}

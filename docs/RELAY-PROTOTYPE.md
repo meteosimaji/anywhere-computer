@@ -179,13 +179,19 @@ then calls `recover` with the newly saved grant. Neither a token nor the slot
 identifier is accepted from the WebView.
 
 Schema 3 adds a history of slot identifiers, retaining older slots for explicit
-credential cleanup. No automatic deletion is implemented. A process loss before
+credential cleanup. Once registration is confirmed, the manager's `cleanup`
+command deletes only those recorded recovery profiles. Each stored grant must
+match its provider, client and enrollment scope. Deletion is read back before
+removing its slot record; failed cleanup retains that record for retry. Already
+missing entries can be reconciled without deleting anything else. The original
+grant and registered device receipt remain intact. No automatic deletion is
+implemented. A process loss before
 the grant is saved still loses the in-memory device code; the user can explicitly
 start a new authorization while preserving the original registration. Worker
 tests cover expiry, reauthorization, termination after grant save, restoration
 and recovery, using an in-memory vault and injected provider/relay wires. Native
 IPC and UI state tests cover the new fixed command. Real-provider/native OS-vault
-reauthorization and cleanup remain acceptance work; this is not automatic
+reauthorization remain acceptance work; this is not automatic
 refresh-token renewal or a verified public pairing service.
 
 On 2026-09-14, a separate macOS acceptance check used the real
@@ -199,6 +205,14 @@ verified afterward. Provider and relay responses were injected fixtures and gran
 expiry used a controlled clock. This verifies the native credential and process
 restart boundary, not rendered manager UI, real-provider reauthorization,
 production cleanup behavior or public relay connectivity.
+
+A subsequent run repeated the three-process native Keychain check with the
+worker's `cleanup` command after recovery. The command removed the recovery
+credential and its slot record, preserving the original grant and device receipt;
+the test harness then removed the one remaining original test grant. This verifies
+that cleanup path on macOS with synthetic grants. Failure/readback/retry cases
+remain covered by injected-vault tests, and rendered UI and Windows cleanup
+acceptance have not been established by this run.
 
 ## Native host lifetime
 

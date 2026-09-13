@@ -139,3 +139,26 @@ class EnrollmentCredentials:
             raise ClientCredentialError(
                 "Enrollment grant was not confirmed in the OS store",
             ) from None
+
+    def forget(self, *, scope: str) -> None:
+        """Remove this exact profile after validating its binding, even if expired.
+
+        A missing entry is already cleaned. Failed deletion or readback remains
+        unconfirmed so callers retain their cleanup record for reconciliation.
+        """
+        try:
+            with ProcessLock(self._lock_path, timeout=5):
+                encoded = self._vault.get_password(SERVICE, self.reference)
+                if encoded is None:
+                    return
+                if len(encoded) > 16384:
+                    raise ValueError("Oversized enrollment record")
+                record = _SavedGrant.model_validate_json(encoded)
+                if (record.issuer != self.issuer or record.client != self.client
+                        or record.token.scope != scope):
+                    raise ValueError("Enrollment binding mismatch")
+                self._vault.delete_password(SERVICE, self.reference)
+                if self._vault.get_password(SERVICE, self.reference) is not None:
+                    raise ValueError("Enrollment credential deletion was not confirmed")
+        except Exception:
+            raise ClientCredentialError("Enrollment credential cleanup was not confirmed") from None
