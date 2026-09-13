@@ -187,7 +187,7 @@ def test_schema_one_pending_record_is_preserved_without_guessing_its_account(tmp
         with pytest.raises(ValueError):
             client.register(attempt_id="a" * 32, name="PC")
         assert calls == []
-        assert client._db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert client._db.execute("PRAGMA user_version").fetchone()[0] == 3
         assert json.loads(client._db.execute("SELECT record FROM registration").fetchone()[0]) == (
             original
         )

@@ -14,7 +14,7 @@
 <p id="enrollment-state" role="status" aria-live="polite">未確認</p>
 <div id="enrollment-code-area" hidden><p>認証ページをブラウザーで開き、コードを入力してください。</p><label>認証ページ<input id="enrollment-url" readonly></label><label>コード<input id="enrollment-code" readonly></label></div>
 <label>端末名<input id="enrollment-name" maxlength="120" placeholder="例：自宅のMac"></label>
-<div class="enrollment-actions"><button id="enrollment-progress">状態を確認</button><button id="enrollment-start" disabled>認証を開始</button><button id="enrollment-restart" disabled>認証をやり直す</button><button id="enrollment-poll" disabled>認証結果を確認</button><button id="enrollment-retry_save" disabled>認証情報の保存を再試行</button><button id="enrollment-register" disabled>この名前で登録</button><button id="enrollment-cancel" disabled>認証を中止</button></div>
+<div class="enrollment-actions"><button id="enrollment-progress">状態を確認</button><button id="enrollment-start" disabled>認証を開始</button><button id="enrollment-restart" disabled>認証をやり直す</button><button id="enrollment-reauthorize" disabled>元の登録を引き継いで再認証</button><button id="enrollment-poll" disabled>認証結果を確認</button><button id="enrollment-retry_save" disabled>認証情報の保存を再試行</button><button id="enrollment-register" disabled>この名前で登録</button><button id="enrollment-cancel" disabled>認証を中止</button></div>
 <p id="enrollment-result" role="status" aria-live="polite"></p><p class="muted">端末登録だけではAIから操作できません。接続状態は別途確認します。</p></section>
 <section><h2>登録端末</h2><div id="devices"></div></section>
 <section><h2>実行中の処理</h2><dl id="work"></dl></section>

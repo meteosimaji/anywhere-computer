@@ -44,6 +44,17 @@ const snapshot = phase => ({schema_version:1,authorization:{phase},registration:
   assert.match(get('enrollment-state').textContent,/保持/);
   assert.match(get('enrollment-state').textContent,/認証情報を利用できません/);
   assert.equal(get('enrollment-restart').disabled,true);
+  assert.equal(get('enrollment-reauthorize').disabled,true);
+  response.can_reauthorize=true; await click('progress');
+  assert.equal(get('enrollment-reauthorize').disabled,false);
+  response.authorization.phase='waiting'; response.can_reauthorize=false;
+  response.authorization.user_code='NEW-CODE';
+  response.authorization.verification_uri='https://auth.example';
+  await click('reauthorize');
+  assert.equal(calls.at(-1).args.method,'reauthorize');
+  assert.equal(get('enrollment-code').value,'NEW-CODE');
+  assert.equal(get('enrollment-reauthorize').disabled,true);
+  assert.equal(get('enrollment-register').disabled,true);
   response.authorization.phase='grant_saved'; await click('progress');
   assert.equal(get('enrollment-register').disabled,false);
   response.registration.device={state:'registered'}; await click('register');

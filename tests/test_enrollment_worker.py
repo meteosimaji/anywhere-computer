@@ -7,7 +7,7 @@ from test_device_authorization import Clock
 
 from anywhere_computer.device_authorization import DeviceAuthorizationClient, EnrollmentProvider
 from anywhere_computer.enrollment_credentials import EnrollmentCredentials
-from anywhere_computer.enrollment_http import EnrollmentHTTPReply
+from anywhere_computer.enrollment_http import EnrollmentHTTPReply, EnrollmentTransportError
 from anywhere_computer.enrollment_worker import (
     EnrollmentWorker,
     NativeEnrollmentConfig,
@@ -16,7 +16,8 @@ from anywhere_computer.enrollment_worker import (
 from anywhere_computer.registration_client import RegistrationClient
 
 
-def worker_for(tmp_path, *, vault=None, clock=None):
+def worker_for(tmp_path, *, vault=None, clock=None, account_binding=False,
+               registration_losses=None):
     provider = EnrollmentProvider(issuer="https://auth.example",
         device_authorization_endpoint="https://auth.example/device",
         token_endpoint="https://auth.example/token", client_id="desktop", scope="device:enroll")
@@ -40,13 +41,119 @@ def worker_for(tmp_path, *, vault=None, clock=None):
     def register_wire(endpoint, fields, token):
         calls.append(endpoint)
         assert token == "synthetic-private-token"
+        if endpoint.endswith("/account"):
+            return EnrollmentHTTPReply(200, {"issuer": provider.issuer, "subject": "owner"})
+        if registration_losses and registration_losses[0]:
+            registration_losses[0] -= 1
+            raise EnrollmentTransportError(dispatched=True)
         return EnrollmentHTTPReply(200, {**fields, "device_id": "b" * 32, "state": "registered"})
 
     auth = DeviceAuthorizationClient(provider, credentials, wire=auth_wire,
                                      clock=clock.monotonic, wall_clock=clock.wall)
     registration = RegistrationClient(tmp_path, credentials, endpoint="https://relay.example/enroll",
-                                      wire=register_wire)
-    return EnrollmentWorker(auth, registration), clock, calls
+                                      wire=register_wire,
+                                      account_endpoint="https://relay.example/account"
+                                      if account_binding else None)
+
+    def reauthorization(slot):
+        recovery = EnrollmentCredentials(
+            tmp_path, issuer=provider.issuer, client=provider.client_id,
+            profile="recovery-" + slot, vault=vault, clock=clock.wall,
+        )
+        return DeviceAuthorizationClient(provider, recovery, wire=auth_wire,
+                                          clock=clock.monotonic, wall_clock=clock.wall), recovery
+
+    return EnrollmentWorker(auth, registration, reauthorization=reauthorization
+                            if account_binding else None), clock, calls
+
+
+def test_worker_reauthorizes_expired_pending_registration_and_reopens_new_grant(tmp_path):
+    vault, clock, losses = MemoryVault(), Clock(), [1]
+
+    def opened():
+        return worker_for(tmp_path, vault=vault, clock=clock, account_binding=True,
+                          registration_losses=losses)
+
+    worker, _, _ = opened()
+    worker.handle("start")
+    clock.value = 6
+    worker.handle("poll")
+    with pytest.raises(EnrollmentTransportError):
+        worker.handle("register", name="元の PC 🚀")
+    original = worker.handle("progress")["registration"]
+    old_vault = vault.data.copy()
+    worker.close()
+    clock.value = 80
+    worker, _, calls = opened()
+    expired = worker.handle("progress")
+    assert expired["authorization"]["phase"] == "credential_error"
+    assert expired["can_reauthorize"] is True and calls == []
+    started = worker.handle("reauthorize")
+    assert started["authorization"]["phase"] == "waiting"
+    assert started["can_reauthorize"] is False
+    with pytest.raises(ValueError):
+        worker.handle("reauthorize")
+    clock.value = 86
+    granted = worker.handle("poll")
+    assert granted["authorization"]["phase"] == "grant_saved"
+    assert granted["registration"] == original
+    worker.close()
+    worker, _, calls = opened()
+    try:
+        restored = worker.handle("progress")
+        assert restored["authorization"] == granted["authorization"]
+        assert calls == []
+        with pytest.raises(ValueError):
+            worker.handle("register", name="Other PC")
+        assert calls == []
+        result = worker.handle("register", name="元の PC 🚀")
+        assert result["registration"]["enrollment_id"] == original["enrollment_id"]
+        assert result["registration"]["attempt_id"] == original["attempt_id"]
+        assert result["registration"]["device"]["device_id"] == "b" * 32
+        assert result["can_reauthorize"] is False
+        assert calls == ["https://relay.example/account", "https://relay.example/enroll"]
+        assert vault.writes == 2
+        assert all(vault.data[key] == value for key, value in old_vault.items())
+        public = json.dumps([expired, started, restored, result])
+        assert "synthetic-private" not in public and '"owner"' not in public
+    finally:
+        worker.close()
+
+
+def test_worker_loss_before_new_grant_keeps_registration_and_records_next_slot(tmp_path):
+    import sqlite3
+    from contextlib import closing
+
+    vault, clock = MemoryVault(), Clock()
+
+    def opened():
+        return worker_for(tmp_path, vault=vault, clock=clock, account_binding=True,
+                          registration_losses=[1])[0]
+
+    worker = opened()
+    worker.handle("start")
+    clock.value = 6
+    worker.handle("poll")
+    with pytest.raises(EnrollmentTransportError):
+        worker.handle("register", name="PC")
+    pending = worker.handle("progress")["registration"]
+    worker.handle("reauthorize")
+    worker.close()
+    worker = opened()
+    try:
+        state = worker.handle("progress")
+        assert state["registration"] == pending
+        assert state["authorization"]["phase"] == "new"
+        assert state["can_reauthorize"] is True
+        state = worker.handle("reauthorize")
+        assert state["authorization"]["phase"] == "waiting"
+        assert state["registration"] == pending and vault.writes == 1
+    finally:
+        worker.close()
+    with closing(sqlite3.connect(tmp_path / "registration.sqlite3")) as db:
+        slots = db.execute("SELECT slot FROM reauthorizations ORDER BY rowid").fetchall()
+        assert len(slots) == 2 and slots[0] != slots[1]
+        assert db.execute("SELECT COUNT(*) FROM registration").fetchone()[0] == 1
 
 
 def test_worker_preserves_authorization_through_registration(tmp_path):

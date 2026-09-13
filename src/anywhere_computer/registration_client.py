@@ -78,12 +78,14 @@ class RegistrationClient:
             with self._db:
                 self._db.execute("BEGIN IMMEDIATE")
                 version = self._db.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, 1, 2):
+                if version not in (0, 1, 2, 3):
                     raise ValueError("Unsupported registration state version")
                 self._db.execute("CREATE TABLE IF NOT EXISTS registration ("
                                  "credential TEXT PRIMARY KEY, endpoint TEXT NOT NULL, "
                                  "record TEXT NOT NULL)")
-                self._db.execute("PRAGMA user_version=2")
+                self._db.execute("CREATE TABLE IF NOT EXISTS reauthorizations ("
+                                 "credential TEXT NOT NULL, slot TEXT NOT NULL UNIQUE)")
+                self._db.execute("PRAGMA user_version=3")
         except BaseException:
             self._db.close()
             raise
@@ -99,6 +101,35 @@ class RegistrationClient:
         if row[0] != self._endpoint:
             raise ValueError("Saved registration belongs to a different endpoint")
         return RegistrationAttempt.model_validate_json(row[1])
+
+    def reauthorization_slot(self) -> str | None:
+        self.current()  # Reject configuration changes before selecting another grant.
+        row = self._db.execute(
+            "SELECT slot FROM reauthorizations WHERE credential=? ORDER BY rowid DESC LIMIT 1",
+            (self._credentials.reference,),
+        ).fetchone()
+        if row is None:
+            return None
+        if not isinstance(row[0], str) or uuid.UUID(hex=row[0]).hex != row[0]:
+            raise ValueError("Invalid saved reauthorization slot")
+        return row[0]
+
+    def begin_reauthorization(self) -> str:
+        """Persist a new vault-slot identity before starting explicit authorization.
+
+        Historical slots remain recorded for later credential cleanup; no grant
+        is deleted or replaced. Slots contain no codes, tokens or account claims.
+        """
+        with ProcessLock(self._lock, timeout=0):
+            current = self.current()
+            if (current is None or current.device is not None or current.owner is None
+                    or current.account_endpoint != self._account_endpoint):
+                raise ValueError("Reauthorization requires an account-bound pending registration")
+            slot = uuid.uuid4().hex
+            with self._db:
+                self._db.execute("INSERT INTO reauthorizations VALUES(?,?)",
+                                 (self._credentials.reference, slot))
+            return slot
 
     def recover(self, credentials: EnrollmentCredentials, *,
                 attempt_id: str) -> RegistrationAttempt:

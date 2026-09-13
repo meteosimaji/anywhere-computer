@@ -7,6 +7,7 @@ It supplies configured clients, never a WebView-selected executable or endpoint.
 import argparse
 import json
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
 from urllib.parse import urlsplit
@@ -37,8 +38,26 @@ class NativeEnrollmentConfig(BaseModel):
 
 class EnrollmentWorker:
     def __init__(self, authorization: DeviceAuthorizationClient,
-                 registration: RegistrationClient) -> None:
+                 registration: RegistrationClient, *,
+                 reauthorization: Callable[
+                     [str], tuple[DeviceAuthorizationClient, EnrollmentCredentials]
+                 ] | None = None) -> None:
         self._authorization, self._registration = authorization, registration
+        self._reauthorization = reauthorization
+        self._recovery_credentials: EnrollmentCredentials | None = None
+        slot = registration.reauthorization_slot()
+        if slot is not None:
+            if reauthorization is None:
+                raise ValueError("Saved reauthorization requires its native provider")
+            self._authorization, self._recovery_credentials = reauthorization(slot)
+
+    def _can_reauthorize(self) -> bool:
+        saved = self._registration.current()
+        progress = self._authorization.progress()
+        return bool(self._reauthorization is not None and saved is not None
+                    and saved.device is None and saved.owner is not None
+                    and progress.phase not in {"starting", "waiting", "requesting"}
+                    and not progress.can_retry_save)
 
     def handle(self, method: str, *, name: str | None = None) -> dict[str, object]:
         if method != "register" and name is not None:
@@ -46,6 +65,13 @@ class EnrollmentWorker:
         if method in {"progress", "register"}:
             self._authorization.restore_saved()
         if method == "start":
+            self._authorization.start()
+        elif method == "reauthorize":
+            if not self._can_reauthorize() or self._reauthorization is None:
+                raise ValueError("Reauthorization cannot start in the current state")
+            slot = self._registration.begin_reauthorization()
+            self._authorization.cancel()
+            self._authorization, self._recovery_credentials = self._reauthorization(slot)
             self._authorization.start()
         elif method == "restart":
             if self._registration.current() is not None:
@@ -65,15 +91,22 @@ class EnrollmentWorker:
             progress = self._authorization.progress()
             if saved is None and progress.phase != "grant_saved":
                 raise ValueError("Complete enrollment authorization before registration")
-            self._registration.register(
-                attempt_id=saved.attempt_id if saved is not None else progress.attempt_id,
-                name=name,
-            )
+            if self._recovery_credentials is not None:
+                if saved is None or name != saved.name or progress.phase != "grant_saved":
+                    raise ValueError("Complete reauthorization for the original registration")
+                self._registration.recover(self._recovery_credentials,
+                                           attempt_id=progress.attempt_id)
+            else:
+                self._registration.register(
+                    attempt_id=saved.attempt_id if saved is not None else progress.attempt_id,
+                    name=name,
+                )
         elif method != "progress":
             raise ValueError("Unknown enrollment command")
         authorization = self._authorization.progress().model_dump(exclude={"credential_reference"})
         registration = self._registration.current()
         return {"schema_version": 1, "authorization": authorization,
+                "can_reauthorize": self._can_reauthorize(),
                 "registration": registration.model_dump(exclude={"owner", "account_endpoint"})
                 if registration is not None else None,
                 "connection_state": "not_checked"}
@@ -131,7 +164,15 @@ def main() -> None:
         registration = RegistrationClient(args.state_dir, credentials,
                                           endpoint=config.registration_endpoint,
                                           account_endpoint=config.account_endpoint)
-        serve_enrollment(EnrollmentWorker(authorization, registration), sys.stdin, sys.stdout)
+        def reauthorization(slot: str) -> tuple[DeviceAuthorizationClient, EnrollmentCredentials]:
+            recovery = EnrollmentCredentials(
+                args.state_dir, issuer=config.provider.issuer, client=config.provider.client_id,
+                profile="native-manager-recovery-" + slot,
+            )
+            return DeviceAuthorizationClient(config.provider, recovery), recovery
+
+        serve_enrollment(EnrollmentWorker(authorization, registration,
+                                          reauthorization=reauthorization), sys.stdin, sys.stdout)
     except Exception:
         print(json.dumps({"ok": False, "error": "Native enrollment worker could not continue"}))
         raise SystemExit(1) from None

@@ -121,9 +121,9 @@ Tests exercise restart after simulated post-registration response loss, stable
 identity and cached receipt reuse, conflicting recovery inputs, invalid/rejected
 responses and absence of the synthetic token from the local database. The HTTPS
 wire has separate actual TLS tests. The native worker/UI integration is described
-below. Expired-grant reauthorization and switching accounts need an
-explicit recovery transition; this version preserves pending state instead of
-silently creating a new registration under a different attempt.
+below. Expired-grant reauthorization uses the explicit recovery transition
+described below; switching accounts never silently creates a new registration
+from an existing pending request.
 
 Restart tests also cover expiry after both confirmed registration and lost reply.
 A confirmed cached receipt remains readable without a bearer request; an
@@ -143,10 +143,10 @@ registration. The client verifies issuer/subject before its first registration,
 persists that binding before dispatch and checks it on a pending retry. A changed
 account or removed/changed lookup endpoint cannot resend the pending registration.
 Existing pending records without identity are not silently assigned the current
-account. Registration storage advances to schema 2; old records remain readable,
+account. Registration storage advances to schema 3; old records remain readable,
 while older binaries reject the newer database version. The owner binding stays
 out of native progress responses. Account lookup alone does not renew an expired
-grant; native reauthorization orchestration remains unfinished.
+grant; the native worker must obtain a fresh grant through explicit authorization.
 Account identifiers are not bearer credentials, but callers should keep them out
 of routine diagnostics. This remains an isolated endpoint, not public deployment.
 
@@ -169,11 +169,24 @@ use this transition. Tests cover grant expiry, a different account, mismatched
 provider/client/attempt, changed lookup endpoint and repeated response loss with
 restart. These tests use an in-memory vault and injected registration wire.
 
-The native worker does not yet acquire or select that separate grant. A complete
-manager flow still needs durable ownership of the reauthorization attempt and its
-OS-vault slot, recovery after worker termination, user-visible progress, and a
-verified cleanup policy. The new client method must not be described as completed
-one-click reauthorization or automatic refresh-token renewal.
+The native worker's `reauthorize` command now records a fresh vault-slot identifier
+before starting authorization and uses a separate profile in the existing OS
+credential store. Reopening the worker selects the latest recorded slot and
+restores its saved grant without redeeming the code again. The manager offers
+this command for an account-bound pending registration, disables it during an
+active authorization exchange, and keeps the original name fixed. Registration
+then calls `recover` with the newly saved grant. Neither a token nor the slot
+identifier is accepted from the WebView.
+
+Schema 3 adds a history of slot identifiers, retaining older slots for explicit
+credential cleanup. No automatic deletion is implemented. A process loss before
+the grant is saved still loses the in-memory device code; the user can explicitly
+start a new authorization while preserving the original registration. Worker
+tests cover expiry, reauthorization, termination after grant save, restoration
+and recovery, using an in-memory vault and injected provider/relay wires. Native
+IPC and UI state tests cover the new fixed command. Real-provider/native OS-vault
+reauthorization and cleanup remain acceptance work; this is not automatic
+refresh-token renewal or a verified public pairing service.
 
 ## Native host lifetime
 
@@ -230,11 +243,11 @@ not expose access tokens or credential references. After an uncertain response,
 only explicit state inspection is enabled; a durable pending registration reuses
 its original name and enrollment ID. Denied, expired, cancelled or failed attempts can be explicitly restarted in
 the same manager. A fresh authorization object isolates late cancelled replies.
-Active or uncertain attempts, existing vault grants and saved registrations are
-not reset or deleted. A fresh worker restores the attempt ID of an unexpired, correctly bound grant
+Active exchanges cannot be replaced. Existing vault grants and saved registrations
+are not deleted. A fresh worker restores the attempt ID of an unexpired, correctly bound grant
 from the OS vault before registration, without exposing or redeeming its token.
-Expired grants remain preserved and unavailable; their reauthentication workflow
-is still unfinished.
+Expired grants remain preserved and unavailable; the separate-slot reauthorization
+flow above can recover account-bound pending registrations.
 
 Rust framing/cleanup tests, Python worker tests and JavaScript state tests cover
 these layers separately. They do not establish a rendered Tauri-to-provider

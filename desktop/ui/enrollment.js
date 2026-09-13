@@ -1,6 +1,6 @@
 "use strict";
 (() => {
-  const methods = ["progress", "start", "restart", "poll", "retry_save", "register", "cancel"];
+  const methods = ["progress", "start", "restart", "reauthorize", "poll", "retry_save", "register", "cancel"];
   const element = id => document.getElementById(`enrollment-${id}`);
   let busy = false, snapshot = null;
   const phases = {new:"認証を開始できます",starting:"認証を開始しています",waiting:"ブラウザーでの認証を待っています",requesting:"認証結果を確認しています",grant_saved:"認証情報を保存しました。端末名を入力して登録してください",denied:"認証が拒否されました",expired:"認証コードの期限が切れました",cancelled:"認証を中止しました",failed:"認証に失敗しました",uncertain:"認証結果が未確認です",credential_error:"認証情報を利用できません。期限や資格情報ストアの状態を確認してください"};
@@ -9,6 +9,7 @@
     const saved = snapshot?.registration;
     for (const method of methods) {
       const allowed = method === "progress"
+        || method === "reauthorize" && snapshot?.can_reauthorize === true
         || method === "start" && phase === "new" && !saved
         || method === "restart" && ["denied","expired","cancelled","failed"].includes(phase) && !saved
         || method === "poll" && phase === "waiting"
