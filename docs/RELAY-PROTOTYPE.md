@@ -32,8 +32,8 @@ still required before a public service. This is not end-to-end encryption.
 
 Five storage tests cover reopen/retry, duplicate names, both subject and issuer
 separation, revocation/replay, and concurrent registration. These prove the
-storage boundary only. Authenticated registration endpoints, separate PC transport
-credentials, outbound connections, per-request tool authorization and result
+storage boundary only. Separate PC transport credentials, outbound connections,
+per-request tool authorization and result
 recovery remain implementation work. The existing engine ledger remains the
 intended source of execution results; this registry must not become a second
 operation engine or an offline write queue.
@@ -59,11 +59,34 @@ registration grant does not authorize tool execution or a PC relay connection.
 This is a deliberately explicit reference-provider profile, not a claim of
 universal OAuth token compatibility. Other providers need an evaluated profile.
 The service currently receives public keys from operator configuration: automatic
-rotation, online grant revocation, rate limiting and the HTTP enrollment endpoint
-remain unfinished. Short token expiry does not replace those requirements.
+rotation, online grant revocation and rate limiting remain unfinished. Short
+token expiry does not replace those requirements.
 
 The real-provider runner's `--check-registration` option obtains public signing
 keys from the fixed HTTPS loopback fixture issuer, then tests registration with
 the actual issued token, idempotent retry and wrong-audience rejection with no
-extra device record. It does not deploy an endpoint or establish PC transport.
+extra device record. It does not deploy a public endpoint or establish PC transport.
 See [provider acceptance](ENROLLMENT-PROVIDER-TEST.md) for reproducible setup.
+
+## Isolated HTTP registration
+
+`enrollment_http(service)` in `relay_http.py` mounts `POST /enrollment/devices`
+on a separate loopback adapter. It reuses the bounded HTTP framing from
+`HTTPMCP`, not the personal owner's grants or engine. Every registration needs
+an enrollment bearer token; `/mcp` always rejects and creates no session.
+Browser origins are refused by default. There is no listener on a public network
+interface, forwarding header trust, automatic CORS policy or deployment command.
+
+The JSON body contains only `enrollment_id` (32 lowercase hex characters) and
+`name` (the existing normalized device-name contract); caller-supplied account
+fields are rejected. Bodies over 4096 bytes, query strings, unsupported methods
+and media types are refused. Successful creation and replay both return HTTP 200
+with device ID, enrollment ID, name and registration state. Conflicting names
+for an existing enrollment return 409. Responses have `Cache-Control: no-store`;
+failure bodies contain no token, claims, request text or database details.
+
+The registry and adapter belong to one event-loop thread. This small loopback
+implementation performs synchronous signature/storage work and is not a
+production concurrency or rate-limiting design. The manager still needs the
+registration client and persistent association; a registered device still cannot
+execute operations until the separately authenticated outbound link is implemented.

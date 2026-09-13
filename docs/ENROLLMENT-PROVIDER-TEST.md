@@ -160,4 +160,12 @@ returned that same device; a verifier configured for the operations audience
 rejected the grant, leaving the single registration unchanged. Login denial,
 local cancellation and consumed-code rejection still passed. The runner reports
 `pc_transport_connected: false`: this evidence covers the authorization/storage
-boundary, not a deployed registration endpoint, manager UI or outbound PC link.
+boundary, not a public registration endpoint, manager UI or outbound PC link.
+
+The runner now also starts the separate loopback registration adapter and sends
+the real grant over HTTP. On 2026-09-14, registration and retry returned the same
+device ID; using that grant at `/mcp` returned 401 without creating a session.
+The receipt records `http_registration: true` and
+`enrollment_token_mcp_rejected: true`. Provider authentication uses verified
+HTTPS; the local adapter test uses loopback HTTP. This is not evidence for
+internet TLS termination, a proxy deployment, throughput or PC relay transport.

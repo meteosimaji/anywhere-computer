@@ -6,6 +6,8 @@ OS vaults are tested separately: this runner keeps synthetic grants in memory.
 """
 
 import argparse
+import asyncio
+import http.client
 import http.cookiejar
 import json
 import ssl
@@ -110,6 +112,7 @@ def verify_registration(issuer, context, token, directory):
     from cryptography.hazmat.primitives import serialization
 
     from anywhere_computer.relay_enrollment import EnrollmentRejected, RelayEnrollment
+    from anywhere_computer.relay_http import enrollment_http
     from anywhere_computer.relay_registry import RelayRegistry
 
     class NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -151,9 +154,40 @@ def verify_registration(issuer, context, token, directory):
         else:
             raise AssertionError("Enrollment token accepted for a different audience")
         assert registry.db.execute("SELECT COUNT(*) FROM relay_devices").fetchone()[0] == 1
+
+        async def check_http():
+            adapter = enrollment_http(service)
+            port = await adapter.start()
+
+            def send(path, payload):
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                try:
+                    connection.request("POST", path, json.dumps(payload).encode(), headers={
+                        "Authorization": "Bearer " + token, "Content-Type": "application/json",
+                    })
+                    response = connection.getresponse()
+                    raw = response.read(4097)
+                    assert len(raw) <= 4096
+                    return response.status, json.loads(raw) if raw else None
+                finally:
+                    connection.close()
+
+            try:
+                payload = {"enrollment_id": "a" * 32, "name": "Fixture PC"}
+                status, device = await asyncio.to_thread(send, "/enrollment/devices", payload)
+                assert status == 200 and device["device_id"] == first.device_id
+                again = await asyncio.to_thread(send, "/enrollment/devices", payload)
+                assert again == (status, device)
+                rejected, _ = await asyncio.to_thread(send, "/mcp", {"method": "initialize"})
+                assert rejected == 401 and not adapter.sessions
+            finally:
+                await adapter.close()
+
+        asyncio.run(check_http())
     finally:
         registry.close()
-    return {"signed_registration": True, "retry_same_device": True,
+    return {"signed_registration": True, "http_registration": True,
+            "enrollment_token_mcp_rejected": True, "retry_same_device": True,
             "wrong_audience_rejected": True, "pc_transport_connected": False}
 
 
