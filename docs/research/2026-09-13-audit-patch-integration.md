@@ -36,4 +36,4 @@ terminal_stop後にも生存、update_blocked=false、stop state=exitedを確認
 親シェルが終了しても同じPOSIXプロセスグループ/Windows Jobの子が残る間は所有元を保持する。
 親終了後の子の停止・更新ブロッカー維持、SIGTERMを無視する子の終了、終了後に古いPGIDへ
 送信しないことをtests/test_terminal_children.pyに追加した。従来の未修正記述を更新した。
-正式な最終結果と配布・接続版の照合はalpha8の更新検証記録に記載する。
+正式な最終結果と配布・接続版の照合は[alpha8の更新検証記録](../UPDATE-VERIFICATION-ALPHA8-2026-09-13.md)に記載する。

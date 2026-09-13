@@ -83,3 +83,16 @@ async def test_coordinate_metadata_is_validated_and_unrelated_metadata_omitted()
     result = await gui.observe(args, owner='owner')
     assert result['coordinate_status'] == 'unsupported_or_invalid'
     assert result['coordinate_context'] is None
+
+
+@pytest.mark.parametrize(('keys', 'expected'), [
+    (['ESCAPE'], 'escape'), (['ESC'], 'escape'), (['CMD', 'ENTER'], 'cmd,return'),
+])
+async def test_gui_key_normalizes_documented_case_and_aliases(keys, expected):
+    peer = Peer()
+    gui = GUIMCP(peer)
+    sid = 'a' * 32
+    seen = await gui.observe(GUIObserve(session_id=sid, app='Calculator'), owner='owner')
+    await gui.act(GUIKey(session_id=sid, observation_id=seen['observation_id'], keys=keys),
+                  owner='owner')
+    assert peer.calls[-1] == ('hotkey', {'keys': expected})

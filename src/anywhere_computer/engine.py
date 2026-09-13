@@ -865,6 +865,12 @@ class Engine:
                 "office": False,
                 "office_text_read": True,
                 "gui": False,
+                "gui_mcp_adapter": {
+                    "available": True,
+                    "provider": "peekaboo",
+                    "requires": "explicit direct MCP session and provider OS permissions",
+                    "runtime_verified": False,
+                },
             },
         }
 

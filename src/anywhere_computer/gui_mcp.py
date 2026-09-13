@@ -23,7 +23,11 @@ def normalized(raw: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 
 class GUIObserve(DirectMCPSessionId):
-    app: str = Field(min_length=1, max_length=256)
+    app: str = Field(min_length=1, max_length=256, description=(
+        'Exact running app name accepted by the selected Peekaboo server. Names may be '
+        'localized (for example 計算機). If absent, inspect its app tool and use the '
+        'name returned by launch; this operation does not launch applications.'
+    ))
 
 
 class GUIAction(DirectMCPSessionId):
@@ -40,7 +44,11 @@ class GUIType(GUIAction):
 
 
 class GUIKey(GUIAction):
-    keys: list[str] = Field(min_length=1, max_length=8)
+    keys: list[str] = Field(min_length=1, max_length=8, description=(
+        'One key chord, case-insensitive: cmd, shift, alt, option, ctrl, fn, a-z, 0-9, '
+        'space, return (alias enter), tab, escape (alias esc), delete, '
+        'arrow_up/down/left/right, f1-f12. Example: ["escape"] or ["cmd", "a"].'
+    ))
 
 
 class Bounds(BaseModel):
@@ -149,12 +157,14 @@ class GUIMCP:
             name, parameters = 'type', {'text': args.text, 'press_return': args.press_return,
                                         'snapshot': observation.snapshot}
         elif isinstance(args, GUIKey):
+            aliases = {'esc': 'escape', 'enter': 'return'}
+            keys = [aliases.get(key.lower(), key.lower()) for key in args.keys]
             if any(not re.fullmatch(
                 r'(?:cmd|shift|alt|option|ctrl|fn|[a-z0-9]|space|return|tab|escape|delete|'
                 r'arrow_(?:up|down|left|right)|f(?:[1-9]|1[0-2]))', key,
-            ) for key in args.keys):
-                raise ValueError('Unsupported GUI key name')
-            name, parameters = 'hotkey', {'keys': ','.join(args.keys)}
+            ) for key in keys):
+                raise ValueError('Unsupported GUI key name; see keys schema for supported names')
+            name, parameters = 'hotkey', {'keys': ','.join(keys)}
         else:
             raise ValueError('Unsupported GUI action')
         # Consume before the first effect. A response failure must not replay input.

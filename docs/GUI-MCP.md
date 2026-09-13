@@ -10,6 +10,15 @@ alpha8にはPeekaboo向けの薄いアダプターを追加した。先に既存
 - `gui_type(session_id, observation_id, text, press_return)`は対象アプリを前面化して入力する。
 - `gui_key(session_id, observation_id, keys)`は対象アプリを前面化してキーを押す。
 
+キー名は大文字・小文字を区別しない。`escape`/`esc`、`return`/`enter`、
+`tab`、`delete`、`space`、`cmd`、`shift`、`alt`、`option`、`ctrl`、`fn`、
+英数字1文字、`arrow_up/down/left/right`、`f1`〜`f12`に対応する。
+例: `["ESCAPE"]`、`["cmd", "a"]`。入力schemaにも対応名を表示する。
+appは選択したMCPが返す実際の名前を使う。日本語macOSのCalculatorは「計算機」と
+返ることがある。観測自体は起動せず、必要ならappツールのschemaを読み、起動結果の名前を使う。
+`computer_status.capabilities.gui_mcp_adapter`はこのアダプターの登録と必要条件を示す。
+利用者が選択する外部MCPの動作をstatusだけで検証済みとは扱わない。
+
 観測は接続所有者・MCPセッションに結び付き、60秒または次の観測・操作で失効する。
 入力・キー操作はOSの現在のフォーカスを使うため、外部からのフォーカス変更は防げない。
 この制約と送信・削除等の副作用をツール説明に明示している。アダプターは独自の承認画面を
