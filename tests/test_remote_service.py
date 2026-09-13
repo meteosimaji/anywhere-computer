@@ -75,7 +75,10 @@ async def test_remote_connector_exit_closes_http(remote_profile, monkeypatch, ex
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-async def test_shared_remote_service_owns_update_monitor(remote_profile, monkeypatch, enabled):
+@pytest.mark.parametrize("startup_delay", [0, 0.5])
+async def test_shared_remote_service_owns_update_monitor(
+    remote_profile, monkeypatch, enabled, startup_delay,
+):
     directory, _ = remote_profile
     from anywhere_computer.release_supervisor import configure_automatic_updates
 
@@ -84,10 +87,13 @@ async def test_shared_remote_service_owns_update_monitor(remote_profile, monkeyp
     original_service = remote_service.http_service
     original_popen = subprocess.Popen
     started, stopped = asyncio.Event(), asyncio.Event()
+    listening = asyncio.Event()
 
     @asynccontextmanager
     async def service(path):
+        await asyncio.sleep(startup_delay)
         async with original_service(path) as running:
+            listening.set()
             yield replace(running, config=running.config.model_copy(update={
                 'shared_agent_directory': str(directory / 'shared'),
             }))
@@ -112,9 +118,9 @@ async def test_shared_remote_service_owns_update_monitor(remote_profile, monkeyp
         if enabled:
             await asyncio.wait_for(started.wait(), timeout=5)
         else:
-            await asyncio.sleep(0.3)
-            assert not started.is_set()
+            await asyncio.wait_for(listening.wait(), timeout=5)
         assert (await diagnose_http(directory))['state'] == 'metadata_reachable'
+        assert started.is_set() == enabled
     finally:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

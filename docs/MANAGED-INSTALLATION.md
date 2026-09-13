@@ -222,7 +222,44 @@ stay disabled while a mutation is pending or the observation is unknown.
 
 Focused Python verification: 72 passed / 3 skipped; packaged-source equality test
 passed. Rust tests: 3 passed / 1 child fixture ignored; Clippy and debug build
-passed. The preview application's process launched on macOS, but Computer Use
-could not acquire its window (timeout); native button acceptance for these new
-controls is still pending, on both OSes. Prior CLI-level native acceptance does
-not substitute for this UI test.
+passed. Mac native button acceptance subsequently succeeded on 2026-09-14:
+enable registered an isolated LaunchAgent, refresh showed a responding engine,
+and disable returned the registration to `not_installed`. Authenticated status
+before and after removal retained instance `c30d234cc2ec4bfa923c9bf3ae614736`
+and runtime `2ee740c8fae7148d2adde42ac2413c7b5ca7c1db74b1c22b39e11faa07fa6fa0`.
+Status operations were `37db1f02be6c4df986e9363c9488f0eb` and
+`589527c5600f4eada9b91bb985583e32`. The latter followed clicking the window's
+close button; the subsequent accessibility observation timed out, so that
+observation alone does not prove window closure. The engine remained ready.
+Explicit fixture stop `482ebe59e7cc446581466af94d392e73` was followed by a
+`stopped` management observation. No production registration was changed.
+
+The initial Mac UI acquisition timed out with a shell wrapper configured as the
+test bundle's executable. Selecting the actual native executable in Info.plist
+and launching it with the fixture arguments made the window accessible, without
+a product-code change. This qualifies the corrected development fixture, not
+the still-unfinished packaged installer. Windows native button acceptance is
+pending; Windows CI compilation and CLI-level native tests do not replace it.
+
+CI exposed a test readiness race: the disabled-update case slept 300 ms before
+probing the HTTP service. Adding a 500 ms startup delay reproduced the failure.
+The test now waits for the real HTTP service context to enter before probing,
+while retaining the live metadata check and update-monitor assertions. Both
+immediate and delayed startup are covered. The complete remote-service test
+file passed (18 tests); this changes test synchronization, not server behavior.
+
+## Independent GUI acceptance checkpoint
+
+On 2026-09-14, ChatGPT GPT-5.6 Sol with medium reasoning used the existing direct
+Peekaboo MCP route on the Mac. TextEdit received Japanese and emoji text, then
+a separate call appended `42` after the earlier `40`. Independent accessibility
+inspection confirmed all three lines in the same document. Finder initially
+remained at the wrong directory; re-observation and targeted input reached the
+empty test directory `/tmp/anywhere-gui-test-mac-20260914`. Session close was
+independently recovered from the operation ledger with `cleanup_confirmed=true`.
+These are two real application workflows, not a long-duration or IME/DPI gate.
+
+The registered Windows device responded to status and terminal commands, but no
+usable GUI provider was established. Notepad, Explorer and browser GUI actions
+were not executed. The static adapter advertisement is not runtime availability;
+per-OS provider discovery and truthful readiness remain required work.
