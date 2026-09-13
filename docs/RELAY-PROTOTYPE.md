@@ -25,6 +25,16 @@ it to registered state. Cross-account lookup and revocation both fail without
 changing the owner's record. `registered` means only that ownership was stored;
 it does not mean transport connected, authentication current, or engine ready.
 
+The isolated `test_registered_certificate_revocation_after_tls_connect` connects
+the registry to the existing mutual-TLS listener. A real verified client
+certificate resolves to its registered device; after revocation, a frame sent on
+an already authenticated socket is rejected before the test handler receives it.
+The listener's static peer entry is deliberately retained, so the assertion
+exercises the durable registry check rather than merely closing enrollment in
+the listener. Certificates are disposable test fixtures. This proves the lookup
+boundary over TLS, not outbound WebSocket transport, production provisioning,
+engine execution, or a Windows-to-relay acceptance test.
+
 Stored data includes issuer, subject, display name, device ID, enrollment ID and
 revocation state. There are no passwords, bearer tokens, tool arguments or results
 in this database. Records currently persist until the isolated database is
