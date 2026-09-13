@@ -97,7 +97,20 @@ for line in sys.stdin:
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", timeout=40) as http:
             headers = await initialize(http, token)
 
+            async def discover():
+                response = await http.post('/mcp', headers=headers, json={
+                    'jsonrpc': '2.0', 'id': uuid.uuid4().hex, 'method': 'tools/list',
+                })
+                assert response.status_code == 200
+                tools = response.json()['result']['tools']
+                assert {tool['name'] for tool in tools} == known
+                assert all(isinstance(tool['inputSchema'], dict) for tool in tools)
+                return {tool['name']: tool for tool in tools}
+
+            discovered = await discover()
+
             async def call(name, args=None, *, operation=None, expected="completed"):
+                assert name in discovered, f'Tool was not discovered in this session: {name}'
                 response = await http.post(
                     "/mcp",
                     headers=headers,
@@ -299,6 +312,26 @@ for line in sys.stdin:
             await call("usage_stats")
             assert covered == known, {"uncovered": sorted(known - covered)}
             assert (await call("computer_status"))["active_sessions"] == 0
+
+            # A new chat must bootstrap independently rather than inherit the old
+            # MCP session or its discovery cache. Retain only the account grant
+            # and an explicitly supplied receipt for the recovery scenario.
+            previous_headers = dict(headers)
+            assert (await http.delete('/mcp', headers=headers)).status_code == 200
+            discovered.clear()
+            headers = await initialize(http, token)
+            assert headers['MCP-Session-Id'] != previous_headers['MCP-Session-Id']
+            stale = await http.post('/mcp', headers=previous_headers, json={
+                'jsonrpc': '2.0', 'id': 'stale', 'method': 'tools/list',
+            })
+            assert stale.status_code == 404
+            discovered = await discover()
+            assert (await call('computer_status'))['active_sessions'] == 0
+            recovered = await call('operations_get', {'operation_id': write_id})
+            assert recovered['state'] == 'completed'
+            fresh_path = str(tmp_path / 'fresh-chat.txt')
+            await call('files_write', {'path': fresh_path, 'text': '新規チャット 🚀'})
+            assert (await call('files_read', {'path': fresh_path}))['text'] == '新規チャット 🚀'
     finally:
         if process is not None and process.returncode is None:
             process.kill()

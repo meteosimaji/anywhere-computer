@@ -16,6 +16,7 @@ anywhere = "anywhere_computer.cli:main"
 [project.optional-dependencies]
 relay = [
     "PyJWT[crypto]==2.13.0",
+    "websockets==17.0.1",
 ]
 browser = [
     "playwright==1.58.0",
@@ -26,6 +27,7 @@ mcp = [
 
 [dependency-groups]
 dev = [
+    "websockets==17.0.1",
     "mcp>=1.12,<2",
     "pytest>=8",
     "pytest-asyncio>=1",

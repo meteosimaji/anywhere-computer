@@ -131,6 +131,63 @@ async def initialize(http, token):
     return headers
 
 
+async def test_fresh_chat_discovers_and_operates_without_previous_session(configured, tmp_path):
+    """Real OAuth/HTTP/files, portable across OSes; no model or GUI is simulated."""
+    config, owner = configured
+    catalog_request = {'jsonrpc': '2.0', 'id': 'discover', 'method': 'tools/list'}
+    operation_id = 'f' * 32
+
+    async def invoke(http, headers, name, arguments, identity):
+        response = await http.post('/mcp', headers=headers, json={
+            'jsonrpc': '2.0', 'id': identity, 'method': 'tools/call', 'params': {
+                'name': name, 'arguments': arguments, '_meta': {
+                    'io.github.meteosimaji.anywhere-computer/operation_id': identity,
+                },
+            },
+        })
+        assert response.status_code == 200
+        result = response.json()['result']['structuredContent']
+        assert result['state'] == 'completed', result
+        return result['data']
+
+    async with http_service(tmp_path, credentials=owner):
+        previous_headers = None
+        token = None
+        for number in (1, 2):
+            # Separate HTTP clients as well as separate initialized MCP sessions.
+            async with httpx.AsyncClient(
+                base_url=f'http://127.0.0.1:{config.port}', trust_env=False,
+            ) as http:
+                if token is None:
+                    token = await authenticate(http)
+                headers = await initialize(http, token)
+                if previous_headers is not None:
+                    assert headers['MCP-Session-Id'] != previous_headers['MCP-Session-Id']
+                    stale = await http.post('/mcp', headers=previous_headers, json=catalog_request)
+                    assert stale.status_code == 404
+                catalog = await http.post('/mcp', headers=headers, json=catalog_request)
+                assert catalog.status_code == 200
+                tools = {item['name']: item for item in catalog.json()['result']['tools']}
+                assert set(tools) == SCOPES
+                assert all(isinstance(tool['inputSchema'], dict) for tool in tools.values())
+                path = tmp_path / f'新規チャット-{number}.txt'
+                text = f'日本語 🚀 {number}'
+                await invoke(http, headers, 'files_write', {'path': str(path), 'text': text},
+                             operation_id if number == 1 else 'e' * 32)
+                read = await invoke(http, headers, 'files_read', {'path': str(path)},
+                                    str(number) * 32)
+                assert read['text'] == text
+                assert path.read_text(encoding='utf-8') == text
+                if number == 2:
+                    # A receipt is explicitly supplied; no prior tool/session cache is reused.
+                    result = await invoke(http, headers, 'operations_get',
+                                          {'operation_id': operation_id}, 'd' * 32)
+                    assert result['state'] == 'completed'
+                    assert result['operation_id'] == operation_id
+                assert (await http.delete('/mcp', headers=headers)).status_code == 200
+                previous_headers = headers
+
+
 async def test_server_restart_preserves_operations_and_revocation(configured, tmp_path):
     config, owner = configured
     target = tmp_path / "test.txt"
