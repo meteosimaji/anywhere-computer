@@ -46,3 +46,31 @@ proves how the engine can be started by that client, not that Windows starts it
 automatically after login. Verify both the host forwarding and guest startup
 before relying on unattended reconnection. Do not restart that VM based on this
 probe alone.
+
+## Windows local engine at login
+
+For an SSH-only Windows device with the local launcher already installed, run
+the following as the same Windows user that owns the Plugin and credentials:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows_local_startup.ps1 -Action Install
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File .\scripts\windows_local_startup.ps1 -Action Status
+```
+
+This creates `Anywhere Computer Local.lnk` in that user's Startup folder. It
+calls the existing `%USERPROFILE%\.anywhere-computer\bin\anywhere.cmd start`
+launcher after interactive login. It does not add an HTTP endpoint, copy
+credentials, change machine-wide PowerShell policy, or run before login. The
+PowerShell policy option applies only to the installer process; the shortcut
+itself runs the existing CMD launcher. Keep that launcher updated when moving
+the installed runtime. Use `-Launcher` for a different absolute `.cmd` path.
+
+Remove the registration with the same command and `-Action Remove`. Repeated
+installation is supported. A shortcut with a different target or arguments is
+left untouched rather than overwritten or removed. Registration does not start
+the engine immediately and is not evidence of a successful subsequent login.
+
+On the development Windows VM, install/status/reinstall/remove/status/install
+and execution of the saved target and arguments passed on 2026-09-13. The
+command returned the existing Windows `0.1.0a9` engine without replacing it.
+Cold login and full VM restart remain separate acceptance checks.
