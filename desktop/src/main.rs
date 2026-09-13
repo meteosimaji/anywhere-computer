@@ -4,6 +4,7 @@ use std::{path::PathBuf, process::Stdio, time::Duration};
 use tokio::io::AsyncReadExt;
 
 const SNAPSHOT_LIMIT: usize = 262_144;
+mod enrollment;
 
 fn decode_snapshot(bytes: Vec<u8>) -> Result<String, &'static str> {
     if bytes.len() > SNAPSHOT_LIMIT {
@@ -180,12 +181,14 @@ fn main() {
     let host = ManagementHost::from_arguments();
     tauri::Builder::default()
         .manage(host)
+        .manage(enrollment::EnrollmentState::default())
         .invoke_handler(tauri::generate_handler![
             management_snapshot,
             management_start,
             management_startup_status,
             management_startup_enable,
-            management_startup_disable
+            management_startup_disable,
+            enrollment::management_enrollment
         ])
         .run(tauri::generate_context!())
         .expect("Management window could not start");

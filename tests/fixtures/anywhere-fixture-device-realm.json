@@ -12,7 +12,27 @@
       "protocol": "openid-connect",
       "attributes": {
         "include.in.token.scope": "true"
-      }
+      },
+      "protocolMappers": [
+        {
+          "name": "enrollment-account-subject",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-sub-mapper",
+          "config": {
+            "access.token.claim": "true"
+          }
+        },
+        {
+          "name": "relay-enrollment-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.custom.audience": "https://relay.example.invalid/enrollment",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
     }
   ],
   "clients": [

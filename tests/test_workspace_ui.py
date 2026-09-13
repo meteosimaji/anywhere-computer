@@ -94,9 +94,20 @@ def test_workspace_mutation_recovery_in_javascript():
     if node is None:
         pytest.skip("Node.js is required for the development-only UI script test")
     root = Path(__file__).resolve().parents[1]
-    result = subprocess.run(
-        [node, str(root / "tests/workspace_ui_state.cjs"),
-         str(root / "src/anywhere_computer/web/workspace.html")],
-        capture_output=True, text=True, timeout=15, check=True,
-    )
+    try:
+        result = subprocess.run(
+            [node, str(root / "tests/workspace_ui_state.cjs"),
+             str(root / "src/anywhere_computer/web/workspace.html")],
+            capture_output=True, text=True, encoding="utf-8", timeout=15, check=True,
+        )
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
+        # TimeoutExpired may retain bytes even when text=True. Fixture output
+        # contains only test phases and assertion diagnostics, not user data.
+        captured = []
+        for stream in (error.stdout, error.stderr):
+            if isinstance(stream, bytes):
+                stream = stream.decode("utf-8", errors="replace")
+            captured.append((stream or "<no output>")[-4000:])
+        pytest.fail(f"Workspace Node fixture failed: {error}\n"
+                    f"stdout:\n{captured[0]}\nstderr:\n{captured[1]}", pytrace=False)
     assert "workspace mutation recovery: passed" in result.stdout

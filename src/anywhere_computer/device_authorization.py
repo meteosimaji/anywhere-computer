@@ -68,6 +68,7 @@ class EnrollmentProgress(BaseModel):
     phase: EnrollmentPhase
     attempt_id: str
     retry_after: float = 0
+    can_retry_save: bool = False
     user_code: str | None = Field(default=None, repr=False)
     verification_uri: str | None = None
     verification_uri_complete: str | None = Field(default=None, repr=False)
@@ -107,7 +108,7 @@ class DeviceAuthorizationClient:
         self._progress = EnrollmentProgress(phase=phase, attempt_id=self._progress.attempt_id)
         if phase not in {"waiting", "requesting"}:
             self._code = None
-        return self._progress
+        return self.progress()
 
     def progress(self) -> EnrollmentProgress:
         with self._lock:
@@ -118,6 +119,27 @@ class DeviceAuthorizationClient:
                 self._progress = self._progress.model_copy(
                     update={"retry_after": state.retry_after},
                 )
+            retryable = False
+            if self._pending is not None and self._progress.phase == "credential_error":
+                token, requested_at = self._pending
+                now = self._wall_clock()
+                retryable = math.isfinite(now) and requested_at <= now < (
+                    requested_at + token.expires_in
+                )
+            self._progress = self._progress.model_copy(update={"can_retry_save": retryable})
+            return self._progress
+
+    def restore_saved(self) -> EnrollmentProgress:
+        """Recover a saved grant on a fresh client without redeeming another code."""
+        with self._lock:
+            if self._progress.phase != "new":
+                return self.progress()
+            try:
+                attempt = self._credentials.saved_attempt(scope=self._provider.scope)
+            except ClientCredentialError:
+                return self._set("credential_error")
+            if attempt is not None:
+                self._progress = EnrollmentProgress(phase="grant_saved", attempt_id=attempt)
             return self._progress
 
     def start(self) -> EnrollmentProgress:
@@ -165,6 +187,21 @@ class DeviceAuthorizationClient:
                 if self.progress().phase == "cancelled":
                     return self._progress
                 return self._set("failed")
+
+    def new_attempt(self) -> "DeviceAuthorizationClient":
+        """Explicitly replace a finished attempt without deleting any grant.
+
+        Return a separate client so late replies from a cancelled request stay
+        bound to the old cancelled object and cannot overwrite the new attempt.
+        """
+        with self._lock:
+            if self.progress().phase not in {"denied", "expired", "cancelled", "failed"}:
+                raise ValueError("The authorization attempt is not safely restartable")
+            self._credentials.require_empty()
+            return DeviceAuthorizationClient(
+                self._provider, self._credentials, wire=self._wire,
+                clock=self._clock, wall_clock=self._wall_clock,
+            )
 
     def cancel(self) -> EnrollmentProgress:
         with self._lock:

@@ -129,3 +129,12 @@ Linux ARM64 でも通常モードの実エージェント試験が成功した�
 `Setup ChatGPT.command --help` が成功。一時展開先は除去済み。ハッシュと検証結果は
 `research/2026-09-09-portable-setup-verification.json`。これは署名・公証、Finder からの
 起動、公開 HTTPS、ChatGPT UI、Windows の受け入れ試験ではない。
+
+## CI trigger policy
+
+The Quality workflow runs the complete macOS/Windows manager matrix and the
+Linux/macOS/Windows runtime matrix for pull requests. Push-triggered runs are
+limited to `main`, preserving post-merge verification and main-only provenance
+attestations. This avoids duplicate push and pull-request matrices for each PR
+commit. Before opening a PR, use the workflow's manual `workflow_dispatch`
+entry on the chosen branch. No test steps or platform coverage are removed.

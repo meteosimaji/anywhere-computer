@@ -1,0 +1,146 @@
+import io
+import json
+
+import pytest
+from test_client_tokens import MemoryVault
+from test_device_authorization import Clock
+
+from anywhere_computer.device_authorization import DeviceAuthorizationClient, EnrollmentProvider
+from anywhere_computer.enrollment_credentials import EnrollmentCredentials
+from anywhere_computer.enrollment_http import EnrollmentHTTPReply
+from anywhere_computer.enrollment_worker import (
+    EnrollmentWorker,
+    NativeEnrollmentConfig,
+    serve_enrollment,
+)
+from anywhere_computer.registration_client import RegistrationClient
+
+
+def worker_for(tmp_path, *, vault=None, clock=None):
+    provider = EnrollmentProvider(issuer="https://auth.example",
+        device_authorization_endpoint="https://auth.example/device",
+        token_endpoint="https://auth.example/token", client_id="desktop", scope="device:enroll")
+    clock = clock or Clock()
+    vault = vault or MemoryVault()
+    calls = []
+    credentials = EnrollmentCredentials(tmp_path, issuer=provider.issuer, client=provider.client_id,
+                                        profile="worker", vault=vault, clock=clock.wall)
+
+    def auth_wire(endpoint, fields):
+        calls.append(endpoint)
+        if endpoint.endswith("/device"):
+            return EnrollmentHTTPReply(200, {
+                "device_code": "synthetic-private-code", "user_code": "TEST-CODE",
+                "verification_uri": "https://auth.example/verify", "expires_in": 120,
+            })
+        return EnrollmentHTTPReply(200, {"access_token": "synthetic-private-token",
+                                        "token_type": "Bearer", "scope": "device:enroll",
+                                        "expires_in": 60})
+
+    def register_wire(endpoint, fields, token):
+        calls.append(endpoint)
+        assert token == "synthetic-private-token"
+        return EnrollmentHTTPReply(200, {**fields, "device_id": "b" * 32, "state": "registered"})
+
+    auth = DeviceAuthorizationClient(provider, credentials, wire=auth_wire,
+                                     clock=clock.monotonic, wall_clock=clock.wall)
+    registration = RegistrationClient(tmp_path, credentials, endpoint="https://relay.example/enroll",
+                                      wire=register_wire)
+    return EnrollmentWorker(auth, registration), clock, calls
+
+
+def test_worker_preserves_authorization_through_registration(tmp_path):
+    worker, clock, calls = worker_for(tmp_path)
+    try:
+        initial = worker.handle("start")
+        clock.value = 6
+        granted = worker.handle("poll")
+        assert granted["authorization"]["attempt_id"] == initial["authorization"]["attempt_id"]
+        assert granted["authorization"]["phase"] == "grant_saved"
+        registered = worker.handle("register", name="日本語 PC 🚀")
+        assert registered["registration"]["device"]["state"] == "registered"
+        assert registered["connection_state"] == "not_checked"
+        assert len(calls) == 3
+        text = json.dumps([initial, granted, registered])
+        assert "synthetic-private" not in text and "credential_reference" not in text
+    finally:
+        worker.close()
+
+
+def test_line_commands_retain_state_and_refuse_arbitrary_actions(tmp_path):
+    worker, _, calls = worker_for(tmp_path)
+    source = io.StringIO('\n'.join(json.dumps(item) for item in [
+        {"method": "start"}, {"method": "progress"},
+        {"method": "terminal_start", "command": "unexpected"}, {"method": "cancel"},
+    ]) + '\n')
+    output = io.StringIO()
+    serve_enrollment(worker, source, output)
+    responses = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert responses[0]["result"] == responses[1]["result"]
+    assert responses[2]["ok"] is False
+    assert responses[3]["result"]["authorization"]["phase"] == "cancelled"
+    assert calls == ["https://auth.example/device"]
+    assert "synthetic-private" not in output.getvalue()
+
+
+@pytest.mark.parametrize("invalid", ["scope", "endpoint", "unknown"])
+def test_native_configuration_rejects_wrong_boundary(invalid):
+    values = {
+        "provider": {"issuer": "https://auth.example",
+                     "device_authorization_endpoint": "https://auth.example/device",
+                     "token_endpoint": "https://auth.example/token",
+                     "client_id": "desktop", "scope": "device:enroll"},
+        "registration_endpoint": "https://relay.example/enrollment",
+    }
+    if invalid == "scope":
+        values["provider"]["scope"] = "files_write"
+    elif invalid == "endpoint":
+        values["registration_endpoint"] += "?token=unexpected"
+    else:
+        values["command"] = "unexpected"
+    with pytest.raises(ValueError):
+        NativeEnrollmentConfig.model_validate(values)
+
+
+def test_explicit_restart_after_cancel_keeps_worker_and_changes_attempt(tmp_path):
+    worker, clock, calls = worker_for(tmp_path)
+    try:
+        first = worker.handle("start")
+        with pytest.raises(ValueError):
+            worker.handle("restart")
+        worker.handle("cancel")
+        second = worker.handle("restart")
+        assert second["authorization"]["phase"] == "waiting"
+        assert first["authorization"]["attempt_id"] != second["authorization"]["attempt_id"]
+        assert len(calls) == 2
+        clock.value = 6
+        worker.handle("poll")
+        worker.handle("register", name="Restarted PC")
+        with pytest.raises(ValueError):
+            worker.handle("restart")
+        assert len(calls) == 4
+    finally:
+        worker.close()
+
+
+def test_worker_reopens_grant_saved_before_registration(tmp_path):
+    vault, clock = MemoryVault(), Clock()
+    worker, _, calls = worker_for(tmp_path, vault=vault, clock=clock)
+    worker.handle("start")
+    clock.value = 6
+    original = worker.handle("poll")
+    worker.close()
+    assert len(calls) == 2
+    reopened, _, new_calls = worker_for(tmp_path, vault=vault, clock=clock)
+    try:
+        restored = reopened.handle("progress")
+        assert restored["authorization"]["phase"] == "grant_saved"
+        assert restored["authorization"]["attempt_id"] == original["authorization"]["attempt_id"]
+        assert new_calls == []
+        result = reopened.handle("register", name="Recovered PC")
+        assert result["registration"]["device"]["state"] == "registered"
+        assert new_calls == ["https://relay.example/enroll"]
+        assert vault.writes == 1
+        assert "synthetic-private" not in json.dumps([restored, result])
+    finally:
+        reopened.close()

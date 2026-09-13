@@ -77,29 +77,36 @@ class EnrollmentCredentials:
         except Exception:
             raise ClientCredentialError("Could not inspect the OS enrollment credential") from None
 
-    def access_token(self, *, attempt_id: str, scope: str) -> str:
-        """Recover an unexpired grant for the exact enrollment attempt.
+    def _read_current(self, scope: str) -> _SavedGrant | None:
+        with ProcessLock(self._lock_path, timeout=5):
+            encoded = self._vault.get_password(SERVICE, self.reference)
+            if encoded is None:
+                return None
+            if len(encoded) > 16384:
+                raise ValueError("Oversized enrollment record")
+            record = _SavedGrant.model_validate_json(encoded)
+            now = self._clock()
+            if (record.issuer != self.issuer or record.client != self.client
+                    or record.token.scope != scope or not math.isfinite(now)
+                    or not record.expires_at - record.token.expires_in <= now < record.expires_at):
+                raise ValueError("Enrollment binding or lifetime does not match")
+            return record
 
-        For the trusted registration client only; never expose the return value
-        through management IPC or MCP. This performs no network requests,
-        refresh, deletion or reauthorization. The server must still validate
-        the grant and its audience when registration is submitted.
-        """
+    def saved_attempt(self, *, scope: str) -> str | None:
+        """Read only the identity of a valid saved grant, never its token."""
         try:
-            with ProcessLock(self._lock_path, timeout=5):
-                encoded = self._vault.get_password(SERVICE, self.reference)
-                if encoded is None or len(encoded) > 16384:
-                    raise ValueError("Missing or oversized enrollment record")
-                record = _SavedGrant.model_validate_json(encoded)
-                now = self._clock()
-                if (record.issuer != self.issuer or record.client != self.client
-                        or record.attempt_id != attempt_id
-                        or record.token.scope != scope
-                        or not math.isfinite(now)
-                        or not record.expires_at - record.token.expires_in <= now
-                        < record.expires_at):
-                    raise ValueError("Enrollment binding or lifetime does not match")
-                return record.token.access_token
+            record = self._read_current(scope)
+            return record.attempt_id if record is not None else None
+        except Exception:
+            raise ClientCredentialError("Saved enrollment grant could not be restored") from None
+
+    def access_token(self, *, attempt_id: str, scope: str) -> str:
+        """Read a grant for the trusted client; never expose it through IPC/MCP."""
+        try:
+            record = self._read_current(scope)
+            if record is None or record.attempt_id != attempt_id:
+                raise ValueError("Enrollment attempt does not match")
+            return record.token.access_token
         except Exception:
             raise ClientCredentialError(
                 "Saved enrollment grant is unavailable for this attempt",
