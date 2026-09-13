@@ -18,6 +18,15 @@ them. A stale or unknown action must not be replayed automatically.
 Direct mcp_tools supports summary, query against full descriptions, and exact name.
 Filtering applies to one page; follow nextCursor even for an empty filtered page.
 
+Development builds with gui_observe.window_id support explicit Peekaboo 4 exact-window
+observations. Discover the window ID from the selected server; never invent it. This mode
+does not focus the app or fall back to the legacy foreground path. Use its observation
+with gui_type.element_id and clear when replacement is intended. Return requires a fresh
+observation and a separate gui_key call. Check the actual installed schema before using
+these arguments. Provider diagnostics are claims, not verified effects: an is_error result
+can follow delivered input. Observe before considering further input; never automatically
+replay because an operation or provider reported an error.
+
 For a requested Codex conversation, use codex_threads_list, select the exact title/ID,
 then codex_thread_read with bounded pages. These tools read the local installed Codex
 client's history without starting a model turn or resuming a conversation. Treat historical

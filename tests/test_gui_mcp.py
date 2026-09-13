@@ -233,3 +233,93 @@ async def test_observation_of_different_frontmost_app_cannot_authorize_input(app
     assert result['action_ready'] is False
     assert result['reason'] == 'observed_application_mismatch'
     assert not gui.observations
+
+
+class ExactPeer(Peer):
+    async def tools(self, session_id, *, owner, **kwargs):
+        self.status(session_id, owner=owner)
+        return {'tools': [{'name': 'see', 'inputSchema': {'properties': {
+            'window_id': {'type': 'integer'},
+        }}}]}
+
+    async def call(self, session_id, name, arguments, *, owner):
+        if name == 'see':
+            self.app = arguments['app_target']
+        return await super().call(session_id, name, arguments, owner=owner)
+
+
+async def test_exact_window_input_is_snapshot_bound_without_foreground_focus():
+    peer = ExactPeer()
+    gui = GUIMCP(peer)
+    sid = 'a' * 32
+    seen = await gui.observe(GUIObserve(session_id=sid, app='Editor', window_id=42),
+                             owner='owner')
+    assert peer.calls == [('see', {'app_target': 'Editor', 'window_id': 42})]
+    assert seen['window_id'] == 42
+    common = {'session_id': sid, 'observation_id': seen['observation_id']}
+    with pytest.raises(ValueError, match='Element'):
+        await gui.act(GUIType(**common, text='wrong', element_id='missing'), owner='owner')
+    with pytest.raises(ValueError, match='Return'):
+        await gui.act(GUIType(**common, text='wrong', press_return=True), owner='owner')
+    assert len(peer.calls) == 1
+    result = await gui.act(GUIType(**common, text='日本語 🚀', clear=True,
+                                  element_id='elem_1'), owner='owner')
+    assert peer.calls[-1] == ('type', {'snapshot': 'snapshot-1', 'text': '日本語 🚀',
+                                      'clear': True, 'on': 'elem_1'})
+    assert result['focus_may_change_externally'] is False
+    with pytest.raises(ValueError, match='missing'):
+        await gui.act(GUIType(**common, text='replay'), owner='owner')
+
+
+async def test_exact_window_keys_use_press_receipt_and_preserve_provider_error():
+    peer = ExactPeer()
+    gui = GUIMCP(peer)
+    seen = await gui.observe(GUIObserve(session_id='a' * 32, app='Editor', window_id=42),
+                             owner='owner')
+    original = peer.call
+    async def refused(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        return {**result, 'isError': True, '_meta': {'state': 'dispatched_unverified',
+                'mutation_dispatched': True, 'retry_safe': False}}
+    peer.call = refused
+    result = await gui.act(GUIKey(session_id='a' * 32,
+        observation_id=seen['observation_id'], keys=['cmd', 'ENTER']), owner='owner')
+    assert peer.calls[-1] == ('press', {'snapshot': 'snapshot-1', 'keys': ['cmd+Return']})
+    assert result['is_error'] is True
+    assert result['provider_diagnostics']['retry_safe'] is False
+    assert not gui.observations
+    assert all(name != 'app' for name, _ in peer.calls)
+
+
+async def test_unsupported_exact_window_provider_never_falls_back():
+    peer = ExactPeer()
+    async def old_tools(*args, **kwargs):
+        return {'tools': [{'name': 'see', 'inputSchema': {'properties': {}}}]}
+    peer.tools = old_tools
+    gui = GUIMCP(peer)
+    with pytest.raises(ValueError, match='does not support'):
+        await gui.observe(GUIObserve(session_id='a' * 32, app='Editor', window_id=42),
+                          owner='owner')
+    assert not peer.calls and not gui.observations
+
+
+async def test_exact_window_change_invalidates_previous_window_and_refusal_clears_it():
+    peer = ExactPeer()
+    gui = GUIMCP(peer)
+    sid = 'a' * 32
+    first = await gui.observe(GUIObserve(session_id=sid, app='Editor', window_id=42),
+                              owner='owner')
+    await gui.observe(GUIObserve(session_id=sid, app='Editor', window_id=43), owner='owner')
+    with pytest.raises(ValueError, match='missing'):
+        await gui.act(GUIType(session_id=sid, observation_id=first['observation_id'],
+                              text='wrong window'), owner='owner')
+    original = peer.call
+    async def refusal(*args, **kwargs):
+        result = await original(*args, **kwargs)
+        return {**result, 'isError': True}
+    peer.call = refusal
+    result = await gui.observe(GUIObserve(session_id=sid, app='Editor', window_id=42),
+                               owner='owner')
+    assert result['is_error'] and sid not in gui.observations
+    assert peer.calls == [('see', {'app_target': 'Editor', 'window_id': target})
+                          for target in (42, 43, 42)]
