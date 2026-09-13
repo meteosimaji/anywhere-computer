@@ -13,7 +13,7 @@
         || method === "restart" && ["denied","expired","cancelled","failed"].includes(phase) && !saved
         || method === "poll" && phase === "waiting"
         || method === "retry_save" && phase === "credential_error" && snapshot.authorization.can_retry_save === true
-        || method === "register" && !saved?.device && (phase === "grant_saved" || saved) && element("name").value.trim().length > 0
+        || method === "register" && !saved?.device && phase === "grant_saved" && element("name").value.trim().length > 0
         || method === "cancel" && ["waiting","credential_error"].includes(phase);
       element(method).disabled = busy || !allowed;
     }
@@ -25,7 +25,9 @@
     const auth = value.authorization, saved = value.registration;
     element("state").textContent = saved?.device
       ? (saved.device.state === "registered" ? "端末登録を保存済み。現在の接続・登録の有効性は未確認です" : "端末登録は失効しています")
-      : saved ? "登録要求を保存済み。結果を再確認するには同じ名前で登録してください" : phases[auth.phase];
+      : saved ? (auth.phase === "grant_saved"
+        ? "登録要求を保存済み。結果を再確認するには同じ名前で登録してください"
+        : `登録要求は保持されています。${phases[auth.phase]}`) : phases[auth.phase];
     if (saved) element("name").value = saved.name;
     const showCode = auth.phase === "waiting" && !!auth.user_code && !!auth.verification_uri;
     element("code-area").hidden = !showCode;

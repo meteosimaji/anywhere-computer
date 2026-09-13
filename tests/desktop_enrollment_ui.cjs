@@ -37,6 +37,15 @@ const snapshot = phase => ({schema_version:1,authorization:{phase},registration:
   assert.deepEqual(calls.at(-1).args.name,'日本語 PC 🚀');
   assert.equal(get('enrollment-name').disabled,true);
   assert.equal(get('enrollment-register').disabled,false);
+  response.authorization.phase='credential_error'; await click('progress');
+  assert.equal(get('enrollment-register').disabled,true);
+  assert.equal(get('enrollment-name').value,'日本語 PC 🚀');
+  assert.equal(get('enrollment-name').disabled,true);
+  assert.match(get('enrollment-state').textContent,/保持/);
+  assert.match(get('enrollment-state').textContent,/認証情報を利用できません/);
+  assert.equal(get('enrollment-restart').disabled,true);
+  response.authorization.phase='grant_saved'; await click('progress');
+  assert.equal(get('enrollment-register').disabled,false);
   response.registration.device={state:'registered'}; await click('register');
   assert.equal(get('enrollment-register').disabled,true);
   assert.match(get('enrollment-state').textContent,/未確認/);
