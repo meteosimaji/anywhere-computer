@@ -175,3 +175,100 @@ async def test_shared_gateway_requires_local_authentication_and_granted_tool(age
     assert not target.exists()
     catalog = await exchange(directory, '__catalog', credential=credential)
     assert '__remote' not in {entry['name'] for entry in catalog.data['tools']}
+
+
+async def test_owner_pipe_route_does_not_read_logon_credentials(tmp_path, monkeypatch):
+    import json
+    from types import SimpleNamespace
+
+    from anywhere_computer import connection
+    from anywhere_computer.models import Reply, Request
+    from anywhere_computer.owner_json_pipe import OwnerPipeIdentityError
+
+    endpoint = {
+        'pipe_name': r'\\.\pipe\anywhere-owner-json-' + 'a' * 48,
+        'server_id': 'b' * 64, 'server_pid': 123, 'server_creation_time': 1.0,
+        'owner_sid': 'S-1-5-21-123', 'server_executable': str(tmp_path / 'python'),
+        'max_payload_bytes': connection.WIRE_LIMIT, 'protocol': 'anywhere-owner-json-v1',
+    }
+    (tmp_path / 'agent.json').write_text(json.dumps({'port': 1234, 'owner_pipe': endpoint}))
+    monkeypatch.setattr(connection, 'os', SimpleNamespace(name='nt'))
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Pipe route must not access the credential store or fallback to TCP')
+
+    monkeypatch.setattr(connection, 'local_credential', forbidden)
+    monkeypatch.setattr(connection.asyncio, 'open_connection', forbidden)
+    calls = []
+
+    async def pipe_call(selected, payload, *, timeout):
+        request = Request.model_validate_json(payload)
+        calls.append(request.operation_id)
+        assert selected.to_dict() == endpoint and timeout == 7
+        return Reply(operation_id=request.operation_id, state='completed',
+                     data={'value': 42}).model_dump_json().encode()
+
+    monkeypatch.setattr(connection, 'request_owner_json_pipe_async', pipe_call)
+    result = await connection.exchange(tmp_path, '__status', operation_id='c' * 32, timeout=7)
+    assert result.data == {'value': 42} and calls == ['c' * 32]
+
+    async def wrong_owner(*args, **kwargs):
+        raise OwnerPipeIdentityError('synthetic wrong owner')
+
+    monkeypatch.setattr(connection, 'request_owner_json_pipe_async', wrong_owner)
+    with pytest.raises(OwnerPipeIdentityError):
+        await connection.exchange(tmp_path, '__status')
+
+
+async def test_endpoint_publication_failure_closes_started_server(tmp_path, monkeypatch):
+    from anywhere_computer import connection
+
+    original_start = asyncio.start_server
+    original_write = Path.write_text
+    started = []
+
+    async def track_start(*args, **kwargs):
+        server = await original_start(*args, **kwargs)
+        started.append(server)
+        return server
+
+    def fail_publication(path, *args, **kwargs):
+        if path.name == 'agent.pending.json':
+            raise OSError('synthetic endpoint publication failure')
+        return original_write(path, *args, **kwargs)
+
+    monkeypatch.setattr(asyncio, 'start_server', track_start)
+    monkeypatch.setattr(Path, 'write_text', fail_publication)
+    try:
+        with pytest.raises(OSError, match='synthetic endpoint publication failure'):
+            await connection.serve(tmp_path, credential='synthetic-test-credential')
+        assert len(started) == 1
+        assert not started[0].is_serving()
+    finally:
+        for server in started:
+            server.close()
+            await server.wait_closed()
+
+
+@pytest.mark.skipif(__import__('sys').platform != 'win32', reason='Windows native owner pipe')
+async def test_native_owner_pipe_files_and_operation_recovery(agent, monkeypatch):
+    from anywhere_computer import connection
+
+    directory, _ = agent
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('Native pipe route must not read the logon credential store')
+
+    monkeypatch.setattr(connection, 'local_credential', forbidden)
+    status = await exchange(directory, '__status')
+    target = directory / 'owner-pipe-日本語.txt'
+    written = await exchange(directory, 'files_write',
+                             {'path': str(target), 'text': '日本語 🚀 42'})
+    assert written.state == 'completed'
+    read = await exchange(directory, 'files_read', {'path': str(target)})
+    assert read.state == 'completed' and read.data['text'] == '日本語 🚀 42'
+    recovered = await exchange(directory, 'operations_get',
+                               {'operation_id': written.operation_id})
+    assert recovered.state == 'completed'
+    assert recovered.data['operation_id'] == written.operation_id
+    assert (await exchange(directory, '__status')).data['instance_id'] == status.data['instance_id']

@@ -20,6 +20,11 @@ from .engine import Engine
 from .engine_selection import engine_directory
 from .locking import ProcessLock
 from .models import Contract, Reply, Request
+from .owner_json_pipe import (
+    OwnerJsonPipeServer,
+    OwnerPipeEndpoint,
+    request_owner_json_pipe_async,
+)
 from .runtime_identity import ENGINE_API_VERSION, runtime_identity
 from .runtime_launch import python_module_command
 from .runtime_selection import (
@@ -79,6 +84,18 @@ async def exchange(
     request = Request(
         operation_id=operation_id or uuid.uuid4().hex, tool=tool, arguments=arguments or {}
     )
+    pipe_metadata = endpoint.get("owner_pipe")
+    if os.name == "nt" and credential is None and pipe_metadata is not None:
+        if not isinstance(pipe_metadata, dict):
+            raise ValueError("Invalid local agent pipe endpoint")
+        pipe_endpoint = OwnerPipeEndpoint.from_dict(dict(pipe_metadata))
+        payload = await request_owner_json_pipe_async(
+            pipe_endpoint, request.model_dump_json().encode(), timeout=timeout,
+        )
+        reply = Reply.model_validate_json(payload)
+        if reply.operation_id != request.operation_id:
+            raise ConnectionError("Agent returned a different operation ID")
+        return reply
     secret = credential if credential is not None else local_credential(directory)
     reader, writer = await asyncio.wait_for(
         asyncio.open_connection("127.0.0.1", port, limit=WIRE_LIMIT),
@@ -207,22 +224,32 @@ async def serve(
             connections.add(asyncio.create_task(handle(reader, writer)))
 
         server = await asyncio.start_server(accept, "127.0.0.1", 0, limit=WIRE_LIMIT)
-        port = server.sockets[0].getsockname()[1]
-        metadata = {
-            "port": port,
-            "pid": os.getpid(),
-            "process_started": psutil.Process().create_time(),
-            "instance_id": engine.instance_id,
-            "version": engine.status()["version"],
-        }
-        pending = directory / "agent.pending.json"
-        pending.write_text(json.dumps(metadata))
-        pending.replace(directory / "agent.json")
-        loop = asyncio.get_running_loop()
-        if os.name != "nt":
-            for sig in (signal.SIGINT, signal.SIGTERM):
-                loop.add_signal_handler(sig, stop.set)
+        pipe_server: OwnerJsonPipeServer | None = None
         try:
+            port = server.sockets[0].getsockname()[1]
+            metadata = {
+                "port": port,
+                "pid": os.getpid(),
+                "process_started": psutil.Process().create_time(),
+                "instance_id": engine.instance_id,
+                "version": engine.status()["version"],
+            }
+            if os.name == "nt":
+                async def pipe_dispatch(payload: bytes) -> bytes:
+                    return await dispatch(Request.model_validate_json(payload))
+
+                pipe_server = OwnerJsonPipeServer(
+                    pipe_dispatch, max_payload_bytes=WIRE_LIMIT, request_timeout=65,
+                    max_connections=MAX_CONNECTIONS,
+                )
+                metadata["owner_pipe"] = pipe_server.start().to_dict()
+            pending = directory / "agent.pending.json"
+            pending.write_text(json.dumps(metadata))
+            pending.replace(directory / "agent.json")
+            loop = asyncio.get_running_loop()
+            if os.name != "nt":
+                for sig in (signal.SIGINT, signal.SIGTERM):
+                    loop.add_signal_handler(sig, stop.set)
             async with server:
                 await stop.wait()
         finally:
@@ -230,6 +257,8 @@ async def serve(
             await server.wait_closed()
             if connections:
                 await asyncio.gather(*list(connections), return_exceptions=True)
+            if pipe_server is not None:
+                await pipe_server.aclose(timeout=70)
             await engine.close()
             (directory / "agent.json").unlink(missing_ok=True)
 
@@ -252,7 +281,7 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
             selection = candidate
         elif selection is not None:
             expected_runtime = selection.runtime_id
-        credential = local_credential(directory, create=True)
+        credential: str | None = None
         try:
             reply = asyncio.run(exchange(directory, "__status", timeout=2, credential=credential))
             if reply.state == "completed":
@@ -301,6 +330,7 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
             pass
         if replace_idle and selection is not None:
             begin_runtime_update(directory, selection)
+        credential = local_credential(directory, create=True)
         command = python_module_command(
             "anywhere_computer", "serve", "--state-dir", str(directory),
             executable=selection.executable if selection is not None else None,
