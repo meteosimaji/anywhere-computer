@@ -148,8 +148,9 @@ class Engine:
         async def gui_action(args: GUIAction) -> Result:
             return await self.gui_mcp.act(args, owner=self._plugin_owner.get())
 
-        self.register('gui_observe', 'Observe an app through a selected Peekaboo MCP session. '
+        self.register('gui_observe', 'Focus and observe an app through a selected MCP session. '
                       'Creates a screenshot/snapshot and a 60-second observation reference. '
+                      'Requires the observed application name to match app exactly. '
                       'Returns available coordinate metadata; does not run a model.',
                       GUIObserve, gui_observe, open_world=True)
         self.register('gui_click', 'Click an element from an unconsumed GUI observation. '

@@ -262,7 +262,7 @@ for line in sys.stdin:
                 "from mcp.server.fastmcp import FastMCP\nm=FastMCP('fixture')\nn=40\n"
                 "@m.tool()\ndef increment()->int:\n global n\n n+=1\n return n\n"
                 "@m.tool()\ndef see(app_target:str)->str:\n"
-                " return 'Snapshot ID: fixture-1\\n  elem_1 - button'\n"
+                " return 'Snapshot ID: fixture-1\\nApplication: fixture\\n  elem_1 - button'\n"
                 "@m.tool()\ndef click(on:str,snapshot:str)->str:\n return 'clicked'\n"
                 "@m.tool()\ndef app(action:str,name:str)->str:\n return 'focused'\n"
                 "@m.tool()\ndef type(text:str,press_return:bool,snapshot:str)->str:\n return text\n"
