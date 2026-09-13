@@ -545,8 +545,12 @@ an expired grant, a clock earlier than its issuance, malformed storage or a vaul
 failure returns a redacted credential error. Reading never rotates, removes or
 replaces credentials and never redeems the original device code again. The
 returned token is internal and must not enter management IPC or MCP responses.
-Server-side audience, account and device authorization are still required: this
-does not implement device registration or indicate that a PC is connected.
+This credential-store operation alone does not register a device or indicate
+that a PC is connected. The subsequent isolated registration implementation
+validates the bearer audience/account at the relay, persists the original
+registration request locally and connects it to the native manager worker;
+see [the current relay implementation](RELAY-PROTOTYPE.md). That implementation
+still does not establish PC transport or complete default-installation pairing.
 
 The targeted credential and device-authorization suites passed 52 tests on Mac.
 The isolated Keycloak runner also reopened its actual received grant with a new
