@@ -333,6 +333,17 @@ compatibility burden. Do not install a WebSocket dependency or claim proxy
 compatibility until its supported version and an actual loopback exchange have
 been checked. AI-facing MCP remains a separate protocol and authorization layer.
 
+An isolated 2026-09-14 evaluation used websockets 17.0.1 in a disposable Python
+environment, without adding it to the project runtime. Verified-server WSS on
+loopback carried requests from a test relay to two sequential PC-initiated
+connections. Two real `Engine` instances with separate state directories created
+Japanese/emoji files and recovered each write through `operations_get`; the
+other engine's ledger did not contain that operation. Both engines ran in one
+process, and grants were synthetic. PC authentication, reconnect/reply-loss,
+concurrent routing, public proxy compatibility and separate-process acceptance
+were not tested by this experiment. It establishes feasibility of reusing the
+engine behind an outbound channel, not completion of the relay.
+
 The first channel slice must bind an authenticated PC credential to an existing,
 non-revoked registry device. A channel replacement must invalidate the old
 connection generation. Tool requests require a separately verified, expiring
