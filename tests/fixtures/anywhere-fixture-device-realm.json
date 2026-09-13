@@ -1,0 +1,54 @@
+{
+  "realm": "anywhere-fixture-device",
+  "enabled": true,
+  "sslRequired": "all",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "oauth2DeviceCodeLifespan": 120,
+  "oauth2DevicePollingInterval": 1,
+  "clientScopes": [
+    {
+      "name": "device:enroll",
+      "protocol": "openid-connect",
+      "attributes": {
+        "include.in.token.scope": "true"
+      }
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "anywhere-enrollment",
+      "enabled": true,
+      "publicClient": true,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": [
+        "http://127.0.0.1/*"
+      ],
+      "defaultClientScopes": [],
+      "optionalClientScopes": [
+        "device:enroll"
+      ],
+      "attributes": {
+        "oauth2.device.authorization.grant.enabled": "true"
+      }
+    }
+  ],
+  "users": [
+    {
+      "username": "fixture-user",
+      "enabled": true,
+      "emailVerified": true,
+      "firstName": "Isolated",
+      "lastName": "Fixture",
+      "email": "fixture@example.invalid",
+      "credentials": [
+        {
+          "type": "password",
+          "value": "synthetic-fixture-only-password",
+          "temporary": false
+        }
+      ]
+    }
+  ]
+}

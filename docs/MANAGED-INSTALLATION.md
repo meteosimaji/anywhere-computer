@@ -535,3 +535,9 @@ wiring. Existing `native_login` already
 provides PKCE and a bounded loopback callback for personal HTTP client login;
 enrollment integration must reuse that behavior without reusing its AI tokens.
 No public relay, endpoint, native permission or production credential changed.
+
+The next provider compatibility check is documented in
+[ENROLLMENT-PROVIDER-TEST.md](ENROLLMENT-PROVIDER-TEST.md). It uses an isolated
+Keycloak release and the actual device-flow HTTP endpoints, with a synthetic
+account and memory-only grant storage. This is separate from the native-vault
+receipts above and from production account/device association.
