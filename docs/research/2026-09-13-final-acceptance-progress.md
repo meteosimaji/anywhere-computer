@@ -6,8 +6,11 @@ Windows-for-Mac product development is outside this completion pass.
 ## Current baseline
 
 At main `b586b49`, the local suite completed with 925 passed and 17 skipped in
-93.52 seconds. Ruff passed; mypy passed for 80 source files. The skips have not
-all been classified in this pass. GitHub Quality run 34744562722 completed on
+93.52 seconds. Ruff passed; mypy passed for 80 source files. A focused rerun
+with skip reasons classified all 17: 14 Windows-only native checks, two
+Linux-only checks, and one registration test restricted to disposable GitHub
+runners. That rerun completed with 69 passed and 17 skipped.
+GitHub Quality run 34744562722 completed on
 macOS, Windows and Ubuntu. These checks do not establish GUI or reboot behavior.
 
 ## New ChatGPT trial
@@ -48,3 +51,13 @@ Both reported ready and zero active work. The VM was not restarted.
 Future update acceptance must inspect the operation entry points themselves;
 service process identity alone is insufficient when the shared engine directory
 differs from the HTTP configuration directory.
+
+## Real Codex protocol checks
+
+`verify_codex_plugins.py` passed catalog discovery, fixture tool execution and
+child-process cleanup. `verify_plugin_sessions.py`, using the installed Codex
+binary, passed authenticated HTTP session continuity, token refresh, native PNG
+relay, dispatch-once replay, stale-catalog rejection, grant isolation/revocation
+and cleanup. The recorded methods contained no model-turn start or steer calls.
+These tests use isolated fixture MCP servers and credentials; they prove the
+bridge protocol and lifecycle, not every installed third-party Plugin.

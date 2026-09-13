@@ -35,6 +35,9 @@ Claude Code・Gemini CLIなどの接続設定と検証範囲は[MCPクライア�
 開発版alpha9は、同じChatGPT接続から登録済みの別PCを明示指定するHTTP端末ルーターを追加しています。
 Windows VMも、そのゲスト内のAnywhere ComputerをSSHまたは認証付きHTTPで登録する操作先です。
 接続方法と機械試験・実機試験の区別は[複数端末の操作](docs/DEVICE-ROUTING.md)を参照してください。
+開発版では、ChatGPTからWindows VMのファイル作成・条件付き追記・端末実行・
+結果回収まで実機検証しています。GUIとVM再起動後の自動復旧は別の確認項目です。
+[Windows実操作の検証記録](docs/research/2026-09-13-windows-owner-pipe-acceptance.md)
 
 ## 入手方法
 
@@ -112,6 +115,7 @@ macOSでは、共通エンジンへの移行と更新後に、既存のHTTP接�
 | 確認対象 | 確認できている範囲 |
 |---|---|
 | macOS | 実エージェント、認証付きHTTP、端末再接続、常駐版更新、共通エンジン移行 |
+| Windows VM（開発版） | ChatGPTから明示端末指定でファイル・端末・結果回収、更新後の保存データ継続、インストール済みPluginコマンド実行 |
 | Windows・Ubuntu CI | 共通テスト、配布ZIP生成、展開後のランタイム試験、配布物の出所証明検証 |
 | Linux ARM64 | 過去の隔離ゲストで、Secret Serviceを使った実エージェント試験 |
 | 全OSの初回導入・再ログイン・スリープ復帰 | 一般利用者の環境での受け入れは未完了 |
