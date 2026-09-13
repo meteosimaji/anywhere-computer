@@ -99,3 +99,27 @@ before dispatch, and response loss after one request without replay. This is
 transport only: the trusted controller must still bind its configured endpoint,
 saved grant and persistent enrollment ID before exposing registration in the UI.
 An unconfirmed response is not permission to allocate a new enrollment ID.
+
+## Client registration recovery
+
+`RegistrationClient` persists the original enrollment ID, authorization attempt,
+endpoint and normalized name before its first registration request. The database
+contains only those bindings, the hashed OS-vault reference and the eventual
+device receipt; it does not persist bearer or refresh tokens. The existing grant
+store verifies the exact authorization attempt and scope before a network call.
+
+An explicit retry after response loss reuses the saved enrollment ID. A record
+without a device receipt means unconfirmed: the server may already have created
+the device. Changing the endpoint, name or authorization attempt while recovering
+is rejected without another request. A successfully saved receipt is returned
+without repeating registration, but remains cached registration evidence, not a
+connection check or proof that authorization is still valid. Native callers must
+run this synchronous client on its owning worker thread and close its database.
+
+Tests exercise restart after simulated post-registration response loss, stable
+identity and cached receipt reuse, conflicting recovery inputs, invalid/rejected
+responses and absence of the synthetic token from the local database. The HTTPS
+wire has separate actual TLS tests. This client is not yet wired into management
+IPC or the native UI. Expired-grant reauthorization and switching accounts need an
+explicit recovery transition; this version preserves pending state instead of
+silently creating a new registration under a different attempt.
