@@ -4,6 +4,35 @@
 Codex タスクへの委譲や、ローカル試験の成功だけではこの確認の合格としない。
 以下は未実施の試験手順であり、合格記録ではない。
 
+## 新規チャットと機械試験の区別
+
+新規利用の受け入れは、既存会話への追記では代替しない。ホームの新規チャットを
+開き、空の会話でモデルを選択する。既存会話が GPT-5.6 でも、新規会話が同じモデル
+になるとは限らない。送信前に GPT-5.6 Sol・中程度の表示を確認し、新しい会話URLを
+記録する。ツール定義・端末ID・セッションIDは会話内で新規取得する。
+一方、状態保持と再接続の試験では、同じ会話または明示的に渡した操作の控えを使う。
+両者の結果を別に記録し、同じ会話の成功で初回利用を合格にしない。
+
+リポジトリ内の再現試験は次のように範囲が異なる。
+
+| 試験 | 実際に通る経路 | 証明しないこと |
+|---|---|---|
+| `test_http_service.py::test_fresh_chat_discovers_and_operates_without_previous_session` | OAuth/PKCE、実HTTP、独立したHTTPクライアントとMCP初期化、再発見、旧セッション拒否、日本語ファイル操作、明示された操作IDの回収。OSによるスキップなし | LLMの判断、GUI、すべてのツール、実OS資格情報ストア。資格情報ストアはMemoryVault |
+| `test_http_capability_acceptance.py::test_every_remote_engine_tool_in_chat_like_http_workflows` | 認証付き実HTTP、公開エンジンツールの網羅性検査、実ファイル・プロセス、子プロセスMCP、セッション破棄後の再発見 | WindowsではPOSIX fixtureのためスキップ。Codex/GUI提供元は合成であり、実アプリや全インストール済みPluginの成功ではない |
+| `test_http_device_routing.py::test_chat_http_routes_and_recovers_without_cross_grant_access` | HTTPの端末ルーティングと結果回収・認可間の分離 | インターネット中継や物理的に別のMac/Windowsでの成功 |
+
+対象試験の実行例:
+
+```sh
+.venv/bin/pytest -q tests/test_http_service.py tests/test_http_capability_acceptance.py tests/test_http_device_routing.py
+```
+
+Windowsでは同梱環境に合わせて `.venv\\Scripts\\python.exe -m pytest` を使用する。
+OSによるスキップがないことと、そのOSで試験が成功したことは別である。
+CIまたは実機の完了結果・対象コミットを確認してから成功を記録する。
+機械試験の成功はChatGPT自身の発見・操作・安全性判定・使いやすさの代わりにはならない。
+稼働版のruntime IDが開発配布物と異なる場合、そのChat試験を開発版の検証に流用しない。
+
 ## 前提と登録
 
 - 現在の公式手順: https://developers.openai.com/apps-sdk/deploy/connect-chatgpt
