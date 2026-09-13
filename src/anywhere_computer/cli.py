@@ -78,6 +78,7 @@ def main() -> None:
             "http-watch",
             "remote-serve",
             "remote-watch",
+            "local-watch",
             "remote-setup",
             "chatgpt-setup",
             "remote-doctor",
@@ -138,8 +139,10 @@ def main() -> None:
     parser.add_argument("--watch-parent", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--persistent", action="store_true",
                         help="Keep remote supervision alive until explicitly stopped")
+    parser.add_argument("--startup-mode", choices=["local", "remote"])
     parser.add_argument("--startup-id", help=argparse.SUPPRESS)
-    parser.add_argument("--codex-executable", help="Pinned Codex CLI for remote services")
+    parser.add_argument("--codex-executable",
+                        help="Optional pinned Codex CLI for supervised services")
     args = parser.parse_args()
     if args.command == 'update':
         if args.verifier is None or not args.verifier.is_absolute():
@@ -152,17 +155,22 @@ def main() -> None:
     elif args.http_state_dir is not None:
         parser.error("--http-state-dir is only valid for engine-unify")
     if args.codex_executable is not None:
-        if args.command not in {"remote-watch", "remote-serve"}:
-            parser.error("--codex-executable is only valid for remote services")
+        if args.command not in {"remote-watch", "remote-serve", "local-watch"}:
+            parser.error("--codex-executable is only valid for supervised services")
         if not Path(args.codex_executable).is_absolute():
             parser.error("--codex-executable must be absolute")
         os.environ["ANYWHERE_CODEX_EXECUTABLE"] = args.codex_executable
     if args.persistent and args.command != "remote-watch":
         parser.error("--persistent is only valid for remote-watch")
     if args.startup_id is not None and (
-        args.command != "remote-watch" or not re.fullmatch(r"[a-f0-9]{32}", args.startup_id)
+        args.command not in {"remote-watch", "local-watch"}
+        or not re.fullmatch(r"[a-f0-9]{32}", args.startup_id)
     ):
         parser.error("Invalid startup registration identifier")
+    if args.startup_mode is not None and args.command not in {
+        "autostart-preview", "autostart-install",
+    }:
+        parser.error("--startup-mode is only valid for startup preview and installation")
     if args.connector is not None and args.command not in {
         "remote-watch", "remote-serve", "tunnel-run", "autostart-preview", "autostart-install",
         "autostart-upgrade",
@@ -324,10 +332,12 @@ def main() -> None:
             assert args.http_state_dir is not None  # Validated before any command dispatch.
             print(json.dumps(migrate_engine(directory, args.http_state_dir), indent=2))
         elif args.command == "autostart-preview":
-            print(json.dumps(preview_startup(directory, connector=args.connector),
+            print(json.dumps(preview_startup(directory, connector=args.connector,
+                                              mode=args.startup_mode or "remote"),
                              ensure_ascii=True, indent=2))
         elif args.command == "autostart-install":
-            print(json.dumps(install_startup(directory, connector=args.connector), indent=2))
+            print(json.dumps(install_startup(directory, connector=args.connector,
+                                             mode=args.startup_mode), indent=2))
         elif args.command == "autostart-uninstall":
             print(json.dumps(uninstall_startup(directory), indent=2))
         elif args.command == "autostart-start":
@@ -422,6 +432,12 @@ def main() -> None:
                 print(f"\nCopy a command into {commands['shell']}:")
                 for command_name in ("resume", "start", "diagnose"):
                     print(f"\n{command_name}:\n{commands[command_name]}")
+        elif args.command == "local-watch":
+            from .local_supervisor import watch_local
+
+            if sys.platform == "win32":
+                signal.signal(signal.SIGBREAK, signal.default_int_handler)
+            raise SystemExit(watch_local(directory))
         elif args.command == "remote-watch":
             if sys.platform == "win32":
                 signal.signal(signal.SIGBREAK, signal.default_int_handler)

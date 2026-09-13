@@ -14,6 +14,7 @@ from typing import Literal, cast
 from .runtime_launch import python_module_command
 
 Platform = Literal["darwin", "linux", "win32"]
+StartupMode = Literal["remote", "local"]
 TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 
 
@@ -49,7 +50,12 @@ def startup_definition(
     utf8_python: bool = True,
     codex_executable: str | None = None,
     policy_version: Literal[1, 2] = 1,
+    mode: StartupMode = "remote",
 ) -> StartupDefinition:
+    if mode not in {"remote", "local"}:
+        raise ValueError("Unsupported startup mode")
+    if mode == "local" and connector is not None:
+        raise ValueError("Local startup does not accept a tunnel connector")
     directory = directory.resolve()
     executable = _clean_argument(executable)
     if not Path(executable).is_absolute():
@@ -58,7 +64,8 @@ def startup_definition(
     _clean_argument(user)
     name = "io.anywhere-computer." + hashlib.sha256(str(directory).encode()).hexdigest()[:20]
     arguments = python_module_command(
-        "anywhere_computer.cli", "remote-watch", "--state-dir", str(directory),
+        "anywhere_computer.cli", "local-watch" if mode == "local" else "remote-watch",
+        "--state-dir", str(directory),
         executable=executable,
     )[1:]
     if not utf8_python and "-X" in arguments:
@@ -78,7 +85,7 @@ def startup_definition(
         if not Path(codex_executable).is_absolute():
             raise ValueError("Startup Codex executable requires an absolute path")
         arguments.extend(["--codex-executable", codex_executable])
-    if policy_version == 2:
+    if policy_version == 2 and mode == "remote":
         arguments.append("--persistent")
     if startup_id is not None:
         if not re.fullmatch(r"[a-f0-9]{32}", startup_id):
@@ -108,7 +115,9 @@ def startup_definition(
             "After=graphical-session.target\n\n[Service]\nType=simple\n"
             f"ExecStart={command}\nWorkingDirectory={working_directory}\n"
             + ("Restart=always\nRestartSec=60\n" if policy_version == 2 else "Restart=no\n")
-            + "UMask=0077\nKillMode=control-group\nTimeoutStopSec=30\n"
+            + "UMask=0077\n"
+            + ("KillMode=process\n" if mode == "local" else "KillMode=control-group\n")
+            + "TimeoutStopSec=30\n"
             "\n[Install]\nWantedBy=default.target\n"
         ).encode()
         return StartupDefinition(
@@ -167,6 +176,7 @@ def current_definition(
     utf8_python: bool = True,
     codex_executable: str | None = None,
     policy_version: Literal[1, 2] = 1,
+    mode: StartupMode = "remote",
 ) -> StartupDefinition:
     import psutil
 
@@ -178,7 +188,7 @@ def current_definition(
         executable=executable or os.path.abspath(sys.executable), user=psutil.Process().username(),
         connector=connector, startup_id=startup_id, isolated_python=isolated_python,
         utf8_python=utf8_python,
-        codex_executable=codex_executable, policy_version=policy_version,
+        codex_executable=codex_executable, policy_version=policy_version, mode=mode,
     )
     if sys.platform == "linux":
         configured = os.environ.get("XDG_CONFIG_HOME", "")
@@ -194,7 +204,7 @@ def current_definition(
 
 
 def preview_startup(
-    directory: Path, *, connector: str | None = None,
+    directory: Path, *, connector: str | None = None, mode: StartupMode = "remote",
 ) -> dict[str, str | bool]:
     """Render a definition without creating state or contacting a service manager."""
     from .codex_context import _executable
@@ -204,7 +214,7 @@ def preview_startup(
     except FileNotFoundError:
         pinned_codex = None
     definition = current_definition(directory, connector=connector, codex_executable=pinned_codex,
-                                    policy_version=2)
+                                    policy_version=2, mode=mode)
     return {
         "platform": definition.platform,
         "name": definition.name,

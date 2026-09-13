@@ -199,3 +199,25 @@ def test_xdg_config_home_is_respected_and_must_be_absolute(tmp_path, monkeypatch
     with pytest.raises(ValueError, match="XDG_CONFIG_HOME must be absolute"):
         autostart.current_definition(tmp_path / "state")
     assert not configured.exists()
+
+
+@pytest.mark.parametrize("platform", ["darwin", "linux", "win32"])
+def test_local_startup_uses_shared_watch_without_tunnel(tmp_path, platform):
+    definition = autostart.startup_definition(
+        tmp_path, platform=platform, home=tmp_path,
+        executable=os.path.abspath(sys.executable), user="fixture-user",
+        mode="local", policy_version=2,
+    )
+    content = definition.content.decode("utf-16" if platform == "win32" else "utf-8")
+    assert "local-watch" in content
+    assert "remote-watch" not in content
+    assert "--connector" not in content
+    assert "--persistent" not in content
+    if platform == "linux":
+        assert "KillMode=process\n" in content
+    with pytest.raises(ValueError, match="connector"):
+        autostart.startup_definition(
+            tmp_path, platform=platform, home=tmp_path,
+            executable=os.path.abspath(sys.executable), user="fixture-user",
+            mode="local", connector=os.path.abspath(sys.executable),
+        )

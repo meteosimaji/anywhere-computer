@@ -380,3 +380,27 @@ def test_pre_utf8_receipt_remains_inspectable_and_upgradeable(registration, monk
     service.upgrade_startup(directory)
     assert service._record(directory).utf8_python is True
     assert service.startup_status(directory)["definition_exists"] is True
+
+
+def test_local_registration_needs_no_remote_setup_and_preserves_mode(registration, monkeypatch):
+    directory, native, calls, definition = registration
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("Local startup must not require remote provisioning")
+
+    for name in (
+        "cloudflared_executable", "load_http_config", "OwnerCredentials", "TunnelCredential",
+    ):
+        monkeypatch.setattr(service, name, unexpected)
+    first = service.install_startup(directory, mode="local")
+    record = service._record(directory)
+    assert record.mode == "local" and record.connector is None
+    assert first["state"] == "registered"
+    assert service.install_startup(directory)["state"] == "registered"
+    assert calls == ["install"]
+    with pytest.raises(ValueError, match="mode differs"):
+        service.install_startup(directory, mode="remote")
+    assert calls == ["install"]
+    assert service.upgrade_startup(directory)["state"] == "registered"
+    assert service._record(directory).mode == "local"
+    assert service.uninstall_startup(directory)["state"] == "uninstalled"
