@@ -61,6 +61,32 @@ class OwnerJsonPipeNativeTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(parsed, dict)
         return parsed
 
+    async def test_client_identity_does_not_require_process_query_access(self) -> None:
+        from unittest.mock import patch
+
+        from anywhere_computer import owner_json_pipe as transport
+
+        original = transport._WINDOWS.process_sid
+
+        def restricted_process_sid(pid=None):
+            if threading.current_thread().name == "anywhere-owner-json-client":
+                raise OSError(5, "Synthetic cross-logon process query denial")
+            return original(pid)
+
+        with patch.object(transport._WINDOWS, "process_sid", restricted_process_sid):
+            self.assertTrue((await self.request("identity"))["ok"])
+        self.assertEqual(self.calls, ["identity"])
+
+    async def test_different_client_sid_rejected_before_dispatch(self) -> None:
+        from unittest.mock import patch
+
+        from anywhere_computer import owner_json_pipe as transport
+
+        with patch.object(transport._WINDOWS, "client_sid", return_value="S-1-5-21-999"):
+            with self.assertRaises((EOFError, OSError)):
+                await self.request("must-not-dispatch")
+        self.assertEqual(self.calls, [])
+
     async def test_multiple_requests_reconnect_and_parallel_status(self) -> None:
         self.assertEqual((await self.request("first"))["action"], "first")
         self.assertEqual((await self.request("second"))["action"], "second")

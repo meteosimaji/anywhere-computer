@@ -33,3 +33,20 @@ These tests do not prove that the installed Windows agent has been upgraded, tha
 an interactive-login agent can serve the final SSH entry point, or that ChatGPT can
 switch from Mac to Windows. Those deployment and end-to-end gates remain open.
 The pipe tests are not GUI, HVCI, EAC or VRChat qualification.
+
+## Cross-logon follow-up
+
+The first deployed owner-pipe build failed before its hello: the interactive agent
+received Windows error 5 from `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` when
+inspecting the SSH client's process. A diagnostic subclass recorded the exception
+class and stack frame without request payloads or credentials.
+
+The revised server reads the client's bounded frame, identifies its Windows token
+through `ImpersonateNamedPipeClient` / `OpenThreadToken`, restores its own identity,
+and checks the owner SID before dispatch. The client requests identification-only
+security QoS. The server process identity and hello checks remain on the client.
+A real interactive-login server / SSH client round trip returned `{"ok":true}`.
+Native tests including process-query denial and wrong-client-SID rejection:
+11 passed in 1.356 seconds. Connection/deadline tests: 11 passed in 1.41 seconds.
+This follow-up was verified in an isolated server; installed-agent and ChatGPT
+acceptance still require the revised build to be deployed.

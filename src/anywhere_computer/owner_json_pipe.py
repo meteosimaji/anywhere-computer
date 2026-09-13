@@ -300,6 +300,12 @@ if sys.platform == "win32" or TYPE_CHECKING:
                     [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD],
                     wintypes.HANDLE,
                 ),
+                (self.kernel, "GetCurrentThread", [], wintypes.HANDLE),
+                (self.security, "ImpersonateNamedPipeClient", [wintypes.HANDLE], wintypes.BOOL),
+                (self.security, "RevertToSelf", [], wintypes.BOOL),
+                (self.security, "OpenThreadToken",
+                 [wintypes.HANDLE, wintypes.DWORD, wintypes.BOOL, ctypes.POINTER(wintypes.HANDLE)],
+                 wintypes.BOOL),
                 (self.kernel, "CancelSynchronousIo", [wintypes.HANDLE], wintypes.BOOL),
                 (self.kernel, "LocalFree", [wintypes.HLOCAL], wintypes.HLOCAL),
                 (
@@ -365,29 +371,49 @@ if sys.platform == "win32" or TYPE_CHECKING:
             try:
                 if not self.security.OpenProcessToken(process, 0x0008, ctypes.byref(token)):
                     raise self._last_error("Could not inspect owner pipe process token")
-                needed = wintypes.DWORD()
-                self.security.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
-                if not 0 < needed.value <= 65_536:
-                    raise OwnerPipeIdentityError("Invalid owner pipe token metadata")
-                buffer = ctypes.create_string_buffer(needed.value)
-                if not self.security.GetTokenInformation(
-                    token, 1, buffer, needed.value, ctypes.byref(needed)
-                ):
-                    raise self._last_error("Could not inspect owner pipe token")
-                sid = ctypes.cast(buffer, ctypes.POINTER(wintypes.LPVOID))[0]
-                rendered = wintypes.LPWSTR()
-                if not self.security.ConvertSidToStringSidW(sid, ctypes.byref(rendered)):
-                    raise self._last_error("Could not render owner pipe SID")
-                try:
-                    if rendered.value is None:
-                        raise OwnerPipeIdentityError("Missing owner pipe SID")
-                    return rendered.value
-                finally:
-                    self.kernel.LocalFree(rendered)
+                return self._token_sid(token)
             finally:
                 self.close(token.value)
                 if close_process:
                     self.close(process)
+
+        def _token_sid(self, token: wintypes.HANDLE) -> str:
+            needed = wintypes.DWORD()
+            self.security.GetTokenInformation(token, 1, None, 0, ctypes.byref(needed))
+            if not 0 < needed.value <= 65_536:
+                raise OwnerPipeIdentityError("Invalid owner pipe token metadata")
+            buffer = ctypes.create_string_buffer(needed.value)
+            if not self.security.GetTokenInformation(
+                token, 1, buffer, needed.value, ctypes.byref(needed)
+            ):
+                raise self._last_error("Could not inspect owner pipe token")
+            sid = ctypes.cast(buffer, ctypes.POINTER(wintypes.LPVOID))[0]
+            rendered = wintypes.LPWSTR()
+            if not self.security.ConvertSidToStringSidW(sid, ctypes.byref(rendered)):
+                raise self._last_error("Could not render owner pipe SID")
+            try:
+                if rendered.value is None:
+                    raise OwnerPipeIdentityError("Missing owner pipe SID")
+                return rendered.value
+            finally:
+                self.kernel.LocalFree(rendered)
+
+        def client_sid(self, handle: int) -> str:
+            # Inspect the identity attached by Windows to the request just read.
+            # No access to the other logon session's process object is required.
+            if not self.security.ImpersonateNamedPipeClient(handle):
+                raise self._last_error("Could not identify owner pipe client")
+            token = wintypes.HANDLE()
+            try:
+                if not self.security.OpenThreadToken(
+                    self.kernel.GetCurrentThread(), 0x0008, True, ctypes.byref(token)
+                ):
+                    raise self._last_error("Could not inspect owner pipe client token")
+                return self._token_sid(token)
+            finally:
+                self.close(token.value)
+                if not self.security.RevertToSelf():
+                    raise OwnerPipeIdentityError("Could not restore owner pipe server identity")
 
         def create_server_pipe(
             self,
@@ -439,7 +465,7 @@ if sys.platform == "win32" or TYPE_CHECKING:
                 wait_ms = max(1, min(int(remaining * 1000), 100))
                 if self.kernel.WaitNamedPipeW(name, wait_ms):
                     handle = self.kernel.CreateFileW(
-                        name, 0xC0000000, 0, None, 3, 0, None
+                        name, 0xC0000000, 0, None, 3, 0x00110000, None
                     )
                     if handle != self.INVALID_HANDLE:
                         return int(handle)
@@ -789,9 +815,6 @@ class OwnerJsonPipeServer:
             _WINDOWS.close(int(thread_handle))
 
     def _serve_connection(self, handle: int, thread_handle: int) -> None:
-        client_pid = _WINDOWS.peer_pid(handle, server=False)
-        if _WINDOWS.process_sid(client_pid) != self.endpoint.owner_sid:
-            raise OwnerPipeIdentityError("Owner pipe client SID does not match server owner")
         _WINDOWS.write_all(
             handle,
             _encode_frame(_hello(self.endpoint), self._maximum),
@@ -799,6 +822,8 @@ class OwnerJsonPipeServer:
             thread_handle,
         )
         request = _read_frame(handle, self._maximum, self._request_timeout, self._stopped)
+        if _WINDOWS.client_sid(handle) != self.endpoint.owner_sid:
+            raise OwnerPipeIdentityError("Owner pipe client SID does not match server owner")
         if self._loop is None:
             raise OwnerPipeCleanupError("Owner pipe server loop is unavailable")
         async def invoke() -> bytes:
