@@ -1,5 +1,6 @@
 """Typed Peekaboo operations over an explicitly opened, owner-scoped MCP session."""
 
+import asyncio
 import re
 import time
 import uuid
@@ -91,8 +92,15 @@ class GUIMCP:
     def __init__(self, sessions: DirectMCPSessions) -> None:
         self.sessions = sessions
         self.observations: dict[str, Observation] = {}
+        self._interaction = asyncio.Lock()
 
     async def observe(self, args: GUIObserve, *, owner: str | None) -> dict[str, JsonValue]:
+        if self._interaction.locked():
+            raise ValueError('GUI is busy; observe again after the current interaction finishes')
+        async with self._interaction:
+            return await self._observe(args, owner=owner)
+
+    async def _observe(self, args: GUIObserve, *, owner: str | None) -> dict[str, JsonValue]:
         self.sessions.status(args.session_id, owner=owner)
         self.observations.pop(args.session_id, None)
         raw = await self.sessions.call(
@@ -143,6 +151,12 @@ class GUIMCP:
                 'coordinate_actions_supported': False}
 
     async def act(self, args: GUIAction, *, owner: str | None) -> dict[str, JsonValue]:
+        if self._interaction.locked():
+            raise ValueError('GUI is busy; observe again after the current interaction finishes')
+        async with self._interaction:
+            return await self._act(args, owner=owner)
+
+    async def _act(self, args: GUIAction, *, owner: str | None) -> dict[str, JsonValue]:
         observation = self.observations.get(args.session_id)
         if (observation is None or observation.owner != owner
                 or observation.identity != args.observation_id
@@ -168,7 +182,9 @@ class GUIMCP:
         else:
             raise ValueError('Unsupported GUI action')
         # Consume before the first effect. A response failure must not replay input.
-        del self.observations[args.session_id]
+        # Keyboard focus is desktop-global, including across provider sessions.
+        # Other observations must not survive an input that may change that focus.
+        self.observations.clear()
         if name in {'type', 'hotkey'}:
             focused = await self.sessions.call(args.session_id, 'app',
                 {'action': 'focus', 'name': observation.app}, owner=owner)

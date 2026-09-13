@@ -1,3 +1,4 @@
+import asyncio
 import time
 
 import pytest
@@ -96,3 +97,60 @@ async def test_gui_key_normalizes_documented_case_and_aliases(keys, expected):
     await gui.act(GUIKey(session_id=sid, observation_id=seen['observation_id'], keys=keys),
                   owner='owner')
     assert peer.calls[-1] == ('hotkey', {'keys': expected})
+
+
+async def test_focus_and_input_cannot_be_interleaved_by_another_typed_session():
+    peer = Peer()
+    peer.entries['b' * 32] = object()
+    gui = GUIMCP(peer)
+    first = await gui.observe(GUIObserve(session_id='a' * 32, app='Editor'), owner='owner')
+    second = await gui.observe(GUIObserve(session_id='b' * 32, app='Browser'), owner='owner')
+    focused, release = asyncio.Event(), asyncio.Event()
+    original = peer.call
+
+    async def delayed(session_id, name, arguments, *, owner):
+        result = await original(session_id, name, arguments, owner=owner)
+        if name == 'app':
+            focused.set()
+            await release.wait()
+        return result
+
+    peer.call = delayed
+    action = asyncio.create_task(gui.act(GUIType(
+        session_id='a' * 32, observation_id=first['observation_id'], text='hello'), owner='owner'))
+    try:
+        await asyncio.wait_for(focused.wait(), 1)
+        count = len(peer.calls)
+        with pytest.raises(ValueError, match='busy'):
+            await gui.observe(GUIObserve(session_id='b' * 32, app='Browser'), owner='owner')
+        assert len(peer.calls) == count
+    finally:
+        release.set()
+        await action
+    with pytest.raises(ValueError, match='missing'):
+        await gui.act(GUIKey(session_id='b' * 32, observation_id=second['observation_id'],
+                            keys=['return']), owner='owner')
+    assert peer.calls[-1][0] == 'type'
+    await gui.observe(GUIObserve(session_id='b' * 32, app='Browser'), owner='owner')
+
+
+async def test_cancelled_observation_releases_typed_gui_slot():
+    peer = Peer()
+    gui = GUIMCP(peer)
+    started = asyncio.Event()
+    original = peer.call
+
+    async def waiting(*args, **kwargs):
+        started.set()
+        await asyncio.Event().wait()
+
+    peer.call = waiting
+    observation = asyncio.create_task(gui.observe(
+        GUIObserve(session_id='a' * 32, app='Editor'), owner='owner'))
+    await asyncio.wait_for(started.wait(), 1)
+    observation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await observation
+    peer.call = original
+    assert (await gui.observe(GUIObserve(session_id='a' * 32, app='Editor'),
+                              owner='owner'))['action_ready']
