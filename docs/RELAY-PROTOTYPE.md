@@ -88,8 +88,8 @@ failure bodies contain no token, claims, request text or database details.
 
 The registry and adapter belong to one event-loop thread. This small loopback
 implementation performs synchronous signature/storage work and is not a
-production concurrency or rate-limiting design. The manager still needs the
-registration client and persistent association; a registered device still cannot
+production concurrency or rate-limiting design. The native worker uses the
+persistent registration client described below; a registered device still cannot
 execute operations until the separately authenticated outbound link is implemented.
 
 The client-side `https_enrollment_registration` transport now sends JSON and a
@@ -97,8 +97,8 @@ bearer grant over verified HTTPS. It shares the form flow's bounded exchange,
 duplicate-response-field rejection and no-redirect/no-retry behavior. Local TLS
 tests cover Japanese/emoji names, bearer delivery, malformed-header rejection
 before dispatch, and response loss after one request without replay. This is
-transport only: the trusted controller must still bind its configured endpoint,
-saved grant and persistent enrollment ID before exposing registration in the UI.
+transport only: the registration client and native worker described below bind
+the configured endpoint, saved grant and persistent enrollment ID for the UI.
 An unconfirmed response is not permission to allocate a new enrollment ID.
 
 ## Client registration recovery
@@ -149,6 +149,14 @@ out of native progress responses. The reauthorization transition itself remains
 unfinished; account lookup alone does not renew an expired grant.
 Account identifiers are not bearer credentials, but callers should keep them out
 of routine diagnostics. This remains an isolated endpoint, not public deployment.
+
+The combined HTTP recovery test connects `RegistrationClient` to this adapter
+over an actual loopback socket with signed enrollment tokens. It drops the first
+successful registration response, reopens the client, rejects a different verified
+account, then recovers the original enrollment using the original account. It
+checks the exact request sequence and one stored device. Its credential vault is
+in memory and its loopback transport is HTTP: this test does not establish native
+OS-vault behavior, public HTTPS readiness or expired-grant reauthorization.
 
 ## Native host lifetime
 
