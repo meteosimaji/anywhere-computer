@@ -28,6 +28,40 @@ def _strip_meta(value: JsonValue) -> JsonValue:
 
 
 
+# Diagnostic claims from the provider, never authorization or a retry decision.
+# Closed vocabularies prevent forwarding arbitrary metadata bodies or credentials.
+_OUTCOME_VALUES = {
+    'state': frozenset({'confirmed_change', 'confirmed_no_change', 'partial',
+                        'dispatched_unverified', 'suspected_noop', 'refused', 'indeterminate'}),
+    'dispatch_state': frozenset({'none', 'dispatched', 'may_have_dispatched'}),
+    'effect': frozenset({'confirmed', 'partial', 'unverifiable', 'suspected_noop', 'refused'}),
+    'evidence': frozenset({'verified_change', 'verified_no_change',
+        'primary_change_verified_cleanup_failed', 'delivery_accepted', 'operation_still_running',
+        'observed_no_change', 'request_refused', 'response_lost', 'completion_unknown'}),
+    'escalation': frozenset({'none', 'correct_request', 'grant_permission', 'refresh_target',
+        'reconnect_session', 'update_runtime', 'recover_side_effect', 'observe_before_retry'}),
+    'refusal_reason': frozenset({'invalid_request', 'permission_denied', 'target_unavailable',
+        'transport_session_unavailable', 'request_cancelled', 'runtime_incompatible',
+        'foreground_consent_required', 'operation_unsupported'}),
+    'retry_safety': frozenset({'safe', 'unsafe', 'not_applicable'}),
+}
+
+
+def _provider_diagnostics(meta: JsonValue) -> dict[str, JsonValue]:
+    if not isinstance(meta, dict):
+        return {}
+    output: dict[str, JsonValue] = {}
+    for key, allowed in _OUTCOME_VALUES.items():
+        value = meta.get(key)
+        if isinstance(value, str) and value in allowed:
+            output[key] = value
+    for key in ('mutation_dispatched', 'requires_fresh_observation', 'retry_safe'):
+        value = meta.get(key)
+        if isinstance(value, bool):
+            output[key] = value
+    return output
+
+
 def normalize_tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
     content = result.get("content", [])
     is_error = result.get("isError", False)
@@ -71,6 +105,9 @@ def normalize_tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
     output: dict[str, JsonValue] = {
         "content": clean_content, "is_error": is_error, "truncated": truncated,
     }
+    diagnostics = _provider_diagnostics(result.get("_meta"))
+    if diagnostics:
+        output["provider_diagnostics"] = diagnostics
     if omitted_images:
         output["omitted_image_items"] = omitted_images
     if unsupported:
