@@ -97,9 +97,20 @@ def test_runtime_rejects_directory_link_cycle(tmp_path):
 
 
 @pytest.mark.parametrize("platform", ["darwin", "win32"])
-def test_manager_packaging_keeps_native_executable_and_relative_runtime_layout(tmp_path, platform):
+def test_manager_packaging_keeps_native_executable_and_relative_runtime_layout(
+    tmp_path, platform, monkeypatch,
+):
+    import os
     import plistlib
 
+    chmod_calls = []
+    real_chmod = Path.chmod
+
+    def record_chmod(path, mode):
+        chmod_calls.append((path, mode))
+        real_chmod(path, mode)
+
+    monkeypatch.setattr(Path, "chmod", record_chmod)
     native = tmp_path / "native"
     native.write_bytes(b"native fixture")
     app = tmp_path / "relocated 日本語"
@@ -109,7 +120,9 @@ def test_manager_packaging_keeps_native_executable_and_relative_runtime_layout(t
         contents = app / "Anywhere Computer Manager.app" / "Contents"
         metadata = plistlib.loads((contents / "Info.plist").read_bytes())
         executable = contents / "MacOS" / metadata["CFBundleExecutable"]
-        assert executable.stat().st_mode & 0o111
+        assert (executable, 0o755) in chmod_calls
+        if os.name != "nt":
+            assert executable.stat().st_mode & 0o111
         assert metadata["CFBundlePackageType"] == "APPL"
     else:
         executable = app / "Anywhere Computer Manager.exe"
