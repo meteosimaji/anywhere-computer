@@ -238,8 +238,37 @@ The initial Mac UI acquisition timed out with a shell wrapper configured as the
 test bundle's executable. Selecting the actual native executable in Info.plist
 and launching it with the fixture arguments made the window accessible, without
 a product-code change. This qualifies the corrected development fixture, not
-the still-unfinished packaged installer. Windows native button acceptance is
-pending; Windows CI compilation and CLI-level native tests do not replace it.
+the still-unfinished packaged installer. Windows native verification follows
+below; CI compilation and CLI-level native tests do not replace that UI test.
+
+Windows native button verification (2026-09-14) used the executable built from
+`9700b3d93d58249f595ec2ada33ff3c60322e26b`, Actions run `34768326837`.
+Its SHA-256 was `d8d3a1a1df0521ec0a76d49c649fed7f553f440bfca795c8b20b23a0a4c68ab8`,
+checked again on the guest before launch. The isolated runtime wheel was also
+hash-checked. The normal-user fixture, separate from production, was
+`%LOCALAPPDATA%/Temp/anywhere-manager-native-9700b3d`.
+
+The actual window displayed stopped/unregistered, accepted enable, displayed
+registered and a responding engine after refresh, and accepted disable. The
+window then displayed unregistered. Closing it ended the manager process with
+exit code 0. Independent authenticated observations before and after removal
+retained instance `026fa5f7c8a54d5e9bc4c37dddb35a38` and runtime
+`2ee740c8fae7148d2adde42ac2413c7b5ca7c1db74b1c22b39e11faa07fa6fa0`.
+Routed observation operations were `f703ab85d62b4e15a3e50468a8f2ce36` and
+`4f1ea94672444e7eab04a1d53eac367c`. Explicit fixture stop
+`424151f2bca04e89988b9edaaf5af726` was followed by absent agent metadata;
+all test terminal sessions were closed. Production engine and VM remained up.
+
+This test also exposed an unresolved usability defect: console windows appeared
+in front of the manager during startup registration. The native manager's Python
+child launch, native startup subprocesses and scheduled console interpreter are
+the relevant launch paths to investigate; the screenshot alone does not identify
+which process owns each console. Do not call the Windows installation experience
+complete until this is fixed and retested. The fixture contains `pythonw.exe`;
+compatibility with startup receipts and runtime selection must be checked before
+changing the scheduled interpreter. The first verification command also found
+`Get-FileHash` unavailable in this PowerShell environment; Python SHA-256 checking
+succeeded without weakening verification or changing production settings.
 
 CI exposed a test readiness race: the disabled-update case slept 300 ms before
 probing the HTTP service. Adding a 500 ms startup delay reproduced the failure.
