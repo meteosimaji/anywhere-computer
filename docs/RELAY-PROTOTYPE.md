@@ -123,3 +123,26 @@ wire has separate actual TLS tests. This client is not yet wired into management
 IPC or the native UI. Expired-grant reauthorization and switching accounts need an
 explicit recovery transition; this version preserves pending state instead of
 silently creating a new registration under a different attempt.
+
+## Native host lifetime
+
+The current native manager launches a short-lived Python command for each status
+or startup action. That model cannot retain `DeviceAuthorizationClient` state
+between start and poll. Enrollment therefore needs a separate host-owned worker,
+not additional independent status subprocesses or private codes in WebView state.
+
+`EnrollmentWorker` and `serve_enrollment` provide the fixed-command worker
+boundary: start, progress, poll, cancel, retry_save and register. The trusted host
+supplies the configured clients. Line requests cannot select endpoints, paths,
+executables or arbitrary engine commands. Responses exclude the OS-vault
+reference and private grants; user codes and verification links remain available
+for the explicit authorization UI. Calls are serial, progress is local-only,
+and EOF closes the registration database/cancels the local authorization attempt
+without stopping the computer agent. Transport failures return a generic error;
+the host must inspect progress rather than replay a state-changing command.
+
+This worker is not yet wired into the Tauri process lifecycle or management UI.
+The native host still needs bounded pipe I/O, pending-call handling, verified
+worker exit and trusted provider configuration. Its tests use the real client
+state machines with synthetic provider responses; they are not a rendered native
+authentication or public-service acceptance test.
