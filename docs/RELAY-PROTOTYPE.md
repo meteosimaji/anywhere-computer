@@ -398,3 +398,45 @@ trusted storage APIs, not public enrollment endpoints or proof-of-possession
 verification. No private key or bearer credential is stored in this table.
 Certificate issuance, OS-vault private-key handling, explicit rotation and the
 outbound WebSocket integration are still unimplemented.
+
+### Authenticated outbound channel building block
+
+`RelayChannels` now accepts PC-initiated WSS connections on a loopback listener.
+It requires mutual TLS, the `/pc` path and `anywhere-pc.v1` subprotocol. The actual
+peer certificate fingerprint resolves through the existing registry; the client
+does not announce an account or device ID as its identity. Browser Origin headers
+are rejected. TLS key logging, unverified peer contexts and public bind addresses
+are rejected by this isolated entry point.
+
+The trusted internal `exchange` method checks account/device ownership and current
+registration before sending. One request may be in flight per PC; a busy or offline
+PC does not queue the request. A new authenticated connection replaces the old
+generation. Old completion cannot remove the replacement or return a stale reply.
+Results are checked against the original operation ID and current registration.
+Response loss, timeout, malformed replies or replacement during execution close
+that channel and report an unknown outcome. Cancellation closes the old channel
+and propagates cancellation; its caller must likewise treat an already submitted
+operation as potentially executed. No automatic reconnect or mutation replay occurs.
+
+The optional relay extra and development tests pin websockets 17.0.1 (BSD-3-Clause,
+Python >=3.11). Core local MCP does not import this module or require the dependency.
+This reuses the existing engine Request/Reply format and result ledger rather than
+creating a queue or durable result store. It currently carries binary frames with
+an 8 MiB limit, no compression, a one-frame receive queue and a bounded exchange
+deadline. These are connection bounds, not a public-service rate-limiting design.
+
+Six actual loopback mTLS/WSS tests cover registered and unregistered certificates,
+cross-account denial, revocation on a live socket, connection replacement, busy and
+offline refusal, response identity mismatch, timeout, and two same-name PCs routed
+concurrently by distinct IDs. A real Engine file write loses its reply after commit;
+the reconnected PC recovers the original operation via `operations_get`, with one
+write dispatch. The two-PC routing test uses synthetic responses, and the Engine
+test runs in the test process. Separate-process WSS trials above remain separate
+evidence; this slice does not establish Windows or public relay acceptance.
+
+This class is not mounted on the AI HTTP/MCP boundary and is not a complete relay.
+Its account argument is supplied by trusted code, not an authentication proof.
+The tests use a synthetic expiring RemoteAgent grant. Verified AI grant propagation
+and independent PC verification must be implemented before connecting untrusted
+AI requests to this transport. Certificate provisioning, OS-vault key storage,
+rotation, the production PC client lifecycle and proxy compatibility remain open.
