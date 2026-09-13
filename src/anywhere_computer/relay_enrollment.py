@@ -55,6 +55,11 @@ class RelayEnrollment:
             self._keys[key_id] = key
 
     def register(self, token: str, *, enrollment_id: str, name: str) -> RelayDevice:
+        owner = self.account(token)
+        return self._registry.register(owner, enrollment_id=enrollment_id, name=name)
+
+    def account(self, token: str) -> RelayAccount:
+        """Resolve only the authenticated enrollment identity, without mutation."""
         try:
             if not token or len(token) > 16384:
                 raise ValueError("Invalid enrollment token size")
@@ -76,4 +81,4 @@ class RelayEnrollment:
             owner = RelayAccount(issuer=claims.iss, subject=claims.sub)
         except (ValueError, jwt.PyJWTError, TypeError):
             raise EnrollmentRejected("Enrollment authorization was rejected") from None
-        return self._registry.register(owner, enrollment_id=enrollment_id, name=name)
+        return owner

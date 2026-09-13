@@ -23,6 +23,7 @@ class NativeEnrollmentConfig(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid", hide_input_in_errors=True)
     provider: EnrollmentProvider
     registration_endpoint: str
+    account_endpoint: str | None = None
 
     @model_validator(mode="after")
     def enrollment_only(self) -> "NativeEnrollmentConfig":
@@ -73,7 +74,8 @@ class EnrollmentWorker:
         authorization = self._authorization.progress().model_dump(exclude={"credential_reference"})
         registration = self._registration.current()
         return {"schema_version": 1, "authorization": authorization,
-                "registration": registration.model_dump() if registration is not None else None,
+                "registration": registration.model_dump(exclude={"owner", "account_endpoint"})
+                if registration is not None else None,
                 "connection_state": "not_checked"}
 
     def close(self) -> None:
@@ -127,7 +129,8 @@ def main() -> None:
         )
         authorization = DeviceAuthorizationClient(config.provider, credentials)
         registration = RegistrationClient(args.state_dir, credentials,
-                                          endpoint=config.registration_endpoint)
+                                          endpoint=config.registration_endpoint,
+                                          account_endpoint=config.account_endpoint)
         serve_enrollment(EnrollmentWorker(authorization, registration), sys.stdin, sys.stdout)
     except Exception:
         print(json.dumps({"ok": False, "error": "Native enrollment worker could not continue"}))

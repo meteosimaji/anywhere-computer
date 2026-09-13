@@ -13,7 +13,7 @@ from .devices import device_name
 from .enrollment_credentials import EnrollmentCredentials
 from .enrollment_http import EnrollmentHTTPReply, https_enrollment_registration
 from .locking import ProcessLock
-from .relay_registry import RelayDevice
+from .relay_registry import RelayAccount, RelayDevice
 from .state import prepare_directory
 
 
@@ -23,9 +23,13 @@ class RegistrationAttempt(BaseModel):
     enrollment_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     name: str
     device: RelayDevice | None = None
+    owner: RelayAccount | None = None
+    account_endpoint: str | None = None
 
     @model_validator(mode="after")
     def consistent_receipt(self) -> "RegistrationAttempt":
+        if (self.owner is None) != (self.account_endpoint is None):
+            raise ValueError("Incomplete registration account binding")
         if self.name != device_name(self.name):
             raise ValueError("Saved registration name is not normalized")
         if self.device is not None and (
@@ -51,10 +55,18 @@ class RegistrationClient:
     """
 
     def __init__(self, directory: Path, credentials: EnrollmentCredentials, *,
-                 endpoint: str, wire: RegistrationWire = _send) -> None:
+                 endpoint: str, wire: RegistrationWire = _send,
+                 account_endpoint: str | None = None) -> None:
         validate_authorization_url(endpoint)
         if urlsplit(endpoint).query:
             raise ValueError("Registration endpoint must not have a query")
+        if account_endpoint is not None:
+            validate_authorization_url(account_endpoint)
+            registration_url, account_url = urlsplit(endpoint), urlsplit(account_endpoint)
+            if (account_url.query or account_url.hostname != registration_url.hostname
+                    or (account_url.port or 443) != (registration_url.port or 443)):
+                raise ValueError("Account lookup must use the registration origin")
+        self._account_endpoint = account_endpoint
         prepare_directory(directory)
         path = directory / "registration.sqlite3"
         if path.is_symlink():
@@ -66,12 +78,12 @@ class RegistrationClient:
             with self._db:
                 self._db.execute("BEGIN IMMEDIATE")
                 version = self._db.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, 1):
+                if version not in (0, 1, 2):
                     raise ValueError("Unsupported registration state version")
                 self._db.execute("CREATE TABLE IF NOT EXISTS registration ("
                                  "credential TEXT PRIMARY KEY, endpoint TEXT NOT NULL, "
                                  "record TEXT NOT NULL)")
-                self._db.execute("PRAGMA user_version=1")
+                self._db.execute("PRAGMA user_version=2")
         except BaseException:
             self._db.close()
             raise
@@ -94,19 +106,38 @@ class RegistrationClient:
                                        name=name)
         with ProcessLock(self._lock, timeout=0):
             current = self.current()
+            if current is not None:
+                if current.attempt_id != attempt_id or current.name != name:
+                    raise ValueError(
+                        "Saved registration must be recovered with its original request",
+                    )
+                if current.device is not None:
+                    return current
+                if current.account_endpoint != self._account_endpoint:
+                    raise ValueError("Pending registration account binding cannot be changed")
+            token = self._credentials.access_token(attempt_id=attempt_id, scope="device:enroll")
+            owner = None
+            if self._account_endpoint is not None:
+                identity = self._wire(self._account_endpoint, {}, token)
+                try:
+                    if identity.status != 200:
+                        raise ValueError("Account lookup was rejected")
+                    owner = RelayAccount.model_validate(identity.fields)
+                    if owner.issuer != self._credentials.issuer:
+                        raise ValueError("Account issuer mismatch")
+                except ValueError:
+                    raise ValueError("Registration account could not be verified") from None
+                if current is not None and current.owner != owner:
+                    raise ValueError("Registration belongs to a different account")
             if current is None:
-                # Verify the grant before creating new local registration state.
-                self._credentials.access_token(attempt_id=attempt_id, scope="device:enroll")
+                proposed = proposed.model_copy(update={
+                    "owner": owner, "account_endpoint": self._account_endpoint,
+                })
                 with self._db:
                     self._db.execute("INSERT INTO registration VALUES(?,?,?)", (
                         self._credentials.reference, self._endpoint, proposed.model_dump_json(),
                     ))
                 current = proposed
-            if current.attempt_id != attempt_id or current.name != name:
-                raise ValueError("Saved registration must be recovered with its original request")
-            if current.device is not None:
-                return current
-            token = self._credentials.access_token(attempt_id=attempt_id, scope="device:enroll")
             reply = self._wire(self._endpoint, {
                 "enrollment_id": current.enrollment_id, "name": current.name,
             }, token)
