@@ -19,6 +19,10 @@ class _Registration(BaseModel):
         return device_name(value)
 
 
+class _AccountRequest(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+
+
 def enrollment_http(service: RelayEnrollment) -> HTTPMCP:
     """Reuse bounded loopback framing, with separate enrollment authentication.
 
@@ -60,4 +64,29 @@ def enrollment_http(service: RelayEnrollment) -> HTTPMCP:
         return 200, {"device_id": device.device_id, "enrollment_id": device.enrollment_id,
                      "name": device.name, "state": device.state}, {}
 
-    return HTTPMCP(reject_mcp, no_session, public_routes={"/enrollment/devices": register})
+    async def account(method: str, headers: dict[str, str], body: bytes,
+                      query: str) -> HTTPResult:
+        if method != "POST":
+            return 405, None, {"Allow": "POST"}
+        if query:
+            return 400, None, {}
+        if headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            return 415, None, {}
+        if len(body) > 4096:
+            return 413, None, {}
+        scheme, _, token = headers.get("authorization", "").partition(" ")
+        if scheme.lower() != "bearer" or not token or any(c.isspace() for c in token):
+            return 401, None, {"WWW-Authenticate": "Bearer"}
+        try:
+            _AccountRequest.model_validate_json(body)
+        except ValueError:
+            return 400, None, {}
+        try:
+            owner = service.account(token)
+        except EnrollmentRejected:
+            return 401, None, {"WWW-Authenticate": "Bearer"}
+        return 200, {"issuer": owner.issuer, "subject": owner.subject}, {}
+
+    return HTTPMCP(reject_mcp, no_session, public_routes={
+        "/enrollment/devices": register, "/enrollment/account": account,
+    })

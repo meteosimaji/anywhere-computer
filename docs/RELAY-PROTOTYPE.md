@@ -134,6 +134,15 @@ the registry's idempotency key includes issuer and subject, so reusing only the
 enrollment ID under another account would create a distinct device. Clearing the
 vault and starting a new login is therefore not a complete recovery implementation.
 
+The isolated adapter now offers `POST /enrollment/account` with an empty JSON
+object and the enrollment bearer. It uses the same signature, issuer, audience,
+client, lifetime and exact-scope validation as registration, and returns only the
+verified issuer/subject. It neither writes device records nor opens MCP sessions.
+This provides the identity check needed by recovery; the native client's durable
+binding and reauthorization transition are not yet connected to this endpoint.
+Account identifiers are not bearer credentials, but callers should keep them out
+of routine diagnostics. This remains an isolated endpoint, not public deployment.
+
 ## Native host lifetime
 
 The current native manager launches a short-lived Python command for each status

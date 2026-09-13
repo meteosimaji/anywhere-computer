@@ -8,6 +8,36 @@ from anywhere_computer.relay_http import enrollment_http
 registration = registration_fixture
 
 
+async def test_verified_account_lookup_is_read_only_and_token_bound(registration):
+    key, registry, service, claims = registration
+    adapter = enrollment_http(service)
+    port = await adapter.start()
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}",
+                                     trust_env=False) as client:
+            for subject in ("owner", "another-account"):
+                token = signed(key, {**claims, "sub": subject})
+                headers = {"Authorization": "Bearer " + token}
+                response = await client.post("/enrollment/account", headers=headers, json={})
+                assert response.status_code == 200
+                assert response.headers["cache-control"] == "no-store"
+                assert response.json() == {"issuer": claims["iss"], "subject": subject}
+                assert token not in response.text
+                override = await client.post("/enrollment/account", headers=headers,
+                                             json={"subject": "victim"})
+                assert override.status_code == 400
+            for invalid in ("malformed", signed(key, {**claims, "scope": "files_write"}),
+                            signed(key, {**claims, "aud": "https://other.example"}),
+                            signed(key, {**claims, "exp": 1})):
+                response = await client.post("/enrollment/account", json={},
+                                             headers={"Authorization": "Bearer " + invalid})
+                assert response.status_code == 401 and not response.content
+            assert registry.db.execute("SELECT COUNT(*) FROM relay_devices").fetchone()[0] == 0
+            assert not adapter.sessions
+    finally:
+        await adapter.close()
+
+
 async def test_actual_http_registration_retry_and_mcp_separation(registration):
     key, registry, service, claims = registration
     adapter = enrollment_http(service)
