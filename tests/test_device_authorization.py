@@ -15,7 +15,11 @@ from anywhere_computer.client_tokens import ClientCredentialError, ClientTokens
 from anywhere_computer.credentials import SERVICE
 from anywhere_computer.device_authorization import DeviceAuthorizationClient, EnrollmentProvider
 from anywhere_computer.enrollment_credentials import EnrollmentCredentials, EnrollmentToken
-from anywhere_computer.enrollment_http import EnrollmentTransportError, https_enrollment_form
+from anywhere_computer.enrollment_http import (
+    EnrollmentTransportError,
+    https_enrollment_form,
+    https_enrollment_registration,
+)
 
 # Match the IPv4-only fixture listener, avoiding Windows' IPv6 localhost fallback.
 # The certificate still validates the actual endpoint; localhost is a negative test.
@@ -45,7 +49,13 @@ def endpoint(certificates):
             pass
 
         def do_POST(self):
-            fields = parse_qs(self.rfile.read(int(self.headers["Content-Length"])).decode())
+            raw = self.rfile.read(int(self.headers["Content-Length"]))
+            if self.headers["Content-Type"] == "application/json":
+                fields = json.loads(raw)
+                # Only the synthetic fixture token is accepted; never record a bearer.
+                assert self.headers["Authorization"] == "Bearer synthetic-registration-token"
+            else:
+                fields = parse_qs(raw.decode())
             calls.append((self.path, fields))
             if options["pause"] == self.path:
                 received.set()
@@ -318,6 +328,37 @@ def test_slow_drip_has_total_exchange_deadline(endpoint):
         https_enrollment_form(provider.device_authorization_endpoint, {}, context=tls, timeout=0.15)
     assert caught.value.dispatched and time.monotonic() - started < 2
     assert len(calls) == 1
+
+
+def test_registration_uses_json_and_bearer_over_verified_tls(endpoint):
+    provider, options, calls, _, _, _, tls = endpoint
+    request = {"enrollment_id": "a" * 32, "name": "日本語 PC 🚀"}
+    options["/registration"] = {**request, "device_id": "b" * 32, "state": "registered"}
+    reply = https_enrollment_registration(
+        provider.issuer + "/registration", request, token="synthetic-registration-token",
+        context=tls,
+    )
+    assert reply.status == 200 and reply.fields == options["/registration"]
+    assert calls == [("/registration", request)]
+
+
+def test_registration_response_loss_does_not_replay(endpoint):
+    provider, options, calls, _, _, _, tls = endpoint
+    options["mode"] = "drop"
+    with pytest.raises(EnrollmentTransportError) as caught:
+        https_enrollment_registration(
+            provider.issuer + "/registration", {"enrollment_id": "a" * 32, "name": "PC"},
+            token="synthetic-registration-token", context=tls,
+        )
+    assert caught.value.dispatched and len(calls) == 1
+
+
+def test_registration_invalid_bearer_never_dispatched(endpoint):
+    provider, _, calls, _, _, _, tls = endpoint
+    with pytest.raises(ValueError, match="Invalid enrollment authorization"):
+        https_enrollment_registration(provider.issuer + "/registration", {},
+                                      token="synthetic\r\nInjected: header", context=tls)
+    assert not calls
 
 
 def test_expired_grant_cannot_be_saved(tmp_path, endpoint):

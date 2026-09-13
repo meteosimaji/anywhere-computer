@@ -42,6 +42,36 @@ def https_enrollment_form(
     endpoint: str, fields: dict[str, str], *, context: ssl.SSLContext | None = None,
     timeout: float = 15,
 ) -> EnrollmentHTTPReply:
+    return _https_enrollment_request(
+        endpoint, urlencode(fields).encode("ascii"),
+        {"Content-Type": "application/x-www-form-urlencoded"}, context=context, timeout=timeout,
+    )
+
+
+def https_enrollment_registration(
+    endpoint: str, fields: dict[str, str], *, token: str,
+    context: ssl.SSLContext | None = None, timeout: float = 15,
+) -> EnrollmentHTTPReply:
+    """Send the saved enrollment grant only to the configured registration endpoint.
+
+    The trusted controller supplies the endpoint and original enrollment ID.
+    No redirect, implicit retry, credential persistence or token logging occurs.
+    """
+    if not token or len(token) > 4096 or any(ord(c) < 33 or ord(c) > 126 for c in token):
+        raise ValueError("Invalid enrollment authorization")
+    body = json.dumps(fields, ensure_ascii=False, allow_nan=False).encode("utf-8")
+    if len(body) > 4096:
+        raise ValueError("Registration request exceeds limit")
+    return _https_enrollment_request(
+        endpoint, body, {"Content-Type": "application/json", "Authorization": "Bearer " + token},
+        context=context, timeout=timeout,
+    )
+
+
+def _https_enrollment_request(
+    endpoint: str, body: bytes, headers: dict[str, str], *,
+    context: ssl.SSLContext | None, timeout: float,
+) -> EnrollmentHTTPReply:
     """Trusted embedding may supply a verified test CA, never disable TLS checks.
 
     DNS/connect uses the socket timeout. Once connected, a watchdog bounds the
@@ -55,7 +85,6 @@ def https_enrollment_form(
     if (tls.verify_mode != ssl.CERT_REQUIRED or not tls.check_hostname
             or tls.minimum_version < ssl.TLSVersion.TLSv1_2 or tls.keylog_filename is not None):
         raise ValueError("Enrollment requires verified TLS without key logging")
-    body = urlencode(fields).encode("ascii")
     if len(body) > RESPONSE_LIMIT:
         raise ValueError("Enrollment request exceeds limit")
     connection = http.client.HTTPSConnection(
@@ -80,21 +109,22 @@ def https_enrollment_form(
         timer.start()
         dispatched = True  # A partial write can consume a one-use grant.
         connection.request("POST", parsed.path or "/", body=body, headers={
-            "Content-Type": "application/x-www-form-urlencoded",
+            **headers,
             "Accept": "application/json", "Connection": "close",
         })
         response = connection.getresponse()
-        headers: dict[str, str] = {}
+        response_headers: dict[str, str] = {}
         size = 0
         for name, value in response.getheaders():
             size += len(name) + len(value) + 4
             name = name.lower()
-            if size > RESPONSE_LIMIT or name in headers:
+            if size > RESPONSE_LIMIT or name in response_headers:
                 raise ValueError("Invalid response headers")
-            headers[name] = value
-        if headers.get("content-type", "").split(";")[0].strip().lower() != "application/json":
+            response_headers[name] = value
+        media_type = response_headers.get("content-type", "").split(";")[0].strip().lower()
+        if media_type != "application/json":
             raise ValueError("Expected a JSON response")
-        if headers.get("content-encoding", "identity").lower() != "identity":
+        if response_headers.get("content-encoding", "identity").lower() != "identity":
             raise ValueError("Compressed enrollment responses are unsupported")
         raw = response.read(RESPONSE_LIMIT + 1)
         if len(raw) > RESPONSE_LIMIT:

@@ -90,3 +90,12 @@ implementation performs synchronous signature/storage work and is not a
 production concurrency or rate-limiting design. The manager still needs the
 registration client and persistent association; a registered device still cannot
 execute operations until the separately authenticated outbound link is implemented.
+
+The client-side `https_enrollment_registration` transport now sends JSON and a
+bearer grant over verified HTTPS. It shares the form flow's bounded exchange,
+duplicate-response-field rejection and no-redirect/no-retry behavior. Local TLS
+tests cover Japanese/emoji names, bearer delivery, malformed-header rejection
+before dispatch, and response loss after one request without replay. This is
+transport only: the trusted controller must still bind its configured endpoint,
+saved grant and persistent enrollment ID before exposing registration in the UI.
+An unconfirmed response is not permission to allocate a new enrollment ID.
