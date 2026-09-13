@@ -131,8 +131,16 @@ pub async fn management_enrollment(
     if slot.is_none() {
         *slot = Some(Worker::spawn(&host)?);
     }
+    exchange_worker(&mut slot, &payload, Duration::from_secs(45)).await
+}
+
+async fn exchange_worker(
+    slot: &mut Option<Worker>,
+    payload: &[u8],
+    deadline: Duration,
+) -> Result<String, String> {
     let worker = slot.as_mut().ok_or("登録処理を開始できません。")?;
-    let result = tokio::time::timeout(Duration::from_secs(45), worker.exchange(&payload))
+    let result = tokio::time::timeout(deadline, worker.exchange(payload))
         .await
         .unwrap_or_else(|_| Err("登録結果は未確認です。自動では再実行しません。".into()));
     if result.is_err() {
@@ -160,6 +168,87 @@ mod tests {
         assert!(decode_reply(b"not json\n").is_err());
         assert!(decode_reply(b"{\"ok\":true,\"result\":{}}\n").is_err());
         assert!(decode_reply(&vec![b' '; REPLY_LIMIT + 1]).is_err());
+    }
+
+    #[test]
+    #[ignore = "protocol fixture invoked by persistent_pipe test"]
+    fn enrollment_pipe_fixture() {
+        use std::io::{BufRead, Write};
+        println!("ENROLLMENT_FIXTURE_READY");
+        std::io::stdout().flush().unwrap();
+        for (index, line) in std::io::stdin().lock().lines().enumerate() {
+            let _: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
+            match index {
+                0 => println!("{{\"ok\":false}}"),
+                1 => println!("{{\"ok\":true,\"result\":{{\"schema_version\":1,\"requests\":2}}}}"),
+                _ => {
+                    std::io::stdout()
+                        .write_all(&vec![b'x'; REPLY_LIMIT + 1])
+                        .unwrap();
+                    std::io::stdout().flush().unwrap();
+                    std::thread::sleep(Duration::from_secs(60));
+                }
+            }
+            std::io::stdout().flush().unwrap();
+        }
+    }
+
+    #[test]
+    fn persistent_pipe_retains_rejected_worker_and_discards_broken_reply() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "enrollment::tests::enrollment_pipe_fixture",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .kill_on_drop(true)
+                .spawn()
+                .unwrap();
+            let input = child.stdin.take().unwrap();
+            let mut output = BufReader::new(child.stdout.take().unwrap());
+            // The Rust test harness prints a banner before the protocol fixture.
+            tokio::time::timeout(Duration::from_secs(10), async {
+                loop {
+                    let mut line = String::new();
+                    assert!(output.read_line(&mut line).await.unwrap() > 0);
+                    if line.trim() == "ENROLLMENT_FIXTURE_READY" {
+                        break;
+                    }
+                }
+            })
+            .await
+            .unwrap();
+            let pid = child.id();
+            let mut slot = Some(Worker {
+                child,
+                input,
+                output,
+            });
+            let payload = request("progress", None).unwrap();
+            let deadline = Duration::from_secs(5);
+            assert!(exchange_worker(&mut slot, &payload, deadline)
+                .await
+                .is_err());
+            assert_eq!(slot.as_ref().unwrap().child.id(), pid);
+            let response = exchange_worker(&mut slot, &payload, deadline)
+                .await
+                .unwrap();
+            let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+            assert_eq!(value["requests"], 2);
+            assert!(exchange_worker(&mut slot, &payload, deadline)
+                .await
+                .is_err());
+            assert!(slot.is_none());
+        });
     }
 
     #[test]

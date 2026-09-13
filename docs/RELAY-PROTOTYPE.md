@@ -205,3 +205,10 @@ The worker reports `authorization.can_retry_save` only while it still holds an
 unexpired received grant awaiting vault publication. The card does not offer a
 save retry merely because existing credentials are unreadable or expired.
 Progress re-evaluates the pending grant's lifetime without another token request.
+
+The native pipe regression test uses a real child process: its first request is
+rejected, its second succeeds in the same process with a request counter of two,
+and an oversized third response causes worker disposal. Reintroducing the old
+condition that discarded a worker on an ordinary command rejection makes this
+test fail. The fixture tests native IPC lifecycle, not provider authentication;
+it is launched by the parent test rather than run standalone in the suite.
