@@ -413,3 +413,52 @@ async def test_peer_expiry_after_tls_connect_prevents_file_dispatch(certificates
             await close_stream(writer)
         await listener.close()
         await engine.close()
+
+
+async def test_registered_certificate_revocation_after_tls_connect(certificates, tmp_path):
+    """Real peer identity reaches the registry; no claimed identity comes from JSON."""
+    from anywhere_computer.relay_registry import RelayAccount, RelayRegistry
+
+    context, fingerprint = certificates
+    registry = RelayRegistry(tmp_path / "registry")
+    owner = RelayAccount(issuer="https://issuer.example", subject="owner")
+    device = registry.register(owner, enrollment_id=uuid.uuid4().hex, name="Test PC")
+    registry.bind_channel(owner, device.device_id, fingerprint=fingerprint("client"))
+    received = []
+
+    async def dispatch(verified_fingerprint, payload):
+        account, current = registry.channel_device(verified_fingerprint)
+        assert account == owner
+        received.append((current.device_id, payload))
+        return current.device_id.encode()
+
+    # The transport supplies only the fingerprint obtained from the TLS peer.
+    listener = RemoteListener(context("server", False),
+                              {fingerprint("client"): fingerprint("client")}, dispatch)
+    port = await listener.start("127.0.0.1", 0)
+    writer = None
+    try:
+        response = await remote_exchange(
+            "127.0.0.1", port, b"probe", context=context("client", True),
+            server_name="localhost", expected_fingerprint=fingerprint("server"), timeout=5,
+        )
+        assert response == device.device_id.encode()
+        assert received == [(device.device_id, b"probe")]
+        tls = context("client", True)
+        check_tls(tls, client=True)
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", port, ssl=tls, server_hostname="localhost",
+            ssl_handshake_timeout=5,
+        )
+        registry.revoke(owner, device.device_id)
+        await write_frame(writer, b"claimed-active-device")
+        # Static transport enrollment is still present. The durable registry
+        # must reject before delivery even on this already connected socket.
+        assert fingerprint("client") in listener.peers
+        assert await asyncio.wait_for(reader.read(), 5) == b""
+        assert received == [(device.device_id, b"probe")]
+    finally:
+        if writer is not None:
+            await close_stream(writer)
+        await listener.close()
+        registry.close()

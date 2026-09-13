@@ -25,6 +25,16 @@ it to registered state. Cross-account lookup and revocation both fail without
 changing the owner's record. `registered` means only that ownership was stored;
 it does not mean transport connected, authentication current, or engine ready.
 
+The isolated `test_registered_certificate_revocation_after_tls_connect` connects
+the registry to the existing mutual-TLS listener. A real verified client
+certificate resolves to its registered device; after revocation, a frame sent on
+an already authenticated socket is rejected before the test handler receives it.
+The listener's static peer entry is deliberately retained, so the assertion
+exercises the durable registry check rather than merely closing enrollment in
+the listener. Certificates are disposable test fixtures. This proves the lookup
+boundary over TLS, not outbound WebSocket transport, production provisioning,
+engine execution, or a Windows-to-relay acceptance test.
+
 Stored data includes issuer, subject, display name, device ID, enrollment ID and
 revocation state. There are no passwords, bearer tokens, tool arguments or results
 in this database. Records currently persist until the isolated database is
@@ -323,6 +333,25 @@ compatibility burden. Do not install a WebSocket dependency or claim proxy
 compatibility until its supported version and an actual loopback exchange have
 been checked. AI-facing MCP remains a separate protocol and authorization layer.
 
+An isolated 2026-09-14 evaluation used websockets 17.0.1 in a disposable Python
+environment, without adding it to the project runtime. Verified-server WSS on
+loopback carried requests from a test relay to two sequential PC-initiated
+connections. Two real `Engine` instances with separate state directories created
+Japanese/emoji files and recovered each write through `operations_get`; the
+other engine's ledger did not contain that operation. Both engines ran in one
+process, and grants were synthetic. PC authentication, reconnect/reply-loss,
+concurrent routing, public proxy compatibility and separate-process acceptance
+were not tested by this experiment. It establishes feasibility of reusing the
+engine behind an outbound channel, not completion of the relay.
+
+A follow-up ran the two PC clients as separate Python subprocesses, each owning
+its own engine and state directory. Both initiated WSS, executed the file write,
+recovered its original operation ID and exited with code 0; the relay ran in the
+parent process. This removes the shared-process limitation for that sequential
+happy-path check only. It still uses synthetic grants and server-authenticated
+TLS without PC authentication, and does not establish concurrent routing,
+reconnect/reply-loss recovery, Windows execution or public ingress readiness.
+
 The first channel slice must bind an authenticated PC credential to an existing,
 non-revoked registry device. A channel replacement must invalidate the old
 connection generation. Tool requests require a separately verified, expiring
@@ -352,3 +381,20 @@ expired/revoked grants, cross-account device IDs and cross-grant result lookup.
 Synthetic identity fixtures establish protocol behavior only; fresh Mac/Windows
 installation, real OAuth client integration and public ingress require their
 own acceptance evidence.
+
+### Durable PC certificate binding (isolated building block)
+
+Registry schema 2 adds a one-to-one binding from a verified SHA-256 peer
+certificate fingerprint to a registered device ID. `bind_channel` requires
+the authenticated account and rejects revoked devices, cross-account binding,
+certificate reuse by another device and silent replacement of an existing
+binding. An identical provisioning retry is idempotent. Existing device records
+and revocation tombstones survive migration from schema 1.
+
+`channel_device` resolves the account and device from that fingerprint and
+rechecks current revocation on every call. Its caller must obtain the fingerprint
+from an authenticated TLS peer, not a client-supplied message field. These are
+trusted storage APIs, not public enrollment endpoints or proof-of-possession
+verification. No private key or bearer credential is stored in this table.
+Certificate issuance, OS-vault private-key handling, explicit rotation and the
+outbound WebSocket integration are still unimplemented.
