@@ -99,6 +99,21 @@ uv run python scripts/verify_enrollment_provider.py \
   --ca /absolute/test/tls.pem --check-expiry
 ```
 
+To additionally exercise signed account registration, use `uv run --extra relay`
+and add `--check-registration`. The fixture scope has explicit audience and
+subject mappers. Its audience is the non-resolving test identifier
+`https://relay.example.invalid/enrollment`, not a deployed endpoint. The runner
+loads public keys only from the configured fixture issuer over verified HTTPS;
+token headers cannot select a key-fetch URL.
+
+The initial real registration attempt correctly rejected a token missing `sub`:
+disabling default Keycloak client scopes also omitted that mapper. The fixture
+now explicitly includes `oidc-sub-mapper`, which maps the authenticated user's
+ID, and `oidc-audience-mapper`. No fallback identity or relaxed claim validation
+was added. These mapper names and semantics were checked against the evaluated
+[subject mapper](https://github.com/keycloak/keycloak/blob/26.7.3/services/src/main/java/org/keycloak/protocol/oidc/mappers/SubMapper.java)
+and [audience mapper](https://github.com/keycloak/keycloak/blob/26.7.3/services/src/main/java/org/keycloak/protocol/oidc/mappers/AudienceProtocolMapper.java).
+
 The runner accepts only the named loopback fixture realm. TLS certificate and
 hostname verification stay enabled. Its form driver uses the real login and
 confirmation endpoints, a fresh cookie jar per case, and refuses cross-origin
@@ -138,3 +153,11 @@ network access. Ruff passed for the runner; the existing strict source mypy
 check passed for 86 files. Full-suite CI is separate from this opt-in server
 test. These observations do not establish public service or native browser UI
 acceptance, and do not replace the remaining account/device association work.
+
+The subsequent `--check-registration` run against fresh fixture state also
+completed with exit code 0. Its actual signed grant created one device; retry
+returned that same device; a verifier configured for the operations audience
+rejected the grant, leaving the single registration unchanged. Login denial,
+local cancellation and consumed-code rejection still passed. The runner reports
+`pc_transport_connected: false`: this evidence covers the authorization/storage
+boundary, not a deployed registration endpoint, manager UI or outbound PC link.

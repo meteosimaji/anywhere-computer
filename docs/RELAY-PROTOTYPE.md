@@ -37,3 +37,33 @@ credentials, outbound connections, per-request tool authorization and result
 recovery remain implementation work. The existing engine ledger remains the
 intended source of execution results; this registry must not become a second
 operation engine or an offline write queue.
+
+## Enrollment authorization boundary
+
+`relay_enrollment.py` now validates signed enrollment access tokens before
+constructing the registry's account identity. Install the optional `relay` extra
+for this module; the core agent does not import it or require a JWT library.
+The extra pins the existing lockfile's PyJWT 2.13.0 with cryptography support
+(MIT), rather than implementing signing or verification. No new inference,
+Java runtime or authorization server is added to the PC agent.
+
+The isolated reference profile uses configured RSA public keys (RS256, at least
+2048 bits), an exact issuer, a single exact audience, a single client (`azp`),
+the `Bearer` token type and exactly `device:enroll`. Subject, issued-at and expiry
+are mandatory; timestamps must be integers, the token must be current and its
+issued lifetime cannot exceed 15 minutes. Unsigned tokens, other keys, token
+supplied key URLs and unsupported critical headers are rejected before storage.
+Account identity is taken from verified claims, not request fields. A valid
+registration grant does not authorize tool execution or a PC relay connection.
+
+This is a deliberately explicit reference-provider profile, not a claim of
+universal OAuth token compatibility. Other providers need an evaluated profile.
+The service currently receives public keys from operator configuration: automatic
+rotation, online grant revocation, rate limiting and the HTTP enrollment endpoint
+remain unfinished. Short token expiry does not replace those requirements.
+
+The real-provider runner's `--check-registration` option obtains public signing
+keys from the fixed HTTPS loopback fixture issuer, then tests registration with
+the actual issued token, idempotent retry and wrong-audience rejection with no
+extra device record. It does not deploy an endpoint or establish PC transport.
+See [provider acceptance](ENROLLMENT-PROVIDER-TEST.md) for reproducible setup.

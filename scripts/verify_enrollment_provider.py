@@ -104,7 +104,60 @@ def confirm_fixture(url, context, *, approve):
     assert submitted == ["login", "approve" if approve else "deny"]
 
 
-def verify(issuer, certificate, *, check_expiry=False):
+def verify_registration(issuer, context, token, directory):
+    """Exercise the isolated registration boundary using provider-issued JWTs."""
+    import jwt
+    from cryptography.hazmat.primitives import serialization
+
+    from anywhere_computer.relay_enrollment import EnrollmentRejected, RelayEnrollment
+    from anywhere_computer.relay_registry import RelayRegistry
+
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            raise ValueError("Fixture signing key redirect refused")
+
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), NoRedirect(),
+        urllib.request.HTTPSHandler(context=context),
+    )
+    # This URL comes from the validated fixture configuration, never the JWT.
+    with opener.open(issuer + "/protocol/openid-connect/certs", timeout=10) as response:
+        raw = response.read(65537)
+    assert len(raw) <= 65536
+    public_keys = {}
+    for item in json.loads(raw)["keys"]:
+        if item.get("kty") == "RSA" and item.get("use") == "sig" and item.get("alg") == "RS256":
+            key = jwt.algorithms.RSAAlgorithm.from_jwk(item)
+            public_keys[item["kid"]] = key.public_bytes(
+                serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
+            ).decode()
+    registry = RelayRegistry(directory)
+    try:
+        service = RelayEnrollment(
+            registry, issuer=issuer, audience="https://relay.example.invalid/enrollment",
+            client="anywhere-enrollment", public_keys=public_keys,
+        )
+        first = service.register(token, enrollment_id="a" * 32, name="Fixture PC")
+        assert first.state == "registered"
+        assert service.register(token, enrollment_id="a" * 32, name="Fixture PC") == first
+        wrong_target = RelayEnrollment(
+            registry, issuer=issuer, audience="https://relay.example.invalid/operations",
+            client="anywhere-enrollment", public_keys=public_keys,
+        )
+        try:
+            wrong_target.register(token, enrollment_id="b" * 32, name="Must not register")
+        except EnrollmentRejected:
+            pass
+        else:
+            raise AssertionError("Enrollment token accepted for a different audience")
+        assert registry.db.execute("SELECT COUNT(*) FROM relay_devices").fetchone()[0] == 1
+    finally:
+        registry.close()
+    return {"signed_registration": True, "retry_same_device": True,
+            "wrong_audience_rejected": True, "pc_transport_connected": False}
+
+
+def verify(issuer, certificate, *, check_expiry=False, check_registration=False):
     parsed = urllib.parse.urlsplit(issuer)
     if (parsed.scheme != "https" or parsed.hostname != "127.0.0.1" or not parsed.port
             or parsed.path != "/realms/anywhere-fixture-device"
@@ -118,6 +171,7 @@ def verify(issuer, certificate, *, check_expiry=False):
         client_id="anywhere-enrollment", scope="device:enroll",
     )
     receipts = []
+    registration = None
     for outcome in ("approve", "deny", "cancel"):
         calls, codes = [], []
 
@@ -155,9 +209,14 @@ def verify(issuer, certificate, *, check_expiry=False):
                         Path(directory), issuer=issuer, client=provider.client_id,
                         profile=outcome, vault=vault,
                     )
-                    assert reopened.access_token(
+                    token = reopened.access_token(
                         attempt_id=initial.attempt_id, scope=provider.scope,
                     )
+                    assert token
+                    if check_registration:
+                        registration = verify_registration(
+                            issuer, context, token, Path(directory) / "relay",
+                        )
                     replay = https_enrollment_form(provider.token_endpoint, {
                         "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
                         "client_id": provider.client_id, "device_code": codes[0],
@@ -184,7 +243,8 @@ def verify(issuer, certificate, *, check_expiry=False):
                          "passed": True})
     return {"provider": "Keycloak", "fixture_only": True, "issuer": issuer,
             "rendered_browser_test": False, "native_vault_test": False,
-            "saved_grant_reopened": True, "used_code_rejected": True, "cases": receipts}
+            "saved_grant_reopened": True, "used_code_rejected": True,
+            "registration": registration, "cases": receipts}
 
 
 def main():
@@ -193,10 +253,13 @@ def main():
     parser.add_argument("--ca", type=Path, required=True)
     parser.add_argument("--check-expiry", action="store_true",
                         help="Also wait for actual server-side code expiration (up to 181s)")
+    parser.add_argument("--check-registration", action="store_true",
+                        help="Verify signed account registration using the relay optional extra")
     args = parser.parse_args()
     # Exceptions intentionally expose no response body, HTML, codes or credentials.
     try:
-        receipt = verify(args.issuer, args.ca, check_expiry=args.check_expiry)
+        receipt = verify(args.issuer, args.ca, check_expiry=args.check_expiry,
+                         check_registration=args.check_registration)
     except Exception as error:
         print(json.dumps({"passed": False, "error_type": type(error).__name__}))
         raise SystemExit(1) from None
