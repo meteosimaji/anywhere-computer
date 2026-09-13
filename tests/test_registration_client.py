@@ -9,6 +9,52 @@ from anywhere_computer.enrollment_http import EnrollmentHTTPReply, EnrollmentTra
 from anywhere_computer.registration_client import RegistrationClient
 
 
+def test_account_binding_survives_reply_loss_and_rejects_other_account(tmp_path):
+    credentials = saved(tmp_path / "credentials", MemoryVault())
+    subject = "original"
+    requests = []
+
+    def wire(endpoint, fields, token):
+        requests.append(endpoint)
+        if endpoint.endswith("/account"):
+            assert fields == {}
+            return EnrollmentHTTPReply(200, {"issuer": credentials.issuer, "subject": subject})
+        raise EnrollmentTransportError(dispatched=True)
+
+    def opened(account_endpoint="https://relay.example/account"):
+        return RegistrationClient(tmp_path / "registration", credentials,
+                                  endpoint="https://relay.example/register", wire=wire,
+                                  account_endpoint=account_endpoint)
+
+    first = opened()
+    try:
+        with pytest.raises(EnrollmentTransportError):
+            first.register(attempt_id="a" * 32, name="PC")
+        pending = first.current()
+        assert pending.owner.subject == "original"
+    finally:
+        first.close()
+    subject = "other"
+    for endpoint in ("https://relay.example/account", None):
+        reopened = opened(endpoint)
+        try:
+            with pytest.raises(ValueError):
+                reopened.register(attempt_id="a" * 32, name="PC")
+            assert reopened.current() == pending
+        finally:
+            reopened.close()
+    assert requests.count("https://relay.example/register") == 1
+    subject = "original"
+    reopened = opened()
+    try:
+        with pytest.raises(EnrollmentTransportError):
+            reopened.register(attempt_id="a" * 32, name="PC")
+        assert reopened.current() == pending
+    finally:
+        reopened.close()
+    assert requests.count("https://relay.example/register") == 2
+
+
 @pytest.mark.parametrize("confirmed", [False, True])
 def test_expired_grant_preserves_original_registration_after_restart(tmp_path, confirmed):
     from test_enrollment_credentials import credentials as reopened_credentials

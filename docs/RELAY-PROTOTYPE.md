@@ -138,8 +138,15 @@ The isolated adapter now offers `POST /enrollment/account` with an empty JSON
 object and the enrollment bearer. It uses the same signature, issuer, audience,
 client, lifetime and exact-scope validation as registration, and returns only the
 verified issuer/subject. It neither writes device records nor opens MCP sessions.
-This provides the identity check needed by recovery; the native client's durable
-binding and reauthorization transition are not yet connected to this endpoint.
+Native configuration may select `account_endpoint` on the same HTTPS origin as
+registration. The client verifies issuer/subject before its first registration,
+persists that binding before dispatch and checks it on a pending retry. A changed
+account or removed/changed lookup endpoint cannot resend the pending registration.
+Existing pending records without identity are not silently assigned the current
+account. Registration storage advances to schema 2; old records remain readable,
+while older binaries reject the newer database version. The owner binding stays
+out of native progress responses. The reauthorization transition itself remains
+unfinished; account lookup alone does not renew an expired grant.
 Account identifiers are not bearer credentials, but callers should keep them out
 of routine diagnostics. This remains an isolated endpoint, not public deployment.
 
