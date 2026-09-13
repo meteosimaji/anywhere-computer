@@ -25,8 +25,8 @@ jobs:
       - run: uv run mypy
       - run: openssl version
       - run: uv run pytest -ra tests/test_startup_native.py --junitxml="${{ runner.temp }}/pytest-native.xml"
-      - name: Check terminal ownership before the full suite
-        run: uv run pytest -v tests/test_terminal_children.py
+      - name: Check terminal ownership and continuous work before the full suite
+        run: uv run pytest -v tests/test_terminal_children.py tests/test_file_search_terminal_workflow.py
       - name: Run full suite with bounded Windows parallelism
         run: >-
           uv run pytest -ra --ignore=tests/test_startup_native.py --durations=20
@@ -58,7 +58,7 @@ jobs:
                   for member in bundle.infolist():
                       (destination / member.filename).chmod((member.external_attr >> 16) & 0o777)
           PY
-          uv run python scripts/verify_portable.py 'dist/relocation 日本語/Anywhere Computer' --runtime-only
+          uv run python scripts/verify_portable.py 'dist/relocation 日本語/Anywhere Computer' ${{ runner.os == 'Windows' && '' || '--runtime-only' }}
       - name: Attest the verified portable archive
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4

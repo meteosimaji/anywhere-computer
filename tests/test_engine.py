@@ -20,7 +20,8 @@ def python_command(script):
     if os.name == "nt":
         import subprocess
 
-        return subprocess.list2cmdline([sys.executable, "-u", "-c", script])
+        # cmd.exe requires one physical line even when Python source is multiline.
+        return subprocess.list2cmdline([sys.executable, "-u", "-c", f"exec({script!r})"])
     return shlex.join([sys.executable, "-u", "-c", script])
 
 

@@ -30,8 +30,7 @@ async def test_exited_shell_child_blocks_update_and_is_stopped(tmp_path, ignore_
     )
     try:
         started = await engine.sessions.start(StartSession(
-            # cmd.exe must receive one physical line; Python decodes embedded newlines.
-            command=python_command(f'exec({source!r})'), cwd=str(tmp_path),
+            command=python_command(source), cwd=str(tmp_path),
         ))
         identity = started["session_id"]
         async with asyncio.timeout(5):
