@@ -145,8 +145,8 @@ account or removed/changed lookup endpoint cannot resend the pending registratio
 Existing pending records without identity are not silently assigned the current
 account. Registration storage advances to schema 2; old records remain readable,
 while older binaries reject the newer database version. The owner binding stays
-out of native progress responses. The reauthorization transition itself remains
-unfinished; account lookup alone does not renew an expired grant.
+out of native progress responses. Account lookup alone does not renew an expired
+grant; native reauthorization orchestration remains unfinished.
 Account identifiers are not bearer credentials, but callers should keep them out
 of routine diagnostics. This remains an isolated endpoint, not public deployment.
 
@@ -157,6 +157,23 @@ account, then recovers the original enrollment using the original account. It
 checks the exact request sequence and one stored device. Its credential vault is
 in memory and its loopback transport is HTTP: this test does not establish native
 OS-vault behavior, public HTTPS readiness or expired-grant reauthorization.
+
+`RegistrationClient.recover` can now recover an existing account-bound request
+using a separately saved, current enrollment grant from the same provider and
+client. The trusted caller supplies that credential store and its new attempt ID;
+the method verifies the account before resending the original enrollment ID and
+name. It preserves the original request's authorization attempt, both OS-vault
+slots and pending state after another lost response. A confirmed result is cached
+under the original registration. Legacy records without a verified account cannot
+use this transition. Tests cover grant expiry, a different account, mismatched
+provider/client/attempt, changed lookup endpoint and repeated response loss with
+restart. These tests use an in-memory vault and injected registration wire.
+
+The native worker does not yet acquire or select that separate grant. A complete
+manager flow still needs durable ownership of the reauthorization attempt and its
+OS-vault slot, recovery after worker termination, user-visible progress, and a
+verified cleanup policy. The new client method must not be described as completed
+one-click reauthorization or automatic refresh-token renewal.
 
 ## Native host lifetime
 

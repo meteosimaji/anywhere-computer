@@ -100,6 +100,43 @@ class RegistrationClient:
             raise ValueError("Saved registration belongs to a different endpoint")
         return RegistrationAttempt.model_validate_json(row[1])
 
+    def recover(self, credentials: EnrollmentCredentials, *,
+                attempt_id: str) -> RegistrationAttempt:
+        """Recover a pending registration with a separately saved fresh grant.
+
+        The trusted caller owns the new authorization and its OS-vault lifetime.
+        Neither credential slot is rewritten here. Original request identity and
+        account binding survive failure and process restart.
+        """
+        with ProcessLock(self._lock, timeout=0):
+            current = self.current()
+            if (current is None or current.owner is None
+                    or current.account_endpoint != self._account_endpoint):
+                raise ValueError("Recovery requires the original verified account binding")
+            if (credentials.issuer != self._credentials.issuer
+                    or credentials.client != self._credentials.client):
+                raise ValueError("Recovery credentials belong to another provider or client")
+            token = credentials.access_token(attempt_id=attempt_id, scope="device:enroll")
+            if self._verified_account(token) != current.owner:
+                raise ValueError("Registration belongs to a different account")
+            if current.device is not None:
+                return current
+            return self._confirm(current, token)
+
+    def _verified_account(self, token: str) -> RelayAccount | None:
+        if self._account_endpoint is None:
+            return None
+        identity = self._wire(self._account_endpoint, {}, token)
+        try:
+            if identity.status != 200:
+                raise ValueError("Account lookup was rejected")
+            owner = RelayAccount.model_validate(identity.fields)
+            if owner.issuer != self._credentials.issuer:
+                raise ValueError("Account issuer mismatch")
+            return owner
+        except ValueError:
+            raise ValueError("Registration account could not be verified") from None
+
     def register(self, *, attempt_id: str, name: str) -> RegistrationAttempt:
         name = device_name(name)
         proposed = RegistrationAttempt(attempt_id=attempt_id, enrollment_id=uuid.uuid4().hex,
@@ -116,19 +153,9 @@ class RegistrationClient:
                 if current.account_endpoint != self._account_endpoint:
                     raise ValueError("Pending registration account binding cannot be changed")
             token = self._credentials.access_token(attempt_id=attempt_id, scope="device:enroll")
-            owner = None
-            if self._account_endpoint is not None:
-                identity = self._wire(self._account_endpoint, {}, token)
-                try:
-                    if identity.status != 200:
-                        raise ValueError("Account lookup was rejected")
-                    owner = RelayAccount.model_validate(identity.fields)
-                    if owner.issuer != self._credentials.issuer:
-                        raise ValueError("Account issuer mismatch")
-                except ValueError:
-                    raise ValueError("Registration account could not be verified") from None
-                if current is not None and current.owner != owner:
-                    raise ValueError("Registration belongs to a different account")
+            owner = self._verified_account(token)
+            if current is not None and current.owner != owner:
+                raise ValueError("Registration belongs to a different account")
             if current is None:
                 proposed = proposed.model_copy(update={
                     "owner": owner, "account_endpoint": self._account_endpoint,
@@ -138,21 +165,25 @@ class RegistrationClient:
                         self._credentials.reference, self._endpoint, proposed.model_dump_json(),
                     ))
                 current = proposed
-            reply = self._wire(self._endpoint, {
-                "enrollment_id": current.enrollment_id, "name": current.name,
-            }, token)
-            if reply.status != 200:
-                raise ValueError("Registration was not confirmed; original request retained")
-            try:
-                device = RelayDevice.model_validate(reply.fields)
-            except ValueError:
-                raise ValueError(
-                    "Invalid registration response; original request retained",
-                ) from None
-            if device.enrollment_id != current.enrollment_id or device.name != current.name:
-                raise ValueError("Registration response does not match the saved request")
-            confirmed = current.model_copy(update={"device": device})
-            with self._db:
-                self._db.execute("UPDATE registration SET record=? WHERE credential=?",
-                                 (confirmed.model_dump_json(), self._credentials.reference))
-            return confirmed
+            return self._confirm(current, token)
+
+    def _confirm(self, current: RegistrationAttempt, token: str) -> RegistrationAttempt:
+        # Caller holds the registration process lock across lookup and dispatch.
+        reply = self._wire(self._endpoint, {
+            "enrollment_id": current.enrollment_id, "name": current.name,
+        }, token)
+        if reply.status != 200:
+            raise ValueError("Registration was not confirmed; original request retained")
+        try:
+            device = RelayDevice.model_validate(reply.fields)
+        except ValueError:
+            raise ValueError(
+                "Invalid registration response; original request retained",
+            ) from None
+        if device.enrollment_id != current.enrollment_id or device.name != current.name:
+            raise ValueError("Registration response does not match the saved request")
+        confirmed = current.model_copy(update={"device": device})
+        with self._db:
+            self._db.execute("UPDATE registration SET record=? WHERE credential=?",
+                             (confirmed.model_dump_json(), self._credentials.reference))
+        return confirmed
