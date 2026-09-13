@@ -58,7 +58,13 @@ async def test_exited_shell_child_blocks_update_and_is_stopped(tmp_path, ignore_
         stopped = await engine.sessions.stop(identity)
         assert stopped["state"] == "exited"
         async with asyncio.timeout(5):
-            while descendant.is_running() and descendant.status() != psutil.STATUS_ZOMBIE:
+            while descendant.is_running():
+                try:
+                    if descendant.status() == psutil.STATUS_ZOMBIE:
+                        break
+                except psutil.NoSuchProcess:
+                    # Exit between is_running() and status() is successful termination.
+                    break
                 await asyncio.sleep(0.02)
         assert engine.status()["active_resources"]["terminal_sessions"] == 0
         assert engine.status()["update_blocked"] is False
