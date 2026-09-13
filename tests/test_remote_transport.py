@@ -14,6 +14,8 @@ from anywhere_computer.remote_transport import (
     FRAME_LIMIT,
     RemoteListener,
     check_tls,
+    close_stream,
+    read_frame,
     remote_exchange,
     write_frame,
 )
@@ -374,4 +376,40 @@ async def test_invalid_expiry_preserves_existing_grant(tmp_path, expiry):
         assert catalog.state == "completed"
         assert {item["name"] for item in catalog.data["tools"]} == tools
     finally:
+        await engine.close()
+
+
+async def test_peer_expiry_after_tls_connect_prevents_file_dispatch(certificates, tmp_path):
+    from anywhere_computer.remote_bridge import RemoteAgent
+
+    context, fingerprint = certificates
+    now = [100.0]
+    engine = Engine(tmp_path / "engine")
+    bridge = RemoteAgent(engine, {}, clock=lambda: now[0])
+    bridge.grant("peer", frozenset({"files_write"}), expires_at=110)
+    listener = RemoteListener(
+        context("server", False), {fingerprint("client"): "peer"}, bridge.dispatch,
+    )
+    port = await listener.start("127.0.0.1", 0)
+    tls = context("client", True)
+    check_tls(tls, client=True)
+    writer = None
+    try:
+        reader, writer = await asyncio.open_connection(
+            "127.0.0.1", port, ssl=tls, server_hostname="localhost",
+            ssl_handshake_timeout=5,
+        )
+        now[0] = 110  # An authenticated open channel is not a lasting tool grant.
+        path = tmp_path / "must-not-exist"
+        operation = request("files_write", path=str(path), text="never")
+        await write_frame(writer, operation.model_dump_json().encode())
+        reply = Reply.model_validate_json(await asyncio.wait_for(read_frame(reader), 5))
+        assert reply.operation_id == operation.operation_id
+        assert reply.state == "failed"
+        assert not path.exists()
+        assert engine.ledger.tool_for(bridge.internal_id("peer", operation.operation_id)) is None
+    finally:
+        if writer is not None:
+            await close_stream(writer)
+        await listener.close()
         await engine.close()
