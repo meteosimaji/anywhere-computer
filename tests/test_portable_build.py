@@ -94,3 +94,33 @@ def test_runtime_rejects_directory_link_cycle(tmp_path):
     (tmp_path / "cycle").symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(ValueError, match="directory symlinks"):
         portable_builder.validate_runtime(tmp_path)
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_manager_packaging_keeps_native_executable_and_relative_runtime_layout(tmp_path, platform):
+    import plistlib
+
+    native = tmp_path / "native"
+    native.write_bytes(b"native fixture")
+    app = tmp_path / "relocated 日本語"
+    app.mkdir()
+    portable_builder.include_manager(app, native, platform=platform)
+    if platform == "darwin":
+        contents = app / "Anywhere Computer Manager.app" / "Contents"
+        metadata = plistlib.loads((contents / "Info.plist").read_bytes())
+        executable = contents / "MacOS" / metadata["CFBundleExecutable"]
+        assert executable.stat().st_mode & 0o111
+        assert metadata["CFBundlePackageType"] == "APPL"
+    else:
+        executable = app / "Anywhere Computer Manager.exe"
+    assert executable.read_bytes() == native.read_bytes()
+    assert not (app / "runtime").exists()  # Existing runtime packaging owns that directory.
+
+
+def test_manager_packaging_requires_explicit_existing_file(tmp_path):
+    with pytest.raises(ValueError, match="native executable"):
+        portable_builder.include_manager(tmp_path, tmp_path / "missing", platform="win32")
+    native = tmp_path / "native"
+    native.write_bytes(b"native fixture")
+    with pytest.raises(ValueError, match="supports"):
+        portable_builder.include_manager(tmp_path, native, platform="linux")

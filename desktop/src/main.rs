@@ -20,12 +20,23 @@ fn decode_snapshot(bytes: Vec<u8>) -> Result<String, &'static str> {
 // Development host selection is native-process input, never a WebView argument.
 struct ManagementHost {
     python: PathBuf,
-    directory: PathBuf,
+    directory: Option<PathBuf>,
 }
+
+type ManagementSelection = Result<ManagementHost, &'static str>;
 
 impl ManagementHost {
     fn from_arguments() -> Result<Self, &'static str> {
         let arguments: Vec<_> = std::env::args_os().skip(1).collect();
+        if arguments.is_empty() || (arguments.len() == 2 && arguments[0] == "--state-dir") {
+            let executable = std::env::current_exe().map_err(|_| "Cannot locate manager")?;
+            let python = packaged_python(&executable, std::env::consts::OS)?;
+            let directory = arguments.get(1).map(PathBuf::from);
+            if !python.is_file() || directory.as_ref().is_some_and(|path| !path.is_absolute()) {
+                return Err("管理アプリと runtime フォルダーを一緒に配置してください。状態ディレクトリは絶対パスで指定してください。");
+            }
+            return Ok(Self { python, directory });
+        }
         if arguments.len() != 4 || arguments[0] != "--python" || arguments[2] != "--state-dir" {
             return Err("Preview requires --python ABSOLUTE_PATH --state-dir ABSOLUTE_PATH");
         }
@@ -34,63 +45,89 @@ impl ManagementHost {
         if !python.is_absolute() || !python.is_file() || !directory.is_absolute() {
             return Err("Select an existing Python executable and an absolute state directory");
         }
-        Ok(Self { python, directory })
+        Ok(Self {
+            python,
+            directory: Some(directory),
+        })
     }
 }
 
+fn packaged_python(executable: &std::path::Path, platform: &str) -> Result<PathBuf, &'static str> {
+    let parent = executable.parent().ok_or("Invalid manager location")?;
+    let root = match platform {
+        "windows" => parent,
+        "macos" => {
+            let contents = parent.parent().ok_or("Invalid app layout")?;
+            let bundle = contents.parent().ok_or("Invalid app layout")?;
+            if parent.file_name().is_none_or(|name| name != "MacOS")
+                || contents.file_name().is_none_or(|name| name != "Contents")
+                || bundle.extension().is_none_or(|ext| ext != "app")
+            {
+                return Err("Run the packaged management app");
+            }
+            bundle.parent().ok_or("Invalid app layout")?
+        }
+        _ => return Err("Packaged manager is supported on macOS and Windows"),
+    };
+    Ok(root.join(if platform == "windows" {
+        "runtime/python.exe"
+    } else {
+        "runtime/bin/python3"
+    }))
+}
+
 #[tauri::command]
-async fn management_snapshot(host: tauri::State<'_, ManagementHost>) -> Result<String, String> {
+async fn management_snapshot(
+    host: tauri::State<'_, ManagementSelection>,
+) -> Result<String, String> {
     run_management(&host, "management-status", 15).await
 }
 
 #[tauri::command]
-async fn management_start(host: tauri::State<'_, ManagementHost>) -> Result<String, String> {
+async fn management_start(host: tauri::State<'_, ManagementSelection>) -> Result<String, String> {
     run_management(&host, "management-start", 60).await
 }
 
 #[tauri::command]
 async fn management_startup_status(
-    host: tauri::State<'_, ManagementHost>,
+    host: tauri::State<'_, ManagementSelection>,
 ) -> Result<String, String> {
     run_management(&host, "management-startup-status", 60).await
 }
 
 #[tauri::command]
 async fn management_startup_enable(
-    host: tauri::State<'_, ManagementHost>,
+    host: tauri::State<'_, ManagementSelection>,
 ) -> Result<String, String> {
     run_management(&host, "management-startup-enable", 180).await
 }
 
 #[tauri::command]
 async fn management_startup_disable(
-    host: tauri::State<'_, ManagementHost>,
+    host: tauri::State<'_, ManagementSelection>,
 ) -> Result<String, String> {
     run_management(&host, "management-startup-disable", 180).await
 }
 
 // Only fixed native commands call this helper; JavaScript cannot select CLI arguments.
 async fn run_management(
-    host: &ManagementHost,
+    host: &ManagementSelection,
     command: &'static str,
     seconds: u64,
 ) -> Result<String, String> {
+    let host = host.as_ref().map_err(|error| error.to_string())?;
     let mut process = tokio::process::Command::new(&host.python);
     // Management reads use pipes, never an interactive console. Preserve the
     // reader's ownership and timeout handling while preventing focus-stealing windows.
     #[cfg(target_os = "windows")]
     process.creation_flags(0x08000000); // CREATE_NO_WINDOW
     let mut child = process
-        .args([
-            "-I",
-            "-X",
-            "utf8",
-            "-m",
-            "anywhere_computer",
-            command,
-            "--state-dir",
-        ])
-        .arg(&host.directory)
+        .args(["-I", "-X", "utf8", "-m", "anywhere_computer", command])
+        .args(
+            host.directory
+                .iter()
+                .flat_map(|path| [std::ffi::OsStr::new("--state-dir"), path.as_os_str()]),
+        )
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -139,10 +176,8 @@ async fn collect_snapshot(
 }
 
 fn main() {
-    let host = ManagementHost::from_arguments().unwrap_or_else(|error| {
-        eprintln!("{error}");
-        std::process::exit(2);
-    });
+    // Show bootstrap failures in the existing status UI, not a silent GUI exit.
+    let host = ManagementHost::from_arguments();
     tauri::Builder::default()
         .manage(host)
         .invoke_handler(tauri::generate_handler![
@@ -159,6 +194,32 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bootstrap_failure_is_returned_to_the_ui_without_launching_a_reader() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let selection = Err("fixture: packaged runtime is missing");
+        let result = runtime.block_on(run_management(&selection, "management-status", 1));
+        assert_eq!(result.unwrap_err(), "fixture: packaged runtime is missing");
+    }
+
+    #[test]
+    fn packaged_layout_is_relative_to_executable_not_working_directory() {
+        let root = std::env::temp_dir().join("relocated 日本語");
+        assert_eq!(
+            packaged_python(&root.join("Manager.exe"), "windows").unwrap(),
+            root.join("runtime/python.exe")
+        );
+        assert_eq!(
+            packaged_python(&root.join("Manager.app/Contents/MacOS/manager"), "macos").unwrap(),
+            root.join("runtime/bin/python3")
+        );
+        assert!(packaged_python(&root.join("manager"), "macos").is_err());
+        assert!(packaged_python(&root.join("manager"), "linux").is_err());
+    }
 
     #[test]
     #[ignore = "child-process fixture, invoked explicitly by the cleanup test"]

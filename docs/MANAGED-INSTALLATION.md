@@ -321,3 +321,49 @@ The registered Windows device responded to status and terminal commands, but no
 usable GUI provider was established. Notepad, Explorer and browser GUI actions
 were not executed. The static adapter advertisement is not runtime availability;
 per-OS provider discovery and truthful readiness remain required work.
+
+
+## Packaged manager checkpoint (2026-09-14)
+
+The portable builder accepts `--manager /absolute/path/to/native-executable`.
+It includes the native Windows executable or macOS application bundle in the
+existing archive and file checksum manifest. The engine and dependency bundle
+are reused; no second Python distribution or PATH-based interpreter is added.
+Build the desktop with `cargo build --locked --manifest-path desktop/Cargo.toml`,
+then pass that platform's executable to `scripts/build_portable.py` alongside
+its trusted standalone `--runtime` and a new `--output` archive path.
+
+Opening the packaged manager with no arguments selects the sibling
+`runtime/python.exe` on Windows or `runtime/bin/python3` outside the macOS app
+bundle. Move the entire portable directory together. The existing CLI selects
+the user's state directory. Explicit native `--state-dir` remains available for
+isolated acceptance, as does the earlier development `--python ... --state-dir
+...` form. WebView callers cannot select these paths. A missing runtime is
+reported in the status window and prevents management actions.
+
+Mac acceptance used a fresh archive relocated under a Japanese directory name,
+with PATH restricted to `/usr/bin:/bin`, no interpreter argument, and an isolated
+state directory. Full archive verification plus the relocated runtime smoke
+test passed (3,118 manifest files). Clicking Start launched the bundled engine;
+authenticated UTF-8/emoji file creation, read and SHA-256-conditional replacement
+from 40 to 42 succeeded. Closing the window retained instance
+`b142ca1515c5445888fd7465ff42f507`; fixture stop was then confirmed. The initial
+replacement harness omitted `mode=replace` and was correctly rejected without
+an overwrite; the corrected call and subsequent read verified the result.
+A separately built final native binary without its runtime displayed the
+placement error in the real macOS window. Rust checks covered layout selection,
+bootstrap-error propagation and reader cleanup; Python checks covered packaging
+and archive verification. Windows packaged GUI acceptance remains pending.
+
+These are unsigned development archives, not a completed installer, signing or
+fresh-machine qualification. The native manager's file hash is in the manifest;
+this is not an authenticity verifier at every launch. Moving the app alone is
+unsupported. Pairing and relay operation are still separate unfinished work.
+
+The additional ChatGPT 5.6 medium browser test used the Mac direct Peekaboo MCP
+route: a new Chrome window navigated from example.com to example.org in the same
+tab. Server result records contained the final URL and Example Domain heading;
+independent native accessibility observation confirmed both. Session
+`72a5c8c6aba24ee1ae081bbc7600de16` closed with cleanup confirmed in ledger operation
+`b3da79bd926375da0c517d67d97ed0eb`. This extends the TextEdit/Finder checkpoint,
+not Windows GUI, long-duration, DPI or IME qualification.
