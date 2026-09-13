@@ -71,7 +71,14 @@ Windows 側が保存した `installed-plugin-exact-acceptance-result.json`
 この記録のホスト名は Mac の SSH 接続先と一致した。ただし SSH 側では
 報告されたユーザー領域の `Programs` ディレクトリを取得できない一方、
 プロセス一覧にはその配下の Python 実行ファイルが表示された。
-インストール先の見え方の差は未解決であり、別ホストと断定しない。
+追加調査で、Windows Codex の MSIX による AppData 転送を確認した。
+SSH からパッケージの `LocalCache/Local/Programs/AnywhereComputer` に
+本体が存在し、その実体の Python を起動して `0.1.0a9` / Python `3.12.13`
+を取得できた。Codex 内の論理パスと、パッケージ外の実体パスが異なっていた。
+この配置は Codex の私有データに依存するため、独立した永続導入としては
+AppData 外のユーザー専用配置先へ調整が必要。既存状態の移行は未実施。
+Microsoft の [MSIX デスクトップアプリ実行仕様](https://learn.microsoft.com/en-us/windows/msix/desktop/desktop-to-uwp-behind-the-scenes)
+に AppData の転送が説明されている。
 対話ログオンでの Plugin 受け入れと、SSH／ChatGPT から同じエージェントへの
 接続成功は別の判定で、後者はまだ未達。
 
