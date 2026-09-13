@@ -20,9 +20,21 @@ def python_command(script):
     if os.name == "nt":
         import subprocess
 
-        # cmd.exe requires one physical line even when Python source is multiline.
-        return subprocess.list2cmdline([sys.executable, "-u", "-c", f"exec({script!r})"])
+        # Keep source quotes, newlines and shell metacharacters out of cmd.exe parsing.
+        source = script.encode("utf-8").hex()
+        return subprocess.list2cmdline([
+            sys.executable, "-u", "-c", f"exec(bytes.fromhex('{source}'))",
+        ])
     return shlex.join([sys.executable, "-u", "-c", script])
+
+
+def test_python_command_preserves_multiline_source_and_shell_characters():
+    import subprocess
+
+    text = "日本語 'quoted' \"double\" READY> < & | %PATH% !value!\nnext"
+    script = "import sys\nsys.stdout.reconfigure(encoding='utf-8')\n" + f"print({text!r})"
+    output = subprocess.check_output(python_command(script), shell=True, timeout=5)
+    assert output.decode("utf-8").replace("\r\n", "\n") == text + "\n"
 
 
 @pytest.fixture
