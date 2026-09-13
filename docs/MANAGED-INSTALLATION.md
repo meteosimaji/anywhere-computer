@@ -20,7 +20,7 @@ The first working branch is `codex/managed-installation`.
 | Stage | Current evidence | Remaining acceptance |
 | --- | --- | --- |
 | 0: baseline | Existing setup, device router, update, runtime, CI and package contracts inspected. Before changes: setup/controller/router tests 31 passed in 4.25 s. | Maintain a requirement-to-evidence record as each subsystem changes. |
-| 1: management and installation | Shared controller, native Mac/Windows status/startup controls and isolated registration/removal accepted (PRs 2–5). PR 6 adds packaged runtime selection; Mac relocated package and missing-runtime UI accepted. | PR 6 combined-package CI and Windows packaged UI; pairing; isolated relay; fresh Mac/Windows installation and connected file workflow. |
+| 1: management and installation | Shared controller, native Mac/Windows status/startup controls and isolated registration/removal accepted (PRs 2–5). PR 6 merged after combined-package CI and relocated Mac/Windows native Start, authenticated file editing and window-close continuity acceptance. | Pairing; isolated relay; fresh Mac/Windows installation and connected file workflow; installer signing and distribution qualification. |
 | 2: update/recovery | Existing release preparation, verification, activation and supervisor are retained. | Unified product controller, lifecycle failure matrix, actual multi-entry runtime verification. |
 | 3: efficiency | Existing direct MCP search retained. Device schemas still fetched without filters. | Selective device catalogs and measured payload/request reductions. |
 | 4: GUI/browser | Existing Peekaboo route retained; no default provider change. | Pinned provider evaluation and per-OS application/IME/DPI tests. |
@@ -353,7 +353,7 @@ an overwrite; the corrected call and subsequent read verified the result.
 A separately built final native binary without its runtime displayed the
 placement error in the real macOS window. Rust checks covered layout selection,
 bootstrap-error propagation and reader cleanup; Python checks covered packaging
-and archive verification. Windows packaged GUI acceptance remains pending.
+and archive verification. Windows packaged GUI acceptance was pending at this first checkpoint; the completed follow-up is recorded below.
 
 These are unsigned development archives, not a completed installer, signing or
 fresh-machine qualification. The native manager's file hash is in the manifest;
@@ -368,6 +368,36 @@ independent native accessibility observation confirmed both. Session
 `b3da79bd926375da0c517d67d97ed0eb`. This extends the TextEdit/Finder checkpoint,
 not Windows GUI, long-duration, DPI or IME qualification.
 
+
+## Completed combined-package acceptance
+
+PR 6 merged as `b794c54e58e64e03e2e8689a07fd0212c7ef0a10` after all ten
+checks on `18c647f` passed. The immutable diff security review found no reportable
+candidate; it does not qualify repository-wide security or signed distribution.
+The native product sources are identical to the `042e4d0` CI artifacts used below;
+the final change corrected a platform-specific test assertion and documentation.
+
+Both artifacts were freshly extracted under isolated paths. macOS verified 3,118
+manifest files; Windows verified 4,649. Each manager selected its bundled runtime
+without `--python` and with a restricted PATH. Clicking Start in the real native
+window launched an engine in a separate test state directory. Authenticated file
+creation, readback, SHA-256-conditional replacement from 40 to 42 and final read
+passed. Closing the manager retained the same engine instance. Explicit fixture
+stop then succeeded; production services were not replaced.
+
+| OS | Instance | Final file-read operation | Fixture stop operation |
+| --- | --- | --- | --- |
+| macOS | `5cc078ea7f634b8a8124ee4d52ab5d47` | `1ef49ca1efee4fcf9ef55982d3e4fdc7` | `97d9f05c139947a9937db05b80e6e64e` |
+| Windows | `aa646ab55874482eb30641ef71b9e733` | `91fb5e8cdac34e428515aacea62d6e83` | `558f14d0fa3842a1b9be8c678ad2c363` |
+
+Both fixture runtimes reported
+`bf67321e3e1f407c9e063772b830d224300f314288b0be853a460b4fc61a415f`.
+On Windows, starting the target interpreter before manifest verification changed
+24 bundled bytecode cache files and correctly failed the integrity check. The
+successful retry used a fresh extraction and an already trusted host interpreter
+to verify the manifest before starting the target runtime. No checksum requirement
+was relaxed. Native window startup, runtime-only smoke verification, and GUI
+automation of arbitrary Windows applications remain separate test layers.
 
 ## Association boundary for the next implementation
 
