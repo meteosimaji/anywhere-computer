@@ -1,13 +1,18 @@
 import io
 import json
 
+import pytest
 from test_client_tokens import MemoryVault
 from test_device_authorization import Clock
 
 from anywhere_computer.device_authorization import DeviceAuthorizationClient, EnrollmentProvider
 from anywhere_computer.enrollment_credentials import EnrollmentCredentials
 from anywhere_computer.enrollment_http import EnrollmentHTTPReply
-from anywhere_computer.enrollment_worker import EnrollmentWorker, serve_enrollment
+from anywhere_computer.enrollment_worker import (
+    EnrollmentWorker,
+    NativeEnrollmentConfig,
+    serve_enrollment,
+)
 from anywhere_computer.registration_client import RegistrationClient
 
 
@@ -74,3 +79,22 @@ def test_line_commands_retain_state_and_refuse_arbitrary_actions(tmp_path):
     assert responses[3]["result"]["authorization"]["phase"] == "cancelled"
     assert calls == ["https://auth.example/device"]
     assert "synthetic-private" not in output.getvalue()
+
+
+@pytest.mark.parametrize("invalid", ["scope", "endpoint", "unknown"])
+def test_native_configuration_rejects_wrong_boundary(invalid):
+    values = {
+        "provider": {"issuer": "https://auth.example",
+                     "device_authorization_endpoint": "https://auth.example/device",
+                     "token_endpoint": "https://auth.example/token",
+                     "client_id": "desktop", "scope": "device:enroll"},
+        "registration_endpoint": "https://relay.example/enrollment",
+    }
+    if invalid == "scope":
+        values["provider"]["scope"] = "files_write"
+    elif invalid == "endpoint":
+        values["registration_endpoint"] += "?token=unexpected"
+    else:
+        values["command"] = "unexpected"
+    with pytest.raises(ValueError):
+        NativeEnrollmentConfig.model_validate(values)

@@ -146,3 +146,18 @@ The native host still needs bounded pipe I/O, pending-call handling, verified
 worker exit and trusted provider configuration. Its tests use the real client
 state machines with synthetic provider responses; they are not a rendered native
 authentication or public-service acceptance test.
+
+The worker now has a native-process entry point:
+`python -I -X utf8 -m anywhere_computer.enrollment_worker --state-dir ABSOLUTE_PATH
+--config ABSOLUTE_PATH`. Its bounded, non-symlink JSON configuration contains
+`provider` (the existing `EnrollmentProvider` schema, exactly `device:enroll`)
+and `registration_endpoint` (HTTPS, no query). This is trusted host configuration,
+not a WebView argument or a general-user installation step. Invalid startup or
+request errors do not echo the configuration or provider responses.
+
+On macOS, a separate Python process using the installed OS-vault backend started
+with a disposable directory and synthetic `.invalid` endpoints. Two pipe commands
+returned `new` then `cancelled`, both with `connection_state: not_checked`; EOF
+terminated the child with exit code 0. No real-account authorization was started.
+This establishes the native Python entry point, not Tauri pipe integration,
+Windows worker execution, or browser-based enrollment acceptance.
