@@ -18,6 +18,21 @@ from .diagnostics import diagnose
 from .models import Contract
 from .release_supervisor import automatic_updates_enabled
 from .setup_controller import SetupController, SetupProgress
+from .startup_service import install_startup, startup_status, uninstall_startup
+
+
+class ManagementStartup(Contract):
+    schema_version: Literal[1] = 1
+    state: Literal["not_installed", "registered", "not_enabled", "unavailable"]
+    mode: Literal["local", "remote"] | None = None
+    native_running: bool = False
+    observed_at: str
+
+
+class ManagementStartupResult(Contract):
+    schema_version: Literal[1] = 1
+    state: Literal["confirmed", "not_confirmed", "unsupported_mode"]
+    startup: ManagementStartup
 
 
 class ManagedDevice(Contract):
@@ -66,6 +81,46 @@ class ManagementController:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.setup = SetupController(directory)
+
+    async def startup(self) -> ManagementStartup:
+        try:
+            raw = await asyncio.to_thread(startup_status, self.directory)
+            state = raw.get("state")
+            mode = raw.get("mode")
+            if state not in {"not_installed", "registered", "not_enabled"}:
+                raise ValueError("Unrecognized startup state")
+            return ManagementStartup.model_validate({
+                "state": state, "mode": mode,
+                "native_running": raw.get("native_running", False),
+                "observed_at": datetime.now(UTC).isoformat(),
+            })
+        except (OSError, RuntimeError, ValueError):
+            return ManagementStartup(
+                state="unavailable", observed_at=datetime.now(UTC).isoformat(),
+            )
+
+    async def set_local_startup(self, enabled: bool) -> ManagementStartupResult:
+        before = await self.startup()
+        if before.mode == "remote":
+            return ManagementStartupResult(state="unsupported_mode", startup=before)
+        if before.state == "unavailable":
+            return ManagementStartupResult(state="not_confirmed", startup=before)
+        try:
+            if enabled:
+                await asyncio.to_thread(install_startup, self.directory, mode="local")
+            else:
+                await asyncio.to_thread(uninstall_startup, self.directory, expected_mode="local")
+        except (OSError, RuntimeError, ValueError):
+            # An acknowledgement failure does not prove that the OS mutation
+            # failed. Read once; never repeat the mutation automatically.
+            pass
+        after = await self.startup()
+        confirmed = (after.state == "registered" and after.mode == "local") if enabled else (
+            after.state == "not_installed"
+        )
+        return ManagementStartupResult(
+            state="confirmed" if confirmed else "not_confirmed", startup=after,
+        )
 
     async def start(self) -> ManagementStartResult:
         # Starting is explicit. Keep the existing selected runtime and busy-work

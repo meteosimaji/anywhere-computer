@@ -13,7 +13,13 @@ from typing import Literal, Self, cast
 import psutil
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .autostart import Platform, StartupDefinition, StartupMode, current_definition
+from .autostart import (
+    Platform,
+    StartupDefinition,
+    StartupMode,
+    current_definition,
+    startup_interpreter,
+)
 from .cloudflare_tunnel import TunnelCredential, cloudflared_executable
 from .codex_context import _executable as codex_executable
 from .http_service import load_http_config
@@ -208,7 +214,7 @@ def _install_startup_locked(
         record = StartupRecord(
             platform=cast(Platform, sys.platform), user=psutil.Process().username(),
             directory=str(directory),
-            interpreter=os.path.abspath(sys.executable), connector=executable,
+            interpreter=startup_interpreter(selected_mode), connector=executable,
             startup_id=secrets.token_hex(16),
             isolated_python=True, utf8_python=True,
             codex_executable=pinned_codex, policy_version=2, mode=selected_mode,
@@ -278,11 +284,17 @@ def _wait_stopped(directory: Path, *, timeout: float = 30) -> None:
             time.sleep(0.1)
 
 
-def uninstall_startup(directory: Path) -> dict[str, str | bool]:
+def uninstall_startup(
+    directory: Path, *, expected_mode: StartupMode | None = None,
+) -> dict[str, str | bool]:
     directory = directory.resolve()
     if not directory.exists():
         return {"state": "not_installed", "changed": False}
     with ProcessLock(directory / "autostart.lock"):
+        if expected_mode is not None:
+            record = _record(directory)
+            if record is not None and record.mode != expected_mode:
+                raise ValueError("Startup mode changed; inspect before removal")
         return _uninstall_startup_locked(directory)
 
 

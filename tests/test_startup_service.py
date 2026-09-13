@@ -3,8 +3,24 @@ from types import SimpleNamespace
 
 import pytest
 
+from anywhere_computer import autostart
 from anywhere_computer import startup_service as service
 from anywhere_computer.startup_native import StartupSnapshot
+
+
+def test_local_windows_startup_uses_same_environment_windowed_python(tmp_path, monkeypatch):
+    console = tmp_path / "python.exe"
+    windowed = tmp_path / "pythonw.exe"
+    console.touch()
+    monkeypatch.setattr(autostart, "sys",
+                        SimpleNamespace(platform="win32", executable=str(console)))
+    with pytest.raises(ValueError, match="requires pythonw.exe"):
+        autostart.startup_interpreter("local")
+    assert autostart.startup_interpreter("remote") == str(console)
+    windowed.touch()
+    assert autostart.startup_interpreter("local") == str(windowed)
+    monkeypatch.setattr(autostart.sys, "executable", str(windowed))
+    assert autostart.startup_interpreter("local") == str(windowed)
 
 
 @pytest.fixture
@@ -404,3 +420,14 @@ def test_local_registration_needs_no_remote_setup_and_preserves_mode(registratio
     assert service.upgrade_startup(directory)["state"] == "registered"
     assert service._record(directory).mode == "local"
     assert service.uninstall_startup(directory)["state"] == "uninstalled"
+
+
+def test_local_management_removal_rejects_remote_receipt_under_lock(registration):
+    directory, native, calls, _ = registration
+    service.install_startup(directory)
+    original = (directory / 'autostart.json').read_bytes()
+    with pytest.raises(ValueError, match='Startup mode changed'):
+        service.uninstall_startup(directory, expected_mode='local')
+    assert calls == ['install']
+    assert native['snapshot'].running
+    assert (directory / 'autostart.json').read_bytes() == original

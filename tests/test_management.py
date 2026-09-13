@@ -129,3 +129,51 @@ async def test_management_reads_live_engine_and_never_restarts_it(tmp_path, monk
     finally:
         stop.set()
         await asyncio.wait_for(running, 5)
+
+
+async def test_startup_read_does_not_create_state(tmp_path):
+    directory = tmp_path / 'absent'
+    value = await ManagementController(directory).startup()
+    assert value.state == 'not_installed'
+    assert value.mode is None
+    assert not directory.exists()
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+async def test_management_never_changes_remote_startup(tmp_path, monkeypatch, enabled):
+    monkeypatch.setattr('anywhere_computer.management.startup_status', lambda _: {
+        'state': 'registered', 'mode': 'remote', 'native_running': True,
+    })
+    def forbidden(*args, **kwargs):
+        pytest.fail('Remote startup must not be changed by local management')
+    monkeypatch.setattr('anywhere_computer.management.install_startup', forbidden)
+    monkeypatch.setattr('anywhere_computer.management.uninstall_startup', forbidden)
+    result = await ManagementController(tmp_path).set_local_startup(enabled)
+    assert result.state == 'unsupported_mode'
+
+
+async def test_startup_lost_ack_reconciles_once_without_leaking_error(tmp_path, monkeypatch):
+    states = iter([{'state': 'not_installed'}, {'state': 'registered', 'mode': 'local'}])
+    monkeypatch.setattr('anywhere_computer.management.startup_status', lambda _: next(states))
+    calls = []
+    def install(directory, *, mode):
+        calls.append((directory, mode))
+        raise RuntimeError('private-error-body')
+    monkeypatch.setattr('anywhere_computer.management.install_startup', install)
+    result = await ManagementController(tmp_path).set_local_startup(True)
+    assert result.state == 'confirmed'
+    assert calls == [(tmp_path, 'local')]
+    assert 'private-error-body' not in result.model_dump_json()
+
+
+async def test_unreadable_startup_never_attempts_mutation(tmp_path, monkeypatch):
+    def failure(_):
+        raise ValueError('private-corrupt-receipt')
+    monkeypatch.setattr('anywhere_computer.management.startup_status', failure)
+    monkeypatch.setattr(
+        'anywhere_computer.management.install_startup', lambda *a, **k: pytest.fail(),
+    )
+    result = await ManagementController(tmp_path).set_local_startup(True)
+    assert result.state == 'not_confirmed'
+    assert result.startup.state == 'unavailable'
+    assert 'private-corrupt-receipt' not in result.model_dump_json()

@@ -188,3 +188,121 @@ Local follow-up verification: focused startup/watch tests 61 passed / 3 skipped;
 full Python suite 939 passed / 17 skipped (95.36 s), Ruff and mypy (82 sources)
 passed. Definition-only Linux cleanup adjustment was verified separately after
 that full run. These results do not prove login/reboot or native uninstall.
+
+Native local-supervision acceptance (2026-09-14, PR #4): an isolated macOS
+LaunchAgent started an authenticated engine; removing the registration retained
+instance `899993646c724d5e8e0b1b2e968aae84`. An isolated Windows Task Scheduler
+registration started instance `16751ee76ccf4edebc74b62f53704c18`; authenticated
+status operations `8842918e4efc4ef2b2e9ee0476c4b76b` and
+`fda010dd6592439f9e2df7b765e0d5a3` confirmed that instance before/after removal.
+Both test registrations and engines were cleaned up. No reboot or active-session
+continuity claim follows from these idle-engine removal tests.
+
+The first Windows fixture was made from elevated SSH, with Administrators
+ownership and OWNER RIGHTS ACL entries. Its normal-user task could not open
+`local-watch.lock`. Creating a separate fixture from the interactive normal user
+succeeded without relaxing ACLs. Run per-user installation in the intended user's
+normal session, not an elevated SSH shell. Existing production settings stayed
+unchanged.
+
+## Management startup controls (development follow-up)
+
+The management controller exposes a separate typed startup observation plus
+explicit enable/disable results. CLI and three fixed native commands share it.
+The WebView cannot supply an executable, directory, registration mode or shell
+command. A missing registration is read without creating state. OS registration
+and engine readiness remain separate observations with timestamps.
+
+The controls apply to local startup only. Existing remote registrations are shown
+but cannot be disabled through these controls. The removal controller also
+checks the expected mode under the existing startup lock, so a mode change after
+a UI observation cannot remove a remote registration. Mutation failures reconcile
+once against OS state; they do not retry the write or expose raw errors. Controls
+stay disabled while a mutation is pending or the observation is unknown.
+
+Focused Python verification: 72 passed / 3 skipped; packaged-source equality test
+passed. Rust tests: 3 passed / 1 child fixture ignored; Clippy and debug build
+passed. Mac native button acceptance subsequently succeeded on 2026-09-14:
+enable registered an isolated LaunchAgent, refresh showed a responding engine,
+and disable returned the registration to `not_installed`. Authenticated status
+before and after removal retained instance `c30d234cc2ec4bfa923c9bf3ae614736`
+and runtime `2ee740c8fae7148d2adde42ac2413c7b5ca7c1db74b1c22b39e11faa07fa6fa0`.
+Status operations were `37db1f02be6c4df986e9363c9488f0eb` and
+`589527c5600f4eada9b91bb985583e32`. The latter followed clicking the window's
+close button; the subsequent accessibility observation timed out, so that
+observation alone does not prove window closure. The engine remained ready.
+Explicit fixture stop `482ebe59e7cc446581466af94d392e73` was followed by a
+`stopped` management observation. No production registration was changed.
+
+The initial Mac UI acquisition timed out with a shell wrapper configured as the
+test bundle's executable. Selecting the actual native executable in Info.plist
+and launching it with the fixture arguments made the window accessible, without
+a product-code change. This qualifies the corrected development fixture, not
+the still-unfinished packaged installer. Windows native verification follows
+below; CI compilation and CLI-level native tests do not replace that UI test.
+
+Windows native button verification (2026-09-14) used the executable built from
+`9700b3d93d58249f595ec2ada33ff3c60322e26b`, Actions run `34768326837`.
+Its SHA-256 was `d8d3a1a1df0521ec0a76d49c649fed7f553f440bfca795c8b20b23a0a4c68ab8`,
+checked again on the guest before launch. The isolated runtime wheel was also
+hash-checked. The normal-user fixture, separate from production, was
+`%LOCALAPPDATA%/Temp/anywhere-manager-native-9700b3d`.
+
+The actual window displayed stopped/unregistered, accepted enable, displayed
+registered and a responding engine after refresh, and accepted disable. The
+window then displayed unregistered. Closing it ended the manager process with
+exit code 0. Independent authenticated observations before and after removal
+retained instance `026fa5f7c8a54d5e9bc4c37dddb35a38` and runtime
+`2ee740c8fae7148d2adde42ac2413c7b5ca7c1db74b1c22b39e11faa07fa6fa0`.
+Routed observation operations were `f703ab85d62b4e15a3e50468a8f2ce36` and
+`4f1ea94672444e7eab04a1d53eac367c`. Explicit fixture stop
+`424151f2bca04e89988b9edaaf5af726` was followed by absent agent metadata;
+all test terminal sessions were closed. Production engine and VM remained up.
+
+This test also exposed an unresolved usability defect: console windows appeared
+in front of the manager during startup registration. The native manager's Python
+child launch, native startup subprocesses and scheduled console interpreter are
+the relevant launch paths to investigate; the screenshot alone does not identify
+which process owns each console. Do not call the Windows installation experience
+complete until this is fixed and retested. The fixture contains `pythonw.exe`;
+compatibility with startup receipts and runtime selection must be checked before
+changing the scheduled interpreter. The first verification command also found
+`Get-FileHash` unavailable in this PowerShell environment; Python SHA-256 checking
+succeeded without weakening verification or changing production settings.
+
+Console follow-up: the Windows manager is now built as a GUI-subsystem process,
+and its fixed Python readers and native startup-manager subprocesses request
+`CREATE_NO_WINDOW`. A real Windows probe of the isolated previous implementation
+reported a console handle; the patched native subprocess returned no console
+handle while preserving a Japanese/emoji stdin/stdout round trip. This checks
+that subprocess boundary, not the complete manager workflow.
+New local Windows registrations select `pythonw.exe` beside the current
+interpreter, never from PATH, and fail clearly if it is absent. Preview and
+registration share that selection. Existing receipts retain their recorded
+interpreter; remote registrations are unchanged. Updated native UI and scheduled
+watcher acceptance is still pending. Focused Python tests: 93 passed / 5 skipped;
+Ruff, mypy (3 sources), bundled-source equality, Rust tests and Clippy passed.
+The Windows-only console regression test must also run in Windows CI.
+
+CI exposed a test readiness race: the disabled-update case slept 300 ms before
+probing the HTTP service. Adding a 500 ms startup delay reproduced the failure.
+The test now waits for the real HTTP service context to enter before probing,
+while retaining the live metadata check and update-monitor assertions. Both
+immediate and delayed startup are covered. The complete remote-service test
+file passed (18 tests); this changes test synchronization, not server behavior.
+
+## Independent GUI acceptance checkpoint
+
+On 2026-09-14, ChatGPT GPT-5.6 Sol with medium reasoning used the existing direct
+Peekaboo MCP route on the Mac. TextEdit received Japanese and emoji text, then
+a separate call appended `42` after the earlier `40`. Independent accessibility
+inspection confirmed all three lines in the same document. Finder initially
+remained at the wrong directory; re-observation and targeted input reached the
+empty test directory `/tmp/anywhere-gui-test-mac-20260914`. Session close was
+independently recovered from the operation ledger with `cleanup_confirmed=true`.
+These are two real application workflows, not a long-duration or IME/DPI gate.
+
+The registered Windows device responded to status and terminal commands, but no
+usable GUI provider was established. Notepad, Explorer and browser GUI actions
+were not executed. The static adapter advertisement is not runtime availability;
+per-OS provider discovery and truthful readiness remain required work.

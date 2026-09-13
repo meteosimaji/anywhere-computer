@@ -26,6 +26,19 @@ class StartupDefinition:
     content: bytes
 
 
+def startup_interpreter(mode: StartupMode) -> str:
+    interpreter = Path(os.path.abspath(sys.executable))
+    if sys.platform == "win32" and mode == "local":
+        # A scheduled interactive python.exe creates a persistent console.
+        # Select the windowed entry from the SAME installed environment, never PATH.
+        if interpreter.name.lower() == "python.exe":
+            interpreter = interpreter.with_name("pythonw.exe")
+        if interpreter.name.lower() != "pythonw.exe" or not interpreter.is_file():
+            raise ValueError("Local Windows startup requires pythonw.exe in this installation")
+    return str(interpreter)
+
+
+
 def _clean_argument(value: str) -> str:
     if not value or any(ord(char) < 32 or ord(char) == 127 for char in value):
         raise ValueError("Startup arguments must be nonempty and contain no control characters")
@@ -185,7 +198,7 @@ def current_definition(
     # Keep the venv path: resolving an interpreter symlink would lose its environment.
     definition = startup_definition(
         directory, platform=cast(Platform, sys.platform), home=Path.home(),
-        executable=executable or os.path.abspath(sys.executable), user=psutil.Process().username(),
+        executable=executable or startup_interpreter(mode), user=psutil.Process().username(),
         connector=connector, startup_id=startup_id, isolated_python=isolated_python,
         utf8_python=utf8_python,
         codex_executable=codex_executable, policy_version=policy_version, mode=mode,
