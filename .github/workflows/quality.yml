@@ -31,6 +31,42 @@ jobs:
             desktop/target/debug/anywhere-computer-manager.exe
           if-no-files-found: error
           retention-days: 7
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.8"
+      - name: Select managed Python for packaging
+        run: uv sync --locked --managed-python --python 3.12
+      - name: Package native manager with the existing runtime
+        shell: bash
+        run: |
+          uv run python - <<'PYCODE'
+          import os
+          import subprocess
+          import sys
+          import zipfile
+          from pathlib import Path
+          native = Path('desktop/target/debug/anywhere-computer-manager' +
+                        ('.exe' if os.name == 'nt' else '')).resolve()
+          archive = Path('dist/managed-portable.zip')
+          subprocess.run([sys.executable, 'scripts/build_portable.py',
+                          '--allow-downloads', '--manager', str(native),
+                          '--output', str(archive)], check=True)
+          destination = Path('dist/managed relocation 日本語')
+          with zipfile.ZipFile(archive) as bundle:
+              bundle.extractall(destination)
+              if os.name != 'nt':
+                  for member in bundle.infolist():
+                      (destination / member.filename).chmod((member.external_attr >> 16) & 0o777)
+          subprocess.run([sys.executable, 'scripts/verify_portable.py',
+                          str(destination / 'Anywhere Computer'), '--runtime-only'], check=True)
+          PYCODE
+      - name: Retain combined package for isolated GUI acceptance
+        uses: actions/upload-artifact@v4
+        with:
+          name: managed-portable-${{ matrix.os }}
+          path: dist/managed-portable.zip
+          if-no-files-found: error
+          retention-days: 7
   shared-runtime:
     permissions:
       contents: read
