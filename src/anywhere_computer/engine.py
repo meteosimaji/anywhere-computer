@@ -148,7 +148,9 @@ class Engine:
         async def gui_action(args: GUIAction) -> Result:
             return await self.gui_mcp.act(args, owner=self._plugin_owner.get())
 
-        self.register('gui_observe', 'Focus and observe an app through a selected MCP session. '
+        self.register('gui_observe', 'Observe an app through a selected MCP session. '
+                      'With window_id, use Peekaboo 4 exact-window capture without app focus; '
+                      'otherwise focus the app using the legacy adapter. '
                       'Creates a screenshot/snapshot and a 60-second observation reference. '
                       'Requires the observed application name to match app exactly. '
                       'Returns available coordinate metadata; does not run a model.',
@@ -156,11 +158,14 @@ class Engine:
         self.register('gui_click', 'Click an element from an unconsumed GUI observation. '
                       'May activate controls or submit changes; consumes the observation.',
                       GUIClick, gui_action, destructive=True, open_world=True)
-        self.register('gui_type', 'Focus the observed app and type at its current keyboard focus. '
+        self.register('gui_type', 'Type using the selected observation. Exact-window mode supports '
+                      'element_id and clear, and requires a separate observed gui_key for Return. '
+                      'Legacy mode focuses the app and types at current keyboard focus. '
                       'Text may contain provider key sequences; optional Return may submit. '
                       'External focus changes remain possible. Consumes the observation.',
                       GUIType, gui_action, destructive=True, open_world=True)
-        self.register('gui_key', 'Focus the observed app and press a key chord at keyboard focus. '
+        self.register('gui_key', 'Press one key chord using the selected observation. '
+                      'Exact-window mode uses the snapshot; legacy mode focuses the app. '
                       'May submit, delete, or close UI. External focus changes remain possible. '
                       'Consumes the observation.',
                       GUIKey, gui_action, destructive=True, open_world=True)

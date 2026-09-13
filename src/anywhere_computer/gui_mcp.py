@@ -24,6 +24,11 @@ def normalized(raw: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 
 class GUIObserve(DirectMCPSessionId):
+    window_id: int | None = Field(default=None, ge=1, le=4294967295, description=(
+        'Explicit Peekaboo 4 exact-window mode. Use a window ID discovered from that '
+        'server. Observes without app focus and pins actions to the returned snapshot. '
+        'Requires a compatible server; never falls back to foreground input.'
+    ))
     app: str = Field(min_length=1, max_length=256, description=(
         'Exact running app name accepted by the selected Peekaboo server. Names may be '
         'localized (for example 計算機). If absent, inspect its app tool and use the '
@@ -42,6 +47,10 @@ class GUIClick(GUIAction):
 class GUIType(GUIAction):
     text: str = Field(min_length=1, max_length=10000)
     press_return: bool = False
+    element_id: str | None = Field(default=None, min_length=1, max_length=128,
+        description='Optional observed input element, available in exact-window mode.')
+    clear: bool = Field(default=False,
+        description='Replace existing text in exact-window mode; otherwise append/type.')
 
 
 class GUIKey(GUIAction):
@@ -84,6 +93,7 @@ class Observation:
     snapshot: str
     elements: frozenset[str]
     created: float
+    window_id: int | None = None
 
 
 class GUIMCP:
@@ -94,6 +104,28 @@ class GUIMCP:
         self.observations: dict[str, Observation] = {}
         self._interaction = asyncio.Lock()
 
+    async def _require_exact_window(self, session_id: str, owner: str | None) -> None:
+        # Check the live contract before requesting a capture. Older providers may
+        # ignore unknown arguments, which must not silently select another window.
+        page = await self.sessions.tools(session_id, owner=owner, name='see')
+        for _ in range(16):
+            rows = page.get('tools')
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict) or row.get('name') != 'see':
+                        continue
+                    schema = row.get('inputSchema')
+                    properties = schema.get('properties') if isinstance(schema, dict) else None
+                    window = properties.get('window_id') if isinstance(properties, dict) else None
+                    if isinstance(window, dict) and window.get('type') == 'integer':
+                        return
+                    raise ValueError('Selected MCP server does not support exact-window capture')
+            cursor = page.get('nextCursor')
+            if not isinstance(cursor, str) or not cursor:
+                break
+            page = await self.sessions.tools(session_id, owner=owner, name='see', cursor=cursor)
+        raise ValueError('Exact-window capture contract unavailable in selected MCP catalog')
+
     async def observe(self, args: GUIObserve, *, owner: str | None) -> dict[str, JsonValue]:
         if self._interaction.locked():
             raise ValueError('GUI is busy; observe again after the current interaction finishes')
@@ -103,13 +135,19 @@ class GUIMCP:
     async def _observe(self, args: GUIObserve, *, owner: str | None) -> dict[str, JsonValue]:
         self.sessions.status(args.session_id, owner=owner)
         self.observations.pop(args.session_id, None)
-        focused = normalized(await self.sessions.call(
-            args.session_id, 'app', {'action': 'focus', 'name': args.app}, owner=owner,
-        ))
-        if focused['is_error']:
-            return {**focused, 'action_ready': False, 'stage': 'focus'}
+        capture: dict[str, JsonValue]
+        if args.window_id is None:
+            focused = normalized(await self.sessions.call(
+                args.session_id, 'app', {'action': 'focus', 'name': args.app}, owner=owner,
+            ))
+            if focused['is_error']:
+                return {**focused, 'action_ready': False, 'stage': 'focus'}
+            capture = {'app_target': 'frontmost'}
+        else:
+            await self._require_exact_window(args.session_id, owner)
+            capture = {'app_target': args.app, 'window_id': args.window_id}
         raw = await self.sessions.call(
-            args.session_id, 'see', {'app_target': 'frontmost'}, owner=owner,
+            args.session_id, 'see', capture, owner=owner,
         )
         result = normalized(raw)
         if result['is_error']:
@@ -147,7 +185,7 @@ class GUIMCP:
             frozenset(match[1] for line in text.splitlines()
                       if '[not actionable]' not in line
                       and (match := re.match(r'^\s+([A-Za-z0-9_]+) - ', line))),
-            time.monotonic(),
+            time.monotonic(), args.window_id,
         )
         # Bound history to currently registered sessions; no screenshots are stored here.
         self.observations = {key: value for key, value in self.observations.items()
@@ -155,6 +193,7 @@ class GUIMCP:
                              time.monotonic() - value.created < 60}
         self.observations[args.session_id] = observation
         return {**result, 'observation_id': observation.identity, 'app': args.app,
+                'window_id': args.window_id,
                 'snapshot': snapshot, 'action_ready': True, 'expires_in_seconds': 60,
                 'coordinate_context': context, 'coordinate_status': coordinate_status,
                 'coordinate_actions_supported': False}
@@ -177,8 +216,21 @@ class GUIMCP:
                 raise ValueError('Element is not present in the selected observation')
             name, parameters = 'click', {'on': args.element_id, 'snapshot': observation.snapshot}
         elif isinstance(args, GUIType):
-            name, parameters = 'type', {'text': args.text, 'press_return': args.press_return,
-                                        'snapshot': observation.snapshot}
+            name = 'type'
+            if observation.window_id is not None:
+                if args.press_return:
+                    raise ValueError('Use gui_key after observation for exact-window Return')
+                if args.element_id is not None and args.element_id not in observation.elements:
+                    raise ValueError('Element is not present in the selected observation')
+                parameters = {'text': args.text, 'clear': args.clear,
+                              'snapshot': observation.snapshot}
+                if args.element_id is not None:
+                    parameters['on'] = args.element_id
+            else:
+                if args.clear or args.element_id is not None:
+                    raise ValueError('Replacement and element targeting require exact-window mode')
+                parameters = {'text': args.text, 'press_return': args.press_return,
+                              'snapshot': observation.snapshot}
         elif isinstance(args, GUIKey):
             aliases = {'esc': 'escape', 'enter': 'return'}
             keys = [aliases.get(key.lower(), key.lower()) for key in args.keys]
@@ -187,14 +239,25 @@ class GUIMCP:
                 r'arrow_(?:up|down|left|right)|f(?:[1-9]|1[0-2]))', key,
             ) for key in keys):
                 raise ValueError('Unsupported GUI key name; see keys schema for supported names')
-            name, parameters = 'hotkey', {'keys': ','.join(keys)}
+            if observation.window_id is None:
+                name, parameters = 'hotkey', {'keys': ','.join(keys)}
+            else:
+                primary = [key for key in keys
+                           if key not in {'cmd', 'shift', 'alt', 'option', 'ctrl', 'fn'}]
+                if len(primary) != 1:
+                    raise ValueError('Exact-window key chord requires one primary key')
+                names = {'return': 'Return', 'escape': 'Escape', 'delete': 'BackSpace',
+                         'arrow_up': 'Up', 'arrow_down': 'Down', 'arrow_left': 'Left',
+                         'arrow_right': 'Right', 'tab': 'Tab'}
+                name, parameters = 'press', {'snapshot': observation.snapshot,
+                    'keys': ['+'.join(names.get(key, key) for key in keys)]}
         else:
             raise ValueError('Unsupported GUI action')
         # Consume before the first effect. A response failure must not replay input.
         # Keyboard focus is desktop-global, including across provider sessions.
         # Other observations must not survive an input that may change that focus.
         self.observations.clear()
-        if name in {'type', 'hotkey'}:
+        if observation.window_id is None and name in {'type', 'hotkey'}:
             focused = await self.sessions.call(args.session_id, 'app',
                 {'action': 'focus', 'name': observation.app}, owner=owner)
             focus_result = normalized(focused)
@@ -203,4 +266,6 @@ class GUIMCP:
         raw = await self.sessions.call(args.session_id, name, parameters, owner=owner)
         return {**normalized(raw), 'observation_consumed': True,
                 'app': observation.app, 'stage': 'action_result',
-                'focus_may_change_externally': name in {'type', 'hotkey'}}
+                'window_id': observation.window_id,
+                'focus_may_change_externally': observation.window_id is None
+                    and name in {'type', 'hotkey'}}

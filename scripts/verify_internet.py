@@ -43,7 +43,7 @@ from anywhere_computer.files import read_bytes
 from anywhere_computer.http_client import HTTPBackend, HTTPResponse
 from anywhere_computer.http_mcp import HTTPMCP
 from anywhere_computer.http_service import load_http_config
-from anywhere_computer.models import BeginDownload, ReadFile, Request, WriteFile
+from anywhere_computer.models import BeginDownload, ReadFile, Reply, Request, WriteFile
 from anywhere_computer.native_login import login
 from anywhere_computer.oauth_endpoints import OAuthEndpoints
 from anywhere_computer.owner_credentials import OwnerCredentials
@@ -51,6 +51,30 @@ from anywhere_computer.owner_credentials import OwnerCredentials
 
 class DNSNotReady(RuntimeError):
     pass
+
+
+async def complete_probe_operation(backend, reply, *, timeout=60):
+    """Collect a pending result by ID; never reissue the original operation."""
+    identity = reply.operation_id
+    lookup_request = None
+    async with asyncio.timeout(timeout):
+        while reply.state == "running":
+            await asyncio.sleep(0.05)
+            if lookup_request is None:
+                lookup_request = Request(
+                    operation_id=secrets.token_hex(16), tool="operations_get",
+                    arguments={"operation_id": identity},
+                )
+            lookup = await backend.execute(lookup_request)
+            if lookup.state == "running":
+                continue
+            if lookup.state != "completed":
+                raise RuntimeError("Probe operation result recovery failed")
+            reply = Reply.model_validate(lookup.data)
+            if reply.operation_id != identity:
+                raise RuntimeError("Probe operation result identity mismatch")
+            lookup_request = None
+    return reply
 
 
 def require_no_store(headers):
@@ -693,6 +717,7 @@ async def verify(receipt_path, *, tunnel_directory=None, expected_runtime_root=N
                     },
                 )
             )
+            prepared = await complete_probe_operation(remote_client, prepared)
             if prepared.state != "completed" or prepared.data.get("total_bytes") != 17 * 1024**2:
                 raise RuntimeError("Public download preparation failed")
             binary_source.unlink()
