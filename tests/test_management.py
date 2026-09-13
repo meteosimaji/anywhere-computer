@@ -22,6 +22,34 @@ async def test_empty_management_does_not_initialize_or_contact_remote(tmp_path):
     assert not directory.exists()
 
 
+async def test_management_start_reports_observation_not_success_shaped_ack(tmp_path, monkeypatch):
+    calls = []
+
+    def acknowledged(directory):
+        calls.append(directory)
+        return {"state": "ready"}
+
+    monkeypatch.setattr("anywhere_computer.management.ensure_agent", acknowledged)
+    result = await ManagementController(tmp_path).start()
+    assert calls == [tmp_path]
+    assert result.state == "not_confirmed"
+    assert result.snapshot.engine_state == "stopped"
+
+
+async def test_management_start_reconciles_error_without_repeating(tmp_path, monkeypatch):
+    calls = []
+
+    def failed(directory):
+        calls.append(directory)
+        raise RuntimeError("private error payload")
+
+    monkeypatch.setattr("anywhere_computer.management.ensure_agent", failed)
+    result = await ManagementController(tmp_path).start()
+    assert result.state == "not_confirmed"
+    assert calls == [tmp_path]
+    assert "private error payload" not in result.model_dump_json()
+
+
 async def test_saved_setup_and_cached_device_do_not_claim_live_readiness(tmp_path):
     controller = ManagementController(tmp_path)
     plan = await plan_remote_setup(resource="https://fixture.example/mcp")
@@ -73,6 +101,7 @@ async def test_unsupported_registry_is_not_migrated_and_does_not_hide_other_stat
 
 async def test_management_reads_live_engine_and_never_restarts_it(tmp_path, monkeypatch):
     monkeypatch.setattr("anywhere_computer.diagnostics.local_credential", lambda _: "fixture")
+    monkeypatch.setattr("anywhere_computer.connection.local_credential", lambda *a, **k: "fixture")
     stop = asyncio.Event()
     running = asyncio.create_task(serve(tmp_path, credential="fixture", shutdown=stop))
     try:
@@ -92,6 +121,9 @@ async def test_management_reads_live_engine_and_never_restarts_it(tmp_path, monk
         second = await controller.snapshot()
         assert second.instance_id == first.instance_id
         assert second.observed_at >= first.observed_at
+        started = await controller.start()
+        assert started.state == "ready"
+        assert started.snapshot.instance_id == first.instance_id
         assert "fixture" not in json.dumps(second.model_dump())
         assert not running.done()
     finally:

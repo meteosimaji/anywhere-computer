@@ -10,7 +10,7 @@ function pairs(id, entries) {
   }
 }
 const engineNames = {ready:"エンジンが応答しています",stopped:"エンジンは停止しています",different_build:"別のビルドが稼働しています",stale_endpoint:"記録されたエンジンは終了しています",unresponsive:"エンジンの応答を確認できません",credential_unavailable:"認証情報を利用できません"};
-const engineActions = {ready:"",stopped:"このプレビューでは起動操作をまだ提供していません。",different_build:"稼働中の版と管理画面の版を確認してください。",stale_endpoint:"エンジンを起動してから、状態を更新してください。",unresponsive:"処理中の可能性があります。状態を再確認してください。",credential_unavailable:"このPCの認証情報を読み取れるか確認してください。"};
+const engineActions = {ready:"",stopped:"起動ボタンで、このPCのエンジンを起動できます。",different_build:"稼働中の版と管理画面の版を確認してください。",stale_endpoint:"エンジンを起動してから、状態を更新してください。",unresponsive:"処理中の可能性があります。状態を再確認してください。",credential_unavailable:"このPCの認証情報を読み取れるか確認してください。"};
 const resourceNames = {terminal_sessions:"端末セッション",plugin_sessions:"Pluginセッション",direct_mcp_sessions:"直接MCPセッション",searches:"検索",operations:"操作"};
 const featureNames = {files:"ファイル",terminal:"端末",literal_search:"検索",office_text_read:"文書の読取",gui:"組込みGUI"};
 function render(snapshot) {
@@ -33,16 +33,21 @@ function render(snapshot) {
     devices.append(row);
   }
 }
-async function refresh() {
-  const button = document.getElementById("refresh"); button.disabled = true;
-  field("status","状態を確認しています…");
+async function refresh(start = false) {
+  const button = document.getElementById("refresh"), startButton = document.getElementById("start");
+  button.disabled = true; startButton.disabled = true;
+  field("status",start ? "エンジンの起動を確認しています…" : "状態を確認しています…");
   try {
     if (!window.__TAURI__?.core?.invoke) throw new Error("管理アプリから開いてください。このブラウザーではPCへ接続していません。");
-    const snapshot = JSON.parse(await window.__TAURI__.core.invoke("management_snapshot"));
+    const result = JSON.parse(await window.__TAURI__.core.invoke(start ? "management_start" : "management_snapshot"));
+    const snapshot = start ? result.snapshot : result;
     if (snapshot.schema_version !== 1) throw new Error("状態情報の版に対応していません。");
-    render(snapshot); field("status","状態を更新しました。登録端末への接続試験は行っていません。");
+    render(snapshot);
+    startButton.disabled = snapshot.engine_state !== "stopped";
+    field("status",start ? (result.state === "ready" ? "このPCのエンジンの応答を確認しました。AIからの接続は未確認です。" : "起動結果を確認できませんでした。表示された診断を確認してください。") : "状態を更新しました。登録端末への接続試験は行っていません。");
   } catch (error) { field("status",`更新できませんでした。表示が残っている場合は前回の確認結果です。${String(error)}`); }
   finally { button.disabled = false; }
 }
-document.getElementById("refresh").addEventListener("click",refresh);
+document.getElementById("refresh").addEventListener("click",() => refresh());
+document.getElementById("start").addEventListener("click",() => refresh(true));
 refresh();

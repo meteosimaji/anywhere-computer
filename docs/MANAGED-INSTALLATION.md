@@ -112,6 +112,30 @@ experience. Bundle generation is disabled until packaged-runtime qualification.
 
 ## Next bounded changes
 
+Lifecycle follow-up (separate `codex/management-lifecycle` branch): explicit
+`management-start` reuses `ensure_agent` without forcing a runtime replacement,
+then reconciles observed status. A start acknowledgement alone is not readiness;
+exceptions do not trigger a repeated start. The native start command accepts no
+WebView arguments. Its timeout reports an unknown result, since an engine could
+have started before the response was lost. UI enables start only after observing
+stopped state and disables repeated clicks while the request is pending.
+Seven focused Python tests pass, including authenticated observation of a live
+fixture engine retaining its instance ID across start. Rust tests and all-target
+Clippy pass. Mac native button operation started a fresh isolated engine on
+2026-09-13. Closing the manager retained its ready response and identical
+instance `d738d865c23f4cc4b89cff91d6e0fda5`, runtime
+`cf4fdfc291bf9e4a0c2c4c370715e9d5c07ec6ec9c3a01087703bff2e526a2db`.
+The fixture used a built wheel and locked dependencies in a separate test venv;
+it was stopped after verification. Windows native button acceptance is pending.
+This is not login startup or a completed installer.
+
+The first native lifecycle attempt using the Documents checkout venv timed out
+during Python initialization (`getpath_readlines` / `open`, observed by process
+sampling). The same application using the separate installed-wheel fixture
+responded. This establishes a launch-environment dependency, not a proven TCC
+root cause; no privacy permissions were changed. Production packaging must use
+its own verified runtime instead of relying on a development checkout path.
+
 Startup integration finding: `startup_service._install_startup_locked` currently
 requires `cloudflared_executable`, HTTP owner setup, and `TunnelCredential`, while
 `autostart.startup_definition` always launches `remote-watch`. Local management

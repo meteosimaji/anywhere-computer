@@ -1,9 +1,10 @@
-"""Read-only management model shared by local CLI and desktop hosts.
+"""Management model shared by local CLI and desktop hosts.
 
 No command execution surface is exported to a WebView. Saved configuration and
 cached device observations never constitute an authenticated live connection.
 """
 
+import asyncio
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import Literal
 
 from pydantic import Field, JsonValue
 
+from .connection import ensure_agent
 from .devices import DeviceStore
 from .diagnostics import diagnose
 from .models import Contract
@@ -48,6 +50,13 @@ class ManagementSnapshot(Contract):
     changed: Literal[False] = False
 
 
+class ManagementStartResult(Contract):
+    schema_version: Literal[1] = 1
+    state: Literal["ready", "not_confirmed"]
+    snapshot: ManagementSnapshot
+    action: str
+
+
 def _text(data: dict[str, JsonValue], key: str) -> str | None:
     value = data.get(key)
     return value if isinstance(value, str) else None
@@ -57,6 +66,25 @@ class ManagementController:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.setup = SetupController(directory)
+
+    async def start(self) -> ManagementStartResult:
+        # Starting is explicit. Keep the existing selected runtime and busy-work
+        # rules; opening the manager must not silently activate another build.
+        try:
+            await asyncio.to_thread(ensure_agent, self.directory)
+        except (OSError, RuntimeError, ValueError, TimeoutError):
+            # The start acknowledgement may be lost after the engine starts.
+            # Reconcile real status instead of repeating the start or claiming
+            # that an exception proves no process was created.
+            pass
+        observed = await self.snapshot()
+        ready = observed.engine_state == "ready"
+        return ManagementStartResult(
+            state="ready" if ready else "not_confirmed",
+            snapshot=observed,
+            action="Engine responded; inspect the observed runtime before work."
+            if ready else "Start was not confirmed; inspect diagnosis before retrying.",
+        )
 
     async def snapshot(self) -> ManagementSnapshot:
         diagnosis = await diagnose(self.directory)
