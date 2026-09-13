@@ -43,7 +43,7 @@ async def test_remote_connector_exit_closes_http(remote_profile, monkeypatch, ex
     children = []
 
     def launch(command, **options):
-        assert command[1:5] == ["-I", "-m", "anywhere_computer.cli", "tunnel-run"]
+        assert command[1:7] == ["-I", "-X", "utf8", "-m", "anywhere_computer.cli", "tunnel-run"]
         assert str(directory) in command
         child = original(
             [getattr(sys, "_base_executable", sys.executable), "-c",

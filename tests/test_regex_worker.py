@@ -40,7 +40,7 @@ async def test_worker_and_cli_ignore_workspace_python(tmp_path, monkeypatch, pla
 def test_internal_launch_isolation_keeps_selected_venv():
     executable = str(Path("/trusted/venv/bin/python"))
     command = python_module_command("anywhere_computer.cli", "--help", executable=executable)
-    assert command == [executable, "-I", "-m", "anywhere_computer.cli", "--help"]
+    assert command == [executable, "-I", "-X", "utf8", "-m", "anywhere_computer.cli", "--help"]
 
 
 async def test_regex_real_worker_handles_syntax_and_word_boundaries():
@@ -77,3 +77,14 @@ async def test_regex_cancellation_reaps_child(monkeypatch):
     with pytest.raises(asyncio.CancelledError):
         await task
     assert len(children) == 1 and children[0].returncode is not None
+
+
+def test_internal_child_explicitly_enables_utf8(monkeypatch):
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    command = python_module_command("anywhere_computer.cli")
+    flags = command[:command.index("-m")]
+    result = subprocess.run(
+        [*flags, "-c", "import sys; print(sys.flags.utf8_mode); print('日本語 🚀')"],
+        capture_output=True, timeout=10, check=True,
+    )
+    assert result.stdout.decode("utf-8").splitlines() == ["1", "日本語 🚀"]

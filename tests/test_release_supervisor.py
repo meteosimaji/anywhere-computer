@@ -23,8 +23,8 @@ async def test_monitor_bounded_cycle_and_delay(tmp_path, monkeypatch, reported, 
             return 0
     child = Child()
     def launch(command, **options):
-        assert command[1:4] == ['-I', '-m', 'anywhere_computer']
-        assert command[4] == 'update'
+        assert command[1:6] == ['-I', '-X', 'utf8', '-m', 'anywhere_computer']
+        assert command[6] == 'update'
         return child
     async def sleep(seconds):
         assert seconds == delay
