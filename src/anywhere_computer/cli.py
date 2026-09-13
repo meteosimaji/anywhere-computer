@@ -65,6 +65,9 @@ def main() -> None:
             "doctor",
             "management-status",
             "management-start",
+            "management-startup-status",
+            "management-startup-enable",
+            "management-startup-disable",
             "stop",
             "engine-unify",
             "remote-mcp",
@@ -506,11 +509,18 @@ def main() -> None:
 
             assert args.verifier is not None  # Required by command validation above.
             print(json.dumps(update_once(directory, verifier=args.verifier), indent=2))
-        elif args.command in {"management-status", "management-start"}:
+        elif args.command in {"management-status", "management-start", "management-startup-status",
+                              "management-startup-enable", "management-startup-disable"}:
             from .management import ManagementController
 
             controller = ManagementController(directory)
-            if args.command == "management-start":
+            if args.command == "management-startup-status":
+                print(asyncio.run(controller.startup()).model_dump_json(indent=2))
+            elif args.command in {"management-startup-enable", "management-startup-disable"}:
+                print(asyncio.run(controller.set_local_startup(
+                    args.command == "management-startup-enable",
+                )).model_dump_json(indent=2))
+            elif args.command == "management-start":
                 started = asyncio.run(controller.start())
                 print(started.model_dump_json(indent=2))
             else:

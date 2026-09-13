@@ -188,3 +188,41 @@ Local follow-up verification: focused startup/watch tests 61 passed / 3 skipped;
 full Python suite 939 passed / 17 skipped (95.36 s), Ruff and mypy (82 sources)
 passed. Definition-only Linux cleanup adjustment was verified separately after
 that full run. These results do not prove login/reboot or native uninstall.
+
+Native local-supervision acceptance (2026-09-14, PR #4): an isolated macOS
+LaunchAgent started an authenticated engine; removing the registration retained
+instance `899993646c724d5e8e0b1b2e968aae84`. An isolated Windows Task Scheduler
+registration started instance `16751ee76ccf4edebc74b62f53704c18`; authenticated
+status operations `8842918e4efc4ef2b2e9ee0476c4b76b` and
+`fda010dd6592439f9e2df7b765e0d5a3` confirmed that instance before/after removal.
+Both test registrations and engines were cleaned up. No reboot or active-session
+continuity claim follows from these idle-engine removal tests.
+
+The first Windows fixture was made from elevated SSH, with Administrators
+ownership and OWNER RIGHTS ACL entries. Its normal-user task could not open
+`local-watch.lock`. Creating a separate fixture from the interactive normal user
+succeeded without relaxing ACLs. Run per-user installation in the intended user's
+normal session, not an elevated SSH shell. Existing production settings stayed
+unchanged.
+
+## Management startup controls (development follow-up)
+
+The management controller exposes a separate typed startup observation plus
+explicit enable/disable results. CLI and three fixed native commands share it.
+The WebView cannot supply an executable, directory, registration mode or shell
+command. A missing registration is read without creating state. OS registration
+and engine readiness remain separate observations with timestamps.
+
+The controls apply to local startup only. Existing remote registrations are shown
+but cannot be disabled through these controls. The removal controller also
+checks the expected mode under the existing startup lock, so a mode change after
+a UI observation cannot remove a remote registration. Mutation failures reconcile
+once against OS state; they do not retry the write or expose raw errors. Controls
+stay disabled while a mutation is pending or the observation is unknown.
+
+Focused Python verification: 72 passed / 3 skipped; packaged-source equality test
+passed. Rust tests: 3 passed / 1 child fixture ignored; Clippy and debug build
+passed. The preview application's process launched on macOS, but Computer Use
+could not acquire its window (timeout); native button acceptance for these new
+controls is still pending, on both OSes. Prior CLI-level native acceptance does
+not substitute for this UI test.

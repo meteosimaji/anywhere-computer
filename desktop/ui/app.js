@@ -51,3 +51,36 @@ async function refresh(start = false) {
 document.getElementById("refresh").addEventListener("click",() => refresh());
 document.getElementById("start").addEventListener("click",() => refresh(true));
 refresh();
+
+let startupBusy = false;
+function renderStartup(value) {
+  const remote = value.mode === "remote";
+  const names = {not_installed:"自動起動は未登録です",registered:"自動起動は登録されています",not_enabled:"登録されていますが無効です",unavailable:"自動起動の状態を確認できません"};
+  field("startup-state", remote ? "既存のリモート接続用の自動起動です。変更にはCLIを使用してください。" : (names[value.state] ?? "未確認"));
+  field("startup-observed", `確認時刻：${new Date(value.observed_at).toLocaleString()}。エンジンの接続状態は「このPC」で確認してください。`);
+  document.getElementById("startup-enable").disabled = startupBusy || remote || !["not_installed","not_enabled"].includes(value.state);
+  document.getElementById("startup-disable").disabled = startupBusy || remote || !["registered","not_enabled"].includes(value.state);
+}
+async function refreshStartup(action = "status") {
+  if (startupBusy) return;
+  startupBusy = true;
+  document.getElementById("startup-enable").disabled = true;
+  document.getElementById("startup-disable").disabled = true;
+  field("startup-result", action === "status" ? "登録状態を確認しています…" : "登録の変更を確認しています…");
+  try {
+    const commands = {status:"management_startup_status",enable:"management_startup_enable",disable:"management_startup_disable"};
+    const result = JSON.parse(await window.__TAURI__.core.invoke(commands[action]));
+    const value = action === "status" ? result : result.startup;
+    if (result.schema_version !== 1 || value.schema_version !== 1) throw new Error("対応していない状態情報です。");
+    startupBusy = false;
+    renderStartup(value);
+    field("startup-result", action === "status" ? "" : result.state === "confirmed" ? "登録状態の変更を確認しました。" : "変更結果を確認できません。状態を更新し、診断を確認してください。");
+  } catch (_) {
+    field("startup-state", "現在の登録状態は未確認です");
+    field("startup-result", "結果を確認できませんでした。自動で再実行はしません。状態を更新してください。");
+  } finally { startupBusy = false; }
+}
+document.getElementById("startup-enable").addEventListener("click", () => refreshStartup("enable"));
+document.getElementById("startup-disable").addEventListener("click", () => refreshStartup("disable"));
+document.getElementById("refresh").addEventListener("click", () => refreshStartup());
+refreshStartup();

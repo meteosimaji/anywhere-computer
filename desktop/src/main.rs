@@ -38,15 +38,41 @@ impl ManagementHost {
 
 #[tauri::command]
 async fn management_snapshot(host: tauri::State<'_, ManagementHost>) -> Result<String, String> {
-    run_management(&host, false).await
+    run_management(&host, "management-status", 15).await
 }
 
 #[tauri::command]
 async fn management_start(host: tauri::State<'_, ManagementHost>) -> Result<String, String> {
-    run_management(&host, true).await
+    run_management(&host, "management-start", 60).await
 }
 
-async fn run_management(host: &ManagementHost, start: bool) -> Result<String, String> {
+#[tauri::command]
+async fn management_startup_status(
+    host: tauri::State<'_, ManagementHost>,
+) -> Result<String, String> {
+    run_management(&host, "management-startup-status", 60).await
+}
+
+#[tauri::command]
+async fn management_startup_enable(
+    host: tauri::State<'_, ManagementHost>,
+) -> Result<String, String> {
+    run_management(&host, "management-startup-enable", 180).await
+}
+
+#[tauri::command]
+async fn management_startup_disable(
+    host: tauri::State<'_, ManagementHost>,
+) -> Result<String, String> {
+    run_management(&host, "management-startup-disable", 180).await
+}
+
+// Only fixed native commands call this helper; JavaScript cannot select CLI arguments.
+async fn run_management(
+    host: &ManagementHost,
+    command: &'static str,
+    seconds: u64,
+) -> Result<String, String> {
     let mut child = tokio::process::Command::new(&host.python)
         .args([
             "-I",
@@ -54,11 +80,7 @@ async fn run_management(host: &ManagementHost, start: bool) -> Result<String, St
             "utf8",
             "-m",
             "anywhere_computer",
-            if start {
-                "management-start"
-            } else {
-                "management-status"
-            },
+            command,
             "--state-dir",
         ])
         .arg(&host.directory)
@@ -68,7 +90,7 @@ async fn run_management(host: &ManagementHost, start: bool) -> Result<String, St
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| "管理用ランタイムを起動できません。導入先を確認してください。")?;
-    collect_snapshot(&mut child, Duration::from_secs(if start { 60 } else { 15 })).await
+    collect_snapshot(&mut child, Duration::from_secs(seconds)).await
 }
 
 async fn collect_snapshot(
@@ -118,7 +140,10 @@ fn main() {
         .manage(host)
         .invoke_handler(tauri::generate_handler![
             management_snapshot,
-            management_start
+            management_start,
+            management_startup_status,
+            management_startup_enable,
+            management_startup_disable
         ])
         .run(tauri::generate_context!())
         .expect("Management window could not start");

@@ -404,3 +404,14 @@ def test_local_registration_needs_no_remote_setup_and_preserves_mode(registratio
     assert service.upgrade_startup(directory)["state"] == "registered"
     assert service._record(directory).mode == "local"
     assert service.uninstall_startup(directory)["state"] == "uninstalled"
+
+
+def test_local_management_removal_rejects_remote_receipt_under_lock(registration):
+    directory, native, calls, _ = registration
+    service.install_startup(directory)
+    original = (directory / 'autostart.json').read_bytes()
+    with pytest.raises(ValueError, match='Startup mode changed'):
+        service.uninstall_startup(directory, expected_mode='local')
+    assert calls == ['install']
+    assert native['snapshot'].running
+    assert (directory / 'autostart.json').read_bytes() == original

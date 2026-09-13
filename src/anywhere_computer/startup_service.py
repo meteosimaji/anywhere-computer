@@ -278,11 +278,17 @@ def _wait_stopped(directory: Path, *, timeout: float = 30) -> None:
             time.sleep(0.1)
 
 
-def uninstall_startup(directory: Path) -> dict[str, str | bool]:
+def uninstall_startup(
+    directory: Path, *, expected_mode: StartupMode | None = None,
+) -> dict[str, str | bool]:
     directory = directory.resolve()
     if not directory.exists():
         return {"state": "not_installed", "changed": False}
     with ProcessLock(directory / "autostart.lock"):
+        if expected_mode is not None:
+            record = _record(directory)
+            if record is not None and record.mode != expected_mode:
+                raise ValueError("Startup mode changed; inspect before removal")
         return _uninstall_startup_locked(directory)
 
 
