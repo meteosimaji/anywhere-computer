@@ -352,3 +352,20 @@ expired/revoked grants, cross-account device IDs and cross-grant result lookup.
 Synthetic identity fixtures establish protocol behavior only; fresh Mac/Windows
 installation, real OAuth client integration and public ingress require their
 own acceptance evidence.
+
+### Durable PC certificate binding (isolated building block)
+
+Registry schema 2 adds a one-to-one binding from a verified SHA-256 peer
+certificate fingerprint to a registered device ID. `bind_channel` requires
+the authenticated account and rejects revoked devices, cross-account binding,
+certificate reuse by another device and silent replacement of an existing
+binding. An identical provisioning retry is idempotent. Existing device records
+and revocation tombstones survive migration from schema 1.
+
+`channel_device` resolves the account and device from that fingerprint and
+rechecks current revocation on every call. Its caller must obtain the fingerprint
+from an authenticated TLS peer, not a client-supplied message field. These are
+trusted storage APIs, not public enrollment endpoints or proof-of-possession
+verification. No private key or bearer credential is stored in this table.
+Certificate issuance, OS-vault private-key handling, explicit rotation and the
+outbound WebSocket integration are still unimplemented.

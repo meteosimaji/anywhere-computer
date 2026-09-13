@@ -4,6 +4,7 @@ Callers must authenticate the account and enrollment permission before invoking
 this storage layer. It does not validate bearer tokens or authorize tool calls.
 """
 
+import re
 import sqlite3
 import uuid
 from pathlib import Path
@@ -49,7 +50,7 @@ class RelayRegistry:
             with self.db:
                 self.db.execute("BEGIN IMMEDIATE")
                 version = self.db.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, 1):
+                if version not in (0, 1, 2):
                     raise ValueError("Unsupported relay registry schema")
                 self.db.execute(
                     "CREATE TABLE IF NOT EXISTS relay_devices ("
@@ -58,7 +59,11 @@ class RelayRegistry:
                     "state TEXT NOT NULL CHECK(state IN ('registered','revoked')),"
                     "UNIQUE(issuer,subject,enrollment_id))"
                 )
-                self.db.execute("PRAGMA user_version=1")
+                self.db.execute(
+                    "CREATE TABLE IF NOT EXISTS relay_channels ("
+                    "fingerprint TEXT PRIMARY KEY, device_id TEXT NOT NULL UNIQUE)"
+                )
+                self.db.execute("PRAGMA user_version=2")
         except BaseException:
             self.db.close()
             raise
@@ -120,3 +125,49 @@ class RelayRegistry:
                 (account.issuer, account.subject, device_id),
             )
             return self.get(account, device_id)
+
+    def bind_channel(self, account: RelayAccount, device_id: str, *, fingerprint: str) -> None:
+        """Bind a verified PC certificate after authenticated provisioning.
+
+        Fingerprints are public identities, not bearer credentials. The caller
+        must verify certificate possession and enrollment authorization. Existing
+        bindings cannot be silently replaced or moved to another device.
+        """
+        self._fingerprint(fingerprint)
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            if self.get(account, device_id).state != "registered":
+                raise ValueError("Device registration is revoked")
+            existing = self.db.execute(
+                "SELECT fingerprint,device_id FROM relay_channels "
+                "WHERE fingerprint=? OR device_id=?", (fingerprint, device_id),
+            ).fetchall()
+            if existing:
+                if (len(existing) == 1 and existing[0]["fingerprint"] == fingerprint
+                        and existing[0]["device_id"] == device_id):
+                    return
+                raise ValueError("PC channel identity is already bound")
+            self.db.execute("INSERT INTO relay_channels VALUES(?,?)", (fingerprint, device_id))
+
+    @staticmethod
+    def _fingerprint(fingerprint: str) -> None:
+        if re.fullmatch(r"[a-f0-9]{64}", fingerprint) is None:
+            raise ValueError("Invalid PC certificate fingerprint")
+
+    def channel_device(self, fingerprint: str) -> tuple[RelayAccount, RelayDevice]:
+        """Resolve an authenticated channel; recheck on each dispatch.
+
+        Never call this with a self-reported fingerprint from a message. A TLS
+        verifier supplies it from the actual peer certificate. Revocation remains
+        authoritative even when the network connection has not closed yet.
+        """
+        self._fingerprint(fingerprint)
+        row = self.db.execute(
+            "SELECT d.* FROM relay_devices d JOIN relay_channels c "
+            "ON d.device_id=c.device_id WHERE c.fingerprint=? AND d.state='registered'",
+            (fingerprint,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("PC channel is unknown or revoked")
+        account = self._account(RelayAccount(issuer=row["issuer"], subject=row["subject"]))
+        return account, self._device(row)
