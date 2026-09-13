@@ -154,3 +154,49 @@ async def test_cancelled_observation_releases_typed_gui_slot():
     peer.call = original
     assert (await gui.observe(GUIObserve(session_id='a' * 32, app='Editor'),
                               owner='owner'))['action_ready']
+
+
+async def test_engine_records_busy_without_replaying_input(tmp_path):
+    from anywhere_computer.engine import Engine
+    from anywhere_computer.models import Request
+
+    engine = Engine(tmp_path)
+    peer = Peer()
+    engine.gui_mcp = GUIMCP(peer)
+    focused, release = asyncio.Event(), asyncio.Event()
+    original = peer.call
+
+    async def delayed(session_id, name, arguments, *, owner):
+        result = await original(session_id, name, arguments, owner=owner)
+        if name == 'app':
+            focused.set()
+            await release.wait()
+        return result
+
+    peer.call = delayed
+    running = None
+    try:
+        observed = await engine.execute(Request(operation_id='1' * 32, tool='gui_observe',
+            arguments={'session_id': 'a' * 32, 'app': 'Editor'}), peer='owner')
+        arguments = {'session_id': 'a' * 32,
+                     'observation_id': observed.data['observation_id'], 'text': 'hello'}
+        running = asyncio.create_task(engine.execute(Request(
+            operation_id='2' * 32, tool='gui_type', arguments=arguments), peer='owner'))
+        await asyncio.wait_for(focused.wait(), 1)
+        rejected = Request(operation_id='3' * 32, tool='gui_type', arguments=arguments)
+        busy = await engine.execute(rejected, peer='owner')
+        assert busy.state == 'failed' and 'busy' in busy.error
+        release.set()
+        assert (await running).state == 'completed'
+        count = len(peer.calls)
+        assert (await engine.execute(rejected, peer='owner')) == busy
+        assert len(peer.calls) == count
+        recovered = await engine.execute(Request(operation_id='4' * 32, tool='operations_get',
+            arguments={'operation_id': rejected.operation_id}), peer='owner')
+        assert recovered.data['state'] == 'failed'
+        assert [name for name, _ in peer.calls].count('type') == 1
+    finally:
+        release.set()
+        if running is not None:
+            await running
+        await engine.close()
