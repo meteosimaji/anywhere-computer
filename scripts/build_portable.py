@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -66,8 +67,34 @@ def publish_archive(staged: Path, output: Path) -> None:
     os.link(staged, output)
 
 
+def include_manager(app: Path, manager: Path, *, platform: str) -> None:
+    """Include an explicitly selected native build in the existing file manifest."""
+    if not manager.is_absolute() or manager.is_symlink() or not manager.is_file():
+        raise ValueError("Manager must be an absolute native executable file")
+    if platform == "win32":
+        shutil.copyfile(manager, app / "Anywhere Computer Manager.exe")
+    elif platform == "darwin":
+        contents = app / "Anywhere Computer Manager.app" / "Contents"
+        binary = contents / "MacOS" / "anywhere-computer-manager"
+        binary.parent.mkdir(parents=True)
+        shutil.copyfile(manager, binary)
+        binary.chmod(0o755)
+        (contents / "Info.plist").write_bytes(plistlib.dumps({
+            "CFBundleExecutable": binary.name,
+            "CFBundleIdentifier": "org.anywherecomputer.manager.preview",
+            "CFBundleName": "Anywhere Computer",
+            "CFBundlePackageType": "APPL",
+            "CFBundleShortVersionString": "0.1.0",
+            "CFBundleVersion": "1",
+            "NSHighResolutionCapable": True,
+        }))
+    else:
+        raise ValueError("Native manager packaging supports macOS and Windows")
+
+
 def build_portable(
     root: Path, runtime: Path, output: Path, *, allow_downloads: bool = False,
+    manager: Path | None = None,
 ) -> Path:
     validate_runtime(runtime)
     if output.exists():
@@ -120,9 +147,14 @@ def build_portable(
                                 'exec "$base/runtime/bin/python3" -I -m anywhere_computer "$@"\n')
             launcher.chmod(0o755)
         write_setup_launcher(app, windows=os.name == "nt")
+        if manager is not None:
+            include_manager(app, manager, platform=sys.platform)
         shutil.copyfile(root / "LICENSE", app / "LICENSE")
         (app / "README.txt").write_text(
             "Anywhere Computer portable alpha\n"
+            + ("Open Anywhere Computer Manager to view status and configure local startup.\n"
+               "Keep the manager and runtime together when moving this directory.\n"
+               if manager is not None else "") +
             "Run ./anywhere --help (Windows: anywhere.cmd --help).\n"
             "Double-click Setup ChatGPT.command on macOS, or Setup ChatGPT.cmd on Windows.\n"
             "Run chatgpt-setup with an explicit --state-dir to configure ChatGPT.\n"
@@ -158,6 +190,9 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--allow-downloads", action="store_true",
                         help="Allow hash-pinned dependency downloads on the build machine")
+    parser.add_argument("--manager", type=Path,
+                        help="Include a native management executable built for this platform")
     arguments = parser.parse_args()
     print(build_portable(Path(__file__).resolve().parents[1], arguments.runtime,
-                         arguments.output.absolute(), allow_downloads=arguments.allow_downloads))
+                         arguments.output.absolute(), allow_downloads=arguments.allow_downloads,
+                         manager=arguments.manager))

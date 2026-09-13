@@ -20,7 +20,7 @@ The first working branch is `codex/managed-installation`.
 | Stage | Current evidence | Remaining acceptance |
 | --- | --- | --- |
 | 0: baseline | Existing setup, device router, update, runtime, CI and package contracts inspected. Before changes: setup/controller/router tests 31 passed in 4.25 s. | Maintain a requirement-to-evidence record as each subsystem changes. |
-| 1: management and installation | Read-only shared Python controller and thin Tauri management preview implemented locally. Mac native refresh displays stopped/unconfigured and leaves an absent fixture directory absent. | Windows native UI verification; packaged runtime; startup; pairing; isolated relay; fresh Mac/Windows file workflow. |
+| 1: management and installation | Shared controller, native Mac/Windows status/startup controls and isolated registration/removal accepted (PRs 2–5). PR 6 adds packaged runtime selection; Mac relocated package and missing-runtime UI accepted. | PR 6 combined-package CI and Windows packaged UI; pairing; isolated relay; fresh Mac/Windows installation and connected file workflow. |
 | 2: update/recovery | Existing release preparation, verification, activation and supervisor are retained. | Unified product controller, lifecycle failure matrix, actual multi-entry runtime verification. |
 | 3: efficiency | Existing direct MCP search retained. Device schemas still fetched without filters. | Selective device catalogs and measured payload/request reductions. |
 | 4: GUI/browser | Existing Peekaboo route retained; no default provider change. | Pinned provider evaluation and per-OS application/IME/DPI tests. |
@@ -321,3 +321,93 @@ The registered Windows device responded to status and terminal commands, but no
 usable GUI provider was established. Notepad, Explorer and browser GUI actions
 were not executed. The static adapter advertisement is not runtime availability;
 per-OS provider discovery and truthful readiness remain required work.
+
+
+## Packaged manager checkpoint (2026-09-14)
+
+The portable builder accepts `--manager /absolute/path/to/native-executable`.
+It includes the native Windows executable or macOS application bundle in the
+existing archive and file checksum manifest. The engine and dependency bundle
+are reused; no second Python distribution or PATH-based interpreter is added.
+Build the desktop with `cargo build --locked --manifest-path desktop/Cargo.toml`,
+then pass that platform's executable to `scripts/build_portable.py` alongside
+its trusted standalone `--runtime` and a new `--output` archive path.
+
+Opening the packaged manager with no arguments selects the sibling
+`runtime/python.exe` on Windows or `runtime/bin/python3` outside the macOS app
+bundle. Move the entire portable directory together. The existing CLI selects
+the user's state directory. Explicit native `--state-dir` remains available for
+isolated acceptance, as does the earlier development `--python ... --state-dir
+...` form. WebView callers cannot select these paths. A missing runtime is
+reported in the status window and prevents management actions.
+
+Mac acceptance used a fresh archive relocated under a Japanese directory name,
+with PATH restricted to `/usr/bin:/bin`, no interpreter argument, and an isolated
+state directory. Full archive verification plus the relocated runtime smoke
+test passed (3,118 manifest files). Clicking Start launched the bundled engine;
+authenticated UTF-8/emoji file creation, read and SHA-256-conditional replacement
+from 40 to 42 succeeded. Closing the window retained instance
+`b142ca1515c5445888fd7465ff42f507`; fixture stop was then confirmed. The initial
+replacement harness omitted `mode=replace` and was correctly rejected without
+an overwrite; the corrected call and subsequent read verified the result.
+A separately built final native binary without its runtime displayed the
+placement error in the real macOS window. Rust checks covered layout selection,
+bootstrap-error propagation and reader cleanup; Python checks covered packaging
+and archive verification. Windows packaged GUI acceptance remains pending.
+
+These are unsigned development archives, not a completed installer, signing or
+fresh-machine qualification. The native manager's file hash is in the manifest;
+this is not an authenticity verifier at every launch. Moving the app alone is
+unsupported. Pairing and relay operation are still separate unfinished work.
+
+The additional ChatGPT 5.6 medium browser test used the Mac direct Peekaboo MCP
+route: a new Chrome window navigated from example.com to example.org in the same
+tab. Server result records contained the final URL and Example Domain heading;
+independent native accessibility observation confirmed both. Session
+`72a5c8c6aba24ee1ae081bbc7600de16` closed with cleanup confirmed in ledger operation
+`b3da79bd926375da0c517d67d97ed0eb`. This extends the TextEdit/Finder checkpoint,
+not Windows GUI, long-duration, DPI or IME qualification.
+
+
+## Association boundary for the next implementation
+
+Code inspection at `042e4d0` distinguishes existing HTTP setup from enrollment:
+`plan_remote_setup` generates a single-owner configuration with a random device
+ID, exact tool scopes and registered callbacks; `SetupController` previews and
+publishes that configuration. `BrowserAuthorization` authenticates the already
+initialized local owner and grants an AI client access to that resource. Neither
+component associates a new PC with an account on a multi-user relay. Reusing
+that consent form as device enrollment would conflate two different grants.
+
+Keep the existing personal/self-hosted HTTP setup compatible. The relay account
+and device association belong to a separate optional service boundary. The
+manager should use an external browser for native authorization with PKCE;
+the code/QR alternative is for completing association on another device. Neither
+flow accepts account passwords in the manager. The pending enrollment belongs
+to one local attempt and configured issuer, not a display name. Cancellation,
+expiry and server denial terminate it; an uncertain token exchange must not
+restart enrollment or silently create a second device. Credential publication
+must complete in the OS vault before the manager reports association complete.
+
+Three credentials remain distinct: account enrollment, AI-to-relay access, and
+PC-to-relay transport. Enrollment alone grants no AI tool execution. Delivery
+must bind the authorized account, device ID and operation ID; duplicate names
+or an offline device never select another device or local fallback. Existing
+engine result recovery remains authoritative after dispatch. The relay must
+retain a bounded receipt identifying whether dispatch occurred, rather than
+turning an uncertain response into another execution.
+
+The next isolated slice must exercise the enrollment client against an actual
+local HTTP fixture: successful association and vault readback, cancellation,
+expiry, rejection, repeated code use, wrong issuer/state, and lost exchange
+responses. Device-flow polling must retain increased intervals after slow_down
+and stop on terminal errors. This fixture does not establish public service
+operation. Select a maintained authorization implementation before introducing
+service-side token issuance; do not transplant the existing single-owner store
+into a multi-account service or implement signing primitives anew.
+
+References checked 2026-09-14: [RFC 8252](https://www.rfc-editor.org/rfc/rfc8252.html)
+for external-browser native authorization, and
+[RFC 8628](https://www.rfc-editor.org/rfc/rfc8628.html) for the separate-device
+flow. The paragraphs above are design decisions and pending acceptance, not
+claims that these enrollment or relay paths already exist.
