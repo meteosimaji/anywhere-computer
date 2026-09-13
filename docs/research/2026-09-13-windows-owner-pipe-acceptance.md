@@ -50,3 +50,35 @@ Native tests including process-query denial and wrong-client-SID rejection:
 11 passed in 1.356 seconds. Connection/deadline tests: 11 passed in 1.41 seconds.
 This follow-up was verified in an isolated server; installed-agent and ChatGPT
 acceptance still require the revised build to be deployed.
+
+## Installed-agent and ChatGPT verification
+
+The 43895bb candidate was deployed by overlaying the verified wheel onto a copy of
+its existing portable runtime, retaining the previous installation. Runtime-only
+portable verification passed. The interactive agent and SSH entry point now share
+one working Windows instance. Mac Plugin routing completed Windows status, a
+41-byte Japanese/emoji file write and exact read-back, terminal start/output/stop,
+and operation-history retrieval. The terminal exited with code 0, but nested
+`cmd /c echo` output included an unexpected trailing quote; exact command-output
+compatibility is therefore still open.
+
+A new ChatGPT conversation was tested with GPT-5.6 Sol / medium selected in the UI.
+It discovered the registered Windows device and its tools, then reported an
+unconfirmed `computer_status` response and `Invalid routed operation lookup` on
+recovery. No Windows file/terminal acceptance was performed by that chat. The
+Windows operation history independently showed no new status/file/terminal calls
+from the chat's test interval. Its exact failed JSON arguments could not be
+recovered from the inspected UI, so the following reproduction is a matching
+failure mode, not proof of that chat's exact arguments.
+
+A read-only real Windows call with an outer request ID and a different nested
+`arguments.request_id` reproduced `Device response was not confirmed` with state
+`unknown`. The source explains the conflict: the remote MCP catalog advertises
+its transport `request_id` inside the routed schema, while SSHBackend supplies
+the router's operation ID in MCP metadata. MCPSession rejects conflicting IDs
+before engine dispatch. The HTTP recovery validator also rejects extra fields in
+its nested OperationId arguments. This transport/schema mismatch needs a fix and
+fresh ChatGPT acceptance before the Windows Chat route can be marked passed.
+
+CI run 34742186547 for 43895bb completed successfully on GitHub. Passing CI does
+not supersede the failed ChatGPT acceptance or the terminal-output discrepancy.
