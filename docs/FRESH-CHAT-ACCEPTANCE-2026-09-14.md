@@ -38,3 +38,23 @@ Pluginの削除と断定しない。VMの強制終了・保護機能の解除は
 
 新規チャットからMacのコア機能とTextEdit操作が成立した証拠は得たが、
 Windows・新しいGUIアダプター・中継・ベータ版全体の受け入れは未完了。
+
+## Windows CIの独立確認
+
+PR #20の実行 `34790352450`（対象コミット
+`9f96aeb46b6fad4ada1d6ce937d0a12f5f7f2446`）から
+`pytest-results-windows-latest` 成果物の `pytest-results.xml` を取得し、
+次の8件に failure・error・skipped 要素がないことを確認した。
+
+- `test_fresh_chat_discovers_and_operates_without_previous_session`
+- `test_pc_initiates_and_recovers_commit_after_lost_reply`
+- `test_registry_owner_and_revocation_checked_on_live_connection`
+- `test_replacement_invalidates_old_inflight_reply_without_offline_queue`
+- `test_unregistered_certificate_never_becomes_an_execution_target`
+- `test_wrong_reply_identity_and_timeout_close_without_replay`
+- `test_two_registered_pcs_route_concurrently_by_id_not_display_name`
+- `test_isolated_listener_rejects_public_bind_and_unverified_tls`
+
+これはWindows runner上のHTTP・中継機械試験である。
+新規ChatGPT会話、Windows VM、GUI、実利用者の認証、公開中継の
+実操作をこの結果から合格扱いしない。
