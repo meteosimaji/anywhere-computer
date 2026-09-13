@@ -1,4 +1,5 @@
 import asyncio
+import dataclasses
 import hashlib
 import json
 import os
@@ -18,16 +19,27 @@ from anywhere_computer.http_service import configure_http
 from anywhere_computer.models import Request
 
 
-async def test_internet_probe_only_exposes_disposable_file(tmp_path):
+@pytest.mark.parametrize('pending_download', [False, True])
+async def test_internet_probe_only_exposes_disposable_file(tmp_path, monkeypatch, pending_download):
     helper = runpy.run_path(str(Path(__file__).parents[1] / "scripts/verify_internet.py"))
     engine, target = helper["restricted_engine"](tmp_path)
+    download_invocations = []
+    if pending_download:
+        monkeypatch.setattr('anywhere_computer.engine.OBSERVER_WAIT_SECONDS', 0.001)
+        original = engine.tools['download_begin']
+        async def delayed(args):
+            download_invocations.append(args.path)
+            await asyncio.sleep(0.03)
+            return await original.handler(args)
+        engine.tools['download_begin'] = dataclasses.replace(original, handler=delayed)
     outside = tmp_path / "not-exposed.txt"
     outside.write_text("private fixture", encoding="utf-8")
 
     async def call(tool, **arguments):
-        return await engine.execute(
+        reply = await engine.execute(
             Request(operation_id=uuid.uuid4().hex, tool=tool, arguments=arguments)
         )
+        return await helper['complete_probe_operation'](engine, reply)
 
     try:
         assert set(engine.tools) == {"files_read", "files_write", "operations_get"} | DOWNLOAD_TOOLS
@@ -48,6 +60,8 @@ async def test_internet_probe_only_exposes_disposable_file(tmp_path):
         binary = target.with_name("download.bin")
         prepared = await call("download_begin", path=str(binary), transfer_id=uuid.uuid4().hex)
         assert prepared.state == "completed" and prepared.data["total_bytes"] == 17 * 1024**2
+        if pending_download:
+            assert download_invocations == [str(outside), str(binary)]
         if os.name != "nt":
             target.unlink()
             target.symlink_to(outside)
@@ -223,3 +237,34 @@ def test_probe_runtime_binding_detects_application_overlay(tmp_path, monkeypatch
     monkeypatch.setattr(modules[-1], "__file__", str(tmp_path.parent / "overlay.py"))
     with pytest.raises(ValueError, match="application import"):
         helper["require_runtime_root"](tmp_path)
+
+
+async def test_probe_pending_result_has_bounded_recovery_without_mutation_replay():
+    from anywhere_computer.models import Reply
+    helper = runpy.run_path(str(Path(__file__).parents[1] / 'scripts/verify_internet.py'))
+    identity = 'a' * 32
+    calls = []
+    async def execute(request):
+        calls.append(request)
+        return Reply(operation_id=request.operation_id, state='completed', data={
+            'operation_id': identity, 'state': 'running', 'data': {}, 'error': None,
+        })
+    with pytest.raises(TimeoutError):
+        await helper['complete_probe_operation'](SimpleNamespace(execute=execute),
+            Reply(operation_id=identity, state='running'), timeout=0.15)
+    assert calls
+    assert all(r.tool == 'operations_get' and r.arguments == {'operation_id': identity}
+               for r in calls)
+    assert len({r.operation_id for r in calls}) == len(calls)
+
+
+async def test_probe_recovery_rejects_another_operations_result():
+    from anywhere_computer.models import Reply
+    helper = runpy.run_path(str(Path(__file__).parents[1] / 'scripts/verify_internet.py'))
+    async def execute(request):
+        return Reply(operation_id=request.operation_id, state='completed', data={
+            'operation_id': 'b' * 32, 'state': 'completed', 'data': {}, 'error': None,
+        })
+    with pytest.raises(RuntimeError, match='identity mismatch'):
+        await helper['complete_probe_operation'](SimpleNamespace(execute=execute),
+            Reply(operation_id='a' * 32, state='running'))
