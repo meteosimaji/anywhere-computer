@@ -83,3 +83,17 @@ def test_missing_or_corrupt_grants_are_not_replaced(tmp_path, raw):
     with pytest.raises(ClientCredentialError):
         store.access_token(attempt_id="a" * 32, scope="device:enroll")
     assert vault.writes == 0
+
+
+def test_saved_attempt_returns_identity_only_and_rejects_expiry(tmp_path):
+    vault = MemoryVault()
+    store = credentials(tmp_path, vault)
+    assert store.saved_attempt(scope="device:enroll") is None
+    saved(tmp_path, vault)
+    assert store.saved_attempt(scope="device:enroll") == "a" * 32
+    for scope in ("files_write", "device:enroll extra"):
+        with pytest.raises(ClientCredentialError):
+            store.saved_attempt(scope=scope)
+    with pytest.raises(ClientCredentialError):
+        credentials(tmp_path, vault, now=1060).saved_attempt(scope="device:enroll")
+    assert vault.writes == 1

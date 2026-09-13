@@ -181,8 +181,10 @@ only explicit state inspection is enabled; a durable pending registration reuses
 its original name and enrollment ID. Denied, expired, cancelled or failed attempts can be explicitly restarted in
 the same manager. A fresh authorization object isolates late cancelled replies.
 Active or uncertain attempts, existing vault grants and saved registrations are
-not reset or deleted. Reauthentication of existing grants and recovery of a saved
-grant before registration preparation remain unfinished.
+not reset or deleted. A fresh worker restores the attempt ID of an unexpired, correctly bound grant
+from the OS vault before registration, without exposing or redeeming its token.
+Expired grants remain preserved and unavailable; their reauthentication workflow
+is still unfinished.
 
 Rust framing/cleanup tests, Python worker tests and JavaScript state tests cover
 these layers separately. They do not establish a rendered Tauri-to-provider

@@ -42,6 +42,8 @@ class EnrollmentWorker:
     def handle(self, method: str, *, name: str | None = None) -> dict[str, object]:
         if method != "register" and name is not None:
             raise ValueError("Unexpected enrollment argument")
+        if method in {"progress", "register"}:
+            self._authorization.restore_saved()
         if method == "start":
             self._authorization.start()
         elif method == "restart":

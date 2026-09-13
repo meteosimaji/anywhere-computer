@@ -16,11 +16,13 @@ from anywhere_computer.enrollment_worker import (
 from anywhere_computer.registration_client import RegistrationClient
 
 
-def worker_for(tmp_path):
+def worker_for(tmp_path, *, vault=None, clock=None):
     provider = EnrollmentProvider(issuer="https://auth.example",
         device_authorization_endpoint="https://auth.example/device",
         token_endpoint="https://auth.example/token", client_id="desktop", scope="device:enroll")
-    clock, vault, calls = Clock(), MemoryVault(), []
+    clock = clock or Clock()
+    vault = vault or MemoryVault()
+    calls = []
     credentials = EnrollmentCredentials(tmp_path, issuer=provider.issuer, client=provider.client_id,
                                         profile="worker", vault=vault, clock=clock.wall)
 
@@ -119,3 +121,26 @@ def test_explicit_restart_after_cancel_keeps_worker_and_changes_attempt(tmp_path
         assert len(calls) == 4
     finally:
         worker.close()
+
+
+def test_worker_reopens_grant_saved_before_registration(tmp_path):
+    vault, clock = MemoryVault(), Clock()
+    worker, _, calls = worker_for(tmp_path, vault=vault, clock=clock)
+    worker.handle("start")
+    clock.value = 6
+    original = worker.handle("poll")
+    worker.close()
+    assert len(calls) == 2
+    reopened, _, new_calls = worker_for(tmp_path, vault=vault, clock=clock)
+    try:
+        restored = reopened.handle("progress")
+        assert restored["authorization"]["phase"] == "grant_saved"
+        assert restored["authorization"]["attempt_id"] == original["authorization"]["attempt_id"]
+        assert new_calls == []
+        result = reopened.handle("register", name="Recovered PC")
+        assert result["registration"]["device"]["state"] == "registered"
+        assert new_calls == ["https://relay.example/enroll"]
+        assert vault.writes == 1
+        assert "synthetic-private" not in json.dumps([restored, result])
+    finally:
+        reopened.close()

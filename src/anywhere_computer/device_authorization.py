@@ -120,6 +120,19 @@ class DeviceAuthorizationClient:
                 )
             return self._progress
 
+    def restore_saved(self) -> EnrollmentProgress:
+        """Recover a saved grant on a fresh client without redeeming another code."""
+        with self._lock:
+            if self._progress.phase != "new":
+                return self.progress()
+            try:
+                attempt = self._credentials.saved_attempt(scope=self._provider.scope)
+            except ClientCredentialError:
+                return self._set("credential_error")
+            if attempt is not None:
+                self._progress = EnrollmentProgress(phase="grant_saved", attempt_id=attempt)
+            return self._progress
+
     def start(self) -> EnrollmentProgress:
         with self._lock:
             if self._progress.phase != "new":
