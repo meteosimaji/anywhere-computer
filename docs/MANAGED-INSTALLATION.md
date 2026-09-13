@@ -279,10 +279,25 @@ that subprocess boundary, not the complete manager workflow.
 New local Windows registrations select `pythonw.exe` beside the current
 interpreter, never from PATH, and fail clearly if it is absent. Preview and
 registration share that selection. Existing receipts retain their recorded
-interpreter; remote registrations are unchanged. Updated native UI and scheduled
-watcher acceptance is still pending. Focused Python tests: 93 passed / 5 skipped;
+interpreter; remote registrations are unchanged. Focused Python tests: 93 passed / 5 skipped;
 Ruff, mypy (3 sources), bundled-source equality, Rust tests and Clippy passed.
-The Windows-only console regression test must also run in Windows CI.
+The Windows-only console regression test subsequently passed in Windows CI.
+
+The corrected Windows manager from `3a9e562` was then exercised on the VM.
+Enable, refresh, disable and manager exit completed; the persistent foreground
+consoles seen before the fix were absent in those observations. This is a bounded
+interactive check, not frame-by-frame proof against every possible transient.
+Authenticated before/after status retained instance
+`13a0e26cc1564fefb6f8db4bc077a7e7`, runtime
+`bf67321e3e1f407c9e063772b830d224300f314288b0be853a460b4fc61a415f`.
+The fixture registration and engine were subsequently removed/stopped, with
+absent registration/agent metadata confirmed. Production remained unchanged.
+[Full receipt](https://github.com/meteosimaji/anywhere-computer/pull/5#issuecomment-5654621700).
+All current-head Mac/Windows desktop and Linux/Mac/Windows runtime CI checks
+passed. PR #5 merged as `51529862845c1c032209c65883a22319ee8ade23`.
+This completes the bounded management startup controls, not stages 0–5 or a
+published installer: packaged runtime selection, pairing, relay, actual login
+recovery and the other acceptance items above remain required.
 
 CI exposed a test readiness race: the disabled-update case slept 300 ms before
 probing the HTTP service. Adding a 500 ms startup delay reproduced the failure.
