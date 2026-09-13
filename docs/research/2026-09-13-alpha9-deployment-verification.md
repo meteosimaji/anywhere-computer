@@ -153,3 +153,28 @@ the successful run used a fresh producer and corrected command quoting.
 This proves a bounded same-user cross-logon IPC primitive works on the current VM.
 It does not implement or verify a persistent authenticated agent transport,
 reconnection, MCP dispatch over that transport, or Windows reboot recovery.
+
+### Mac installed update after 8c94b72
+
+The installed Codex Plugin was refreshed using `codex plugin add
+anywhere-computer@personal`. Its wheel, checksums, and release metadata matched the
+repository bundle. A newly launched MCP process using the installed configuration
+listed 65 tools and reconnected to the existing engine.
+
+A separate portable build was then generated offline from the bundle and installed
+in a new `0.1.0a9-8c94b72` directory, preserving the previous runtime. Its manifest
+verified 3,113 files. The bundled interpreter passed agent startup, file roundtrip,
+regex subprocess, terminal reconnect, busy-stop refusal, normal stop, and fixture
+credential cleanup checks. After verifying zero active resources, `anywhere start`
+against the existing control directory selected the new runtime.
+
+The local Plugin and authenticated HTTP connector subsequently returned the same
+instance `5e545a3846614b41803d543e09392bcb` and runtime
+`b4e1aa299443cf1eb1b461141df35a528bafde6a448110b611cca2a3caf0a84f`.
+The HTTP response explicitly reported `remote_channel_authenticated: true`.
+A pre-update operation (`fa582707f4e844efb17a3e74b743b095`) was recovered through
+`operations_get` after the switch, retaining the old instance in its recorded result.
+These are direct connector observations, not a new ChatGPT browser acceptance run.
+The HTTP supervisor process itself was not replaced during this engine switch.
+Windows VM restart, Windows pipe transport integration, and ChatGPT-to-Windows
+acceptance remain unverified.

@@ -35,6 +35,7 @@ class StartupRecord(BaseModel):
     startup_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     native_fingerprint: str = Field(default="", pattern=r"^(?:[a-f0-9]{64})?$")
     codex_executable: str | None = None
+    utf8_python: bool = False  # Missing field preserves pre-UTF-8 startup definitions.
     isolated_python: bool = False  # Missing field identifies a pre-isolation receipt.
 
 
@@ -90,6 +91,7 @@ def _definition(directory: Path, record: StartupRecord) -> StartupDefinition:
     return current_definition(directory, connector=record.connector, startup_id=record.startup_id,
                               executable=record.interpreter, isolated_python=record.isolated_python,
                               codex_executable=record.codex_executable,
+                              utf8_python=record.utf8_python,
                               policy_version=record.policy_version)
 
 
@@ -185,7 +187,8 @@ def _install_startup_locked(
             directory=str(directory),
             interpreter=os.path.abspath(sys.executable), connector=executable,
             startup_id=secrets.token_hex(16),
-            isolated_python=True, codex_executable=pinned_codex, policy_version=2,
+            isolated_python=True, utf8_python=True,
+            codex_executable=pinned_codex, policy_version=2,
         )
         definition = _definition(directory, record)
         backend = NativeStartup(definition)

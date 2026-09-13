@@ -352,3 +352,31 @@ def test_uninstall_waits_for_matching_native_job_to_disappear(registration, monk
     monkeypatch.setattr(service.NativeStartup, 'query', query)
     assert service.uninstall_startup(directory)['state'] == 'uninstalled'
     assert calls.count('uninstall') == 1
+
+
+def test_pre_utf8_receipt_remains_inspectable_and_upgradeable(registration, monkeypatch):
+    import json
+
+    from anywhere_computer import autostart
+
+    directory, native, calls, definition = registration
+    original = autostart.python_module_command
+
+    def legacy_command(*args, **kwargs):
+        command = original(*args, **kwargs)
+        if "-X" in command:
+            offset = command.index("-X")
+            del command[offset:offset + 2]
+        return command
+
+    with monkeypatch.context() as old:
+        old.setattr(autostart, "python_module_command", legacy_command)
+        service.install_startup(directory)
+    receipt = directory / "autostart.json"
+    raw = json.loads(receipt.read_text())
+    raw.pop("utf8_python", None)
+    receipt.write_text(json.dumps(raw))
+    assert service.startup_status(directory)["definition_exists"] is True
+    service.upgrade_startup(directory)
+    assert service._record(directory).utf8_python is True
+    assert service.startup_status(directory)["definition_exists"] is True

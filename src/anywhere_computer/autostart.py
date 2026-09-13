@@ -46,6 +46,7 @@ def startup_definition(
     connector: str | None = None,
     startup_id: str | None = None,
     isolated_python: bool = True,
+    utf8_python: bool = True,
     codex_executable: str | None = None,
     policy_version: Literal[1, 2] = 1,
 ) -> StartupDefinition:
@@ -60,6 +61,9 @@ def startup_definition(
         "anywhere_computer.cli", "remote-watch", "--state-dir", str(directory),
         executable=executable,
     )[1:]
+    if not utf8_python and "-X" in arguments:
+        offset = arguments.index("-X")
+        del arguments[offset:offset + 2]
     if not isolated_python:
         # Reconstruct old receipts for inspection/removal only. New registration
         # always uses isolated Python and refuses to reactivate legacy receipts.
@@ -160,6 +164,7 @@ def current_definition(
     directory: Path, *, connector: str | None = None, startup_id: str | None = None,
     executable: str | None = None,
     isolated_python: bool = True,
+    utf8_python: bool = True,
     codex_executable: str | None = None,
     policy_version: Literal[1, 2] = 1,
 ) -> StartupDefinition:
@@ -172,6 +177,7 @@ def current_definition(
         directory, platform=cast(Platform, sys.platform), home=Path.home(),
         executable=executable or os.path.abspath(sys.executable), user=psutil.Process().username(),
         connector=connector, startup_id=startup_id, isolated_python=isolated_python,
+        utf8_python=utf8_python,
         codex_executable=codex_executable, policy_version=policy_version,
     )
     if sys.platform == "linux":
