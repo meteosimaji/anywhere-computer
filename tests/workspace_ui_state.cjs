@@ -1,4 +1,5 @@
 // Execute the packaged UI script with a minimal host/DOM, exercising real RPC replies.
+process.stderr.write('workspace fixture: node entered\n');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
@@ -6,7 +7,7 @@ const {webcrypto} = require('node:crypto');
 const html = fs.readFileSync(process.argv[2], 'utf8');
 let script = html.split('<script>')[1].split('</script>')[0];
 script = script.replace('  controls();\n  if(window.parent',
-  '  globalThis.testUI={state,call,resolveMutation,listDevices,selectDevice,setupCall,planSetup,confirmSetup,controls};return;\n  if(window.parent');
+  '  globalThis.testUI={state,pending,call,resolveMutation,listDevices,selectDevice,setupCall,planSetup,confirmSetup,controls};return;\n  if(window.parent');
 const elements = new Map();
 let listener;
 let responder;
@@ -27,6 +28,7 @@ const context = vm.createContext({
 });
 vm.runInContext(script,context);
 const ui = context.testUI;
+process.stderr.write('workspace fixture: script loaded\n');
 ui.state.ready=true;
 ui.state.tools=new Set(['files_write','operations_get']);
 function completed(packet,data) {
@@ -56,6 +58,7 @@ function completed(packet,data) {
   assert.equal(ui.state.current.text,'draft');
   assert.equal(ui.state.dirty,false);
   assert.equal(calls,5,'Recovery must only query, never resend the write');
+  process.stderr.write('workspace fixture: mutation recovery checked\n');
   ui.state.tools.delete('operations_get');
   await assert.rejects(ui.call('files_write',{path:'/fixture',text:'draft'},{mutation:true}));
   assert.equal(calls,5,'No write may be dispatched without recovery permission');
@@ -126,5 +129,7 @@ function completed(packet,data) {
   assert.equal(elements.get('setup-tab').hidden,true);
   before=calls;await assert.rejects(ui.setupCall('connection_setup_status'));
   assert.equal(calls,before,'Missing local setup capability must prevent dispatch');
+  assert.equal(ui.pending.size,0,'All RPC replies must release their pending requests');
+  process.stderr.write('workspace fixture: all assertions completed\n');
   process.stdout.write('workspace mutation recovery: passed\n');
 })().catch(error=>{console.error(error);process.exitCode=1;});
