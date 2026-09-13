@@ -190,3 +190,25 @@ async def test_http_authorization_and_session_cleanup(http_remote, tmp_path):
     finally:
         router.close()
         await local.close()
+
+
+def test_routed_catalog_removes_only_transport_request_id():
+    from anywhere_computer.mcp_server import with_request_id
+
+    raw = [{'name': 'computer_status', 'inputSchema': {
+        'type': 'object', 'properties': {}, 'additionalProperties': False,
+    }}]
+    advertised = with_request_id(raw)
+    assert DeviceRouter._remote_tools(advertised) == raw
+    assert 'request_id' in advertised[0]['inputSchema']['properties']
+
+
+async def test_nested_request_id_is_rejected_before_remote_dispatch(routed):
+    router, _, _, sent, first, _ = routed
+    reply = await router.execute(request(
+        'devices_call', device_id=first, tool='computer_status',
+        arguments={'request_id': uuid.uuid4().hex},
+    ))
+    assert reply.state == 'failed'
+    assert 'outer devices_call' in reply.error
+    assert not sent

@@ -7,7 +7,7 @@ from pydantic import JsonValue
 
 from .authorization import AuthorizationStore, GrantIdentity
 from .connection import exchange_remote
-from .device_router import ROUTER_TOOLS, DeviceRouter
+from .device_router import NESTED_REQUEST_ID_ERROR, ROUTER_TOOLS, DeviceRouter
 from .engine import Engine
 from .mcp_server import MCPSession
 from .models import OperationId, Reply, Request
@@ -104,6 +104,11 @@ class AuthorizedDeviceMCP:
             # routed operation IDs separate even when the target uses one credential.
             namespace = "device-route:" + grant.grant_id
             arguments = dict(request.arguments)
+            nested = arguments.get("arguments")
+            if (request.tool == "devices_call" and isinstance(nested, dict)
+                    and "request_id" in nested):
+                return Reply(operation_id=request.operation_id, state="failed",
+                             data={"dispatched": False}, error=NESTED_REQUEST_ID_ERROR)
             lookup = None
             try:
                 if request.tool == "devices_call" and arguments.get("tool") == "operations_get":

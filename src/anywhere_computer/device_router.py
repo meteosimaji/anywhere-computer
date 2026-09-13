@@ -1,5 +1,6 @@
 """Explicit saved-device routing for local connectors and scoped HTTP gateways."""
 
+import copy
 import hashlib
 import json
 import sqlite3
@@ -12,11 +13,15 @@ from pydantic import Field, JsonValue
 from .client_tokens import ClientTokens
 from .devices import DeviceData, DeviceStore
 from .http_client import HTTPBackend
-from .mcp_server import Catalog, Execute
+from .mcp_server import REQUEST_ID_ARGUMENT, REQUEST_ID_SCHEMA, Catalog, Execute
 from .models import Contract, Empty, Reply, Request
 from .ssh_client import SSHBackend
 
 ROUTER_TOOLS = frozenset({"devices_list", "devices_tools", "devices_call"})
+NESTED_REQUEST_ID_ERROR = (
+    "Set request_id on the outer devices_call only; remove it from arguments. "
+    "Recover using that outer ID with operations_get."
+)
 
 
 class DeviceTarget(Contract):
@@ -98,6 +103,15 @@ class DeviceRouter:
                 raise ValueError("Remote tool catalog contains duplicate names")
             names.add(name)
             if not name.startswith(("devices_", "connection_setup_", "__")):
+                tool = copy.deepcopy(tool)
+                schema = tool.get("inputSchema")
+                properties = schema.get("properties") if isinstance(schema, dict) else None
+                if isinstance(properties, dict) and properties.get(
+                    REQUEST_ID_ARGUMENT
+                ) == REQUEST_ID_SCHEMA:
+                    # The outer devices_call owns the ID, including HTTP grant namespacing.
+                    # Advertising the peer's transport argument causes metadata conflicts.
+                    properties.pop(REQUEST_ID_ARGUMENT)
                 visible.append(tool)
         return visible
 
@@ -150,6 +164,12 @@ class DeviceRouter:
             args = (DeviceCall.model_validate(request.arguments) if request.tool == "devices_call"
                     else DeviceTarget.model_validate(request.arguments))
             target = args.device_id
+            if isinstance(args, DeviceCall) and REQUEST_ID_ARGUMENT in args.arguments:
+                return Reply(
+                    operation_id=request.operation_id, state="failed",
+                    data={"device_id": target, "dispatched": False},
+                    error=NESTED_REQUEST_ID_ERROR,
+                )
             if isinstance(args, DeviceCall) and args.tool.startswith(
                 ("devices_", "connection_setup_", "__")
             ):

@@ -82,3 +82,21 @@ fresh ChatGPT acceptance before the Windows Chat route can be marked passed.
 
 CI run 34742186547 for 43895bb completed successfully on GitHub. Passing CI does
 not supersede the failed ChatGPT acceptance or the terminal-output discrepancy.
+
+## Routed operation-ID repair
+
+The router now removes the peer transport's request_id schema from nested tool
+schemas. The outer devices_call remains the caller's recoverable ID. Nested
+request_id values from stale catalogs are rejected before dispatch with an
+explicit correction; HTTP recovery uses the same explanation rather than the
+opaque lookup-validation error. Grant namespaces and operation replay checks are
+unchanged.
+
+Two new regressions failed before the patch. Device-router, real SSH stdio and
+HTTP device-routing tests pass (13 tests), including response-loss recovery,
+session reconnection and grant separation. Ruff and mypy passed for the changed
+code. An isolated revised router using the actual saved Windows SSH entry point
+returned a catalog with no nested request_id, completed Windows status, and
+recovered that exact completed status by operation ID. This verifies the revised
+source against the installed Windows agent; deployment of the gateway and a fresh
+ChatGPT acceptance are separate remaining gates.

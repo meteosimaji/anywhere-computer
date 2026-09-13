@@ -110,6 +110,16 @@ async def test_chat_http_routes_and_recovers_without_cross_grant_access(
             assert [row["device_id"] for row in listed["data"]["devices"]] == ["local", remote_id]
             catalog = await call("devices_tools", {"device_id": remote_id})
             assert {row["name"] for row in catalog["data"]["tools"]} == TARGET_TOOLS
+            assert all('request_id' not in row['inputSchema'].get('properties', {})
+                       for row in catalog['data']['tools'])
+            for name, args in [('computer_status', {}),
+                               ('operations_get', {'operation_id': uuid.uuid4().hex})]:
+                before = len(packets)
+                rejected = await routed(name, {**args, 'request_id': uuid.uuid4().hex},
+                                        expected='failed')
+                assert 'outer devices_call' in rejected['error']
+                assert rejected['data']['dispatched'] is False
+                assert len(packets) == before
             here = await call("devices_call", {"device_id": "local", "tool": "computer_status"})
             there = await routed("computer_status")
             assert here["data"]["result"]["instance_id"] == local_instance
