@@ -1,6 +1,7 @@
 # Completion acceptance progress
 
-This record is incomplete acceptance evidence, not a release qualification.
+This record separates completed acceptance checks from untested support claims.
+It is not a stable-release qualification.
 Windows-for-Mac product development is outside this completion pass.
 
 ## Current baseline
@@ -132,3 +133,21 @@ returns all authorized schemas, even when only one tool is needed. The exact
 schema and Plugin fingerprint sequence also requires several calls. These are
 recorded usability findings, not silently treated as functional test failures
 or as proof of a complete whole-product qualification.
+
+## Requirement reconciliation
+
+| Requirement | Evidence and boundary |
+| --- | --- |
+| Four alpha7 audit defects | Current spawn failure handling, atomic terminal admission, post-write unknown outcome handling, and persistent group/Job ownership are implemented. `test_audit_regressions_20260913.py` covers the first three; `test_terminal_children.py` exercises real surviving children, update blocking, stop and reused-group protection. They are included in the passing full suite and OS CI. |
+| Mac/Windows files, search, terminal | Prior Windows write/append/terminal receipts are recorded in `2026-09-13-windows-owner-pipe-acceptance.md`; this pass verifies current Windows reads/search and durable output recovery. Mac workflows are covered by the existing real acceptance records and full workflow tests. |
+| MCP/Plugin and Skills | Real Codex protocol checks plus the new Chat's installed node_repl state continuity and actual Skill/reference reads, reconciled above. This does not promise every third-party Plugin's own service works. |
+| Same Chat, two computers | The new Chat obtained both distinct instance IDs and the same installed runtime, then operated on the explicitly selected Windows file and Mac Plugin session. |
+| Connection continuity | Authenticated HTTP reconnect and token refresh preserve sessions in the protocol test; saved Windows file and operation remain recoverable through subsequent fresh connections. VM power-cycle and cold-login acceptance were not performed. Running processes are not restored after an OS/agent crash. |
+| Computer Use | Real macOS Calculator observation/input/re-observation and ledger recovery passed through the typed GUI adapter. Windows native GUI and the Codex-owned execution context are not qualified; neither is falsely advertised as available. |
+| Installed updates | Actual Mac local/HTTP operation entry points share the updated engine identity; installed Mac Plugin artifacts match source bundle hashes. Windows installed launcher/Plugin and its actual current runtime were checked in the Windows acceptance record and this Chat. |
+| Tests and publication | Full local suite, lint/types and three-OS Quality CI passed. Source/Plugin consistency passed. Changes are on public GitHub main; the distributed public alpha6 release remains distinct from the tested alpha9 development installation. |
+| Operational policy | Updates remain manual by default, automatic stable updates opt-in. No new per-operation approval UI was added. Platform decisions remain outside the Plugin's control. VM and user data were preserved. |
+
+Windows-for-Mac display, input, clipboard, HVCI and VRChat work remains outside
+this delivery. Future cold-login/VM reboot verification requires a coordinated
+window and is not represented by the successful live-connection checks.
