@@ -55,6 +55,13 @@ async fn management_snapshot(host: tauri::State<'_, ManagementHost>) -> Result<S
         .kill_on_drop(true)
         .spawn()
         .map_err(|_| "管理用ランタイムを起動できません。導入先を確認してください。")?;
+    collect_snapshot(&mut child, Duration::from_secs(15)).await
+}
+
+async fn collect_snapshot(
+    child: &mut tokio::process::Child,
+    timeout: Duration,
+) -> Result<String, String> {
     let stdout = child.stdout.take().ok_or("状態の読取を開始できません。")?;
     let operation = async {
         let mut bytes = Vec::new();
@@ -75,17 +82,85 @@ async fn management_snapshot(host: tauri::State<'_, ManagementHost>) -> Result<S
         }
         decode_snapshot(bytes)
     };
-    tokio::time::timeout(Duration::from_secs(15), operation)
+    let result = tokio::time::timeout(timeout, operation)
         .await
-        .map_err(|_| {
-            "状態確認がタイムアウトしました。エージェントは停止していません。".to_string()
-        })?
-        .map_err(str::to_string)
+        .unwrap_or(Err(
+            "状態確認がタイムアウトしました。エージェントは停止していません。",
+        ));
+    if result.is_err() {
+        // Reap this short-lived reader explicitly; never address the engine PID.
+        if child.kill().await.is_err() && child.try_wait().ok().flatten().is_none() {
+            return Err("状態取得に失敗し、読取プロセスの終了も確認できませんでした。".into());
+        }
+    }
+    result.map_err(str::to_string)
+}
+
+fn main() {
+    let host = ManagementHost::from_arguments().unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(2);
+    });
+    tauri::Builder::default()
+        .manage(host)
+        .invoke_handler(tauri::generate_handler![management_snapshot])
+        .run(tauri::generate_context!())
+        .expect("Management window could not start");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "child-process fixture, invoked explicitly by the cleanup test"]
+    fn reader_fixture() {
+        use std::io::Write;
+        if std::env::var("ANYWHERE_READER_FIXTURE").as_deref() == Ok("oversized") {
+            std::io::stdout()
+                .write_all(&vec![b'x'; SNAPSHOT_LIMIT + 1])
+                .unwrap();
+            std::io::stdout().flush().unwrap();
+        }
+        std::thread::sleep(Duration::from_secs(60));
+    }
+
+    #[test]
+    fn reaps_timed_out_and_oversized_readers() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            for mode in ["timeout", "oversized"] {
+                let mut child = tokio::process::Command::new(std::env::current_exe().unwrap())
+                    .args([
+                        "--exact",
+                        "tests::reader_fixture",
+                        "--ignored",
+                        "--nocapture",
+                    ])
+                    .env("ANYWHERE_READER_FIXTURE", mode)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap();
+                let result = collect_snapshot(&mut child, Duration::from_secs(2)).await;
+                let error = result.unwrap_err();
+                assert!(
+                    error.contains(if mode == "timeout" {
+                        "タイムアウト"
+                    } else {
+                        "表示上限"
+                    }),
+                    "{error}"
+                );
+                assert!(child.try_wait().unwrap().is_some());
+            }
+        });
+    }
 
     #[test]
     fn rejects_incompatible_or_corrupt_runtime_output() {
@@ -109,16 +184,4 @@ mod tests {
             Ok(snapshot.into())
         );
     }
-}
-
-fn main() {
-    let host = ManagementHost::from_arguments().unwrap_or_else(|error| {
-        eprintln!("{error}");
-        std::process::exit(2);
-    });
-    tauri::Builder::default()
-        .manage(host)
-        .invoke_handler(tauri::generate_handler![management_snapshot])
-        .run(tauri::generate_context!())
-        .expect("Management window could not start");
 }

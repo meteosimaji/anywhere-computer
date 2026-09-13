@@ -33,7 +33,11 @@ No production installation or permission has been changed for this preview.
 Focused controller/device/setup/diagnostic tests: 30 passed (1.08 s).
 Rust decoder tests: 2 passed, covering malformed/incompatible/oversized output
 and preservation of Japanese/emoji text. Native Mac `cargo check` and build
-passed. These do not establish timeout cleanup or Windows GUI acceptance.
+passed. A subsequent real-process test covers hung and oversized readers: the
+host awaits their termination, and the test verifies an exit status is available.
+Rust now reports 3 passed / 1 ignored; the ignored entry is the child fixture
+explicitly invoked by the cleanup test, not missing acceptance coverage.
+These do not establish Windows GUI acceptance. All-target Clippy passed.
 CI now includes locked native host tests/builds on Mac and Windows; execution
 results must be recorded after publication rather than assumed from this config.
 
