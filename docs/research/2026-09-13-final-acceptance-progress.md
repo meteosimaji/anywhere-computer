@@ -12,6 +12,8 @@ Linux-only checks, and one registration test restricted to disposable GitHub
 runners. That rerun completed with 69 passed and 17 skipped.
 GitHub Quality run 34744562722 completed on
 macOS, Windows and Ubuntu. These checks do not establish GUI or reboot behavior.
+Quality run 34745974391 at `5d0f6f8` subsequently completed successfully on all
+three platforms, including portable build and provenance verification.
 
 ## New ChatGPT trial
 
@@ -81,3 +83,52 @@ remained open through the sequence, and explicit closure confirmed cleanup.
 This is a real macOS GUI test through an isolated authenticated loopback HTTP
 server and the typed GUI API, with no model inference. It does not establish
 Windows GUI support or replace the incomplete new ChatGPT acceptance trial.
+
+## Separate new ChatGPT read/search/session acceptance
+
+Conversation: https://chatgpt.com/c/6aa654a6-440c-83e8-8ae0-9ed0fb252806
+
+The UI explicitly showed GPT-5.6 Sol and medium effort before submission. This
+independent trial requested device identification, reading and searching the
+existing Windows acceptance directory, Cloudflare Skill/reference reads, and a
+temporary node_repl session. It did not retry the earlier rejected directory
+creation. The final Chat response reported these requested items successful,
+including one Windows search hit with one visited file and no directory errors.
+It also disclosed an initial reused request ID conflict; this is a caller error,
+not evidence that the ID-binding safeguard failed.
+
+The Mac server ledger independently confirmed session
+`f96a466c32204858bf75ab288f415a2b` and these internal operation IDs:
+
+| Check | Internal ledger operation | Observed result |
+| --- | --- | --- |
+| First node_repl call | `3dffe4a3e6c56ab257c4259c10e8eace` | 40, completed, is_error=false |
+| Second call, same session | `917edfbe85627fc67b6908815faaafb1` | 42, completed, is_error=false |
+| Recovery | `db5e6a5351d62bcedc86e52e799868eb` | Original second call and 42 |
+| Close | `e62439a4333542f099b3b173014c4e85` | cleanup_confirmed=true |
+
+These IDs are internal, grant-namespaced IDs, distinct from the external IDs in
+the Chat response. Skill and reference reads were also completed in the same
+trial interval. Both computers reported the expected runtime fingerprint and
+their distinct current instance IDs. An independent device continuity probe
+also read the unchanged Windows acceptance file and recovered its earlier
+terminal operation successfully (three calls, approximately 2.86 seconds).
+This is continuity without a VM restart; cold-login recovery remains untested.
+
+Read-only inspection of the Windows ledger independently matched that trial's
+search ID `733462a3210f4e87a1543d3b93b4201a`: search start
+`eeb016e1fddca0c49220c2a9125840e8` and result
+`06b11189444a52675865ea0d9c7e6dca`. The completed result contained one matching
+file at line 1, visited_files=1, directory_errors=0 and truncated=false. File
+read `0848b77065efa42be6477acdcb6406ea` matched the expected three-line content
+and SHA-256. No Windows settings or files were changed by this inspection.
+
+The installed Mac Plugin cache's wheel and pinned dependencies file matched
+the repository's bundled checksums, with manifest version `0.1.0-alpha.9`.
+The package/source consistency regression test passed as well.
+
+The Chat identified catalog verbosity as a usability limitation: devices_tools
+returns all authorized schemas, even when only one tool is needed. The exact
+schema and Plugin fingerprint sequence also requires several calls. These are
+recorded usability findings, not silently treated as functional test failures
+or as proof of a complete whole-product qualification.
