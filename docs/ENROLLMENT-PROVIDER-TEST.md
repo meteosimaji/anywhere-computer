@@ -195,3 +195,24 @@ provider-side natural expiry was not asserted. Separate-process native Keychain
 coverage is recorded in [relay development](RELAY-PROTOTYPE.md). No rendered
 manager/browser acceptance, public relay deployment or PC transport is established
 by these checks.
+
+### Rendered native manager: start, cancel and restart
+
+At `94ef0c2`, a fresh debug build of the Tauri manager and a wheel installed
+into an isolated Python runtime were exercised through the macOS accessibility
+UI. The temporary app used an ad-hoc local signature, not a distribution key.
+Its native worker contacted the real Keycloak fixture with certificate validation
+enabled. `SSL_CERT_FILE` selected the fixture CA for this app process and its
+child only; the system trust store and production configuration were unchanged.
+
+The UI showed initial readiness, then a provider-issued code and waiting state
+after Start. Cancel hid the code and enabled Restart. Restart displayed a new
+code; a final Cancel returned to the cancelled state. The native credential
+reference was absent from Keychain after the test. The isolated app exited
+normally and the test provider was stopped.
+
+This verifies rendered controls, native IPC and actual device-authorization
+requests. It does not verify browser approval, saving a granted credential,
+registration or pending-registration reauthorization through the rendered UI.
+The fixture registration endpoint was deliberately unprovisioned and Register
+was not invoked. Those acceptance steps remain outstanding.
