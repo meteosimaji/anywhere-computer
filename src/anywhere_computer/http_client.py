@@ -322,7 +322,9 @@ class HTTPBackend:
                         error="Remote request was rejected before execution; check authorization",
                     )
                 except Exception:
-                    self.session_id = None
+                    # An unconfirmed operation response does not invalidate the
+                    # established MCP session. Retain it for lookup or DELETE;
+                    # an actual expired session is handled by the explicit 404 path.
                     return Reply(
                         operation_id=request.operation_id,
                         state="unknown",

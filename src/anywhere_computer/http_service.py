@@ -18,6 +18,7 @@ from .authorization import AuthorizationStore, validate_authorization_url
 from .authorized_http import AuthorizedDeviceMCP
 from .browser_authorization import BrowserAuthorization
 from .connection import ensure_agent, exchange
+from .device_router import ROUTER_TOOLS
 from .engine import Engine
 from .engine_selection import require_no_migration
 from .files import read_bytes
@@ -123,7 +124,7 @@ async def save_http_config(directory: Path, config: HTTPServiceConfig) -> HTTPSe
                 store = AuthorizationStore(
                     staged / "authorization",
                     resource=config.resource,
-                    known_tools=frozenset(engine.tools),
+                    known_tools=frozenset(engine.tools) | ROUTER_TOOLS,
                 )
                 try:
                     store.register_client(config.client, config.redirects)
@@ -199,7 +200,7 @@ async def http_service(
         engine = None
         if agent_directory is None:
             engine = Engine(service_directory / "engine", file_locks=directory / "file-locks")
-            known_tools = frozenset(engine.tools)
+            known_tools = frozenset(engine.tools) | ROUTER_TOOLS
         else:
             await asyncio.to_thread(ensure_agent, agent_directory)
             catalog = await exchange(agent_directory, "__catalog")
@@ -211,7 +212,7 @@ async def http_service(
                 if not isinstance(entry, dict) or not isinstance(name := entry.get("name"), str):
                     raise ValueError("Shared agent catalog is invalid")
                 names.add(name)
-            known_tools = frozenset(names)
+            known_tools = frozenset(names) | ROUTER_TOOLS
         try:
             store = AuthorizationStore(
                 service_directory / "authorization",
@@ -228,6 +229,7 @@ async def http_service(
                     device=config.device,
                     client=config.client,
                     allowed_tools=config.scopes,
+                    device_directory=agent_directory or directory,
                 )
                 consent = BrowserAuthorization(store, owner, device=config.device)
                 oauth = OAuthEndpoints(

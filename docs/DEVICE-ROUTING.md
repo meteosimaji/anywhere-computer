@@ -1,6 +1,6 @@
 # 会話からの端末指定
 
-ローカルの `anywhere mcp` は既存エンジンの40ツールに加え、コネクター専用の3ツールを公開する。
+ローカルの `anywhere mcp` はエンジンのツールに加え、端末指定用の次の3ツールを公開する。
 
 1. `devices_list {}` で登録済み端末を確認する。`local` はこのコネクターのコンピューター。
    保存された状態は過去の観測であり、この一覧取得では接続しない。
@@ -13,9 +13,12 @@
 SSH端末は既存のOpenSSH aliasと厳格なホスト鍵検査、HTTP端末は保存済みprofileとnative vaultを使う。
 登録・ブラウザ承認は既存のCLIで行い、会話中の呼出しが無断で認証画面を開くことはない。
 
-この機能はローカルstdioコネクターにのみ追加している。Engine・公開HTTPサーバーのtool grantsに
-ルーターを追加していない。公開端末に接続した利用者へ、その端末から別の保存済み接続へ進む
-権限は与えない。`devices_` / `__` で始まる内部・転送用ツールは転送先一覧から除外し、実行も拒否する。
+alpha9ではローカルstdioに加え、HTTP入口もこの3ツールを公開する。HTTPでは対応する
+明示的なtool grantが必要。新規設定のallには含まれるが、read-only/filesには追加しない。
+既存の全件接続は`http-add-tools --scope devices_list --scope devices_tools --scope devices_call`
+で更新し、クライアントのカタログも更新する。制限付き・失効した認可は拡張しない。
+共通エンジン構成ではshared_agent_directoryの登録を共有し、それ以外ではHTTPのstate-dirを使う。
+`devices_` / `connection_setup_` / `__`で始まる内部・転送用ツールは転送先一覧から除外し、実行も拒否する。
 汎用のdevices_callは書込み・コード実行を含み得るため、破壊的・外部操作を伴うツールとして宣言する。
 
 ## 応答喪失と再試行
@@ -34,7 +37,23 @@ SSH/HTTPはoperationId capabilityを持つ相手だけを受け入れ、操作ID
 照会自体のIDは新しくする。接続解除の失敗で確認済みの実行結果を不明へ書き換えない。
 端末ごとのsession/search/transfer/operation IDは必ずdevice_idと組にして扱う。
 
+HTTP入口では外側の認可ごとに転送操作IDを分離する。転送した操作の照会は同じ認可から
+`devices_call`のtoolに`operations_get`を指定し、元のdevice_idと返されたoperation_idを渡す。
+通常のローカル操作は従来どおりトップレベルのoperations_getで照会する。
+新しく認可を作り直した接続では、旧認可の転送操作を照会できない。
+保存済みの対象側認証は端末の所有者のもの。tool grantsはファイルやプロセスを複数ユーザー間で
+隔離する仕組みではなく、devices_callは対象側で許可された操作全体へのアクセスを含む。
+
 ## 検証と限界
+
+Windows VMも別の操作先として扱う。ゲスト内にAnywhere Computerを配置し、ゲストの
+SSHまたは認証付きHTTP接続を登録する。Macの`local`をWindowsと見なすことはできない。
+接続後は対象の`computer_status`でOS・版・instanceを確認し、ファイルや端末セッションの
+IDをその`device_id`と組にして保持する。VMの起動・仮想化基盤の設定はこのルーターの役割に含めない。
+
+HTTP機械試験では実際のHTTPサーバーを2段に接続し、端末切替・日本語ファイル・応答喪失後の
+照会・連続端末入力・認可分離を確認する。対象エンジンも試験ホスト上で動くため、
+この試験だけで実際のWindows VMへの到達やGUI操作が成功したとは扱わない。
 
 独立したローカル/対象エンジンの試験、実際の子プロセスを介したSSH用MCPプロトコル試験、
 HTTP認証サーバーによるcatalog制限・拒否・セッション解除試験を用いる。
@@ -45,7 +64,8 @@ SSHプロトコル試験はOpenSSH自体や二台の物理端末を実証する�
 CLIの `remote-mcp` / `http-mcp` は引き続き単一端末接続として使える。
 Web dashboard、照合コードpairing、遠隔agent停止、二台の実機・各OSの認証操作検証は残る。
 
-この更新の全体pytestは **486 passed / 5 skipped**。Ruff、mypy通常/Windows対象
+以下は端末ルーター導入時点の検証記録であり、最新版のツール件数ではない。
+導入時の全体pytestは **486 passed / 5 skipped**。Ruff、mypy通常/Windows対象
 （52 source files）、plugin構造検証、同梱wheelとソース一致が成功。
 新しい版のCodex pluginインストール先からuv tool runで実行環境を作成し、
 その環境で43ツールと明示localのファイル作成を確認した。インストール済み7ファイルも一致。

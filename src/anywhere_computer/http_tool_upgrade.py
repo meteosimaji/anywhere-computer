@@ -12,6 +12,7 @@ import time
 from pathlib import Path
 
 from .authorization import LOCAL_ONLY_TOOLS, AuthorizationStore
+from .device_router import ROUTER_TOOLS
 from .engine import Engine
 from .http_service import _check_enrollment, load_http_config
 from .locking import ProcessLock
@@ -31,7 +32,7 @@ async def add_http_tools(directory: Path, tools: frozenset[str]) -> dict[str, ob
         with tempfile.TemporaryDirectory(prefix="anywhere-tool-catalog-") as temporary:
             engine = Engine(Path(temporary))
             try:
-                known = frozenset(engine.tools) - LOCAL_ONLY_TOOLS
+                known = (frozenset(engine.tools) | ROUTER_TOOLS) - LOCAL_ONLY_TOOLS
             finally:
                 await engine.close()
         if expanded.scopes - known:

@@ -170,13 +170,15 @@ async def test_http_connector_recovers_sessions_and_keeps_operation_ids(http_rem
 
 
 async def test_lost_write_response_is_not_retried_and_can_be_looked_up(http_remote, tmp_path):
-    backend, _, _, engine, calls, faults = http_remote
+    backend, adapter, _, engine, calls, faults = http_remote
     await backend.catalog()
+    original_session = backend.session_id
     target = tmp_path / "lost.txt"
     write = operation("files_write", path=str(target), text="one effect")
     faults["lose_write_response"] = True
     unknown = await backend.execute(write)
     assert unknown.state == "unknown" and unknown.operation_id == write.operation_id
+    assert backend.session_id == original_session
     assert target.read_text(encoding="utf-8") == "one effect"
     assert len([p for p in calls if p and p.get("method") == "tools/call"]) == 1
     looked_up = await backend.execute(operation("operations_get", operation_id=write.operation_id))
@@ -196,6 +198,8 @@ async def test_lost_write_response_is_not_retried_and_can_be_looked_up(http_remo
         ).fetchone()[0]
         == 1
     )
+    await backend.close()
+    assert not adapter.sessions
 
 
 async def test_explicit_401_renews_once_and_revocation_never_dispatches(http_remote, tmp_path):

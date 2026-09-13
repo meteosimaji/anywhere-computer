@@ -1,4 +1,4 @@
-"""Local connector routing; never mounted in a remotely authorized engine."""
+"""Explicit saved-device routing for local connectors and scoped HTTP gateways."""
 
 import hashlib
 import json

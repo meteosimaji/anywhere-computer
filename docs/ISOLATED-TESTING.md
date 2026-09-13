@@ -26,6 +26,28 @@ uv run pytest -q
 uv build
 ```
 
+For terminal changes, first run the small real-process workflow below. It catches
+command parsing, surviving children, Unicode file editing and repeated input in
+one terminal before paying for a full Windows run:
+
+```powershell
+uv run pytest -v tests/test_terminal_children.py tests/test_file_search_terminal_workflow.py
+```
+
+The quality workflow runs native startup tests serially, then runs the remaining
+Windows suite with two workers and keeps each test file on one worker:
+
+```powershell
+uv run pytest -ra tests/test_startup_native.py
+uv run pytest -ra --ignore=tests/test_startup_native.py -n 2 --dist loadfile --max-worker-restart=0 --durations=20
+```
+
+Do not remove timeout, credential derivation or process cleanup assertions to
+speed up a run. Compare JUnit timing from the same test inventory, report failures
+and skips, and distinguish full-suite time from runner provisioning/build time.
+`pytest-xdist` is a development dependency and is not added to the installed
+Anywhere Computer runtime.
+
 Record Python version and architecture and the bundle digest with test output.
 These tests inject disposable in-memory authentication values. Real Windows
 Credential Manager, MCP client reconnects, and host-to-guest transport require

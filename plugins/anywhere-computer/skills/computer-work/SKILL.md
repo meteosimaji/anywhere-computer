@@ -123,7 +123,8 @@ stopping that work is intended. On an uncertain response, keep the operation ID
 and query operations_get before considering another mutation. Never interpret a
 missing response as proof that a write did not happen.
 
-The local connector provides devices_list, devices_tools and devices_call. List registered
+The local connector and authorized alpha9 HTTP gateway provide devices_list,
+devices_tools and devices_call. Check the current catalog, then list registered
 devices, then obtain the selected device's authorized tool schemas with devices_tools.
 Pass its explicit device_id, tool and arguments to devices_call. The reserved local ID
 addresses this connector's local agent; ordinary tools still operate locally. A cached
@@ -133,7 +134,10 @@ lost routed response, use devices_call on that SAME device to invoke operations_
 passing the original operation ID inside arguments and a fresh ID for the lookup request.
 Do not repeat a mutation with a new operation ID. The result is nested under data.result.
 Registration and login are explicit local CLI actions; routing never opens a login flow
-or exposes saved credentials. Remote catalogs cannot forward to further devices.
+or exposes saved credentials. Nested routing is not forwarded to further devices.
+For HTTP, recover routed operations using the same authorization grant; creating a new
+grant does not grant access to the old operation namespace. The saved target credential
+belongs to the owner, and routing is not multi-user filesystem or process isolation.
 
 The separate remote-mcp CLI
 can select an already configured SSH device. http-mcp can select an authorized
@@ -148,7 +152,9 @@ Never put it in arguments, environment, files or chat. A token-sent event is not
 public connectivity evidence. tunnel-forget removes local credentials only;
 provider revocation and DNS are separate. These commands do not provision a public endpoint
 or managed internet relay. http-doctor probes only configured loopback metadata;
-metadata_reachable does not prove authenticated readiness or public HTTPS reachability. GUI interaction and OCR are not implemented. Explain
+metadata_reachable does not prove authenticated readiness or public HTTPS reachability.
+Built-in GUI interaction and OCR are not implemented; use the explicit external MCP
+adapter described above when available. Explain
 those limits when they affect the requested task.
 
 

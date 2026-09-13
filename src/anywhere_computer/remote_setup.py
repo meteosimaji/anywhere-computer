@@ -17,6 +17,7 @@ from .authorization import LOCAL_ONLY_TOOLS
 from .client_tokens import ClientCredentialError
 from .cloudflare_tunnel import TunnelCredential, cloudflared_executable
 from .credentials import has_interactive_input
+from .device_router import ROUTER_TOOLS
 from .engine import Engine
 from .http_service import HTTPServiceConfig, load_http_config, save_http_config
 from .locking import ProcessLock
@@ -66,7 +67,7 @@ async def setup_scopes(mode: str) -> frozenset[str]:
                         "search_", "operations_", "computer_status", "workspace_open",
                     )))
                 )
-            )
+            ) | (ROUTER_TOOLS if mode == "all" else frozenset())
         finally:
             await engine.close()
 

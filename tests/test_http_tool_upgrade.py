@@ -11,8 +11,11 @@ from anywhere_computer.http_tool_upgrade import add_http_tools
 from anywhere_computer.owner_credentials import OwnerCredentials
 
 
+@pytest.mark.parametrize("added_tools", [
+    frozenset({"mcp_tools"}), frozenset({"devices_list", "devices_tools", "devices_call"}),
+])
 async def test_upgrade_preserves_token_and_adds_direct_tools_over_real_http(
-    tmp_path, unused_tcp_port
+    tmp_path, unused_tcp_port, added_tools,
 ):
     config = await setup(tmp_path, unused_tcp_port)
     owner = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
@@ -21,8 +24,8 @@ async def test_upgrade_preserves_token_and_adds_direct_tools_over_real_http(
         async with http_service(tmp_path, credentials=owner):
             token = await authenticate(http)
             with pytest.raises(TimeoutError):
-                await add_http_tools(tmp_path, frozenset({"mcp_tools"}))
-        result = await add_http_tools(tmp_path, frozenset({"mcp_tools"}))
+                await add_http_tools(tmp_path, added_tools)
+        result = await add_http_tools(tmp_path, added_tools)
         assert result["expanded_full_access_grants"] == 1
         assert result["credentials_replaced"] is False
         async with http_service(tmp_path, credentials=owner):
@@ -37,9 +40,9 @@ async def test_upgrade_preserves_token_and_adds_direct_tools_over_real_http(
                 },
             )
             assert {t["name"] for t in response.json()["result"]["tools"]} == (
-                config.scopes | {"mcp_tools"}
+                config.scopes | added_tools
             )
-        assert (await add_http_tools(tmp_path, frozenset({"mcp_tools"})))[
+        assert (await add_http_tools(tmp_path, added_tools))[
             "expanded_full_access_grants"
         ] == 0
 

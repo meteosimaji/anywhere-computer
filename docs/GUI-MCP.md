@@ -96,12 +96,17 @@ ChatGPTでは「設定 → プラグイン → Anywhere Computer → 更新す�
 接続先の認証情報を作り直す操作ではありません。他のクライアントでも、カタログキャッシュが
 残る場合はクライアント側の更新・再接続が必要です。
 
-2026-09-13のGPT-5.6 SolによるChatGPT実試験では、「すべてのアクションを許可」が
+alpha7に対する2026-09-13のGPT-5.6 SolによるChatGPT実試験では、「すべてのアクションを許可」が
 選択されていても、最初の `see` を含む `mcp_call` がOpenAI側の安全性チェックで拒否され、
 操作IDは発行されませんでした。セッションは維持され、終了とcleanupは成功しました。
-したがって、下記のHTTP実機試験の成功をChatGPTからのGUI受け入れ合格とは扱いません。
+この時点では、HTTP機械試験の成功だけでChatGPTからのGUI受け入れ合格とは扱いませんでした。
 Anywhere Computerに独自の毎回承認を追加したものではなく、この設定だけで全呼び出しの
 実行を保証することもできません。
+
+alpha8の型付きツールでは、更新後のGPT-5.6 Sol（中程度）で観測・Escape・入力・42の再観測・
+セッション終了が実成功しました。キー表記の手戻りも修正して再試験済みです。
+詳細は[更新検証記録](UPDATE-VERIFICATION-ALPHA8-2026-09-13.md)を参照してください。
+この一試験の成功が、ホスト側の判定を将来含めて保証するものではありません。
 
 ## 再現可能な実機試験
 
@@ -114,7 +119,7 @@ uv run python scripts/verify_gui_http.py \
   --executable /opt/homebrew/bin/peekaboo --receipt /tmp/anywhere-gui-acceptance.json
 ```
 
-通常の機械試験は `tests/test_http_capability_acceptance.py` です。HTTP公開対象54ツールを
+通常の機械試験は `tests/test_http_capability_acceptance.py` です。alpha8のHTTP公開対象58ツールを
 実際のHTTP要求で網羅し、ファイルとプロセスは使い捨ての実物、Codex app-serverは合成データを
 返す子プロセスを使います。外部Plugin全件の実操作やChatGPT UIの試験とは区別します。
 

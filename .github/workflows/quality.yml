@@ -58,7 +58,11 @@ jobs:
                   for member in bundle.infolist():
                       (destination / member.filename).chmod((member.external_attr >> 16) & 0o777)
           PY
-          uv run python scripts/verify_portable.py 'dist/relocation 日本語/Anywhere Computer' ${{ runner.os == 'Windows' && '' || '--runtime-only' }}
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            uv run python scripts/verify_portable.py 'dist/relocation 日本語/Anywhere Computer'
+          else
+            uv run python scripts/verify_portable.py 'dist/relocation 日本語/Anywhere Computer' --runtime-only
+          fi
       - name: Attest the verified portable archive
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4

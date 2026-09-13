@@ -68,7 +68,46 @@ MCPの起動結果の名前を使うことをschemaへ追加し、自動で別�
 状態にはgui_mcp_adapterの登録・前提条件・runtime未検証を追加し、内蔵gui=falseと区別した。
 入力値が不正な場合は観測を消費しないため、キー名修正だけなら再観測は必須ではない。
 
-後続修正後の最終検証・稼働IDとCI状態は完了後に追記する。
+後続修正のローカル全件は910 passed / 5 skipped、92.90秒。Ruff/mypyも成功。
+修正版の配布元はc2259d8（ソース1e489f1）。Codexインストール先から新規stdio接続で
+更新後のキーschemaと65件のカタログを照合した。ChatGPT設定でも更新し、同じSol中程度
+チャットで短い再試験を行った。実測値は以下。
+
+- version: 0.1.0a8
+- instance_id: 86a297dc36234360838039ec0818d957
+- runtime_id: 1e83184837cc234619cd6a2e0d6edb29671acd6b41a8a0e606a6c35ff7b6140d
+- gui_key操作6c1e6c37726b04f77ed03954e3d5fbb8: Pressed escape、is_error=false。
+- 続く観測9d136a8f4efa3c1bb8dd118fca13e550: 表示0。
+- 入力後の観測875d492fcfac7a7f94d385d9d2d35a87: 12 + 30と42。
+- 終了e155413f74e545c4d67d124f81c74898: cleanup_confirmed=true。
+
+上記はChatGPTの回答だけでなく、稼働エンジンの操作台帳からも照合した。
+最終statusでは全種類のactive resourcesが0、update_blocked=false。
+GUIアダプターのruntime_verified=falseはstatusが自動の外部MCPプローブを行わないことを示す。
+個別GUI試験の成功を否定するフィールドではない。観測を各操作の間に挟む方式は継続している。
+
+Windows CIの初回は新しい回帰試験内で停止したため、旧実行を中止してログを回収した。
+cmd.exeへ渡す試験用Pythonの複数行を1物理行のexec表現へ変え、EOF後にもdeadlineへ
+制御が戻るよう試験ループを修正した。製品workerは変更していない。
+192625aでは重点試験を全件より先に実行し、macOS/Linux/Windowsすべてで成功した。
+続くファイル編集・対話端末の試験では、Windowsのcmd.exeがPythonコード中の引用符と
+READY>を解釈して構文を破壊する別のfixture問題が残った。失敗時のstdoutを記録し、
+PythonのSyntaxErrorと欠落した文字列を確認した。4984567ではWindows用python_commandを
+UTF-8のhexから復元する一行に変更し、複数行・日本語・引用符・シェル特殊文字の実行試験を追加した。
+重点試験の先行実行により、この失敗は全件試験を待たず数秒で検出できた。
+
+Windowsの全件試験は2 worker / loadfileへ変更した。直列192625aでは714.38秒、
+並列e0af498では350.99秒だった。両者とも同じfixtureの1 failed / 876 passed / 27 skippedであり、
+この比較自体は最終合格の記録ではない。OSネイティブ常駐登録は別途直列実行し、
+認証KDFや30秒のHTTP待機試験を短縮・省略する変更はしていない。
+4984567の[CI](https://github.com/meteosimaji/anywhere-computer/actions/runs/34733975347)は
+macOS/Linux/Windowsすべて成功。Windowsは全件878 passed / 27 skipped、342.94秒、
+別工程のネイティブ常駐登録は11 passed。スキップにはPOSIX専用fixtureを含み、全OS・全外部Pluginの
+実機成功を意味しない。Windows x64 runnerでの結果であり、Windows ARM64 VMは別途検証する。
+
+このCIの移設portable試験はfiles_roundtrip=true、regex_child=true、native_agent_tested=false。
+Windowsで追加するつもりだった完全検証は、GitHub式の空文字が偽扱いされてruntime-onlyになっていた。
+後続ではシェルの明示的なifへ修正する。この実行をportableのネイティブ接続・再接続成功とは扱わない。
 
 ## 比較対象と能力の境界
 
