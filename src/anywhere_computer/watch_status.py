@@ -16,7 +16,8 @@ from .runtime_identity import runtime_identity
 from .state import prepare_directory
 
 WatchEvent = Literal[
-    "child_started", "restart_wait", "restart_limit", "exited", "interrupted", "launch_error",
+    "engine_ready", "child_started", "restart_wait", "restart_limit", "exited", "interrupted",
+    "launch_error",
     "credential_check", "credentials_ready", "credential_store_unavailable", "credential_rejected",
     "configuration_error", "credential_backend_error", "connector_check_error", "startup_conflict",
     "connector_starting", "connector_cleanup_error",

@@ -8,12 +8,12 @@ import tempfile
 import time
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, Self, cast
 
 import psutil
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .autostart import Platform, StartupDefinition, current_definition
+from .autostart import Platform, StartupDefinition, StartupMode, current_definition
 from .cloudflare_tunnel import TunnelCredential, cloudflared_executable
 from .codex_context import _executable as codex_executable
 from .http_service import load_http_config
@@ -31,12 +31,21 @@ class StartupRecord(BaseModel):
     user: str
     directory: str
     interpreter: str
-    connector: str
+    connector: str | None
+    mode: StartupMode = "remote"
     startup_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     native_fingerprint: str = Field(default="", pattern=r"^(?:[a-f0-9]{64})?$")
     codex_executable: str | None = None
     utf8_python: bool = False  # Missing field preserves pre-UTF-8 startup definitions.
     isolated_python: bool = False  # Missing field identifies a pre-isolation receipt.
+
+    @model_validator(mode="after")
+    def check_connection_mode(self) -> Self:
+        if self.mode == "remote" and self.connector is None:
+            raise ValueError("Remote startup requires a connector")
+        if self.mode == "local" and self.connector is not None:
+            raise ValueError("Local startup cannot contain a connector")
+        return self
 
 
 def _read_file(path: Path) -> bytes | None:
@@ -92,7 +101,7 @@ def _definition(directory: Path, record: StartupRecord) -> StartupDefinition:
                               executable=record.interpreter, isolated_python=record.isolated_python,
                               codex_executable=record.codex_executable,
                               utf8_python=record.utf8_python,
-                              policy_version=record.policy_version)
+                              policy_version=record.policy_version, mode=record.mode)
 
 
 def _check_file(definition: StartupDefinition) -> bool:
@@ -129,13 +138,16 @@ def _check_snapshot(record: StartupRecord, snapshot: StartupSnapshot) -> None:
         raise ValueError("OS startup definition was changed or belongs to another registration")
 
 
-def _result(definition: StartupDefinition, snapshot: StartupSnapshot) -> dict[str, str | bool]:
+def _result(
+    definition: StartupDefinition, snapshot: StartupSnapshot, *, mode: StartupMode,
+) -> dict[str, str | bool]:
     return {
         "state": "registered" if snapshot.present and snapshot.enabled else "not_enabled",
         "name": definition.name,
         "definition_path": str(definition.path),
         "native_running": snapshot.running,
         "public_reachability": "unverified",
+        "mode": mode,
     }
 
 
@@ -147,21 +159,23 @@ def startup_status(directory: Path) -> dict[str, str | bool]:
     file_exists = _check_file(definition)
     snapshot = NativeStartup(definition).query()
     _check_snapshot(record, snapshot)
-    return {**_result(definition, snapshot), "definition_exists": file_exists,
+    return {**_result(definition, snapshot, mode=record.mode), "definition_exists": file_exists,
             "python_isolation_upgrade_required": not record.isolated_python,
             "persistence_upgrade_required": record.policy_version < 2,
             "receipt_confirmed": bool(record.native_fingerprint), "changed": False}
 
 
-def install_startup(directory: Path, *, connector: str | None = None) -> dict[str, str | bool]:
+def install_startup(
+    directory: Path, *, connector: str | None = None, mode: StartupMode | None = None,
+) -> dict[str, str | bool]:
     directory = directory.resolve()
     prepare_directory(directory)
     with ProcessLock(directory / "autostart.lock"):
-        return _install_startup_locked(directory, connector=connector)
+        return _install_startup_locked(directory, connector=connector, mode=mode)
 
 
 def _install_startup_locked(
-    directory: Path, *, connector: str | None = None,
+    directory: Path, *, connector: str | None = None, mode: StartupMode | None = None,
 ) -> dict[str, str | bool]:
     record = _record(directory)
     if record is not None and not record.isolated_python:
@@ -171,12 +185,21 @@ def _install_startup_locked(
         )
     if record is not None and connector is not None and connector != record.connector:
         raise ValueError("Startup connector differs; uninstall before changing it")
+    selected_mode = mode or (record.mode if record is not None else "remote")
+    if selected_mode not in {"remote", "local"}:
+        raise ValueError("Unsupported startup mode")
+    if record is not None and record.mode != selected_mode:
+        raise ValueError("Startup mode differs; uninstall before changing it")
     selected = connector if record is None else record.connector
-    executable = os.path.abspath(cloudflared_executable(selected))
-    config = load_http_config(directory)
-    owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner)
-    owner.ensure_initialized()
-    TunnelCredential(directory).read()
+    executable = None
+    if selected_mode == "remote":
+        executable = os.path.abspath(cloudflared_executable(selected))
+        config = load_http_config(directory)
+        owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner)
+        owner.ensure_initialized()
+        TunnelCredential(directory).read()
+    elif selected is not None:
+        raise ValueError("Local startup does not accept a tunnel connector")
     if record is None:
         try:
             pinned_codex = str(codex_executable(None))
@@ -188,7 +211,7 @@ def _install_startup_locked(
             interpreter=os.path.abspath(sys.executable), connector=executable,
             startup_id=secrets.token_hex(16),
             isolated_python=True, utf8_python=True,
-            codex_executable=pinned_codex, policy_version=2,
+            codex_executable=pinned_codex, policy_version=2, mode=selected_mode,
         )
         definition = _definition(directory, record)
         backend = NativeStartup(definition)
@@ -235,7 +258,7 @@ def _install_startup_locked(
     if not snapshot.present or not snapshot.enabled:
         raise RuntimeError("Startup registration was not confirmed; receipt preserved")
     _save_registered(directory, record, snapshot.fingerprint)
-    return _result(definition, snapshot)
+    return _result(definition, snapshot, mode=record.mode)
 
 
 def _wait_stopped(directory: Path, *, timeout: float = 30) -> None:
@@ -244,7 +267,7 @@ def _wait_stopped(directory: Path, *, timeout: float = 30) -> None:
         try:
             with ExitStack() as locks:
                 for name in ("remote-watch.lock", "http-watch.lock", "http-server.lock",
-                             "cloudflare-tunnel.lock", "persistent-watch.lock"):
+                             "cloudflare-tunnel.lock", "persistent-watch.lock", "local-watch.lock"):
                     locks.enter_context(ProcessLock(directory / name))
                 return
         except TimeoutError:
@@ -320,7 +343,7 @@ def start_startup(directory: Path) -> dict[str, str | bool]:
             backend.start(snapshot)
         after = backend.query()
         _check_snapshot(record, after)
-        return _result(definition, after)
+        return _result(definition, after, mode=record.mode)
 
 
 def upgrade_startup(directory: Path, *, connector: str | None = None) -> dict[str, str | bool]:
@@ -341,7 +364,9 @@ def upgrade_startup(directory: Path, *, connector: str | None = None) -> dict[st
         _create_file(backup, old.model_dump_json(indent=2).encode())
         try:
             _uninstall_startup_locked(directory)
-            result = _install_startup_locked(directory, connector=connector or old.connector)
+            result = _install_startup_locked(
+                directory, connector=connector or old.connector, mode=old.mode,
+            )
         except (OSError, RuntimeError, ValueError):
             try:
                 current = _record(directory)

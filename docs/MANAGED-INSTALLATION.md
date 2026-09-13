@@ -153,3 +153,38 @@ do not duplicate its restart or credential logic inside the desktop host.
    distinct. Public relay service remains unavailable until deployed/accepted.
 4. Complete the remaining stages with the directive's failure and real-operation
    acceptance cases before changing the release channel to beta.
+
+## Local login supervision (development follow-up)
+
+`autostart-preview --startup-mode local` and `autostart-install --startup-mode local`
+reuse the existing user-session registration, owned receipt, conflict checks,
+lost-acknowledgement reconciliation, and uninstall/upgrade paths. The default for
+new CLI registrations stays remote for compatibility. Repeating installation
+without a mode retains the saved mode; an explicit different mode is rejected.
+Old receipts without `mode` remain remote and render their original definition.
+New receipts require this runtime; do not downgrade the registration reader.
+
+Local mode does not require HTTP owner setup, Cloudflare, DNS, or a tunnel token.
+It runs `local-watch`, which uses normal `ensure_agent` selection and startup
+locking every 15 seconds. It never forces a runtime replacement or kills an
+unresponsive engine. Configuration/credential errors leave a blocked watcher
+until it is restarted, avoiding repeated login prompts. Stopping/uninstalling
+this watcher leaves shared engine sessions running. Stopping just the engine
+while the watcher is enabled causes the engine to start again.
+
+An OS registration or a historical `engine_ready` observation is not a live
+connection receipt. Status must still query the engine. Targeted tests cover all
+three definition formats, local prerequisites, idempotence/mode preservation,
+upgrade/removal, blocked errors and a real authenticated fixture engine retaining
+its instance after the watcher stops. Actual login/reboot recovery and the desktop
+control for registration remain unverified. No production registration was made.
+
+Linux local registration uses `KillMode=process`: normal systemd control-group
+cleanup would otherwise terminate the shared engine when removing only the
+watcher. Remote mode retains control-group cleanup for its owned HTTP/tunnel
+children. Native Windows task-removal behavior still needs explicit acceptance.
+
+Local follow-up verification: focused startup/watch tests 61 passed / 3 skipped;
+full Python suite 939 passed / 17 skipped (95.36 s), Ruff and mypy (82 sources)
+passed. Definition-only Linux cleanup adjustment was verified separately after
+that full run. These results do not prove login/reboot or native uninstall.
