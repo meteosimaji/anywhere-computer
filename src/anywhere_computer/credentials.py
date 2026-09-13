@@ -74,3 +74,19 @@ def local_credential(directory: Path, *, create: bool = False) -> str:
         raise RuntimeError(
             "OS credential store is unavailable; unlock it and run anywhere doctor"
         ) from error
+    except Exception as error:
+        # keyring's Windows backend exposes pywin32-ctypes errors directly;
+        # that optional Windows dependency does not derive from KeyringError.
+        # Keep every other failure unchanged, including programming errors.
+        error_type = type(error)
+        if (sys.platform == "win32"
+                and error_type.__module__ == "win32ctypes.pywin32.pywintypes"
+                and error_type.__name__ == "error"
+                and getattr(error, "winerror", None) == 1312):
+            raise RuntimeError(
+                "Windows Credential Manager is unavailable in this logon session "
+                "(WinError 1312). Run the agent and connector in an interactive "
+                "Windows logon, or use a configured authenticated HTTPS connector. "
+                "Starting the agent alone does not grant an SSH logon access to its credentials."
+            ) from None
+        raise
