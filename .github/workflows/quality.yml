@@ -25,6 +25,8 @@ jobs:
       - run: uv run mypy
       - run: openssl version
       - run: uv run pytest -ra tests/test_startup_native.py --junitxml="${{ runner.temp }}/pytest-native.xml"
+      - name: Check terminal ownership before the full suite
+        run: uv run pytest -v tests/test_terminal_children.py
       - run: uv run pytest -ra --ignore=tests/test_startup_native.py --junitxml="${{ runner.temp }}/pytest-results.xml"
       - uses: actions/upload-artifact@v4
         if: always()

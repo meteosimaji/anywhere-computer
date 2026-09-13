@@ -30,7 +30,8 @@ async def test_exited_shell_child_blocks_update_and_is_stopped(tmp_path, ignore_
     )
     try:
         started = await engine.sessions.start(StartSession(
-            command=python_command(source), cwd=str(tmp_path),
+            # cmd.exe must receive one physical line; Python decodes embedded newlines.
+            command=python_command(f'exec({source!r})'), cwd=str(tmp_path),
         ))
         identity = started["session_id"]
         async with asyncio.timeout(5):
@@ -40,6 +41,10 @@ async def test_exited_shell_child_blocks_update_and_is_stopped(tmp_path, ignore_
                 ))
                 if "\n" in page["text"]:
                     break
+                if page['state'] == 'exited':
+                    pytest.fail(f"Fixture exited before its PID record: {page['text']!r}")
+                # wait_output can complete without yielding after EOF. Keep the deadline live.
+                await asyncio.sleep(0.01)
         parent_pid, child_pid = json.loads(page["text"])
         parent = psutil.Process(parent_pid) if psutil.pid_exists(parent_pid) else None
         descendant = psutil.Process(child_pid)
