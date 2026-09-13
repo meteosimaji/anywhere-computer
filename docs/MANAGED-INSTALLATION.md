@@ -461,6 +461,60 @@ cleanup; stopping local polling does not revoke a server-side grant.
 
 The targeted lifecycle suite covers initial pacing, repeated slowdown, expiry
 before the next poll, in-flight cancellation, terminal outcomes and timeout
-backoff. HTTPS integration, issuer binding, PKCE, vault publication/readback,
-server-side code reuse and attempt limits, and manager wiring remain pending.
+backoff. The following client slice connects that lifecycle to HTTPS; neither
+slice is yet wired into the manager or a deployed relay.
+
+### Isolated enrollment authorization client (2026-09-14)
+
+`DeviceAuthorizationClient` now retrieves a device code, exposes the short user
+code and verified-origin activation URL to its owning UI, and polls an explicitly
+configured token endpoint. `progress()` is read-only with respect to the network;
+the caller schedules `poll()` using `retry_after`. One instance represents one
+explicit attempt. A second call to `start()` never creates another code. Keep
+this object in the native controller rather than constructing it on every UI
+refresh. Network operations can run in a worker thread; cancellation and result
+publication share a lock so a late response cannot revive a cancelled attempt.
+
+This first provider profile requires HTTPS and same-origin issuer, device and
+token endpoints. Verification URLs must have that origin too. Explicit issuer
+fields must match, and granted scopes must equal the requested enrollment scope
+(an omitted response scope has the RFC 6749 meaning: unchanged). Cross-origin
+identity-provider configurations and automatic metadata discovery are not yet
+supported. This is a constraint of this client profile, not an OAuth requirement.
+
+`enrollment_http` uses the standard-library HTTPS client, verified certificates
+and hostnames, no redirects/proxies/implicit retries, and a 16 KiB JSON limit.
+It rejects duplicate JSON fields and non-JSON or compressed bodies. DNS/connect
+uses the socket timeout; after TLS connects, a separate watchdog bounds the
+whole exchange, including slow-drip responses. Operating-system DNS resolution
+is not guaranteed to obey the socket timeout. Only a timeout before any HTTP
+request bytes could be sent permits backoff/retry. A partial write, lost reply,
+malformed token success or unexpected HTTP status becomes `uncertain` and stops.
+
+`EnrollmentCredentials` reuses the native credential-backend selector and
+process lock, with an `enrollment-grant-` namespace bound to state directory,
+issuer, client and profile. It preserves existing AI credentials and refuses to
+overwrite another enrollment attempt. Exact vault readback is required before
+`grant_saved` is reported. A failed publication can be retried using the same
+in-memory grant; it never repeats code redemption. Process restart does not
+automatically resume this in-memory attempt. Cancellation stops local work; it
+does not revoke a grant already issued by the authorization server.
+
+The local TLS fixture exercises the real client HTTP exchange using temporary
+certificates and synthetic server replies. Its 35 tests cover success, pacing,
+issuer/scope checks, cancellation during both requests, connection loss,
+redirect refusal, invalid bodies, total exchange timeout, credential-write and
+readback failures, and isolation from existing credentials. Together with the
+polling, existing native PKCE login, token and setup-controller suites, 89 tests
+passed on macOS. Ruff passed for `src tests scripts`; strict mypy passed for
+86 source files. A separate macOS native Keychain check saved and read back one
+disposable synthetic enrollment grant, then verified its removal. This proves
+the OS-vault layer separately, not a real account authorization.
+
+Still pending: account authentication with a maintained authorization server,
+server-enforced one-use codes and rate limits, actual device registration and
+PC-to-relay credentials, registration/result recovery across restart, manager
+wiring, and Windows native-vault acceptance. Existing `native_login` already
+provides PKCE and a bounded loopback callback for personal HTTP client login;
+enrollment integration must reuse that behavior without reusing its AI tokens.
 No public relay, endpoint, native permission or production credential changed.
