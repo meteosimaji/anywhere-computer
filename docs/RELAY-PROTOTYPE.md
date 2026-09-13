@@ -120,10 +120,19 @@ run this synchronous client on its owning worker thread and close its database.
 Tests exercise restart after simulated post-registration response loss, stable
 identity and cached receipt reuse, conflicting recovery inputs, invalid/rejected
 responses and absence of the synthetic token from the local database. The HTTPS
-wire has separate actual TLS tests. This client is not yet wired into management
-IPC or the native UI. Expired-grant reauthorization and switching accounts need an
+wire has separate actual TLS tests. The native worker/UI integration is described
+below. Expired-grant reauthorization and switching accounts need an
 explicit recovery transition; this version preserves pending state instead of
 silently creating a new registration under a different attempt.
+
+Restart tests also cover expiry after both confirmed registration and lost reply.
+A confirmed cached receipt remains readable without a bearer request; an
+unconfirmed record retains its original identity and fails before another request.
+Neither path deletes or rewrites the stored grant. Reauthorization must bind the
+new grant to the original relay account before resending pending registration:
+the registry's idempotency key includes issuer and subject, so reusing only the
+enrollment ID under another account would create a distinct device. Clearing the
+vault and starting a new login is therefore not a complete recovery implementation.
 
 ## Native host lifetime
 

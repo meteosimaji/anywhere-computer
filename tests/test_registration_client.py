@@ -4,8 +4,53 @@ import pytest
 from test_client_tokens import MemoryVault
 from test_enrollment_credentials import saved
 
+from anywhere_computer.client_tokens import ClientCredentialError
 from anywhere_computer.enrollment_http import EnrollmentHTTPReply, EnrollmentTransportError
 from anywhere_computer.registration_client import RegistrationClient
+
+
+@pytest.mark.parametrize("confirmed", [False, True])
+def test_expired_grant_preserves_original_registration_after_restart(tmp_path, confirmed):
+    from test_enrollment_credentials import credentials as reopened_credentials
+
+    vault = MemoryVault()
+    credentials = saved(tmp_path / "credentials", vault)
+    sent = []
+
+    def wire(endpoint, fields, token):
+        sent.append(fields.copy())
+        if not confirmed:
+            raise EnrollmentTransportError(dispatched=True)
+        return EnrollmentHTTPReply(200, {**fields, "device_id": "b" * 32,
+                                         "state": "registered"})
+
+    first = RegistrationClient(tmp_path / "registration", credentials,
+                               endpoint="https://relay.example/register", wire=wire)
+    try:
+        if confirmed:
+            first.register(attempt_id="a" * 32, name="PC")
+        else:
+            with pytest.raises(EnrollmentTransportError):
+                first.register(attempt_id="a" * 32, name="PC")
+        original = first.current()
+    finally:
+        first.close()
+    stored = vault.data.copy()
+    expired = reopened_credentials(tmp_path / "credentials", vault, now=1060)
+    reopened = RegistrationClient(tmp_path / "registration", expired,
+                                  endpoint="https://relay.example/register", wire=wire)
+    try:
+        assert reopened.current() == original
+        if confirmed:
+            assert reopened.register(attempt_id="a" * 32, name="PC") == original
+        else:
+            with pytest.raises(ClientCredentialError):
+                reopened.register(attempt_id="a" * 32, name="PC")
+        assert reopened.current() == original
+        assert len(sent) == 1
+        assert vault.data == stored and vault.writes == 1
+    finally:
+        reopened.close()
 
 
 def test_restart_after_response_loss_recovers_same_registration(tmp_path):
