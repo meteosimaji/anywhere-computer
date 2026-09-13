@@ -187,3 +187,12 @@ these layers separately. They do not establish a rendered Tauri-to-provider
 end-to-end acceptance result. The feature requires an explicitly selected state
 directory and native provider configuration; default installation/pairing and
 public relay transport are not complete.
+
+On 2026-09-14, the macOS Tauri preview's actual registration status button
+returned the Python worker's initial state and enabled authorization start.
+This used a disposable state directory and a temporary environment installed
+from the checksum-verified bundled wheel and locked dependencies. The initial
+development-venv attempt timed out while Python was initializing its paths
+(sampled in `getpath_readlines`/`open`); the precise environmental cause remains
+unconfirmed. No OS permission was changed. The successful UI check did not
+start provider authorization, save a grant or register a device.
