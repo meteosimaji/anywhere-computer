@@ -70,6 +70,9 @@ def worker_for(tmp_path, *, vault=None, clock=None, account_binding=False,
 def test_worker_reauthorizes_expired_pending_registration_and_reopens_new_grant(
     tmp_path, monkeypatch,
 ):
+    import sqlite3
+    from contextlib import closing
+
     from anywhere_computer.client_tokens import ClientCredentialError
     vault, clock, losses = MemoryVault(), Clock(), [1]
 
@@ -129,6 +132,15 @@ def test_worker_reauthorizes_expired_pending_registration_and_reopens_new_grant(
         assert worker.handle("progress")["can_cleanup"] is True
         assert worker.handle("progress")["registration"] == result["registration"]
         monkeypatch.setattr(vault, "delete_password", deletion)
+        with closing(sqlite3.connect(tmp_path / "registration.sqlite3")) as db, db:
+            db.execute("CREATE TRIGGER reject_cleanup BEFORE DELETE ON reauthorizations "
+                       "BEGIN SELECT RAISE(ABORT, 'synthetic database failure'); END")
+        with pytest.raises(sqlite3.IntegrityError):
+            worker.handle("cleanup")
+        assert vault.data == old_vault  # Vault deletion succeeded before database failure.
+        assert worker.handle("progress")["can_cleanup"] is True
+        with closing(sqlite3.connect(tmp_path / "registration.sqlite3")) as db, db:
+            db.execute("DROP TRIGGER reject_cleanup")
         cleaned = worker.handle("cleanup")
         assert cleaned["can_cleanup"] is False
         assert cleaned["registration"] == result["registration"]
