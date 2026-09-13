@@ -127,3 +127,29 @@ HTTP の grant ごとの名前空間を実装どおり SHA-256 で解決する�
 
 Computer Use と Windows VM の切り替えは、この新規チャットでは未検証。
 この結果を全機能の受け入れ合格とは扱わない。
+
+### Windows relocation and cross-logon IPC feasibility
+
+The interactive Windows task relocated the verified alpha 9 portable release and
+state outside MSIX AppData redirection into the user's `.anywhere-computer`
+directory. Its acceptance receipt was retrieved independently over SFTP. The
+receipt records 4,645 manifest entries verified, five SQLite databases migrated
+with online backup and successful integrity checks, preservation of the old state,
+and recovery of an operation created before migration. The exact updated Plugin
+command initialized successfully, listed 65 tools, and completed file creation and
+readback. The Mac-side SSH process can execute the relocated wrapper; its remaining
+failure is Credential Manager error 1312, rather than an invisible executable.
+These observations do not yet establish ChatGPT-to-Windows acceptance.
+
+A separate synthetic experiment exercised the existing `SecretPipe` from the
+interactive Windows logon to the same user's SSH logon. The producer retained its
+owner-SID ACL and remote-client rejection. The SSH consumer read exactly 50 bytes;
+SHA-256 matched the producer's expected
+`4b5729e8c7ef025465a83bccdebdef4e7726fc419f0a5c40de48bc71b7dfd51b`.
+The producer subsequently reported `delivered: true`. No real credential was used.
+An earlier attempt had an argv quoting error and then encountered an expired pipe;
+the successful run used a fresh producer and corrected command quoting.
+
+This proves a bounded same-user cross-logon IPC primitive works on the current VM.
+It does not implement or verify a persistent authenticated agent transport,
+reconnection, MCP dispatch over that transport, or Windows reboot recovery.
