@@ -1,6 +1,6 @@
 "use strict";
 (() => {
-  const methods = ["progress", "start", "restart", "poll", "retry_save", "register", "cancel"];
+  const methods = ["progress", "start", "restart", "reauthorize", "poll", "retry_save", "register", "cancel", "cleanup"];
   const element = id => document.getElementById(`enrollment-${id}`);
   let busy = false, snapshot = null;
   const phases = {new:"認証を開始できます",starting:"認証を開始しています",waiting:"ブラウザーでの認証を待っています",requesting:"認証結果を確認しています",grant_saved:"認証情報を保存しました。端末名を入力して登録してください",denied:"認証が拒否されました",expired:"認証コードの期限が切れました",cancelled:"認証を中止しました",failed:"認証に失敗しました",uncertain:"認証結果が未確認です",credential_error:"認証情報を利用できません。期限や資格情報ストアの状態を確認してください"};
@@ -9,11 +9,13 @@
     const saved = snapshot?.registration;
     for (const method of methods) {
       const allowed = method === "progress"
+        || method === "cleanup" && snapshot?.can_cleanup === true
+        || method === "reauthorize" && snapshot?.can_reauthorize === true
         || method === "start" && phase === "new" && !saved
         || method === "restart" && ["denied","expired","cancelled","failed"].includes(phase) && !saved
         || method === "poll" && phase === "waiting"
         || method === "retry_save" && phase === "credential_error" && snapshot.authorization.can_retry_save === true
-        || method === "register" && !saved?.device && (phase === "grant_saved" || saved) && element("name").value.trim().length > 0
+        || method === "register" && !saved?.device && phase === "grant_saved" && element("name").value.trim().length > 0
         || method === "cancel" && ["waiting","credential_error"].includes(phase);
       element(method).disabled = busy || !allowed;
     }
@@ -25,7 +27,9 @@
     const auth = value.authorization, saved = value.registration;
     element("state").textContent = saved?.device
       ? (saved.device.state === "registered" ? "端末登録を保存済み。現在の接続・登録の有効性は未確認です" : "端末登録は失効しています")
-      : saved ? "登録要求を保存済み。結果を再確認するには同じ名前で登録してください" : phases[auth.phase];
+      : saved ? (auth.phase === "grant_saved"
+        ? "登録要求を保存済み。結果を再確認するには同じ名前で登録してください"
+        : `登録要求は保持されています。${phases[auth.phase]}`) : phases[auth.phase];
     if (saved) element("name").value = saved.name;
     const showCode = auth.phase === "waiting" && !!auth.user_code && !!auth.verification_uri;
     element("code-area").hidden = !showCode;

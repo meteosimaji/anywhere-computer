@@ -17,7 +17,15 @@ struct Worker {
 fn request(method: &str, name: Option<&str>) -> Result<Vec<u8>, String> {
     if !matches!(
         method,
-        "progress" | "start" | "restart" | "poll" | "cancel" | "retry_save" | "register"
+        "progress"
+            | "start"
+            | "restart"
+            | "reauthorize"
+            | "poll"
+            | "cancel"
+            | "retry_save"
+            | "register"
+            | "cleanup"
     ) {
         return Err("対応していない登録操作です。".into());
     }
@@ -253,6 +261,10 @@ mod tests {
 
     #[test]
     fn fixed_commands_and_names_only() {
+        assert!(request("cleanup", None).is_ok());
+        assert!(request("cleanup", Some("unexpected")).is_err());
+        assert!(request("reauthorize", None).is_ok());
+        assert!(request("reauthorize", Some("unexpected")).is_err());
         assert!(request("terminal_start", None).is_err());
         assert!(request("progress", Some("unexpected")).is_err());
         assert!(request("register", None).is_err());

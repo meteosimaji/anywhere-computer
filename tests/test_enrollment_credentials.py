@@ -97,3 +97,51 @@ def test_saved_attempt_returns_identity_only_and_rejects_expiry(tmp_path):
     with pytest.raises(ClientCredentialError):
         credentials(tmp_path, vault, now=1060).saved_attempt(scope="device:enroll")
     assert vault.writes == 1
+
+
+def test_forget_expired_profile_preserves_other_credentials(tmp_path):
+    vault = MemoryVault()
+    old = saved(tmp_path / "old", vault)
+    target = saved(tmp_path / "target", vault)
+    original = vault.data[SERVICE, old.reference]
+    expired = credentials(tmp_path / "target", vault, now=2000)
+    expired.forget(scope="device:enroll")
+    expired.forget(scope="device:enroll")
+    assert vault.data == {(SERVICE, old.reference): original}
+    assert target.reference != old.reference
+
+
+def test_cleanup_failure_keeps_retry_possible_without_disclosing_credentials(tmp_path):
+    class FailedDelete(MemoryVault):
+        fail = True
+
+        def delete_password(self, service, account):
+            if self.fail:
+                return  # Backend claims success but leaves the item present.
+            super().delete_password(service, account)
+
+    vault = FailedDelete()
+    store = saved(tmp_path, vault)
+    with pytest.raises(ClientCredentialError) as caught:
+        store.forget(scope="device:enroll")
+    assert "synthetic" not in str(caught.value)
+    assert vault.data
+    vault.fail = False
+    store.forget(scope="device:enroll")
+    assert vault.data == {}
+
+
+@pytest.mark.parametrize("changed", ["issuer", "client", "scope", "corrupt"])
+def test_cleanup_refuses_mismatched_or_corrupt_record(tmp_path, changed):
+    vault = MemoryVault()
+    store = saved(tmp_path, vault)
+    data = json.loads(vault.data[SERVICE, store.reference])
+    if changed == "scope":
+        data["token"]["scope"] = "files_read"
+    elif changed != "corrupt":
+        data[changed] = "unexpected"
+    vault.data[SERVICE, store.reference] = "malformed" if changed == "corrupt" else json.dumps(data)
+    original = vault.data.copy()
+    with pytest.raises(ClientCredentialError):
+        store.forget(scope="device:enroll")
+    assert vault.data == original

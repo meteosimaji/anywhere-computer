@@ -11,6 +11,140 @@ from anywhere_computer.enrollment_http import EnrollmentHTTPReply, EnrollmentTra
 from anywhere_computer.registration_client import RegistrationClient
 
 
+@pytest.mark.parametrize("renewed_subject", ["original", "other"])
+def test_fresh_grant_recovers_expired_pending_request_without_replacing_vault(
+    tmp_path, renewed_subject,
+):
+    from test_enrollment_credentials import credentials as reopened_credentials
+
+    from anywhere_computer.enrollment_credentials import EnrollmentToken
+
+    vault = MemoryVault()
+    original_credentials = saved(tmp_path / "credentials", vault)
+    requests = []
+    replies_lost = 2
+
+    def wire(endpoint, fields, token):
+        nonlocal replies_lost
+        requests.append((endpoint, fields.copy(), token))
+        if endpoint.endswith("/account"):
+            subject = renewed_subject if token == "renewed-private-grant" else "original"
+            return EnrollmentHTTPReply(200, {
+                "issuer": original_credentials.issuer, "subject": subject,
+            })
+        if replies_lost:
+            replies_lost -= 1
+            raise EnrollmentTransportError(dispatched=True)
+        return EnrollmentHTTPReply(200, {
+            **fields, "device_id": "b" * 32, "state": "registered",
+        })
+
+    def opened(credentials):
+        return RegistrationClient(tmp_path / "registration", credentials, wire=wire,
+                                  endpoint="https://relay.example/register",
+                                  account_endpoint="https://relay.example/account")
+
+    first = opened(original_credentials)
+    try:
+        with pytest.raises(EnrollmentTransportError):
+            first.register(attempt_id="a" * 32, name="日本語 PC 🚀")
+        pending = first.current()
+    finally:
+        first.close()
+    old_values = vault.data.copy()
+    expired = reopened_credentials(tmp_path / "credentials", vault, now=1060)
+    fresh = reopened_credentials(tmp_path / "renewal", vault, now=1060)
+    fresh.save("c" * 32, EnrollmentToken(access_token="renewed-private-grant",
+               token_type="Bearer", expires_in=60, scope="device:enroll"), requested_at=1060)
+    all_values = vault.data.copy()
+    client = opened(expired)
+    try:
+        with pytest.raises(ClientCredentialError):
+            client.register(attempt_id="a" * 32, name=pending.name)
+        if renewed_subject == "other":
+            with pytest.raises(ValueError, match="different account"):
+                client.recover(fresh, attempt_id="c" * 32)
+        else:
+            with pytest.raises(EnrollmentTransportError):
+                client.recover(fresh, attempt_id="c" * 32)
+        assert client.current() == pending
+    finally:
+        client.close()
+    client = opened(expired)
+    try:
+        if renewed_subject == "original":
+            result = client.recover(fresh, attempt_id="c" * 32)
+            assert result.enrollment_id == pending.enrollment_id
+            assert result.attempt_id == pending.attempt_id
+            assert result.owner == pending.owner
+            assert result.device.device_id == "b" * 32
+            assert client.register(attempt_id="a" * 32, name=pending.name) == result
+        registrations = [fields for endpoint, fields, _ in requests
+                         if endpoint.endswith("/register")]
+        assert len(registrations) == (3 if renewed_subject == "original" else 1)
+        assert all(fields == registrations[0] for fields in registrations)
+        assert vault.data == all_values and vault.writes == 2
+        assert all(vault.data[key] == value for key, value in old_values.items())
+    finally:
+        client.close()
+    for path in (tmp_path / "registration").iterdir():
+        assert b"renewed-private-grant" not in path.read_bytes()
+
+
+@pytest.mark.parametrize("invalid", [
+    "missing_registration", "legacy", "endpoint", "issuer", "client", "attempt", "expired",
+])
+def test_recovery_rejects_unbound_or_invalid_grants_before_dispatch(tmp_path, invalid):
+    from anywhere_computer.enrollment_credentials import EnrollmentCredentials, EnrollmentToken
+
+    vault = MemoryVault()
+    original = saved(tmp_path / "credentials", vault)
+    calls = []
+
+    def wire(endpoint, fields, token):
+        calls.append(endpoint)
+        if endpoint.endswith("/account"):
+            return EnrollmentHTTPReply(200, {"issuer": original.issuer, "subject": "owner"})
+        raise EnrollmentTransportError(dispatched=True)
+
+    account_endpoint = None if invalid == "legacy" else "https://relay.example/account"
+    client = RegistrationClient(tmp_path / "registration", original, wire=wire,
+                                endpoint="https://relay.example/register",
+                                account_endpoint=account_endpoint)
+    try:
+        if invalid != "missing_registration":
+            with pytest.raises(EnrollmentTransportError):
+                client.register(attempt_id="a" * 32, name="PC")
+        pending = client.current()
+    finally:
+        client.close()
+    now = [1000]
+    fresh = EnrollmentCredentials(
+        tmp_path / "renewal", vault=vault, clock=lambda: now[0], profile="test",
+        issuer="https://other.example" if invalid == "issuer" else original.issuer,
+        client="different" if invalid == "client" else original.client,
+    )
+    fresh.save("c" * 32, EnrollmentToken(access_token="renewed-private-grant",
+               token_type="Bearer", expires_in=60, scope="device:enroll"), requested_at=1000)
+    if invalid == "expired":
+        now[0] = 1060
+    client = RegistrationClient(
+        tmp_path / "registration", original, wire=wire,
+        endpoint="https://relay.example/register",
+        account_endpoint="https://relay.example/changed" if invalid == "endpoint"
+        else account_endpoint,
+    )
+    previous_calls, values = calls.copy(), vault.data.copy()
+    try:
+        with pytest.raises((ValueError, ClientCredentialError)):
+            client.recover(fresh, attempt_id="d" * 32 if invalid == "attempt" else "c" * 32)
+        assert calls == previous_calls
+        assert client.current() == pending
+        assert vault.data == values
+    finally:
+        client.close()
+
+
 @pytest.mark.parametrize("account_endpoint", [
     "http://relay.example/account", "https://other.example/account",
     "https://relay.example:444/account", "https://relay.example/account?next=other",
@@ -53,7 +187,7 @@ def test_schema_one_pending_record_is_preserved_without_guessing_its_account(tmp
         with pytest.raises(ValueError):
             client.register(attempt_id="a" * 32, name="PC")
         assert calls == []
-        assert client._db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert client._db.execute("PRAGMA user_version").fetchone()[0] == 3
         assert json.loads(client._db.execute("SELECT record FROM registration").fetchone()[0]) == (
             original
         )

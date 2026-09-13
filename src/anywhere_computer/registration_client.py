@@ -78,12 +78,14 @@ class RegistrationClient:
             with self._db:
                 self._db.execute("BEGIN IMMEDIATE")
                 version = self._db.execute("PRAGMA user_version").fetchone()[0]
-                if version not in (0, 1, 2):
+                if version not in (0, 1, 2, 3):
                     raise ValueError("Unsupported registration state version")
                 self._db.execute("CREATE TABLE IF NOT EXISTS registration ("
                                  "credential TEXT PRIMARY KEY, endpoint TEXT NOT NULL, "
                                  "record TEXT NOT NULL)")
-                self._db.execute("PRAGMA user_version=2")
+                self._db.execute("CREATE TABLE IF NOT EXISTS reauthorizations ("
+                                 "credential TEXT NOT NULL, slot TEXT NOT NULL UNIQUE)")
+                self._db.execute("PRAGMA user_version=3")
         except BaseException:
             self._db.close()
             raise
@@ -99,6 +101,89 @@ class RegistrationClient:
         if row[0] != self._endpoint:
             raise ValueError("Saved registration belongs to a different endpoint")
         return RegistrationAttempt.model_validate_json(row[1])
+
+    def reauthorization_slot(self) -> str | None:
+        self.current()  # Reject configuration changes before selecting another grant.
+        row = self._db.execute(
+            "SELECT slot FROM reauthorizations WHERE credential=? ORDER BY rowid DESC LIMIT 1",
+            (self._credentials.reference,),
+        ).fetchone()
+        if row is None:
+            return None
+        if not isinstance(row[0], str) or uuid.UUID(hex=row[0]).hex != row[0]:
+            raise ValueError("Invalid saved reauthorization slot")
+        return row[0]
+
+    def begin_reauthorization(self) -> str:
+        """Persist a new vault-slot identity before starting explicit authorization.
+
+        Historical slots remain recorded for later credential cleanup; no grant
+        is deleted or replaced. Slots contain no codes, tokens or account claims.
+        """
+        with ProcessLock(self._lock, timeout=0):
+            current = self.current()
+            if (current is None or current.device is not None or current.owner is None
+                    or current.account_endpoint != self._account_endpoint):
+                raise ValueError("Reauthorization requires an account-bound pending registration")
+            slot = uuid.uuid4().hex
+            with self._db:
+                self._db.execute("INSERT INTO reauthorizations VALUES(?,?)",
+                                 (self._credentials.reference, slot))
+            return slot
+
+    def cleanup_reauthorizations(self, forget: Callable[[str], None]) -> int:
+        """Release recorded recovery slots only after a receipt was persisted."""
+        with ProcessLock(self._lock, timeout=0):
+            current = self.current()
+            if current is None or current.device is None:
+                raise ValueError("Confirm registration before cleaning recovery credentials")
+            rows = self._db.execute("SELECT slot FROM reauthorizations WHERE credential=?",
+                                    (self._credentials.reference,)).fetchall()
+            for (slot,) in rows:
+                if not isinstance(slot, str) or uuid.UUID(hex=slot).hex != slot:
+                    raise ValueError("Invalid saved reauthorization slot")
+                forget(slot)
+                with self._db:
+                    self._db.execute("DELETE FROM reauthorizations WHERE credential=? AND slot=?",
+                                     (self._credentials.reference, slot))
+            return len(rows)
+
+    def recover(self, credentials: EnrollmentCredentials, *,
+                attempt_id: str) -> RegistrationAttempt:
+        """Recover a pending registration with a separately saved fresh grant.
+
+        The trusted caller owns the new authorization and its OS-vault lifetime.
+        Neither credential slot is rewritten here. Original request identity and
+        account binding survive failure and process restart.
+        """
+        with ProcessLock(self._lock, timeout=0):
+            current = self.current()
+            if (current is None or current.owner is None
+                    or current.account_endpoint != self._account_endpoint):
+                raise ValueError("Recovery requires the original verified account binding")
+            if (credentials.issuer != self._credentials.issuer
+                    or credentials.client != self._credentials.client):
+                raise ValueError("Recovery credentials belong to another provider or client")
+            token = credentials.access_token(attempt_id=attempt_id, scope="device:enroll")
+            if self._verified_account(token) != current.owner:
+                raise ValueError("Registration belongs to a different account")
+            if current.device is not None:
+                return current
+            return self._confirm(current, token)
+
+    def _verified_account(self, token: str) -> RelayAccount | None:
+        if self._account_endpoint is None:
+            return None
+        identity = self._wire(self._account_endpoint, {}, token)
+        try:
+            if identity.status != 200:
+                raise ValueError("Account lookup was rejected")
+            owner = RelayAccount.model_validate(identity.fields)
+            if owner.issuer != self._credentials.issuer:
+                raise ValueError("Account issuer mismatch")
+            return owner
+        except ValueError:
+            raise ValueError("Registration account could not be verified") from None
 
     def register(self, *, attempt_id: str, name: str) -> RegistrationAttempt:
         name = device_name(name)
@@ -116,19 +201,9 @@ class RegistrationClient:
                 if current.account_endpoint != self._account_endpoint:
                     raise ValueError("Pending registration account binding cannot be changed")
             token = self._credentials.access_token(attempt_id=attempt_id, scope="device:enroll")
-            owner = None
-            if self._account_endpoint is not None:
-                identity = self._wire(self._account_endpoint, {}, token)
-                try:
-                    if identity.status != 200:
-                        raise ValueError("Account lookup was rejected")
-                    owner = RelayAccount.model_validate(identity.fields)
-                    if owner.issuer != self._credentials.issuer:
-                        raise ValueError("Account issuer mismatch")
-                except ValueError:
-                    raise ValueError("Registration account could not be verified") from None
-                if current is not None and current.owner != owner:
-                    raise ValueError("Registration belongs to a different account")
+            owner = self._verified_account(token)
+            if current is not None and current.owner != owner:
+                raise ValueError("Registration belongs to a different account")
             if current is None:
                 proposed = proposed.model_copy(update={
                     "owner": owner, "account_endpoint": self._account_endpoint,
@@ -138,21 +213,25 @@ class RegistrationClient:
                         self._credentials.reference, self._endpoint, proposed.model_dump_json(),
                     ))
                 current = proposed
-            reply = self._wire(self._endpoint, {
-                "enrollment_id": current.enrollment_id, "name": current.name,
-            }, token)
-            if reply.status != 200:
-                raise ValueError("Registration was not confirmed; original request retained")
-            try:
-                device = RelayDevice.model_validate(reply.fields)
-            except ValueError:
-                raise ValueError(
-                    "Invalid registration response; original request retained",
-                ) from None
-            if device.enrollment_id != current.enrollment_id or device.name != current.name:
-                raise ValueError("Registration response does not match the saved request")
-            confirmed = current.model_copy(update={"device": device})
-            with self._db:
-                self._db.execute("UPDATE registration SET record=? WHERE credential=?",
-                                 (confirmed.model_dump_json(), self._credentials.reference))
-            return confirmed
+            return self._confirm(current, token)
+
+    def _confirm(self, current: RegistrationAttempt, token: str) -> RegistrationAttempt:
+        # Caller holds the registration process lock across lookup and dispatch.
+        reply = self._wire(self._endpoint, {
+            "enrollment_id": current.enrollment_id, "name": current.name,
+        }, token)
+        if reply.status != 200:
+            raise ValueError("Registration was not confirmed; original request retained")
+        try:
+            device = RelayDevice.model_validate(reply.fields)
+        except ValueError:
+            raise ValueError(
+                "Invalid registration response; original request retained",
+            ) from None
+        if device.enrollment_id != current.enrollment_id or device.name != current.name:
+            raise ValueError("Registration response does not match the saved request")
+        confirmed = current.model_copy(update={"device": device})
+        with self._db:
+            self._db.execute("UPDATE registration SET record=? WHERE credential=?",
+                             (confirmed.model_dump_json(), self._credentials.reference))
+        return confirmed
