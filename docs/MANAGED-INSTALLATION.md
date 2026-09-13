@@ -441,3 +441,26 @@ for external-browser native authorization, and
 [RFC 8628](https://www.rfc-editor.org/rfc/rfc8628.html) for the separate-device
 flow. The paragraphs above are design decisions and pending acceptance, not
 claims that these enrollment or relay paths already exist.
+
+### Device-flow polling implementation (2026-09-14)
+
+`device_polling.DevicePolling` now implements the credential-free lifecycle for
+one device authorization attempt. It delays the first request, permits one
+request in flight, retains each five-second `slow_down` increase, doubles the
+interval on connection timeouts, and stops on cancellation, expiry, denial or
+an unknown exchange result. The clock is monotonic; tests advance it explicitly
+without sleeping. `authorized` means only that the transport reported a valid
+grant, not that a device is registered or credentials were stored.
+
+This is an internal component, not a new public tool or working pairing screen.
+The transport must validate response bodies before classifying them; a lost
+response after a possible exchange is `unknown_result`, not a connection timeout.
+Cancellation prevents a late response from reactivating the attempt. The owning
+transport must also discard any late credentials and perform appropriate remote
+cleanup; stopping local polling does not revoke a server-side grant.
+
+The targeted lifecycle suite covers initial pacing, repeated slowdown, expiry
+before the next poll, in-flight cancellation, terminal outcomes and timeout
+backoff. HTTPS integration, issuer binding, PKCE, vault publication/readback,
+server-side code reuse and attempt limits, and manager wiring remain pending.
+No public relay, endpoint, native permission or production credential changed.
