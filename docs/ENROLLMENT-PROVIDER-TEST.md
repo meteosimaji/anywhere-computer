@@ -169,3 +169,29 @@ The receipt records `http_registration: true` and
 `enrollment_token_mcp_rejected: true`. Provider authentication uses verified
 HTTPS; the local adapter test uses loopback HTTP. This is not evidence for
 internet TLS termination, a proxy deployment, throughput or PC relay transport.
+
+## Reauthorization and native credential acceptance (2026-09-14)
+
+At source commit `fc87b04` (cleanup implementation, subsequently bundled), the
+reference distributions were checksum-verified again and Keycloak was extracted
+into fresh disposable state with the current realm fixture. Its only listener
+was `127.0.0.1:18443`. The existing `--check-registration` runner passed approval,
+denial, cancellation, consumed-code rejection, signed registration, HTTP retry
+and enrollment-token rejection at `/mcp`.
+
+A separate check combined the real Keycloak device login/form endpoints, verified
+TLS, the native macOS Keychain and `EnrollmentWorker`. It retained a pending
+registration after injected reply loss, obtained a new grant through a second
+real login, reconstructed the worker and recovered the original enrollment ID.
+The relay verifier validated the provider-issued signatures and account identity;
+its registry contained one device. The worker cleanup command removed recovery
+credentials, then the test harness removed the original test credential and
+verified all test entries absent.
+
+In that second check, relay verification/storage calls were direct Python calls,
+not the HTTP adapter, and the worker was reconstructed in the same process.
+Original-grant expiry was forced using the credential store's injected clock;
+provider-side natural expiry was not asserted. Separate-process native Keychain
+coverage is recorded in [relay development](RELAY-PROTOTYPE.md). No rendered
+manager/browser acceptance, public relay deployment or PC transport is established
+by these checks.
