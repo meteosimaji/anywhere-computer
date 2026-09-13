@@ -23,13 +23,14 @@ from anywhere_computer.engine import Engine
 from anywhere_computer.http_mcp import HTTPMCP
 
 
-async def verify(executable: Path, receipt: Path) -> None:
+async def verify(executable: Path, receipt: Path, *, typed: bool = False) -> None:
     report = {
         "completed": False,
         "route": "authenticated HTTP -> direct MCP -> Peekaboo",
         "model_inference_requested": False,
         "calls": [],
         "observed_results": [],
+        "typed_gui": typed,
     }
     try:
         with tempfile.TemporaryDirectory(prefix="anywhere-gui-acceptance-") as directory:
@@ -44,6 +45,7 @@ async def verify(executable: Path, receipt: Path) -> None:
                     "mcp_call",
                     "mcp_session_status",
                     "mcp_session_close",
+                    "gui_observe", "gui_click", "gui_type", "gui_key",
                 }
             )
             authority = AuthorizationStore(
@@ -112,15 +114,29 @@ async def verify(executable: Path, receipt: Path) -> None:
                                 names = {t["name"] for t in catalog["data"]["tools"]}
                                 assert {"see", "type", "hotkey", "app"} <= names
 
+                                observation_id = None
+
                                 async def gui(name, arguments):
-                                    result = await call(
-                                        "mcp_call",
-                                        {
-                                            **sid,
-                                            "name": name,
-                                            "arguments": arguments,
-                                        },
-                                    )
+                                    nonlocal observation_id
+                                    if typed and name == "see":
+                                        result = await call("gui_observe", {
+                                            **sid, "app": arguments["app_target"],
+                                        })
+                                        observation_id = result["data"].get("observation_id")
+                                    elif typed and name in {"type", "hotkey"}:
+                                        assert observation_id is not None
+                                        options = arguments if name == "type" else {
+                                            "keys": arguments["keys"].split(","),
+                                        }
+                                        result = await call(
+                                            "gui_type" if name == "type" else "gui_key",
+                                            {**sid, **options, "observation_id": observation_id},
+                                        )
+                                        observation_id = None
+                                    else:
+                                        result = await call("mcp_call", {
+                                            **sid, "name": name, "arguments": arguments,
+                                        })
                                     assert not result["data"]["is_error"], name
                                     return result
 
@@ -137,6 +153,8 @@ async def verify(executable: Path, receipt: Path) -> None:
                                     ("+1", 53),
                                     ("+1", 54),
                                 ]:
+                                    if typed and observation_id is None:
+                                        await gui("see", {"app_target": "com.apple.calculator"})
                                     await gui("type", {"text": expression, "press_return": True})
                                     deadline = time.monotonic() + 3
                                     observations = 0
@@ -201,5 +219,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable", type=Path, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
+    parser.add_argument("--typed", action="store_true")
     args = parser.parse_args()
-    asyncio.run(verify(args.executable, args.receipt))
+    asyncio.run(verify(args.executable, args.receipt, typed=args.typed))

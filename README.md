@@ -4,6 +4,8 @@ ChatGPT・CodexなどのMCPクライアントから、自分のPCのファイル
 判断は接続したAIが行い、PC上のAnywhere Computerが操作を実行します。ファイルや端末の基本機能にCodexのモデル実行は必要ありません。
 
 公開開発中のalpha版です。現在の公開パッケージは `0.1.0a6`、Codex Pluginの表記は `0.1.0-alpha.6` です。正式stableリリースはまだありません。
+このリポジトリの開発版は `0.1.0a8` / `0.1.0-alpha.8` です。監査の4件の実行管理修正、
+直接MCPの要約・検索、Peekaboo向け型付きGUI操作を含みます。公開済みalpha6の機能とは区別してください。
 
 ## できること
 
@@ -24,7 +26,7 @@ Codexのツールを呼び出せることは、Codex専用の画面操作文脈�
 
 Claude Code・Gemini CLIなどの接続設定と検証範囲は[MCPクライアント接続ガイド](docs/MCP-CLIENTS.md)を参照してください。
 
-開発版alpha7では、独立した既存MCPを使うGUI操作を検証しています。macOSのPeekabooで、
+開発版alpha8では、独立した既存MCPを使う型付きGUI操作を検証しています。macOSのPeekabooで、
 認証付きHTTPから電卓の連続操作と結果回収を確認しました。導入条件、公開alphaとの違い、
 更新後のツール追加手順は[GUI用MCP接続ガイド](docs/GUI-MCP.md)を参照してください。
 

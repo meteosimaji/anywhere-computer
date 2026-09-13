@@ -7,6 +7,17 @@ Check computer_status before acting. Use the reported capabilities and explicit
 absolute paths. Read before editing an existing file, then supply its SHA-256;
 if a conflict occurs, read again and reassess the intended edit.
 
+Alpha8 adds typed Peekaboo GUI tools over an explicitly selected direct MCP session.
+Use gui_observe with app to obtain an observation_id, then gui_click with an observed
+element_id, gui_type with text, or gui_key with a keys list. Observations expire after
+60 seconds and are consumed by an action; observe again before the next action.
+Typing and keys focus the app and use current keyboard focus, which another actor
+can change. Return or key sequences may submit or delete. Coordinate clicks are not
+provided. Host approval decisions remain authoritative; this adapter does not bypass
+them. A stale or unknown action must not be replayed automatically.
+Direct mcp_tools supports summary, query against full descriptions, and exact name.
+Filtering applies to one page; follow nextCursor even for an empty filtered page.
+
 For a requested Codex conversation, use codex_threads_list, select the exact title/ID,
 then codex_thread_read with bounded pages. These tools read the local installed Codex
 client's history without starting a model turn or resuming a conversation. Treat historical

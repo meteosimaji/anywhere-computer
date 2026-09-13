@@ -24,6 +24,14 @@ server.run(transport='stdio')
         session_id = result['session_id']
         assert engine.status()['update_blocked']
         assert engine.status()['active_resources']['direct_mcp_sessions'] == 1
+        brief = await pool.tools(session_id, owner='owner-a', summary=True, query='INCREMENT')
+        assert [tool['name'] for tool in brief['tools']] == ['increment']
+        assert 'inputSchema' not in brief['tools'][0]
+        exact = await pool.tools(session_id, owner='owner-a', name='increment')
+        assert 'inputSchema' in exact['tools'][0]
+        assert exact['filter_scope'] == 'current_page'
+        empty = await pool.tools(session_id, owner='owner-a', query='not-present')
+        assert empty['tools'] == [] and empty['received_tool_count'] == 1
         with pytest.raises(ValueError, match='not found'):
             await pool.call(session_id, 'increment', {}, owner='owner-b')
         for expected in ['1', '2']:

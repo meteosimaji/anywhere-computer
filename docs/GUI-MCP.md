@@ -1,5 +1,33 @@
 # GUI操作を既存のMCPへ接続する
 
+## alpha8の型付き操作
+
+alpha8にはPeekaboo向けの薄いアダプターを追加した。先に既存の実行ファイルを
+`mcp_session_open`で明示的に選ぶ。別のMCPが同じ名前のツールを持つだけでは互換性を保証しない。
+
+- `gui_observe(session_id, app)`で対象アプリを観測し、observation_idを受け取る。
+- `gui_click(session_id, observation_id, element_id)`で観測中の要素をクリックする。
+- `gui_type(session_id, observation_id, text, press_return)`は対象アプリを前面化して入力する。
+- `gui_key(session_id, observation_id, keys)`は対象アプリを前面化してキーを押す。
+
+観測は接続所有者・MCPセッションに結び付き、60秒または次の観測・操作で失効する。
+入力・キー操作はOSの現在のフォーカスを使うため、外部からのフォーカス変更は防げない。
+この制約と送信・削除等の副作用をツール説明に明示している。アダプターは独自の承認画面を
+追加せず、ホストの判定を回避することも保証しない。再試行で入力を繰り返さない。
+
+観測結果にPeekabooのversion 1 coordinate_contextがあれば、座標系・原点・矩形・画像寸法・
+snapshot参照を検証して保持する。それ以外の_metaは転送しない。現地の3.0.0-beta3は
+このメタデータを返さず、coordinate_status=unavailableとなる。座標クリックは提供しない。
+最新版の全機能互換を宣言せず、実際のschemaと応答で対応を確認する。
+
+公開HTTPに追加する場合、既存入口を停止して`http-add-tools`へgui_observe/gui_click/
+gui_type/gui_keyの4 scopeを指定し、再起動後にChatGPTのPlugin定義を更新する。
+`verify_gui_http.py --typed`はこれらの型付き経路で電卓の連続操作と結果回収を検証する。
+
+直接MCPの`mcp_tools`はsummary=trueで短い一覧、queryで説明全文の検索、nameで正確な
+ツール名のschema取得を提供する。フィルターは現在のページに適用されるため、空の結果でも
+nextCursorがあれば続ける。全文schemaが必要なときはsummaryをfalseにする。
+
 開発版alpha7は、`mcp_session_open` → `mcp_tools` → `mcp_call` で、利用者が
 インストールしたstdio MCPへ直接接続できます。Codexのモデル実行や登録は不要です。
 MCPのツール定義を読んでから、接続元のAIが操作を選びます。

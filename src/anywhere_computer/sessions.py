@@ -19,6 +19,19 @@ from .models import SessionInput, SessionOutput, StartSession
 OUTPUT_CAP = 8 * 1024 * 1024
 
 
+class TerminalInputOutcomeUnknown(RuntimeError):
+    """Input may have reached the child before delivery or observation failed."""
+
+    def __init__(self, *, bytes_attempted: int, failure_kind: str) -> None:
+        super().__init__(
+            "Terminal input may have been delivered; outcome is unknown. "
+            "Recover the operation and inspect terminal output before another input; "
+            "do not automatically resend it"
+        )
+        self.bytes_attempted = bytes_attempted
+        self.failure_kind = failure_kind
+
+
 @dataclass
 class Session:
     session_id: str
@@ -34,8 +47,15 @@ class Session:
 class Sessions:
     def __init__(self) -> None:
         self.sessions: dict[str, Session] = {}
+        self._start_lock = asyncio.Lock()
 
     async def start(self, args: StartSession) -> dict[str, JsonValue]:
+        # Admission and registration must be atomic across the spawning await.
+        # Only process creation is serialized, not running terminal sessions.
+        async with self._start_lock:
+            return await self._start(args)
+
+    async def _start(self, args: StartSession) -> dict[str, JsonValue]:
         if sum(item.process.returncode is None for item in self.sessions.values()) >= 32:
             raise ValueError("32 active sessions; stop one before starting another")
         if len(self.sessions) >= 128:
@@ -53,28 +73,13 @@ class Sessions:
         )
         if not Path(shell).is_absolute():
             raise ValueError("Shell must be an absolute executable path")
-        # cmd.exe uses its own command-line quoting, not argv quoting.
-        # asyncio's shell transport constructs /c "..." correctly on Windows.
-        if sys.platform == "win32" and Path(shell).name.lower() == "cmd.exe":
-            process = await asyncio.create_subprocess_shell(
-                args.command,
-                executable=shell,
-                cwd=cwd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-            )
-        else:
-            process = await asyncio.create_subprocess_exec(
-                shell,
-                "-c",
-                args.command,
-                cwd=cwd,
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,
-                start_new_session=os.name != "nt",
-            )
+        # A persistent group/Job owner outlives short-lived shells and their children.
+        process = await asyncio.create_subprocess_exec(
+            sys.executable, "-I", str(Path(__file__).with_name("terminal_worker.py")),
+            shell, args.command, cwd=cwd,
+            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT, start_new_session=os.name != "nt",
+        )
         session = Session(uuid.uuid4().hex, process, time.time())
         self.sessions[session.session_id] = session
         session.reader = asyncio.create_task(self._read(session))
@@ -119,14 +124,24 @@ class Sessions:
                 raise ValueError("Session is not accepting input")
             cursor = session.first_cursor + len(session.output)
             encoded = args.text.encode()
-            session.process.stdin.write(encoded)
-            await asyncio.wait_for(session.process.stdin.drain(), 10)
-            sent: dict[str, JsonValue] = {
-                "session_id": args.session_id, "bytes_sent": len(encoded),
-            }
-            if not args.wait_ms and args.wait_for_prompt is None:
-                return sent
-            return {**sent, **await self._wait_response(session, args, cursor)}
+            try:
+                session.process.stdin.write(encoded)
+                await asyncio.wait_for(session.process.stdin.drain(), 10)
+                sent: dict[str, JsonValue] = {
+                    "session_id": args.session_id, "bytes_sent": len(encoded),
+                }
+                if not args.wait_ms and args.wait_for_prompt is None:
+                    return sent
+                return {**sent, **await self._wait_response(session, args, cursor)}
+            except Exception as error:
+                # write/drain failure cannot prove that no bytes reached the child.
+                # The same applies to observation errors after delivery. Preserve
+                # the operation ID and avoid exposing free-form stream errors.
+                raise TerminalInputOutcomeUnknown(
+                    bytes_attempted=len(encoded),
+                    failure_kind="timeout" if isinstance(error, TimeoutError)
+                    else "input_or_observation_failed",
+                ) from None
         finally:
             session.input_lock.release()
 

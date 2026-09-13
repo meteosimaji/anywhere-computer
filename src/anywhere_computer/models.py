@@ -292,3 +292,6 @@ class DirectMCPCall(DirectMCPSessionId):
 
 class DirectMCPTools(DirectMCPSessionId):
     cursor: str | None = Field(default=None, max_length=4096)
+    summary: bool = False
+    query: str | None = Field(default=None, min_length=1, max_length=500)
+    name: str | None = Field(default=None, min_length=1, max_length=256)

@@ -121,9 +121,35 @@ class DirectMCPSessions:
             await self.expire_idle()
 
     async def tools(self, session_id: str, *, owner: str | None,
-                    cursor: str | None = None) -> dict[str, JsonValue]:
+                    cursor: str | None = None, summary: bool = False,
+                    query: str | None = None, name: str | None = None) -> dict[str, JsonValue]:
         async with self._lease(session_id, owner) as entry:
-            return await entry.context.list_tools(cursor=cursor)
+            page = await entry.context.list_tools(cursor=cursor)
+            if not summary and query is None and name is None:
+                return page
+            rows = page.get('tools')
+            if not isinstance(rows, list):
+                raise ValueError('Direct MCP catalog has no tools list')
+            selected: list[JsonValue] = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise ValueError('Direct MCP catalog has an invalid tool')
+                tool_name = row.get('name')
+                description = row.get('description') or ''
+                if not isinstance(tool_name, str) or not isinstance(description, str):
+                    raise ValueError('Direct MCP catalog has invalid tool text')
+                if name is not None and name != tool_name:
+                    continue
+                if query is not None and query.casefold() not in (
+                    tool_name + '\n' + description
+                ).casefold():
+                    continue
+                selected.append({
+                    'name': tool_name, 'description': description[:160],
+                    'description_truncated': len(description) > 160,
+                } if summary else row)
+            return {**page, 'tools': selected, 'filter_scope': 'current_page',
+                    'received_tool_count': len(rows), 'matched_tool_count': len(selected)}
 
     async def call(self, session_id: str, name: str, arguments: dict[str, JsonValue], *,
                    owner: str | None) -> dict[str, JsonValue]:

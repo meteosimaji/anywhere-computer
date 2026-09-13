@@ -71,9 +71,17 @@ async def bounded_stdio(
     with open(os.devnull, 'w') as errors:
         if lifecycle is not None:
             lifecycle.cleanup_confirmed = False
-        process = await _create_platform_compatible_process(
-            server.command, server.args, get_default_environment(), errors, server.cwd,
-        )
+        try:
+            process = await _create_platform_compatible_process(
+                server.command, server.args, get_default_environment(), errors, server.cwd,
+            )
+        except OSError:
+            # OS-level spawn rejection acquired no process to clean up. Do not
+            # consume a permanent session slot. Cancellation and unexpected
+            # helper failures remain unconfirmed rather than claiming cleanup.
+            if lifecycle is not None:
+                lifecycle.cleanup_confirmed = True
+            raise
 
         async def receive() -> None:
             assert process.stdout is not None

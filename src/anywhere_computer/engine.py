@@ -19,6 +19,7 @@ from .document_writer import write_document
 from .documents import read_document
 from .downloads import Downloads
 from .files import Files, absolute_path, inspect_file
+from .gui_mcp import GUIMCP, GUIAction, GUIClick, GUIKey, GUIObserve, GUIType
 from .mcp_results import normalize_tool_result
 from .models import (
     BeginDownload,
@@ -74,7 +75,7 @@ from .plugin_sessions import PluginSessions
 from .processes import list_processes, stop_process
 from .runtime_identity import ENGINE_API_VERSION, runtime_identity
 from .search import Searches
-from .sessions import Sessions
+from .sessions import Sessions, TerminalInputOutcomeUnknown
 from .state import Ledger
 from .uploads import UploadOutcomeUnknown, Uploads
 
@@ -107,6 +108,7 @@ class Engine:
         self.sessions = Sessions()
         self.plugin_sessions = PluginSessions()
         self.direct_mcp_sessions = DirectMCPSessions()
+        self.gui_mcp = GUIMCP(self.direct_mcp_sessions)
         # Transport-owned identity, inherited by the durable execution task only.
         # Tool arguments cannot set this value; None is the local execution scope.
         self._plugin_owner: ContextVar[str | None] = ContextVar("plugin_owner", default=None)
@@ -140,6 +142,28 @@ class Engine:
         )
 
     def _register_tools(self) -> None:
+        async def gui_observe(args: GUIObserve) -> Result:
+            return await self.gui_mcp.observe(args, owner=self._plugin_owner.get())
+
+        async def gui_action(args: GUIAction) -> Result:
+            return await self.gui_mcp.act(args, owner=self._plugin_owner.get())
+
+        self.register('gui_observe', 'Observe an app through a selected Peekaboo MCP session. '
+                      'Creates a screenshot/snapshot and a 60-second observation reference. '
+                      'Returns available coordinate metadata; does not run a model.',
+                      GUIObserve, gui_observe, open_world=True)
+        self.register('gui_click', 'Click an element from an unconsumed GUI observation. '
+                      'May activate controls or submit changes; consumes the observation.',
+                      GUIClick, gui_action, destructive=True, open_world=True)
+        self.register('gui_type', 'Focus the observed app and type at its current keyboard focus. '
+                      'Text may contain provider key sequences; optional Return may submit. '
+                      'External focus changes remain possible. Consumes the observation.',
+                      GUIType, gui_action, destructive=True, open_world=True)
+        self.register('gui_key', 'Focus the observed app and press a key chord at keyboard focus. '
+                      'May submit, delete, or close UI. External focus changes remain possible. '
+                      'Consumes the observation.',
+                      GUIKey, gui_action, destructive=True, open_world=True)
+
         async def direct_open(args: OpenDirectMCPSession) -> Result:
             return await self.direct_mcp_sessions.open(
                 args.command, Path(args.cwd), owner=self._plugin_owner.get(),
@@ -157,6 +181,7 @@ class Engine:
         async def direct_tools(args: DirectMCPTools) -> Result:
             return await self.direct_mcp_sessions.tools(
                 args.session_id, owner=self._plugin_owner.get(), cursor=args.cursor,
+                summary=args.summary, query=args.query, name=args.name,
             )
 
         async def direct_call(args: DirectMCPCall) -> Result:
@@ -186,6 +211,9 @@ class Engine:
         self.register('mcp_session_close', 'Close your direct MCP session and its server process.',
                       DirectMCPSessionId, direct_close, destructive=True)
         self.register('mcp_tools', 'Read direct MCP tool names and argument schemas. '
+                      'Use summary for brief descriptions, query for full-description search, '
+                      'or name for an exact tool. Filters apply to the current page; follow '
+                      'nextCursor even when no matches are returned. '
                       'Pass a returned nextCursor as cursor to fetch the next page.',
                       DirectMCPTools, direct_tools, open_world=True)
         self.register(
@@ -889,6 +917,18 @@ class Engine:
                           'execution_state': 'unknown',
                           'next_action': 'Recover this operation with operations_get and inspect '
                                          'the target before making another call'},
+                )
+            except TerminalInputOutcomeUnknown as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state="unknown", error=str(error),
+                    data={
+                        "error_code": "terminal_input_outcome_unknown",
+                        "dispatched": None, "execution_state": "unknown",
+                        "failure_kind": error.failure_kind,
+                        "bytes_attempted": error.bytes_attempted,
+                        "next_action": "Recover this operation with operations_get and inspect "
+                        "terminal output and the target before any new input; do not resend",
+                    },
                 )
             except UploadOutcomeUnknown as error:
                 reply = Reply(operation_id=request.operation_id, state="unknown", error=str(error))
