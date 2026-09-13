@@ -1,4 +1,6 @@
 import json
+import sqlite3
+from contextlib import closing
 
 import pytest
 from test_client_tokens import MemoryVault
@@ -7,6 +9,56 @@ from test_enrollment_credentials import saved
 from anywhere_computer.client_tokens import ClientCredentialError
 from anywhere_computer.enrollment_http import EnrollmentHTTPReply, EnrollmentTransportError
 from anywhere_computer.registration_client import RegistrationClient
+
+
+@pytest.mark.parametrize("account_endpoint", [
+    "http://relay.example/account", "https://other.example/account",
+    "https://relay.example:444/account", "https://relay.example/account?next=other",
+])
+def test_invalid_account_endpoint_does_not_create_registration_state(tmp_path, account_endpoint):
+    credentials = saved(tmp_path / "credentials", MemoryVault())
+    with pytest.raises(ValueError):
+        RegistrationClient(tmp_path / "registration", credentials,
+                           endpoint="https://relay.example/register",
+                           account_endpoint=account_endpoint)
+    assert not (tmp_path / "registration").exists()
+
+
+def test_schema_one_pending_record_is_preserved_without_guessing_its_account(tmp_path):
+    credentials = saved(tmp_path / "credentials", MemoryVault())
+    directory = tmp_path / "registration"
+    directory.mkdir()
+    original = {"attempt_id": "a" * 32, "enrollment_id": "c" * 32,
+                "name": "PC", "device": None}
+    database = directory / "registration.sqlite3"
+    with closing(sqlite3.connect(database)) as db, db:
+        db.execute("CREATE TABLE registration (credential TEXT PRIMARY KEY, "
+                   "endpoint TEXT NOT NULL, record TEXT NOT NULL)")
+        db.execute("INSERT INTO registration VALUES(?,?,?)", (
+            credentials.reference, "https://relay.example/register", json.dumps(original),
+        ))
+        db.execute("PRAGMA user_version=1")
+    calls = []
+
+    def wire(endpoint, fields, token):
+        calls.append(endpoint)
+        raise AssertionError("Unbound legacy registration must not be sent")
+
+    client = RegistrationClient(directory, credentials, wire=wire,
+                                endpoint="https://relay.example/register",
+                                account_endpoint="https://relay.example/account")
+    try:
+        assert client.current().enrollment_id == original["enrollment_id"]
+        assert client.current().owner is None
+        with pytest.raises(ValueError):
+            client.register(attempt_id="a" * 32, name="PC")
+        assert calls == []
+        assert client._db.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert json.loads(client._db.execute("SELECT record FROM registration").fetchone()[0]) == (
+            original
+        )
+    finally:
+        client.close()
 
 
 def test_account_binding_survives_reply_loss_and_rejects_other_account(tmp_path):
