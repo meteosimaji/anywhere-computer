@@ -57,6 +57,8 @@ async def test_search_read_edit_and_verify_in_persistent_terminal(tmp_path):
                 "terminal_input", session_id=identity, text=str(path) + "\n",
                 wait_ms=3000, wait_for_prompt="READY>",
             )
+            if not output["prompt_matched"]:
+                print(output["text"])
             assert output["prompt_matched"] and output["wait_reason"] == "prompt", output
             assert expected in output["text"] and "比較=40" in output["text"]
             assert "🚀" in output["text"] and output["dropped_bytes"] == 0
