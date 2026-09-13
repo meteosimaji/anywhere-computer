@@ -13,6 +13,18 @@ from anywhere_computer import startup_native as native
 from anywhere_computer.autostart import _systemd_quote, current_definition, startup_definition
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows console creation contract")
+def test_native_command_has_no_console_and_retains_utf8_pipes():
+    result = native._run([
+        sys.executable, "-I", "-X", "utf8", "-c",
+        "import ctypes,sys; assert not ctypes.windll.kernel32.GetConsoleWindow(); "
+        "print(sys.stdin.read(),end='')",
+    ], payload="日本語 🚀")
+    assert result.returncode == 0
+    assert result.stdout == "日本語 🚀"
+    assert result.stderr == ""
+
+
 @pytest.mark.parametrize("run_level, matches", [(None, True), ("HighestAvailable", False)])
 def test_windows_readback_accepts_omitted_default_but_rejects_elevation(
     tmp_path, monkeypatch, run_level, matches,

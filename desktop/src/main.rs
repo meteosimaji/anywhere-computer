@@ -1,3 +1,5 @@
+#![cfg_attr(all(target_os = "windows", not(test)), windows_subsystem = "windows")]
+
 use std::{path::PathBuf, process::Stdio, time::Duration};
 use tokio::io::AsyncReadExt;
 
@@ -73,7 +75,12 @@ async fn run_management(
     command: &'static str,
     seconds: u64,
 ) -> Result<String, String> {
-    let mut child = tokio::process::Command::new(&host.python)
+    let mut process = tokio::process::Command::new(&host.python);
+    // Management reads use pipes, never an interactive console. Preserve the
+    // reader's ownership and timeout handling while preventing focus-stealing windows.
+    #[cfg(target_os = "windows")]
+    process.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    let mut child = process
         .args([
             "-I",
             "-X",

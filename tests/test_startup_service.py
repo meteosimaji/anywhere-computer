@@ -3,8 +3,24 @@ from types import SimpleNamespace
 
 import pytest
 
+from anywhere_computer import autostart
 from anywhere_computer import startup_service as service
 from anywhere_computer.startup_native import StartupSnapshot
+
+
+def test_local_windows_startup_uses_same_environment_windowed_python(tmp_path, monkeypatch):
+    console = tmp_path / "python.exe"
+    windowed = tmp_path / "pythonw.exe"
+    console.touch()
+    monkeypatch.setattr(autostart, "sys",
+                        SimpleNamespace(platform="win32", executable=str(console)))
+    with pytest.raises(ValueError, match="requires pythonw.exe"):
+        autostart.startup_interpreter("local")
+    assert autostart.startup_interpreter("remote") == str(console)
+    windowed.touch()
+    assert autostart.startup_interpreter("local") == str(windowed)
+    monkeypatch.setattr(autostart.sys, "executable", str(windowed))
+    assert autostart.startup_interpreter("local") == str(windowed)
 
 
 @pytest.fixture

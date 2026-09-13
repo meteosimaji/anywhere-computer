@@ -270,6 +270,20 @@ changing the scheduled interpreter. The first verification command also found
 `Get-FileHash` unavailable in this PowerShell environment; Python SHA-256 checking
 succeeded without weakening verification or changing production settings.
 
+Console follow-up: the Windows manager is now built as a GUI-subsystem process,
+and its fixed Python readers and native startup-manager subprocesses request
+`CREATE_NO_WINDOW`. A real Windows probe of the isolated previous implementation
+reported a console handle; the patched native subprocess returned no console
+handle while preserving a Japanese/emoji stdin/stdout round trip. This checks
+that subprocess boundary, not the complete manager workflow.
+New local Windows registrations select `pythonw.exe` beside the current
+interpreter, never from PATH, and fail clearly if it is absent. Preview and
+registration share that selection. Existing receipts retain their recorded
+interpreter; remote registrations are unchanged. Updated native UI and scheduled
+watcher acceptance is still pending. Focused Python tests: 93 passed / 5 skipped;
+Ruff, mypy (3 sources), bundled-source equality, Rust tests and Clippy passed.
+The Windows-only console regression test must also run in Windows CI.
+
 CI exposed a test readiness race: the disabled-update case slept 300 ms before
 probing the HTTP service. Adding a 500 ms startup delay reproduced the failure.
 The test now waits for the real HTTP service context to enter before probing,

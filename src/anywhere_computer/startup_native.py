@@ -37,7 +37,8 @@ def _gui_domain() -> str:
 def _run(command: list[str], *, payload: str | None = None) -> subprocess.CompletedProcess[str]:
     try:
         result = subprocess.run(command, input=payload, capture_output=True,
-                                encoding="utf-8", timeout=30)
+                                encoding="utf-8", timeout=30,
+                                creationflags=0x08000000 if os.name == "nt" else 0)
     except (OSError, subprocess.TimeoutExpired, UnicodeError):
         raise RuntimeError("OS startup manager did not return a readable response") from None
     if len(result.stdout) + len(result.stderr) > 262144:
