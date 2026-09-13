@@ -188,6 +188,18 @@ IPC and UI state tests cover the new fixed command. Real-provider/native OS-vaul
 reauthorization and cleanup remain acceptance work; this is not automatic
 refresh-token renewal or a verified public pairing service.
 
+On 2026-09-14, a separate macOS acceptance check used the real
+`keyring.backends.macOS` backend and three successive Python processes: the first
+saved the original grant and retained a pending request after injected reply
+loss; the second reauthorized into a separate Keychain slot; the third restored
+that grant and recovered the original registration. The authorization attempt
+matched between the second and third processes and the enrollment ID matched
+across all three. Both test-only Keychain entries were deleted and their absence
+verified afterward. Provider and relay responses were injected fixtures and grant
+expiry used a controlled clock. This verifies the native credential and process
+restart boundary, not rendered manager UI, real-provider reauthorization,
+production cleanup behavior or public relay connectivity.
+
 ## Native host lifetime
 
 The current native manager launches a short-lived Python command for each status
