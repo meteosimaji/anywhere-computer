@@ -13,6 +13,7 @@ from .devices import device_name
 from .enrollment_credentials import EnrollmentCredentials
 from .enrollment_http import EnrollmentHTTPReply, https_enrollment_registration
 from .locking import ProcessLock
+from .relay_client import PCEnrollmentReceipt, PCRelayClient
 from .relay_registry import RelayAccount, RelayDevice
 from .state import prepare_directory
 
@@ -101,6 +102,25 @@ class RegistrationClient:
         if row[0] != self._endpoint:
             raise ValueError("Saved registration belongs to a different endpoint")
         return RegistrationAttempt.model_validate_json(row[1])
+
+    async def enroll_channel(self, client: PCRelayClient, *,
+                             fingerprint: str) -> PCEnrollmentReceipt:
+        """Bind a provisioned PC channel using the saved registration and OS grant.
+
+        This explicit setup step returns connection enrollment evidence, not live
+        readiness. It never sends a bearer through the native IPC or CLI. Normal
+        resident connections use client.run() and do not read enrollment grants.
+        """
+        current = self.current()
+        if (current is None or current.device is None or current.owner is None
+                or current.device.state != "registered"
+                or current.owner != client.agent.account
+                or current.device.device_id != client.agent.device_id):
+            raise ValueError("PC channel does not match the confirmed registration")
+        token = self._credentials.access_token(
+            attempt_id=current.attempt_id, scope="device:enroll",
+        )
+        return await client.enroll(token, fingerprint=fingerprint)
 
     def reauthorization_slot(self) -> str | None:
         self.current()  # Reject configuration changes before selecting another grant.

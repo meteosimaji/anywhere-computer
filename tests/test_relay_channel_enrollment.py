@@ -70,10 +70,16 @@ async def test_first_tls_connection_binds_only_authenticated_enrolled_device(
 
 
 async def test_pc_enrolls_then_runs_signed_file_operation(registration, certificates, tmp_path):
+    import time
+
     from cryptography.hazmat.primitives import serialization
+    from test_client_tokens import MemoryVault
 
     from anywhere_computer.engine import Engine
+    from anywhere_computer.enrollment_credentials import EnrollmentCredentials, EnrollmentToken
+    from anywhere_computer.enrollment_http import EnrollmentHTTPReply
     from anywhere_computer.models import Request
+    from anywhere_computer.registration_client import RegistrationClient
     from anywhere_computer.relay_client import PCRelayClient
     from anywhere_computer.relay_grants import AuthorizedRelayAgent, ExecutionVerifier
     from anywhere_computer.relay_tokens import SignedRelayToken
@@ -82,8 +88,23 @@ async def test_pc_enrolls_then_runs_signed_file_operation(registration, certific
     key, registry, service, claims = registration
     context, fingerprint = certificates
     token = signed(key, claims)
-    device = service.register(token, enrollment_id='b' * 32, name='PC')
-    owner = service.account(token)
+    credentials = EnrollmentCredentials(tmp_path / 'credentials', issuer=claims['iss'],
+                                        client=claims['azp'], profile='test', vault=MemoryVault())
+    credentials.save('b' * 32, EnrollmentToken(access_token=token, token_type='Bearer',
+                     expires_in=60, scope='device:enroll'), requested_at=time.time())
+
+    def registration_wire(endpoint, fields, bearer):
+        if endpoint.endswith('/account'):
+            return EnrollmentHTTPReply(200, service.account(bearer).model_dump())
+        return EnrollmentHTTPReply(200, service.register(bearer, **fields).model_dump())
+
+    registration_client = RegistrationClient(
+        tmp_path / 'registration', credentials, endpoint='https://relay.example/register',
+        account_endpoint='https://relay.example/account', wire=registration_wire,
+    )
+    saved = registration_client.register(attempt_id='b' * 32, name='PC')
+    device, owner = saved.device, saved.owner
+    assert device is not None and owner is not None
     public = key.public_key().public_bytes(
         serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode()
@@ -99,7 +120,18 @@ async def test_pc_enrolls_then_runs_signed_file_operation(registration, certific
     client = PCRelayClient(f'wss://localhost:{port}/pc', context('client', True), pc)
     task = None
     try:
-        receipt = await client.enroll(token, fingerprint=fingerprint('client'))
+        pc.device_id = '0' * 32
+        with pytest.raises(ValueError, match='confirmed registration'):
+            await registration_client.enroll_channel(client, fingerprint=fingerprint('client'))
+        pc.device_id = device.device_id
+        pc.account = RelayAccount(issuer=owner.issuer, subject='different-owner')
+        with pytest.raises(ValueError, match='confirmed registration'):
+            await registration_client.enroll_channel(client, fingerprint=fingerprint('client'))
+        pc.account = owner
+        assert registry.db.execute('SELECT COUNT(*) FROM relay_channels').fetchone()[0] == 0
+        receipt = await registration_client.enroll_channel(
+            client, fingerprint=fingerprint('client'),
+        )
         assert receipt.device_id == device.device_id and client.state == 'enrolled'
         assert not relay._channels
         task = asyncio.create_task(client.run())
@@ -152,3 +184,4 @@ async def test_pc_enrolls_then_runs_signed_file_operation(registration, certific
             await asyncio.wait_for(task, 5)
         await relay.close()
         await engine.close()
+        registration_client.close()

@@ -628,3 +628,15 @@ pre-restart operation result. Repeating the original write ID returns that resul
 without overwriting a subsequent independent file edit. This proves persisted
 ledger recovery across engine/client recreation within one test process, not
 process-crash, OS-restart, sleep or installed-service recovery.
+
+`RegistrationClient.enroll_channel` connects the saved registration to first
+channel enrollment. It requires a confirmed, account-bound registered device that
+matches the PC agent before reading the original attempt's `device:enroll` grant
+from `EnrollmentCredentials`. Only the verified receipt is returned; the bearer
+stays within trusted Python clients. Expired/missing grants fail instead of being
+silently replaced. This step is explicit and is not used on normal reconnect.
+The integration test exercises this composition using a memory vault and an
+in-process registration service, followed by real TLS channel communication.
+Wrong-device and wrong-owner clients fail before binding. Native OS-vault access,
+post-registration grant renewal, certificate provisioning and resident entrypoint
+wiring remain to be integrated and accepted on installed applications.
