@@ -57,3 +57,53 @@ async def test_mcp_discovery_write_refresh_and_session_binding(
     finally:
         await client.stop()
         await asyncio.wait_for(task, timeout=10)
+
+
+async def test_http_to_real_pc_write_refresh_and_revocation(channel_setup, execution, certificates):
+    import httpx
+    from test_http_mcp import HEADERS, INITIALIZE
+
+    from anywhere_computer.relay_mcp import relay_http_mcp
+
+    relay, _, account, device_id, _ = channel_setup
+    pc, sign, current, root, claims = execution
+    context, _ = certificates
+    pc.device_id = device_id
+    port = relay._server.sockets[0].getsockname()[1]
+    client = PCRelayClient(f'wss://localhost:{port}/pc', context('client', True), pc)
+    adapter = relay_http_mcp(relay, pc.verifier, account=account, device_id=device_id)
+    http_port = await adapter.start()
+    task = asyncio.create_task(client.run())
+    try:
+        await wait_connected(relay, device_id)
+        async with httpx.AsyncClient(base_url=f'http://127.0.0.1:{http_port}',
+                                     headers=HEADERS) as http:
+            http.headers['Authorization'] = 'Bearer ' + sign({'device_id': device_id})
+            initialized = await http.post('/mcp', json=INITIALIZE)
+            assert initialized.status_code == 200
+            http.headers['MCP-Session-Id'] = initialized.headers['MCP-Session-Id']
+            await http.post('/mcp', json={'jsonrpc': '2.0',
+                                         'method': 'notifications/initialized'})
+            target = root / 'HTTP中継.txt'
+            write = await http.post('/mcp', json={'jsonrpc': '2.0', 'id': 2,
+                'method': 'tools/call', 'params': {'name': 'files_write', 'arguments': {
+                    'path': str(target), 'text': 'HTTP 🚀', 'request_id': 'e' * 32}}})
+            assert write.json()['result']['structuredContent']['state'] == 'completed'
+            assert target.read_text(encoding='utf-8') == 'HTTP 🚀'
+            http.headers['Authorization'] = 'Bearer ' + sign({
+                'device_id': device_id, 'exp': claims['exp'] + 60})
+            recovered = await http.post('/mcp', json={'jsonrpc': '2.0', 'id': 3,
+                'method': 'tools/call', 'params': {'name': 'operations_get', 'arguments': {
+                    'operation_id': 'e' * 32, 'request_id': '2' * 32}}})
+            assert recovered.json()['result']['structuredContent']['data']['state'] == 'completed'
+            http.headers['Authorization'] = 'Bearer ' + sign({
+                'device_id': device_id, 'grant_id': 'c' * 32})
+            assert (await http.post('/mcp', json=INITIALIZE)).status_code == 404
+            current['active'] = False
+            assert (await http.post('/mcp', json=INITIALIZE)).status_code == 401
+        with pytest.raises(RuntimeError, match='No authenticated'):
+            adapter.current_bearer()
+    finally:
+        await adapter.close()
+        await client.stop()
+        await asyncio.wait_for(task, timeout=10)

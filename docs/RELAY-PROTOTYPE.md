@@ -525,3 +525,18 @@ and Engine. It checks changed-grant and revoked authorization refusal. This uses
 in-process MCP packets, WSS loopback, and synthetic provider tokens. HTTP request
 context isolation, authentication metadata and multi-device AI routing still need
 integration before this can be exposed as a client-facing endpoint.
+
+### Request-scoped HTTP MCP entry
+
+`relay_http_mcp` connects the existing loopback HTTP adapter to the signed relay
+backend for one explicitly provisioned account/device. Every HTTP request verifies
+its bearer again; the MCP session owner is the verified grant identity, so token
+refresh preserves the session while a different grant cannot reuse it. Bearers
+are available only during the authenticated request in the handling task, not in
+session storage, a global owner map, or inherited child tasks.
+
+The integration test uses real HTTP, mutual-TLS WebSockets and the PC Engine to
+write UTF-8 content, refresh authorization, recover the prior result, and reject
+grant substitution and revocation. Concurrent request tests check token isolation
+and scope cleanup. This is an isolated single-device entry, not the final
+multi-device AI catalog, OAuth issuer, public endpoint, or production deployment.

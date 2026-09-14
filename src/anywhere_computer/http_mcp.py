@@ -10,6 +10,7 @@ import re
 import secrets
 import time
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from http import HTTPStatus
 from typing import cast
@@ -53,6 +54,9 @@ class HTTPMCP:
     ) -> None:
         if session_ttl <= 0 or max_sessions < 1:
             raise ValueError("Session bounds must be positive")
+        self._bearer: ContextVar[tuple[asyncio.Task[object] | None, str] | None] = (
+            ContextVar("http_mcp_bearer", default=None)
+        )
         self.authenticate = authenticate
         self.session_factory = session_factory
         self.origins = origins
@@ -149,6 +153,22 @@ class HTTPMCP:
         owner = await self.authenticate(token)
         if not owner:
             raise HTTPFailure(401)
+        marker = self._bearer.set((asyncio.current_task(), token))
+        try:
+            return await self._dispatch_authenticated(method, headers, body, owner)
+        finally:
+            self._bearer.reset(marker)
+
+    def current_bearer(self) -> str:
+        """Fresh authenticated token, available only in the handling task."""
+        context = self._bearer.get()
+        if context is None or context[0] is not asyncio.current_task():
+            raise RuntimeError("No authenticated HTTP request is active")
+        return context[1]
+
+    async def _dispatch_authenticated(
+        self, method: str, headers: dict[str, str], body: bytes, owner: str,
+    ) -> tuple[int, dict[str, JsonValue] | None, dict[str, str]]:
         now = time.monotonic()
         self.sessions = {
             key: value

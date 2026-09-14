@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from pydantic import JsonValue
 
+from .http_mcp import HTTPMCP
 from .mcp_server import MCPSession
 from .models import Reply, Request
 from .relay_channels import RelayChannels
@@ -45,3 +46,24 @@ class RelayMCPBackend:
 
     def mcp_session(self) -> MCPSession:
         return MCPSession(self.catalog, self.execute)
+
+
+def relay_http_mcp(channels: RelayChannels, verifier: ExecutionVerifier, *,
+                   account: RelayAccount, device_id: str) -> HTTPMCP:
+    """Loopback HTTP entry for one provisioned device; no token issuer or public deployment."""
+    async def authenticate(token: str) -> str | None:
+        try:
+            return verifier.verify(token, account=account, device_id=device_id,
+                                   tool='__catalog').identity
+        except ExecutionRejected:
+            return None
+
+    def session_factory(owner: str) -> MCPSession:
+        backend = RelayMCPBackend(channels, verifier, account=account,
+                                  device_id=device_id, token=adapter.current_bearer)
+        if backend.identity != owner:
+            raise ExecutionRejected('MCP session authorization binding changed')
+        return backend.mcp_session()
+
+    adapter = HTTPMCP(authenticate, session_factory)
+    return adapter
