@@ -640,3 +640,13 @@ in-process registration service, followed by real TLS channel communication.
 Wrong-device and wrong-owner clients fail before binding. Native OS-vault access,
 post-registration grant renewal, certificate provisioning and resident entrypoint
 wiring remain to be integrated and accepted on installed applications.
+
+The signed PC adapter also accepts the directory of an already running shared
+local agent. It verifies the execution grant on the PC, then reuses the existing
+owner-authenticated `exchange_remote` path. No bearer enters that RPC or ledger,
+and no second engine or lifecycle supervisor is created. The adapter does not
+start/stop the shared agent. Integration tests compare its instance ID with local
+RPC, exercise file writes and result recovery, and reject revoked or unknown-tool
+grants. The shared owner service now returns a failed reply for invalid tool grants
+instead of closing the connection without an outcome. The Windows native pipe
+requires its platform CI/acceptance; local macOS checks use loopback owner RPC.
