@@ -231,3 +231,25 @@ The native UI then displayed the specific connection failure and timestamp.
 Refreshing showed the previous `unreachable` observation while keeping current
 connectivity unconfirmed. No guest operation succeeded in this test; it proves the
 macOS app-to-CLI diagnostic path and failure presentation, not Windows acceptance.
+
+## Guided CLI acceptance (2026-09-14)
+
+`anywhere setup` offers an English selector for the existing local start,
+ChatGPT self-hosted HTTPS setup and native OAuth self-hosted HTTPS setup. It
+accepts only an optional state directory; advanced commands retain their existing
+interfaces. This is a command selector, not hosted relay provisioning or automatic
+AI registration. The local selection preserves `start`'s idle replacement policy.
+
+On macOS, the development CLI was run in an actual interactive terminal with a
+separate temporary state path. Cancelling with `q` exited successfully without
+creating that path. A second isolated run selected local startup and returned
+ready. After that interactive process exited, a separate status command reached
+the same instance `1e70d22b0f4e465490ab01f6412a2ed4`, runtime
+`466bad39694431b10f444dc07cd8167ee600b23015dea154aaa3aea563fe083e`.
+The real native credential store was used; no credential values were logged.
+
+The isolated agent was explicitly stopped, diagnosis reported stopped, and the
+single fixture-specific Keychain entry was deleted and its absence verified.
+Production state, login startup, Windows and AI account configuration were not
+changed. This verifies local setup and terminal-exit continuity, not HTTPS setup,
+a fresh OS installation, portable-package onboarding or reboot acceptance.

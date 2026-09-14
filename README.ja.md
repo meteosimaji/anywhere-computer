@@ -80,6 +80,15 @@ uv run --locked anywhere stop
 
 `doctor`は診断用です。`stop`は作業中なら停止せず、その理由を返します。起動・常駐登録・停止・複数端末の詳細は[運用ガイド](docs/OPERATIONS.md)を参照してください。
 
+## 対話式コマンド入口（開発中のmain向け）
+
+開発版では `anywhere setup`（ソースからは `uv run --locked anywhere setup`）で、
+ローカル起動・ChatGPT向けHTTPS設定・ネイティブOAuth向けHTTPS設定を選択できます。
+再開時は同じ `--state-dir` を指定します。選択前の取消しは設定を変更しません。
+ローカル経路は `start` と同じく、待機中のエンジンを現在のインストールへ切り替える
+場合があります。中継・公開URLの作成やAI側の登録は自動化しません。
+この入口は以前公開したalpha9 ZIPには含まれません。
+
 ## ChatGPTから接続する
 
 CodexへのPluginインストールだけでは、ChatGPT側の接続は完了しません。実行環境を用意した後、ChatGPT用の設定を開始します。

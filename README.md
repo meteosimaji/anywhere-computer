@@ -44,6 +44,18 @@ connection does not silently replace it with another build. See the
 [MCP client guide](docs/MCP-CLIENTS.md) for client-specific configuration and the
 limits of the recorded Claude Code and Gemini CLI validation.
 
+## Guided command entry (development main)
+
+With the development runtime installed, run `anywhere setup` (or
+`uv run --locked anywhere setup` from source). The English menu selects the existing
+local start, ChatGPT HTTPS setup, or native OAuth HTTPS setup. Use the same
+`--state-dir` to resume an existing configuration. Cancel before selecting a route
+to leave setup untouched. Advanced commands remain available for scripts.
+
+This selector does not provision a managed relay, a public URL, or AI-client
+registration. The local route has the same idle-engine replacement behavior as
+`anywhere start`. It is not part of the previously published alpha9 ZIP.
+
 ## Connect ChatGPT
 
 Installing the Codex Plugin does not connect ChatGPT. After preparing the runtime:

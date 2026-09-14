@@ -55,6 +55,7 @@ def main() -> None:
     parser.add_argument(
         "command",
         choices=[
+            "setup",
             "start",
             "update",
             "auto-update-enable",
@@ -148,6 +149,35 @@ def main() -> None:
     parser.add_argument("--codex-executable",
                         help="Optional pinned Codex CLI for supervised services")
     args = parser.parse_args()
+    if args.command == "setup":
+        if any(value != parser.get_default(name) for name, value in vars(args).items()
+               if name not in {"command", "state_dir"}):
+            parser.error("setup accepts only --state-dir; "
+                         "use a specific command for advanced options")
+        if not has_interactive_input():
+            parser.error("setup requires an interactive terminal; "
+                         "use start, chatgpt-setup or remote-setup")
+        print("Choose a connection. Existing setup steps will be reused.")
+        print("1. Local MCP: start this PC's agent, then configure your MCP client.")
+        print("2. ChatGPT over self-hosted HTTPS: requires your public MCP URL.")
+        print("3. Native OAuth client over self-hosted HTTPS: requires your public MCP URL.")
+        print("Managed relay pairing is not available yet. Enter q to cancel.")
+        try:
+            choice = input("Connection [1/2/3/q]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nSetup cancelled; no setup action was started.")
+            return
+        if choice == "q":
+            print("Setup cancelled; no setup action was started.")
+            return
+        setup_choices = {"1": "start", "2": "chatgpt-setup", "3": "remote-setup"}
+        if choice not in setup_choices:
+            parser.error("Choose 1, 2, 3 or q; no setup action was started")
+        args.command = setup_choices[choice]
+        if choice == "1":
+            print("After startup, configure your local MCP client to run anywhere mcp "
+                  "from this installation with the same --state-dir, if specified. "
+                  "Client registration and login startup are not changed.")
     if args.command == 'update':
         if args.verifier is None or not args.verifier.is_absolute():
             parser.error('update requires an absolute --verifier path')
