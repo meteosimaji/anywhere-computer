@@ -145,7 +145,7 @@ async def test_pc_enrolls_then_runs_signed_file_operation(registration, certific
             arguments={'path': str(target), 'text': '登録後の操作 ✅'},
         ))
         assert result.state == 'completed'
-        assert target.read_text() == '登録後の操作 ✅'
+        assert target.read_text(encoding='utf-8') == '登録後の操作 ✅'
         recovered = await relay.exchange_authorized(verifier, owner, device.device_id, grant,
             Request(operation_id='e' * 32, tool='operations_get',
                     arguments={'operation_id': 'd' * 32}))
