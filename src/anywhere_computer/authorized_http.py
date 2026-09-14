@@ -1,12 +1,13 @@
 """Bind verified HTTP grants to one owner's device and its current tool permissions."""
 
+import asyncio
 import uuid
 from pathlib import Path
 
 from pydantic import JsonValue
 
 from .authorization import AuthorizationStore, GrantIdentity
-from .connection import exchange_remote
+from .connection import ensure_agent, exchange_remote
 from .device_router import NESTED_REQUEST_ID_ERROR, ROUTER_TOOLS, DeviceRouter
 from .engine import Engine
 from .mcp_server import MCPSession
@@ -58,8 +59,15 @@ class AuthorizedDeviceMCP:
             return grant
 
         async def local_catalog() -> list[JsonValue]:
+            grant = current()
             if self.engine is not None:
-                return self.engine.catalog(current().tools - ROUTER_TOOLS)
+                return self.engine.catalog(grant.tools - ROUTER_TOOLS)
+            if self.agent_directory is None:
+                raise RuntimeError("No engine was configured")
+            # Retained HTTP sessions must recover before MCP's pre-dispatch catalog
+            # check. Reuse the selected agent without replacing live work. The grant
+            # is checked again by local_execute after waiting for startup.
+            await asyncio.to_thread(ensure_agent, self.agent_directory, replace_idle=False)
             reply = await local_execute(Request(operation_id=uuid.uuid4().hex, tool="__catalog"))
             tools = reply.data.get("tools")
             if reply.state != "completed" or not isinstance(tools, list):

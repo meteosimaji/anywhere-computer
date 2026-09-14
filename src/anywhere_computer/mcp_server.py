@@ -295,9 +295,13 @@ async def run_mcp(directory: Path) -> None:
     from .setup_connector import SetupConnector
 
     async def catalog() -> list[JsonValue]:
+        # MCP checks the catalog before dispatch. Recover here as well as in execute,
+        # or a retained connector cannot reach execute after its agent has exited.
+        # This only prepares the selected agent; never retry a dispatched operation.
+        await asyncio.to_thread(ensure_agent, directory, replace_idle=False)
         reply = await exchange(directory, "__catalog")
         raw = reply.data.get("tools")
-        if not isinstance(raw, list):
+        if reply.state != "completed" or not isinstance(raw, list):
             raise ValueError("Agent did not return a tool catalog")
         return raw
 

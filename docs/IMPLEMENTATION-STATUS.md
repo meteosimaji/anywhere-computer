@@ -1,8 +1,11 @@
 # Implementation status and beta acceptance
 
 Snapshot: 2026-09-14. This is a capability inventory, not a beta release claim.
-Main includes PRs #25–32. The common-skills work is a subsequent development change.
-Installed alpha 9, the development checkout, CI artifacts, and published releases
+This development worktree starts at `d6fcf56407d536bfb3c0fd9b399f1dd54f810de0`
+(PR #35), including main through PR #33. PRs #34 and #35 were open, with all five
+CI checks successful, when inspected; this worktree does not include PR #34.
+The retained-client recovery change below has not been installed into the live engine.
+Installed alpha 9, development checkouts, CI artifacts, and published releases
 are distinct. Consult each PR for current merge status.
 
 ## Product direction
@@ -20,7 +23,7 @@ is planned. Client approvals and initial connection authentication remain separa
 | --- | --- | --- |
 | Files and search | Engine file tools, hash-conditional writes, backup/recovery, bounded search and result retrieval. Existing fresh Chat acceptance reports Mac operations; not every reported operation was independently reconciled. | Preserve these paths through packaging, updates and remote routing; complete Windows VM acceptance through a fresh Chat. |
 | Terminal | `sessions.py` owns persistent pipe processes, input, output cursors and cleanup. | Actual PTY and Windows ConPTY, terminal resize and interactive programs. A pipe session is not a PTY. |
-| Operations | Persistent engine ledger, owner/device binding, result recovery and duplicate-dispatch prevention. | End-to-end recovery across public relay credentials, OS sleep/restart and real release updates. Do not promise terminal memory survives an engine or OS restart. |
+| Operations | Persistent engine ledger, owner/device binding, result recovery and duplicate-dispatch prevention. Retained stdio connector callbacks and authenticated HTTP sessions recover a stopped/crashed shared agent before catalog lookup; 14 new isolated regression cases pass. See [recovery evidence](SHARED-AGENT-RECOVERY-2026-09-14.md). | Native credential provisioning, real Windows VM and fresh Chat acceptance of this change; end-to-end recovery across public relay credentials, OS sleep/restart and real release updates. Do not promise terminal memory survives an engine or OS restart. |
 | MCP and optional Codex | Direct stdio MCP sessions plus optional Codex Plugin discovery/calls. State continuation and result recovery have tests and historical Chat receipts. | Packaged independent backends, compatibility policy and realistic cross-platform acceptance. Codex-owned Computer Use is not a generally usable external backend. |
 | Skills | Optional Codex catalog remains. Development `skills_list` / `skills_read` discover .agents/skills or explicit roots and read hash-checked SKILL.md and UTF-8 resources without Codex. | Custom roots persist through settings_update; packaged release and cross-platform acceptance remain. Reading a Skill does not install its tools. See [common skills](COMMON-SKILLS.md). |
 | Documents | Office text extraction (`documents.py`); basic DOCX/XLSX creation (`document_writer.py`). | Rendered preview, meaningful diffs and targeted edits that preserve unrelated document content. Text extraction is not Office app automation. |
