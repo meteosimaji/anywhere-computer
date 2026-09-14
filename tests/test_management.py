@@ -214,3 +214,27 @@ async def test_device_check_does_not_create_missing_registry(tmp_path):
         with pytest.raises(ValueError):
             await controller.check_device(identity)
     assert not directory.exists()
+
+
+def test_device_check_cli_returns_observation_without_falling_through(
+    tmp_path, monkeypatch, capsys,
+):
+    import sys
+
+    from anywhere_computer.cli import main
+
+    store = DeviceStore(tmp_path)
+    device = store.add('Offline Windows', 'fixture-vm')
+    store.close()
+
+    def probe(self, identity):
+        return self.record(identity, 'unreachable', 'synthetic offline result')
+
+    monkeypatch.setattr(DeviceStore, 'probe', probe)
+    monkeypatch.setattr(sys, 'argv', ['anywhere', 'management-device-check', '--device',
+                                    device['device_id'], '--state-dir', str(tmp_path)])
+    main()
+    output = capsys.readouterr()
+    assert output.err == ''
+    assert json.loads(output.out)['state'] == 'unreachable'
+    assert not (tmp_path / 'agent.json').exists()

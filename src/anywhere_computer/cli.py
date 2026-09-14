@@ -285,6 +285,7 @@ def main() -> None:
             print(asyncio.run(ManagementController(directory).check_device(
                 args.device,
             )).model_dump_json())
+            return
         elif args.command.startswith("device") or has_device:
             store = DeviceStore(directory)
             try:

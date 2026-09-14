@@ -219,3 +219,15 @@ or refreshing the snapshot still describes it as cached. Raw diagnostic details
 and credentials are not returned to the WebView. Failed checks are not retried
 automatically. This applies to saved SSH/HTTP devices; relay enrollment is not yet
 integrated with this device list.
+
+macOS native check, 2026-09-14: built the manager with locked Cargo dependencies,
+wrapped it using the existing `include_manager` bundle layout, and launched it
+with a disposable state directory and explicit development Python. A saved SSH
+fixture targeting the existing unavailable local VM forwarding endpoint was
+checked through the actual button. This exposed CLI fallthrough: after printing
+the device observation, the command attempted local engine status and exited 1.
+A regression test reproduced it; returning after the observation fixed it.
+The native UI then displayed the specific connection failure and timestamp.
+Refreshing showed the previous `unreachable` observation while keeping current
+connectivity unconfirmed. No guest operation succeeded in this test; it proves the
+macOS app-to-CLI diagnostic path and failure presentation, not Windows acceptance.
