@@ -119,3 +119,53 @@ def test_busy_shutdown_race_clears_pending_intent(tmp_path, monkeypatch):
         ensure_agent(tmp_path, replace_idle=True)
     assert calls == ['__status', '__stop']
     assert load_runtime_selection(tmp_path) is None
+
+
+@pytest.mark.parametrize('live', [False, True])
+def test_owner_pipe_timeout_checks_process_before_starting(tmp_path, monkeypatch, live):
+    import os
+
+    import psutil
+
+    from anywhere_computer import connection
+    from anywhere_computer.owner_json_pipe import OwnerPipeTimeout
+
+    launches = []
+    async def exchange(directory, tool, **kwargs):
+        if not launches:
+            raise OwnerPipeTimeout('Timed out connecting to owner pipe')
+        return Reply(operation_id='0' * 32, state='completed', data={'runtime_id': 'a' * 64})
+    monkeypatch.setattr(connection, 'exchange', exchange)
+    monkeypatch.setattr(connection, 'runtime_identity', lambda: 'a' * 64)
+    monkeypatch.setattr(connection, 'load_endpoint', lambda _: {
+        'pid': os.getpid() if live else -1,
+        'process_started': psutil.Process().create_time() if live else -1,
+    })
+    def credential(*args, **kwargs):
+        assert not live, 'Must not access credentials while an existing agent is alive'
+        return 'synthetic-test-credential'
+    monkeypatch.setattr(connection, 'local_credential', credential)
+    monkeypatch.setattr(connection.subprocess, 'Popen',
+                        lambda command, **kwargs: launches.append(command))
+    if live:
+        with pytest.raises(RuntimeError, match='process exists but is not responding'):
+            ensure_agent(tmp_path, replace_idle=True)
+        assert not launches
+    else:
+        assert ensure_agent(tmp_path, replace_idle=True)['runtime_id'] == 'a' * 64
+        assert len(launches) == 1
+
+
+def test_owner_pipe_identity_failure_never_attempts_startup(tmp_path, monkeypatch):
+    from anywhere_computer import connection
+    from anywhere_computer.owner_json_pipe import OwnerPipeIdentityError
+
+    async def exchange(*args, **kwargs):
+        raise OwnerPipeIdentityError('fixture mismatch')
+    def forbidden(*args, **kwargs):
+        pytest.fail('Identity rejection must not bootstrap or use another credential path')
+    monkeypatch.setattr(connection, 'exchange', exchange)
+    monkeypatch.setattr(connection, 'local_credential', forbidden)
+    monkeypatch.setattr(connection.subprocess, 'Popen', forbidden)
+    with pytest.raises(OwnerPipeIdentityError):
+        ensure_agent(tmp_path, replace_idle=True)
