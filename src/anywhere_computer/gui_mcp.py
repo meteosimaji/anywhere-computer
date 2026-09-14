@@ -24,10 +24,10 @@ def normalized(raw: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 
 class GUIObserve(DirectMCPSessionId):
-    window_id: int | None = Field(default=None, ge=1, le=4294967295, description=(
-        'Explicit Peekaboo 4 exact-window mode. Use a window ID discovered from that '
-        'server. Observes without app focus and pins actions to the returned snapshot. '
-        'Requires a compatible server; never falls back to foreground input.'
+    window_id: int = Field(ge=1, le=4294967295, description=(
+        'Required target window. Use the selected server window tool with action=list '
+        'and the app to discover its ID. Observes without app focus and pins actions '
+        'to the snapshot. Requires a compatible server; never uses foreground input.'
     ))
     app: str = Field(min_length=1, max_length=256, description=(
         'Exact running app name accepted by the selected Peekaboo server. Names may be '
@@ -93,7 +93,7 @@ class Observation:
     snapshot: str
     elements: frozenset[str]
     created: float
-    window_id: int | None = None
+    window_id: int
 
 
 class GUIMCP:
@@ -135,17 +135,8 @@ class GUIMCP:
     async def _observe(self, args: GUIObserve, *, owner: str | None) -> dict[str, JsonValue]:
         self.sessions.status(args.session_id, owner=owner)
         self.observations.pop(args.session_id, None)
-        capture: dict[str, JsonValue]
-        if args.window_id is None:
-            focused = normalized(await self.sessions.call(
-                args.session_id, 'app', {'action': 'focus', 'name': args.app}, owner=owner,
-            ))
-            if focused['is_error']:
-                return {**focused, 'action_ready': False, 'stage': 'focus'}
-            capture = {'app_target': 'frontmost'}
-        else:
-            await self._require_exact_window(args.session_id, owner)
-            capture = {'app_target': args.app, 'window_id': args.window_id}
+        await self._require_exact_window(args.session_id, owner)
+        capture: dict[str, JsonValue] = {'app_target': args.app, 'window_id': args.window_id}
         raw = await self.sessions.call(
             args.session_id, 'see', capture, owner=owner,
         )
@@ -217,20 +208,14 @@ class GUIMCP:
             name, parameters = 'click', {'on': args.element_id, 'snapshot': observation.snapshot}
         elif isinstance(args, GUIType):
             name = 'type'
-            if observation.window_id is not None:
-                if args.press_return:
-                    raise ValueError('Use gui_key after observation for exact-window Return')
-                if args.element_id is not None and args.element_id not in observation.elements:
-                    raise ValueError('Element is not present in the selected observation')
-                parameters = {'text': args.text, 'clear': args.clear,
-                              'snapshot': observation.snapshot}
-                if args.element_id is not None:
-                    parameters['on'] = args.element_id
-            else:
-                if args.clear or args.element_id is not None:
-                    raise ValueError('Replacement and element targeting require exact-window mode')
-                parameters = {'text': args.text, 'press_return': args.press_return,
-                              'snapshot': observation.snapshot}
+            if args.press_return:
+                raise ValueError('Use gui_key after observation for exact-window Return')
+            if args.element_id is not None and args.element_id not in observation.elements:
+                raise ValueError('Element is not present in the selected observation')
+            parameters = {'text': args.text, 'clear': args.clear,
+                          'snapshot': observation.snapshot}
+            if args.element_id is not None:
+                parameters['on'] = args.element_id
         elif isinstance(args, GUIKey):
             aliases = {'esc': 'escape', 'enter': 'return'}
             keys = [aliases.get(key.lower(), key.lower()) for key in args.keys]
@@ -239,33 +224,26 @@ class GUIMCP:
                 r'arrow_(?:up|down|left|right)|f(?:[1-9]|1[0-2]))', key,
             ) for key in keys):
                 raise ValueError('Unsupported GUI key name; see keys schema for supported names')
-            if observation.window_id is None:
-                name, parameters = 'hotkey', {'keys': ','.join(keys)}
-            else:
-                primary = [key for key in keys
-                           if key not in {'cmd', 'shift', 'alt', 'option', 'ctrl', 'fn'}]
-                if len(primary) != 1:
-                    raise ValueError('Exact-window key chord requires one primary key')
-                names = {'return': 'Return', 'escape': 'Escape', 'delete': 'BackSpace',
-                         'arrow_up': 'Up', 'arrow_down': 'Down', 'arrow_left': 'Left',
-                         'arrow_right': 'Right', 'tab': 'Tab'}
-                name, parameters = 'press', {'snapshot': observation.snapshot,
-                    'keys': ['+'.join(names.get(key, key) for key in keys)]}
+            primary = [key for key in keys
+                       if key not in {'cmd', 'shift', 'alt', 'option', 'ctrl', 'fn'}]
+            if len(primary) != 1:
+                raise ValueError('Exact-window key chord requires one primary key')
+            names = {'return': 'Return', 'escape': 'Escape', 'delete': 'BackSpace',
+                     'arrow_up': 'Up', 'arrow_down': 'Down', 'arrow_left': 'Left',
+                     'arrow_right': 'Right', 'tab': 'Tab'}
+            name, parameters = 'press', {'snapshot': observation.snapshot,
+                'keys': ['+'.join(names.get(key, key) for key in keys)]}
         else:
             raise ValueError('Unsupported GUI action')
         # Consume before the first effect. A response failure must not replay input.
         # Keyboard focus is desktop-global, including across provider sessions.
         # Other observations must not survive an input that may change that focus.
         self.observations.clear()
-        if observation.window_id is None and name in {'type', 'hotkey'}:
-            focused = await self.sessions.call(args.session_id, 'app',
-                {'action': 'focus', 'name': observation.app}, owner=owner)
-            focus_result = normalized(focused)
-            if focus_result['is_error']:
-                return {**focus_result, 'input_dispatched': False, 'stage': 'focus'}
         raw = await self.sessions.call(args.session_id, name, parameters, owner=owner)
         return {**normalized(raw), 'observation_consumed': True,
                 'app': observation.app, 'stage': 'action_result',
                 'window_id': observation.window_id,
-                'focus_may_change_externally': observation.window_id is None
-                    and name in {'type', 'hotkey'}}
+                'focus_may_change_externally': False,
+                'postcondition_verified': False,
+                'next_action': 'Observe the same window to verify the intended effect; '
+                    'do not repeat input solely because the provider acknowledged it.'}

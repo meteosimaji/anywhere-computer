@@ -1,6 +1,39 @@
 # GUI操作を既存のMCPへ接続する
 
-## alpha8の型付き操作
+## Current contract: target a window, then verify the effect
+
+The typed GUI adapter now requires `window_id`. Discover the ID with the selected
+Peekaboo server's `window` tool (`action=list`, `app`), then call
+`gui_observe(session_id, app, window_id)`. Use the observed element and snapshot
+through `gui_click`, `gui_type`, or `gui_key`. A missing target fails before dispatch;
+a provider without exact-window capture is rejected without a foreground fallback.
+
+This is a compatibility change from the alpha8 foreground adapter. A fresh ChatGPT
+acceptance test on 2026-09-14 reported an input acknowledgement while the intended
+TextEdit document remained blank, and the user observed test text in another app's
+composer. That run is a GUI failure. Historical Calculator successes below do not
+qualify the old input route for general use.
+
+`gui_type` supports `element_id` and `clear=true` for replacement. Return requires
+another observation and a separate `gui_key` call. An action consumes its observation;
+an acknowledgement returns `postcondition_verified=false`. Verify the actual text or
+UI change with a fresh observation. Do not replay input after an uncertain result.
+Provider enforcement of the snapshot/window contract remains a dependency.
+
+For a designated synthetic TextEdit document, the live HTTP test accepts:
+
+```sh
+python scripts/verify_gui_http.py --typed --executable /absolute/path/to/peekaboo \
+  --window-id ACTUAL_ID --app ACTUAL_APP_NAME \
+  --expected-text 'Anywhere GUI 日本語 ✅' --receipt /tmp/gui-acceptance.json
+```
+
+It refuses to edit unless one editable text area contains the expected test text,
+then replaces and reads back Japanese/emoji text twice and recovers operation results.
+The test uses isolated HTTP credentials and an engine; it does not update the running
+ChatGPT connection or qualify Windows. `--typed` Calculator tests also require a window ID.
+
+## Historical alpha8 adapter (superseded; do not use for current input)
 
 alpha8にはPeekaboo向けの薄いアダプターを追加した。先に既存の実行ファイルを
 `mcp_session_open`で明示的に選ぶ。別のMCPが同じ名前のツールを持つだけでは互換性を保証しない。
@@ -183,7 +216,7 @@ uv run python scripts/verify_gui_http.py \
 
 参考: [Peekaboo MCP documentation](https://peekaboo.sh/MCP.html)
 
-開発版の観測は、指定アプリを前面化した後に `see(app_target="frontmost")` を使う。
+廃止済みの旧観測経路では、指定アプリを前面化した後に `see(app_target="frontmost")` を使う。
 Peekaboo 3.0.0-beta3のアプリ指定経路が固定ウィンドウ番号0を選び、
 Chromeで1920×30の帯を返した実機事例に対応する。前面経路では961×979の
 Chrome画面を取得できた。返却されたApplication行が指定名と一意に完全一致しない場合は
@@ -223,10 +256,38 @@ MCP結果の `provider_diagnostics` は、提供元が返した既知の状態�
 指定する要素は同じ観測に存在する操作可能な要素に限る。`press_return=true` は
 入力前に拒否する。入力後に再観測し、必要なら `gui_key(keys=["return"])` を行う。
 キー操作もsnapshot付きの `press` を使う。エラー後に別入力経路へ切り替えない。
-`window_id` を省略した既存経路は従来の前面アプリ操作を維持する。
+`window_id` の省略は現在は入力前に拒否する。従来の前面操作は廃止した。
 
 2026-09-14には使い捨てEngineを経由した `gui_observe → gui_type → gui_observe` で
 テキストエディットの試験文書を変更し、日本語・英語・絵文字と数値44の一致を確認した。
 操作ID `597339363ca84b079e1f83dc684da320` の結果を `operations_get` で回収し、
 未検証の提供元エラーと診断情報が保持されることも確認した。これはMacでの隔離試験であり、
 Windows、通常ChatGPT接続、製品全体のGUI受け入れの完了を意味しない。
+
+
+### 2026-09-14 cross-app input correction
+
+The current typed adapter removes the foreground input route instead of retrying
+it. Missing window IDs fail validation before any provider call. Two regressions
+(missing target and acknowledgement mistaken for verification) fail against the
+previous source and pass with the correction. Owner isolation, expiry, consumed
+observations, concurrent input, provider errors and result recovery remain tested.
+The HTTP capability fixture now exposes the exact-window provider schema.
+
+The real `verify_gui_http.py --typed --expected-text` run used Peekaboo 4.3.4 and
+an existing synthetic TextEdit document. Thirteen authenticated HTTP calls completed:
+observe, replace with `Anywhere GUI 日本語 40 ✅`, read back, recover result, replace
+with `Anywhere GUI 日本語 42 ✅`, read back, recover result, and close. The two
+input calls took about 680 ms and 595 ms; the following observations about 368 ms
+and 400 ms. These are individual measurements, not performance guarantees.
+An independent accessibility observation also returned the final text exactly.
+Cleanup was confirmed and no direct MCP session remained in the isolated engine.
+
+The first two attempts stopped at the test's precondition because the AX role is
+printed as a group heading rather than on each element line. No input was dispatched
+in those attempts. The test now matches a unique editable text area within that
+group, excludes labels/read-only elements, and refuses ambiguous matches.
+
+This result does not rehabilitate the failed fresh-ChatGPT foreground test. The
+installed ChatGPT runtime and its cached schema still require updating and another
+fresh-chat acceptance run. Windows GUI and complete beta acceptance remain open.
