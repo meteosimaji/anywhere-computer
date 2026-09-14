@@ -72,3 +72,25 @@ Web dashboard、照合コードpairing、遠隔agent停止、二台の実機・�
 同じ開発用wheelパスを使ったuvの確認では旧環境が選ばれたため、その結果を合格扱いせず、
 版付きの実インストール先を使って確認した。現在開いているCodexタスクのtool定義更新や
 ChatGPT接続を実証したものではない。
+
+
+## Selective catalogs (development)
+
+`devices_tools` accepts optional `name`, `query` and `summary` fields. Use
+`{"device_id":"local","summary":true}` for names/descriptions without schemas,
+then `{"device_id":"local","name":"files_read"}` for one exact schema.
+`query` searches tool names and full descriptions case-insensitively. Combined
+filters intersect; no matches returns an empty list. Without these fields the
+existing complete-catalog response is preserved.
+
+This reduces the result delivered to the AI. The connector still fetches the
+current authorized upstream catalog on every request, including execution. This
+is not an upstream bandwidth optimization, schema cache or latency guarantee.
+Changing authorization or removing a tool is reflected on the next request.
+No prior schema response grants permission for a later operation.
+
+A 2026-09-14 isolated local-engine measurement serialized the returned `data`
+using compact JSON and UTF-8: all 59 tools = 67,123 bytes; summary of 59 tools =
+11,330 bytes; exact `files_read` schema = 992 bytes. These are response-data
+bytes, not model tokens, total network traffic or an end-to-end latency benchmark.
+The caller can request an exact schema directly when it already knows the name.

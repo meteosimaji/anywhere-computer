@@ -176,6 +176,12 @@ async def test_http_authorization_and_session_cleanup(http_remote, tmp_path):
     try:
         identity = router.store.add_http('HTTP', existing.tokens.resource,
                                          existing.tokens.client, 'device')['device_id']
+        selected = await router.execute(request('devices_tools', device_id=identity,
+                                                name='computer_status', summary=True))
+        assert selected.state == 'completed'
+        assert [tool['name'] for tool in selected.data['tools']] == ['computer_status']
+        assert 'inputSchema' not in selected.data['tools'][0]
+        assert not adapter.sessions
         result = await router.execute(request('devices_call', device_id=identity,
                                              tool='computer_status'))
         assert result.state == 'completed' and result.data['device_id'] == identity
@@ -212,3 +218,41 @@ async def test_nested_request_id_is_rejected_before_remote_dispatch(routed):
     assert reply.state == 'failed'
     assert 'outer devices_call' in reply.error
     assert not sent
+
+
+async def test_device_catalog_selects_current_schema_and_compact_summaries(routed):
+    router, _, remote, sent, first, _ = routed
+    full = await router.execute(request('devices_tools', device_id=first))
+    selected = await router.execute(request(
+        'devices_tools', device_id=first, name='computer_status',
+    ))
+    assert selected.state == 'completed'
+    expected = next(tool for tool in remote.catalog() if tool['name'] == 'computer_status')
+    assert selected.data['tools'] == [expected]
+    compact = await router.execute(request('devices_tools', device_id=first, summary=True))
+    assert compact.state == 'completed'
+    assert len(compact.data['tools']) == len(full.data['tools'])
+    assert all(set(tool) == {'name', 'description'} for tool in compact.data['tools'])
+    assert not sent
+    missing = await router.execute(request('devices_tools', device_id=first, name='missing'))
+    assert missing.state == 'completed' and missing.data['tools'] == []
+    # Selection is applied to a fresh authorized catalog, never a cached schema.
+    remote.tools.pop('computer_status')
+    removed = await router.execute(request(
+        'devices_tools', device_id=first, name='computer_status',
+    ))
+    assert removed.state == 'completed' and removed.data['tools'] == []
+    blocked = await router.execute(request(
+        'devices_call', device_id=first, tool='computer_status', arguments={},
+    ))
+    assert blocked.state == 'failed' and not sent
+
+
+async def test_device_catalog_search_uses_full_description(routed):
+    router, _, remote, _, first, _ = routed
+    description = remote.tools['computer_status'].description
+    result = await router.execute(request(
+        'devices_tools', device_id=first, query=description[-40:].upper(), summary=True,
+    ))
+    assert result.state == 'completed'
+    assert any(tool['name'] == 'computer_status' for tool in result.data['tools'])
