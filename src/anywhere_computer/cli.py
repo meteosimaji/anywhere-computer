@@ -6,6 +6,7 @@ import getpass
 import json
 import os
 import re
+import shutil
 import signal
 import sys
 from pathlib import Path
@@ -116,7 +117,7 @@ def main() -> None:
     )
     parser.add_argument("--state-dir", type=Path, default=None)
     parser.add_argument("--verifier", type=Path,
-                        help="Absolute path to GitHub CLI for release attestation (update only)")
+                        help="GitHub CLI absolute path for updates (default: gh on PATH)")
     parser.add_argument("--http-state-dir", type=Path,
                         help="Existing HTTP state directory for offline engine-unify")
     parser.add_argument("--connector", help="Absolute path to the optional tunnel executable")
@@ -179,7 +180,13 @@ def main() -> None:
                   "from this installation with the same --state-dir, if specified. "
                   "Client registration and login startup are not changed.")
     if args.command == 'update':
-        if args.verifier is None or not args.verifier.is_absolute():
+        if args.verifier is None:
+            discovered_verifier = shutil.which('gh')
+            if discovered_verifier is None:
+                parser.error('GitHub CLI (gh) is required for verified updates; '
+                             'install it or supply --verifier with its absolute path')
+            args.verifier = Path(discovered_verifier).absolute()
+        if not args.verifier.is_absolute():
             parser.error('update requires an absolute --verifier path')
     elif args.verifier is not None:
         parser.error('--verifier is only valid for update')

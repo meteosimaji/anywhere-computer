@@ -62,6 +62,7 @@ def test_release_version_ordering_and_unknown_version_rejection():
 
 
 def test_update_cli_emits_cycle_result(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cli.shutil, 'which', lambda _: pytest.fail('Explicit path must win'))
     verifier = tmp_path / 'gh'
     monkeypatch.setattr('sys.argv', ['anywhere', 'update', '--state-dir', str(tmp_path),
                                      '--verifier', str(verifier)])
@@ -132,3 +133,27 @@ def test_orphan_pending_record_is_not_silently_replaced(tmp_path, monkeypatch):
     monkeypatch.setattr(update, 'install_release', forbidden)
     with pytest.raises(RuntimeError, match='no prepared release'):
         update.resume_pending_release(tmp_path)
+
+
+def test_update_cli_discovers_verifier_without_changing_update_policy(tmp_path, monkeypatch):
+    verifier = tmp_path / 'GitHub CLI' / 'gh'
+    monkeypatch.setattr('sys.argv', ['anywhere', 'update', '--state-dir', str(tmp_path)])
+    monkeypatch.setattr(cli.shutil, 'which', lambda name: str(verifier) if name == 'gh' else None)
+    calls = []
+    def once(control, **kwargs):
+        calls.append((control, kwargs['verifier']))
+        return {'state': 'no_stable_release'}
+    monkeypatch.setattr(update, 'update_once', once)
+    cli.main()
+    assert calls == [(tmp_path, verifier)]
+
+
+def test_missing_verifier_stops_before_update_or_state_creation(tmp_path, monkeypatch):
+    target = tmp_path / 'absent'
+    monkeypatch.setattr('sys.argv', ['anywhere', 'update', '--state-dir', str(target)])
+    monkeypatch.setattr(cli.shutil, 'which', lambda _: None)
+    monkeypatch.setattr(update, 'update_once', lambda *a, **k: pytest.fail('Unverified update'))
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 2
+    assert not target.exists()
