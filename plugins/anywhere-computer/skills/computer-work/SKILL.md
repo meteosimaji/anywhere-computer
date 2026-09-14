@@ -7,25 +7,22 @@ Check computer_status before acting. Use the reported capabilities and explicit
 absolute paths. Read before editing an existing file, then supply its SHA-256;
 if a conflict occurs, read again and reassess the intended edit.
 
-Alpha8 adds typed Peekaboo GUI tools over an explicitly selected direct MCP session.
-Use gui_observe with app to obtain an observation_id, then gui_click with an observed
-element_id, gui_type with text, or gui_key with a keys list. Observations expire after
-60 seconds and are consumed by an action; observe again before the next action.
-Typing and keys focus the app and use current keyboard focus, which another actor
-can change. Return or key sequences may submit or delete. Coordinate clicks are not
-provided. Host approval decisions remain authoritative; this adapter does not bypass
-them. A stale or unknown action must not be replayed automatically.
+Typed Peekaboo GUI operations require an explicitly selected direct MCP session and
+an exact target window. Discover window IDs using that provider's window tool with
+action=list and app; never invent them. Call gui_observe with app and window_id,
+then gui_click with an observed element_id, gui_type with text (optionally element_id
+and clear for replacement), or gui_key with a key chord. Return requires a new
+observation and a separate gui_key. Observations expire after 60 seconds and are
+consumed by an action. There is no foreground-input fallback. Older providers without
+exact-window capture cannot use this typed adapter. Check the installed schema.
+
+An action acknowledgement is not proof of its effect: postcondition_verified=false
+requires observing the same window to check the text/UI. Even a provider error can
+follow delivered input. Never repeat input automatically after an uncertain result.
+Coordinate clicks are not provided. Host approval decisions remain authoritative;
+do not switch interfaces to evade a restriction.
 Direct mcp_tools supports summary, query against full descriptions, and exact name.
 Filtering applies to one page; follow nextCursor even for an empty filtered page.
-
-Development builds with gui_observe.window_id support explicit Peekaboo 4 exact-window
-observations. Discover the window ID from the selected server; never invent it. This mode
-does not focus the app or fall back to the legacy foreground path. Use its observation
-with gui_type.element_id and clear when replacement is intended. Return requires a fresh
-observation and a separate gui_key call. Check the actual installed schema before using
-these arguments. Provider diagnostics are claims, not verified effects: an is_error result
-can follow delivered input. Observe before considering further input; never automatically
-replay because an operation or provider reported an error.
 
 For a requested Codex conversation, use codex_threads_list, select the exact title/ID,
 then codex_thread_read with bounded pages. These tools read the local installed Codex

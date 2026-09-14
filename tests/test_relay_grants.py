@@ -4,6 +4,7 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from test_connection import agent as agent
 
 from anywhere_computer.engine import Engine
 from anywhere_computer.models import Request
@@ -104,3 +105,33 @@ async def test_catalog_is_limited_to_verified_tools(execution):
     reply = await pc.dispatch(sign(), Request(operation_id='5' * 32, tool='__catalog'))
     assert reply.state == 'completed'
     assert {item['name'] for item in reply.data['tools']} == {'files_write', 'operations_get'}
+
+
+async def test_signed_relay_uses_the_existing_local_engine(execution, agent, monkeypatch):
+    import anywhere_computer.connection as connection
+
+    original, sign, current, root, _ = execution
+    directory, credential = agent
+    monkeypatch.setattr(connection, 'local_credential', lambda _: credential)
+    shared = AuthorizedRelayAgent(directory, original.verifier, account=original.account,
+                                  device_id=original.device_id)
+    local = await connection.exchange(directory, '__status', credential=credential)
+    status = await shared.dispatch(sign({'tools': ['computer_status']}),
+                                  Request(operation_id='8' * 32, tool='computer_status'))
+    assert status.state == 'completed'
+    assert status.data['instance_id'] == local.data['instance_id']
+    target = root / 'shared-engine.txt'
+    write = Request(operation_id='9' * 32, tool='files_write',
+                    arguments={'path': str(target), 'text': '共有エンジン ✅'})
+    result = await shared.dispatch(sign(), write)
+    assert result.state == 'completed'
+    lookup = await shared.dispatch(sign(), Request(operation_id='a' * 32, tool='operations_get',
+                                  arguments={'operation_id': write.operation_id}))
+    assert lookup.data == result.model_dump(mode='json')
+    rejected = await shared.dispatch(sign({'tools': ['files_write', 'unknown_tool']}),
+                                    write.model_copy(update={'operation_id': 'b' * 32}))
+    assert rejected.state == 'failed' and 'before dispatch' in rejected.error
+    current['active'] = False
+    assert (await shared.dispatch(sign(), write)).state == 'failed'
+    after = await connection.exchange(directory, '__status', credential=credential)
+    assert after.data['instance_id'] == local.data['instance_id']

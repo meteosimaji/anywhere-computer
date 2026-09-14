@@ -154,12 +154,17 @@ async def serve(
                 granted = GrantedRequest.model_validate(request.arguments)
                 if granted.request.operation_id != request.operation_id:
                     raise ValueError("Forwarded operation ID differs from envelope")
-                bridge = RemoteAgent(
-                    engine, {granted.identity: frozenset(granted.tools)}, transport="http",
-                )
-                reply = Reply.model_validate_json(await bridge.dispatch(
-                    granted.identity, granted.request.model_dump_json().encode(),
-                ))
+                try:
+                    bridge = RemoteAgent(
+                        engine, {granted.identity: frozenset(granted.tools)}, transport="http",
+                    )
+                except ValueError:
+                    reply = Reply(operation_id=request.operation_id, state="failed",
+                                  error="Remote tool grant was rejected before dispatch")
+                else:
+                    reply = Reply.model_validate_json(await bridge.dispatch(
+                        granted.identity, granted.request.model_dump_json().encode(),
+                    ))
             elif request.tool == "__stop":
                 if engine.status()["update_blocked"]:
                     reply = Reply(

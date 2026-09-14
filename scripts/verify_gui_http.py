@@ -23,7 +23,35 @@ from anywhere_computer.engine import Engine
 from anywhere_computer.http_mcp import HTTPMCP
 
 
-async def verify(executable: Path, receipt: Path, *, typed: bool = False) -> None:
+def text_field(text: str, expected: str) -> str | None:
+    """Match a value only inside the provider's AXTextArea group, not a label."""
+    section = re.search(r"^AXTextArea \([^\n]*\):\n(.*?)(?=^AX|\Z)", text, re.MULTILINE | re.DOTALL)
+    if section is None:
+        return None
+    matches = [
+        match[1]
+        for line in section[1].splitlines()
+        if "[not actionable]" not in line
+        and "[value settable]" in line
+        and f'value: "{expected}"' in line
+        and (match := re.match(r"\s+(elem_\d+) - ", line))
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+async def verify(
+    executable: Path,
+    receipt: Path,
+    *,
+    typed: bool = False,
+    window_id: int | None = None,
+    app: str = "com.apple.calculator",
+    expected_text: str | None = None,
+) -> None:
+    if typed and window_id is None:
+        raise ValueError("Typed acceptance requires an explicitly selected --window-id")
+    if expected_text is not None and not typed:
+        raise ValueError("Text acceptance requires --typed and --window-id")
     report = {
         "completed": False,
         "route": "authenticated HTTP -> direct MCP -> Peekaboo",
@@ -45,7 +73,10 @@ async def verify(executable: Path, receipt: Path, *, typed: bool = False) -> Non
                     "mcp_call",
                     "mcp_session_status",
                     "mcp_session_close",
-                    "gui_observe", "gui_click", "gui_type", "gui_key",
+                    "gui_observe",
+                    "gui_click",
+                    "gui_type",
+                    "gui_key",
                 }
             )
             authority = AuthorizationStore(
@@ -112,82 +143,149 @@ async def verify(executable: Path, receipt: Path, *, typed: bool = False) -> Non
                             try:
                                 catalog = await call("mcp_tools", sid)
                                 names = {t["name"] for t in catalog["data"]["tools"]}
-                                assert {"see", "type", "hotkey", "app"} <= names
+                                assert (
+                                    {"see", "type", "press"}
+                                    if typed
+                                    else {"see", "type", "hotkey", "app"}
+                                ) <= names
 
                                 observation_id = None
 
                                 async def gui(name, arguments):
                                     nonlocal observation_id
                                     if typed and name == "see":
-                                        result = await call("gui_observe", {
-                                            **sid, "app": arguments["app_target"],
-                                        })
+                                        result = await call(
+                                            "gui_observe",
+                                            {
+                                                **sid,
+                                                "app": arguments["app_target"],
+                                                "window_id": window_id,
+                                            },
+                                        )
                                         observation_id = result["data"].get("observation_id")
                                     elif typed and name in {"type", "hotkey"}:
                                         assert observation_id is not None
-                                        options = arguments if name == "type" else {
-                                            "keys": arguments["keys"].split(","),
-                                        }
+                                        options = (
+                                            arguments
+                                            if name == "type"
+                                            else {
+                                                "keys": arguments["keys"].split(","),
+                                            }
+                                        )
                                         result = await call(
                                             "gui_type" if name == "type" else "gui_key",
                                             {**sid, **options, "observation_id": observation_id},
                                         )
                                         observation_id = None
                                     else:
-                                        result = await call("mcp_call", {
-                                            **sid, "name": name, "arguments": arguments,
-                                        })
+                                        result = await call(
+                                            "mcp_call",
+                                            {
+                                                **sid,
+                                                "name": name,
+                                                "arguments": arguments,
+                                            },
+                                        )
                                     assert not result["data"]["is_error"], name
                                     return result
 
-                                await gui("see", {"app_target": "com.apple.calculator"})
-                                await gui(
-                                    "app", {"action": "focus", "name": "com.apple.calculator"}
-                                )
-                                await gui("hotkey", {"keys": "escape"})
-                                for expression, expected in [
-                                    ("12+30", 42),
-                                    ("+8", 50),
-                                    ("+1", 51),
-                                    ("+1", 52),
-                                    ("+1", 53),
-                                    ("+1", 54),
-                                ]:
-                                    if typed and observation_id is None:
-                                        await gui("see", {"app_target": "com.apple.calculator"})
-                                    await gui("type", {"text": expression, "press_return": True})
-                                    deadline = time.monotonic() + 3
-                                    observations = 0
-                                    while True:
-                                        result = await gui(
-                                            "see", {"app_target": "com.apple.calculator"}
-                                        )
-                                        observations += 1
+                                if expected_text is not None:
+                                    result = await gui("see", {"app_target": app})
+                                    for replacement in (
+                                        "Anywhere GUI 日本語 40 ✅",
+                                        "Anywhere GUI 日本語 42 ✅",
+                                    ):
                                         text = "\n".join(
                                             x.get("text", "")
                                             for x in result["data"]["content"]
                                             if x.get("type") == "text"
                                         )
-                                        # Observe UI settlement; never replay the input action.
-                                        matched = re.search(
-                                            r'elem_\d+ - "' + str(expected) + r'" - at', text
+                                        candidate = text_field(text, expected_text)
+                                        assert candidate is not None, (
+                                            "Expected one synthetic input field; no input sent"
                                         )
-                                        if matched:
-                                            break
-                                        assert time.monotonic() < deadline, (
-                                            "Calculator did not settle",
-                                            expected,
+                                        changed = await gui(
+                                            "type",
+                                            {
+                                                "text": replacement,
+                                                "clear": True,
+                                                "element_id": candidate,
+                                            },
                                         )
-                                        await asyncio.sleep(0.1)
-                                    report.setdefault("observation_counts", []).append(observations)
-                                    report["observed_results"].append(expected)
-                                    recovered = await call(
-                                        "operations_get",
-                                        {
-                                            "operation_id": result["operation_id"],
-                                        },
-                                    )
-                                    assert recovered["data"]["data"] == result["data"]
+                                        assert changed["data"]["postcondition_verified"] is False
+                                        # Only observe while settling; never replay a mutation.
+                                        deadline = time.monotonic() + 3
+                                        while True:
+                                            result = await gui("see", {"app_target": app})
+                                            text = "\n".join(
+                                                x.get("text", "")
+                                                for x in result["data"]["content"]
+                                                if x.get("type") == "text"
+                                            )
+                                            if text_field(text, replacement) is not None:
+                                                break
+                                            assert time.monotonic() < deadline, "Readback mismatch"
+                                            await asyncio.sleep(0.1)
+                                        report["observed_results"].append(replacement)
+                                        recovered = await call(
+                                            "operations_get",
+                                            {"operation_id": changed["operation_id"]},
+                                        )
+                                        assert recovered["data"]["data"] == changed["data"]
+                                        expected_text = replacement
+                                else:
+                                    await gui("see", {"app_target": app})
+                                    if not typed:
+                                        await gui("app", {"action": "focus", "name": app})
+                                    await gui("hotkey", {"keys": "escape"})
+                                    for expression, expected in [
+                                        ("12+30", 42),
+                                        ("+8", 50),
+                                        ("+1", 51),
+                                        ("+1", 52),
+                                        ("+1", 53),
+                                        ("+1", 54),
+                                    ]:
+                                        if typed and observation_id is None:
+                                            await gui("see", {"app_target": app})
+                                        await gui(
+                                            "type", {"text": expression, "press_return": not typed}
+                                        )
+                                        if typed:
+                                            await gui("see", {"app_target": app})
+                                            await gui("hotkey", {"keys": "return"})
+                                        deadline = time.monotonic() + 3
+                                        observations = 0
+                                        while True:
+                                            result = await gui("see", {"app_target": app})
+                                            observations += 1
+                                            text = "\n".join(
+                                                x.get("text", "")
+                                                for x in result["data"]["content"]
+                                                if x.get("type") == "text"
+                                            )
+                                            # Observe UI settlement; never replay the input action.
+                                            matched = re.search(
+                                                r'elem_\d+ - "' + str(expected) + r'" - at', text
+                                            )
+                                            if matched:
+                                                break
+                                            assert time.monotonic() < deadline, (
+                                                "Calculator did not settle",
+                                                expected,
+                                            )
+                                            await asyncio.sleep(0.1)
+                                        report.setdefault("observation_counts", []).append(
+                                            observations
+                                        )
+                                        report["observed_results"].append(expected)
+                                        recovered = await call(
+                                            "operations_get",
+                                            {
+                                                "operation_id": result["operation_id"],
+                                            },
+                                        )
+                                        assert recovered["data"]["data"] == result["data"]
                                 assert (await call("mcp_session_status", sid))["data"][
                                     "state"
                                 ] == "open"
@@ -220,5 +318,19 @@ if __name__ == "__main__":
     parser.add_argument("--executable", type=Path, required=True)
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--typed", action="store_true")
+    parser.add_argument("--window-id", type=int)
+    parser.add_argument("--app", default="com.apple.calculator")
+    parser.add_argument(
+        "--expected-text", help="Only edit a test field whose value matches exactly"
+    )
     args = parser.parse_args()
-    asyncio.run(verify(args.executable, args.receipt, typed=args.typed))
+    asyncio.run(
+        verify(
+            args.executable,
+            args.receipt,
+            typed=args.typed,
+            window_id=args.window_id,
+            app=args.app,
+            expected_text=args.expected_text,
+        )
+    )

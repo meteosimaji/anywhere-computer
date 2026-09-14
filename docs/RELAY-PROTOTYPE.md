@@ -581,3 +581,72 @@ The in-flight rotation test also sends a request before renewal, then returns an
 old-channel reply after the binding changes. The reply is withheld as
 `ChannelOutcomeUnknown`; it is not reported as a pre-dispatch failure or replayed.
 Registry/channel coverage now passes 22 tests locally.
+
+## First authenticated PC connection (development)
+
+An explicitly configured `RelayChannels(..., enrollment=service)` accepts
+`/pc/enroll` using `anywhere-pc.signed.v1`. It verifies the existing enrollment
+bearer from `Authorization` and the registered `X-Anywhere-Device` against the
+account, then binds the actual verified TLS peer certificate. It returns a versioned
+`bound` receipt containing the exact device ID and public certificate fingerprint,
+then closes normally. This socket never enters the execution-channel map. The PC
+must verify that receipt before treating enrollment as confirmed; a lost response
+remains unconfirmed. Normal operation starts on a separate `/pc` connection.
+No client-provided
+fingerprint is used. The listener remains loopback-only and requires a trusted
+client certificate; it does not issue certificates or weaken TLS verification.
+
+Invalid, expired, execution-purpose or cross-account tokens close the connection
+with a fixed error and do not create a binding. Initial binding cannot overwrite
+an existing certificate. Later `/pc` connections use the saved certificate binding
+without carrying an enrollment token. Signed execution authorization remains a
+separate per-operation requirement. Configure enrollment and channels with the
+same registry. The optional enrollment service is disabled by default.
+
+Isolated TLS tests cover successful first binding, a forged fingerprint header,
+wrong account/scope/expiry, no automatic operation dispatch and reconnect without
+an enrollment bearer. This connects registration to transport, but the resident
+PC controller, credential provisioning and OS-vault storage are still not wired
+into a complete installation flow. Never put the enrollment bearer in a URL or
+CLI argument.
+
+`PCRelayClient.enroll` now verifies the bounded receipt against its device ID and
+the configured certificate fingerprint. The setup controller supplies the grant
+in memory. Enrollment redirects and automatic retries are disabled; ambiguous
+completion returns a fixed failure without exposing the bearer. `run()` remains
+a separate connection using only TLS credentials and signed execution envelopes.
+An isolated real-TLS integration test registers a device, confirms enrollment,
+starts the PC client, writes a Japanese/emoji file through signed relay execution,
+and recovers the same operation from the PC ledger. This uses provisioned test
+certificates and an isolated signing key; it does not establish OS-vault provisioning,
+public-service operation or native startup integration.
+
+The same integration test now stops the PC client, closes the engine, and creates
+fresh instances against the existing state directory. It reconnects without a new
+enrollment request, verifies the engine instance changed, and retrieves the exact
+pre-restart operation result. Repeating the original write ID returns that result
+without overwriting a subsequent independent file edit. This proves persisted
+ledger recovery across engine/client recreation within one test process, not
+process-crash, OS-restart, sleep or installed-service recovery.
+
+`RegistrationClient.enroll_channel` connects the saved registration to first
+channel enrollment. It requires a confirmed, account-bound registered device that
+matches the PC agent before reading the original attempt's `device:enroll` grant
+from `EnrollmentCredentials`. Only the verified receipt is returned; the bearer
+stays within trusted Python clients. Expired/missing grants fail instead of being
+silently replaced. This step is explicit and is not used on normal reconnect.
+The integration test exercises this composition using a memory vault and an
+in-process registration service, followed by real TLS channel communication.
+Wrong-device and wrong-owner clients fail before binding. Native OS-vault access,
+post-registration grant renewal, certificate provisioning and resident entrypoint
+wiring remain to be integrated and accepted on installed applications.
+
+The signed PC adapter also accepts the directory of an already running shared
+local agent. It verifies the execution grant on the PC, then reuses the existing
+owner-authenticated `exchange_remote` path. No bearer enters that RPC or ledger,
+and no second engine or lifecycle supervisor is created. The adapter does not
+start/stop the shared agent. Integration tests compare its instance ID with local
+RPC, exercise file writes and result recovery, and reject revoked or unknown-tool
+grants. The shared owner service now returns a failed reply for invalid tool grants
+instead of closing the connection without an outcome. The Windows native pipe
+requires its platform CI/acceptance; local macOS checks use loopback owner RPC.

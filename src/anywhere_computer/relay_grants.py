@@ -3,6 +3,7 @@
 import hashlib
 import json
 from collections.abc import Callable
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -77,9 +78,11 @@ class AuthorizedRelayAgent:
 
     Transport framing/provisioning and an actual revocation provider remain
     separate. Never put bearer tokens inside engine arguments or its ledger.
+    A Path selects an already running shared local agent via its authenticated
+    owner transport. This adapter neither starts nor stops that shared engine.
     """
 
-    def __init__(self, agent: RemoteAgent, verifier: ExecutionVerifier, *,
+    def __init__(self, agent: RemoteAgent | Path, verifier: ExecutionVerifier, *,
                  account: RelayAccount, device_id: str) -> None:
         self.agent, self.verifier = agent, verifier
         self.account, self.device_id = account, device_id
@@ -100,10 +103,17 @@ class AuthorizedRelayAgent:
         try:
             grant = self.verifier.verify(token, account=self.account, device_id=self.device_id,
                                          tool=request.tool)
-            self.agent.grant(grant.identity, frozenset(grant.tools), expires_at=grant.exp)
+            if isinstance(self.agent, RemoteAgent):
+                self.agent.grant(grant.identity, frozenset(grant.tools), expires_at=grant.exp)
         except ValueError:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Execution authorization was rejected before dispatch')
+        if isinstance(self.agent, Path):
+            from .connection import exchange_remote
+
+            return await exchange_remote(
+                self.agent, grant.identity, frozenset(grant.tools), request,
+            )
         return Reply.model_validate_json(await self.agent.dispatch(
             grant.identity, request.model_dump_json().encode(),
         ))

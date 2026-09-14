@@ -274,12 +274,12 @@ for line in sys.stdin:
             mcp.write_text(
                 "from mcp.server.fastmcp import FastMCP\nm=FastMCP('fixture')\nn=40\n"
                 "@m.tool()\ndef increment()->int:\n global n\n n+=1\n return n\n"
-                "@m.tool()\ndef see(app_target:str)->str:\n"
+                "@m.tool()\ndef see(app_target:str,window_id:int)->str:\n"
                 " return 'Snapshot ID: fixture-1\\nApplication: fixture\\n  elem_1 - button'\n"
                 "@m.tool()\ndef click(on:str,snapshot:str)->str:\n return 'clicked'\n"
                 "@m.tool()\ndef app(action:str,name:str)->str:\n return 'focused'\n"
-                "@m.tool()\ndef type(text:str,press_return:bool,snapshot:str)->str:\n return text\n"
-                "@m.tool()\ndef hotkey(keys:str)->str:\n return keys\n"
+                "@m.tool()\ndef type(text:str,clear:bool,snapshot:str)->str:\n return text\n"
+                "@m.tool()\ndef press(keys:list[str],snapshot:str)->str:\n return ','.join(keys)\n"
                 "m.run(transport='stdio')\n"
             )
             direct = await call(
@@ -299,7 +299,7 @@ for line in sys.stdin:
                 ("gui_type", {"text": "fixture", "press_return": False}),
                 ("gui_key", {"keys": ["escape"]}),
             ):
-                observed = await call("gui_observe", {**dsid, "app": "fixture"})
+                observed = await call("gui_observe", {**dsid, "app": "fixture", "window_id": 42})
                 assert observed["action_ready"]
                 action = await call(name, {**dsid, **arguments,
                     "observation_id": observed["observation_id"]})
