@@ -23,6 +23,7 @@ from .models import Contract, Reply, Request
 from .owner_json_pipe import (
     OwnerJsonPipeServer,
     OwnerPipeEndpoint,
+    OwnerPipeTimeout,
     request_owner_json_pipe_async,
 )
 from .runtime_identity import ENGINE_API_VERSION, runtime_identity
@@ -320,7 +321,9 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
                     time.sleep(0.05)
                 if (directory / "agent.json").exists():
                     raise RuntimeError("Previous agent has not finished shutdown; retry later")
-        except (OSError, ValueError, TimeoutError):
+        except (OSError, ValueError, TimeoutError, OwnerPipeTimeout):
+            # A dead owner pipe must still reach the PID/start-time check below.
+            # Identity and protocol failures remain fatal; do not bypass them.
             pass
         try:
             metadata = load_endpoint(directory)
