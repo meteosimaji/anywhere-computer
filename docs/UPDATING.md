@@ -124,3 +124,14 @@ uv run --locked anywhere autostart-start --state-dir <既存のHTTP設定保存�
 
 合成候補による中断復旧、CI配布物の出所証明検証、正式stableの実機更新は異なる検証
 です。前二者は確認済みですが、正式stableによる一連の更新成功はまだ確認していません。
+
+
+### Development CLI: verifier discovery
+
+Development builds allow `anywhere update` to find an installed GitHub CLI (`gh`)
+on the current PATH. `--verifier` still takes precedence and must be absolute.
+An unavailable verifier stops before an update begins; nothing is downloaded or
+installed to satisfy this prerequisite automatically. The existing provenance
+checks, stable-only selection, idle-work protection and manual-update default are
+unchanged. Published alpha9 still requires the explicit verifier argument shown
+above. Service PATH may differ from an interactive terminal.
