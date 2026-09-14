@@ -291,3 +291,16 @@ group, excludes labels/read-only elements, and refuses ambiguous matches.
 This result does not rehabilitate the failed fresh-ChatGPT foreground test. The
 installed ChatGPT runtime and its cached schema still require updating and another
 fresh-chat acceptance run. Windows GUI and complete beta acceptance remain open.
+
+
+The same exact-window HTTP sequence also passed using only the relocated macOS
+portable interpreter and bundled package. Before execution, all 3,130 manifest files
+matched. The portable verifier additionally exercised native agent startup, file
+roundtrip, a regex child, reconnecting terminal input, refusal to stop a busy agent,
+normal shutdown and removal of its disposable credential.
+
+The portable GUI run reported version `0.1.0a9`, engine API 1,
+runtime `fb28dae9a51d9a51d471bbaa122370f02119cfe067a525d21acba2c45393e508` and instance
+`14552af8ab7d49af985846531f8c80bf`. The harness now records these identities and checks
+that the final observation uses the same runtime/instance. This is a relocated Mac
+package test, not an installation into the running ChatGPT service or an OS reboot test.
