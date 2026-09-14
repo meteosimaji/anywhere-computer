@@ -555,3 +555,10 @@ Two mismatch tests verify that neither direction sends a frame. The original
 implementation failed these tests; the signed/legacy channel, PC lifecycle and
 MCP integration suite passes with the separation (21 tests). This is development
 protocol compatibility, not public provisioning, key rotation or OS acceptance.
+
+The PC lifecycle also reconciles an explicit stop requested during its opening
+handshake. Once the socket becomes available it closes without entering the
+receive loop. A real WSS connection with a controlled handshake-return delay
+reproduces the old hang and verifies termination after the fix. This is an
+explicit client stop; closing the management UI must still leave independently
+owned permitted work running.

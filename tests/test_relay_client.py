@@ -122,3 +122,44 @@ async def test_engine_io_failure_is_not_classified_as_reconnectable_network(
         await client.stop()
         if not task.done():
             await asyncio.wait_for(task, timeout=10)
+
+
+async def test_stop_during_handshake_does_not_leave_connected_client(
+    channel_setup, execution, certificates, monkeypatch,
+):
+    from contextlib import asynccontextmanager
+
+    from anywhere_computer import relay_client
+
+    relay, _, _, device_id, _ = channel_setup
+    pc, _, _, _, _ = execution
+    context, _ = certificates
+    entered, release = asyncio.Event(), asyncio.Event()
+    real_connect = relay_client.connect
+    attempts = []
+
+    @asynccontextmanager
+    async def delayed_connect(*args, **kwargs):
+        attempts.append(1)
+        async with real_connect(*args, **kwargs) as socket:
+            entered.set()
+            await release.wait()
+            yield socket
+
+    monkeypatch.setattr(relay_client, 'connect', delayed_connect)
+    port = relay._server.sockets[0].getsockname()[1]
+    client = PCRelayClient(f'wss://localhost:{port}/pc', context('client', True), pc)
+    task = asyncio.create_task(client.run())
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert client.state == 'connecting'
+        await client.stop()
+        release.set()
+        await asyncio.wait_for(asyncio.shield(task), timeout=1)
+        assert client.state == 'stopped'
+        assert client._socket is None
+        assert attempts == [1]
+    finally:
+        release.set()
+        await client.stop()
+        await asyncio.wait_for(task, timeout=5)

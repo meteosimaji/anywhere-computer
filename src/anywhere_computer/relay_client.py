@@ -63,6 +63,10 @@ class PCRelayClient:
                         open_timeout=5, close_timeout=1,
                     ) as socket:
                         self._socket = socket
+                        # stop() may have run while connect was awaiting the
+                        # handshake and no socket was available to close yet.
+                        if self._stop.is_set():
+                            break
                         if socket.subprotocol != SIGNED_PC_PROTOCOL:
                             raise ExecutionRejected('Unsupported PC protocol')
                         self.state = 'connected'
