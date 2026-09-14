@@ -46,6 +46,14 @@ class RelayEnrollment:
         owner = self.account(token)
         return self._registry.register(owner, enrollment_id=enrollment_id, name=name)
 
+    def bind_channel(self, token: str, *, device_id: str, peer_fingerprint: str) -> None:
+        """Trusted TLS adapter only; fingerprint must come from the verified peer.
+
+        This grants no execution permission and cannot replace an existing binding.
+        """
+        owner = self.account(token)
+        self._registry.bind_channel(owner, device_id, fingerprint=peer_fingerprint)
+
     def account(self, token: str) -> RelayAccount:
         """Resolve only the authenticated enrollment identity, without mutation."""
         try:

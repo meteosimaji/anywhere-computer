@@ -581,3 +581,26 @@ The in-flight rotation test also sends a request before renewal, then returns an
 old-channel reply after the binding changes. The reply is withheld as
 `ChannelOutcomeUnknown`; it is not reported as a pre-dispatch failure or replayed.
 Registry/channel coverage now passes 22 tests locally.
+
+## First authenticated PC connection (development)
+
+An explicitly configured `RelayChannels(..., enrollment=service)` accepts
+`/pc/enroll` using `anywhere-pc.signed.v1`. It verifies the existing enrollment
+bearer from `Authorization` and the registered `X-Anywhere-Device` against the
+account, then binds the actual verified TLS peer certificate. No client-provided
+fingerprint is used. The listener remains loopback-only and requires a trusted
+client certificate; it does not issue certificates or weaken TLS verification.
+
+Invalid, expired, execution-purpose or cross-account tokens close the connection
+with a fixed error and do not create a binding. Initial binding cannot overwrite
+an existing certificate. Later `/pc` connections use the saved certificate binding
+without carrying an enrollment token. Signed execution authorization remains a
+separate per-operation requirement. Configure enrollment and channels with the
+same registry. The optional enrollment service is disabled by default.
+
+Isolated TLS tests cover successful first binding, a forged fingerprint header,
+wrong account/scope/expiry, no automatic operation dispatch and reconnect without
+an enrollment bearer. This connects registration to transport, but the resident
+PC controller, credential provisioning and OS-vault storage are still not wired
+into a complete installation flow. Never put the enrollment bearer in a URL or
+CLI argument.

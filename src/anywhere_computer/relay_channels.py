@@ -15,6 +15,7 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.typing import Subprotocol
 
 from .models import Reply, Request
+from .relay_enrollment import RelayEnrollment
 from .relay_grants import ExecutionEnvelope, ExecutionVerifier
 from .relay_registry import RelayAccount, RelayRegistry
 from .remote_transport import FRAME_LIMIT, check_tls
@@ -46,11 +47,12 @@ class RelayChannels:
     """
 
     def __init__(self, registry: RelayRegistry, context: ssl.SSLContext, *,
-                 max_connections: int = 32) -> None:
+                 max_connections: int = 32, enrollment: RelayEnrollment | None = None) -> None:
         check_tls(context, client=False)
         context.set_alpn_protocols(['http/1.1'])
         if not 1 <= max_connections <= 256:
             raise ValueError('Invalid PC channel capacity')
+        self.enrollment = enrollment
         self.registry = registry
         self.context = context
         self.max_connections = max_connections
@@ -71,7 +73,7 @@ class RelayChannels:
 
     async def _accept(self, socket: ServerConnection) -> None:
         if (socket.subprotocol not in {PC_PROTOCOL, SIGNED_PC_PROTOCOL} or socket.request is None
-                or socket.request.path != '/pc'):
+                or socket.request.path not in {'/pc', '/pc/enroll'}):
             await socket.close(code=1008, reason='Unsupported PC channel')
             return
         tls = socket.transport.get_extra_info('ssl_object')
@@ -81,8 +83,19 @@ class RelayChannels:
             return
         fingerprint = hashlib.sha256(certificate).hexdigest()
         try:
+            if socket.request.path == '/pc/enroll':
+                if self.enrollment is None or socket.subprotocol != SIGNED_PC_PROTOCOL:
+                    raise ValueError('Enrollment is not configured')
+                headers = socket.request.headers
+                scheme, _, token = headers.get('Authorization', '').partition(' ')
+                device_id = headers.get('X-Anywhere-Device', '')
+                if (scheme.lower() != 'bearer' or not token or len(token) > 8192
+                        or any(c.isspace() for c in token)):
+                    raise ValueError('Invalid enrollment header')
+                self.enrollment.bind_channel(token, device_id=device_id,
+                                             peer_fingerprint=fingerprint)
             _, device = self.registry.channel_device(fingerprint)
-        except ValueError:
+        except (ValueError, LookupError):
             await socket.close(code=1008, reason='PC registration unavailable')
             return
         previous = self._channels.get(device.device_id)
