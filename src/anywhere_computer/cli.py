@@ -152,9 +152,11 @@ def main() -> None:
     if args.command == "setup":
         if any(value != parser.get_default(name) for name, value in vars(args).items()
                if name not in {"command", "state_dir"}):
-            parser.error("setup accepts only --state-dir; use a specific command for advanced options")
+            parser.error("setup accepts only --state-dir; "
+                         "use a specific command for advanced options")
         if not has_interactive_input():
-            parser.error("setup requires an interactive terminal; use start, chatgpt-setup or remote-setup")
+            parser.error("setup requires an interactive terminal; "
+                         "use start, chatgpt-setup or remote-setup")
         print("Choose a connection. Existing setup steps will be reused.")
         print("1. Local MCP: start this PC's agent, then configure your MCP client.")
         print("2. ChatGPT over self-hosted HTTPS: requires your public MCP URL.")
