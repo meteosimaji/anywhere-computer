@@ -440,3 +440,103 @@ The tests use a synthetic expiring RemoteAgent grant. Verified AI grant propagat
 and independent PC verification must be implemented before connecting untrusted
 AI requests to this transport. Certificate provisioning, OS-vault key storage,
 rotation, the production PC client lifecycle and proxy compatibility remain open.
+
+### Execution-grant verification (isolated PC boundary)
+
+`relay_tokens.py` shares the existing fixed-key RS256 signature verification with
+registration. `relay_grants.py` adds a separate execution profile requiring
+`device:execute`, the configured execution audience and AI client, one device ID,
+a stable server-issued grant ID and explicit tool names. Enrollment tokens do not
+satisfy this profile. The issuer must issue the execution claims from authorized
+state; this module does not issue tokens or authorize a requested scope itself.
+
+`AuthorizedRelayAgent` fixes account/device from trusted PC provisioning, verifies
+each signed grant and checks its current revocation status before passing a
+request to `RemoteAgent`. A required trusted `is_current` callback supplies the
+revocation decision; no default allow callback or public revocation provider is
+provided. The existing engine validates known/local-only tools. Tokens never enter
+engine arguments or the operation ledger. An expiry refresh preserves the ledger
+namespace only for the same issuer, subject, AI client, device and grant ID.
+
+Local tests use a real Engine and disposable signed tokens to create a UTF-8 file,
+recover its result after expiry extension, reject another grant's result lookup,
+and reject revoked, expired, wrong-purpose, wrong-account/device/client and
+incomplete grants before file mutation. These are synthetic provider tests, not
+real OAuth consent or deployed relay acceptance. `exchange_authorized` now carries a bounded execution envelope over the WSS
+channel; `dispatch_frame` independently verifies it on the PC. The relay verifies
+again before returning results, withholding a reply if authorization changed while
+execution was in progress. That outcome is unknown to the caller, not a claim
+that the operation did not run. Plain Request frames are refused by this PC entry.
+
+Five actual loopback mTLS/WSS tests exercise signed file execution and refreshed
+result recovery after lost reply, PC-side revocation after relay dispatch,
+enrollment-token refusal without a sent frame, malformed/unsigned frame refusal,
+and result withholding after execution-time revocation. These use synthetic
+signed provider claims and revocation callbacks, with one in-process PC Engine.
+They do not prove a deployed provider, independent PC process lifecycle or Windows
+VM behavior. The original trusted `exchange` API remains a transport test entry;
+it must not be selected as a fallback for failed authorization. No public AI MCP
+endpoint currently exposes either entry. AI endpoint integration, trusted PC
+provisioning, negotiated production framing and a revocation provider remain open.
+
+### Isolated PC client lifecycle
+
+`PCRelayClient` owns one explicitly started outbound connection. It accepts only
+loopback WSS development endpoints and verified TLS contexts, passes binary
+execution envelopes to `AuthorizedRelayAgent`, and never retains a request for
+replay. Transient network failures and service-restart/overload closes reconnect
+with jittered exponential delay capped at 30 seconds. A handshake alone does not
+reset backoff. TLS verification, registration/policy and protocol failures stop;
+normal closure or replacement also stops rather than competing with the new PC
+connection. Duplicate `run` calls on the same instance are rejected.
+
+`stop` closes transport and wakes a retry delay. It does not terminate the shared
+Engine or deliberately cancel an operation already executing. A lost response
+therefore remains unknown until ledger recovery. Cancellation by the owning task
+has separate engine cancellation semantics; this is not a durable service manager.
+The `connected` state means transport only, not refreshed capability readiness.
+
+Three real loopback tests exercise a committed write losing its reply, automatic
+client reconnection and explicit result lookup with exactly one mutation frame;
+replacement without a reconnect fight; and revoked-registration refusal without
+an endless retry. They use the actual client and in-process Engine with disposable
+credentials. Cross-process startup exclusion, OS service integration, proxy
+compatibility, production framing negotiation and real sleep/resume remain open.
+
+An additional fault-injection regression distinguishes a local execution/storage
+`OSError` or timeout from network failure. Before the fix, the client entered its
+transport retry loop; after the fix, it stops with an unknown execution outcome
+and does not imply reconnection repairs the engine. The test was observed failing
+before the change and passing afterward. Network retries remain limited to errors
+originating outside the local dispatch call.
+
+### MCP protocol adapter
+
+`RelayMCPBackend` connects the existing `MCPSession` catalog and execution hooks
+to authorized WSS exchange, without another execution engine. It binds the session
+to the verified account/client/device/grant identity. Each operation obtains a
+fresh bearer from its trusted request-scoped provider; expiry refresh within the
+same grant is accepted, while changing the grant identity requires a new session.
+The adapter neither authenticates an HTTP caller nor stores a global current token.
+
+An actual protocol integration test performs MCP initialize/initialized, tools/list,
+UTF-8 files_write and refreshed-token operations_get through the real PC client
+and Engine. It checks changed-grant and revoked authorization refusal. This uses
+in-process MCP packets, WSS loopback, and synthetic provider tokens. HTTP request
+context isolation, authentication metadata and multi-device AI routing still need
+integration before this can be exposed as a client-facing endpoint.
+
+### Request-scoped HTTP MCP entry
+
+`relay_http_mcp` connects the existing loopback HTTP adapter to the signed relay
+backend for one explicitly provisioned account/device. Every HTTP request verifies
+its bearer again; the MCP session owner is the verified grant identity, so token
+refresh preserves the session while a different grant cannot reuse it. Bearers
+are available only during the authenticated request in the handling task, not in
+session storage, a global owner map, or inherited child tasks.
+
+The integration test uses real HTTP, mutual-TLS WebSockets and the PC Engine to
+write UTF-8 content, refresh authorization, recover the prior result, and reject
+grant substitution and revocation. Concurrent request tests check token isolation
+and scope cleanup. This is an isolated single-device entry, not the final
+multi-device AI catalog, OAuth issuer, public endpoint, or production deployment.

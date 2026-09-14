@@ -15,6 +15,7 @@ from websockets.asyncio.server import Server, ServerConnection, serve
 from websockets.typing import Subprotocol
 
 from .models import Reply, Request
+from .relay_grants import ExecutionEnvelope, ExecutionVerifier
 from .relay_registry import RelayAccount, RelayRegistry
 from .remote_transport import FRAME_LIMIT, check_tls
 
@@ -113,9 +114,30 @@ class RelayChannels:
     async def exchange(self, account: RelayAccount, device_id: str, request: Request,
                        *, timeout: float = 65) -> Reply:
         """Trusted internal caller only; account construction is not authentication."""
+        return await self._exchange_payload(account, device_id, request,
+                                             request.model_dump_json().encode(), timeout=timeout)
+
+    async def exchange_authorized(self, verifier: ExecutionVerifier, account: RelayAccount,
+                                  device_id: str, token: str, request: Request,
+                                  *, timeout: float = 65) -> Reply:
+        """Verify before transport; the receiving PC verifies the envelope again.
+
+        account must come from the authenticated AI connection, not its body.
+        No registration token, unsigned claims or synthetic permissions are added.
+        """
+        verifier.verify(token, account=account, device_id=device_id, tool=request.tool)
+        payload = ExecutionEnvelope(token=token, request=request).model_dump_json().encode()
+        reply = await self._exchange_payload(account, device_id, request, payload, timeout=timeout)
+        try:
+            verifier.verify(token, account=account, device_id=device_id, tool=request.tool)
+        except ValueError:
+            raise ChannelOutcomeUnknown('Authorization changed; PC result was withheld') from None
+        return reply
+
+    async def _exchange_payload(self, account: RelayAccount, device_id: str, request: Request,
+                                payload: bytes, *, timeout: float) -> Reply:
         if not 0 < timeout <= 120:
             raise ValueError('Invalid PC exchange timeout')
-        payload = request.model_dump_json().encode()
         if len(payload) > FRAME_LIMIT:
             raise ValueError('PC request exceeds frame limit')
         channel = self._owned_channel(account, device_id)
