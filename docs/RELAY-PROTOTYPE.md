@@ -425,7 +425,7 @@ creating a queue or durable result store. It currently carries binary frames wit
 an 8 MiB limit, no compression, a one-frame receive queue and a bounded exchange
 deadline. These are connection bounds, not a public-service rate-limiting design.
 
-Six actual loopback mTLS/WSS tests cover registered and unregistered certificates,
+Seven actual loopback mTLS/WSS tests cover registered and unregistered certificates,
 cross-account denial, revocation on a live socket, connection replacement, busy and
 offline refusal, response identity mismatch, timeout, and two same-name PCs routed
 concurrently by distinct IDs. A real Engine file write loses its reply after commit;
