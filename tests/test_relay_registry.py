@@ -133,3 +133,80 @@ def test_channel_schema_upgrade_preserves_existing_device_and_revocation(tmp_pat
             registry.bind_channel(account(), saved.device_id, fingerprint="1" * 64)
     finally:
         registry.close()
+
+
+def test_channel_rotation_preserves_device_and_rejects_stale_writer(tmp_path):
+    registry = RelayRegistry(tmp_path)
+    try:
+        device = registry.register(account(), enrollment_id='a' * 32, name='PC')
+        registry.bind_channel(account(), device.device_id, fingerprint='1' * 64)
+        registry.rotate_channel(account(), device.device_id,
+                                expected_fingerprint='1' * 64, fingerprint='2' * 64)
+        assert registry.get(account(), device.device_id) == device
+        assert registry.channel_device('2' * 64) == (account(), device)
+        with pytest.raises(ValueError):
+            registry.channel_device('1' * 64)
+        for owner, expected, replacement in [
+            (account('other'), '2' * 64, '3' * 64),
+            (account(), '1' * 64, '3' * 64),
+        ]:
+            with pytest.raises(ValueError):
+                registry.rotate_channel(owner, device.device_id,
+                                        expected_fingerprint=expected, fingerprint=replacement)
+        other = registry.register(account(), enrollment_id='b' * 32, name='PC')
+        registry.bind_channel(account(), other.device_id, fingerprint='3' * 64)
+        with pytest.raises(ValueError):
+            registry.rotate_channel(account(), device.device_id,
+                                    expected_fingerprint='2' * 64, fingerprint='3' * 64)
+        assert registry.channel_device('2' * 64) == (account(), device)
+        assert registry.channel_device('3' * 64) == (account(), other)
+    finally:
+        registry.close()
+    reopened = RelayRegistry(tmp_path)
+    try:
+        assert reopened.channel_device('2' * 64) == (account(), device)
+        reopened.revoke(account(), device.device_id)
+        with pytest.raises(ValueError):
+            reopened.rotate_channel(account(), device.device_id,
+                                    expected_fingerprint='2' * 64, fingerprint='4' * 64)
+    finally:
+        reopened.close()
+
+
+def test_competing_certificate_renewals_commit_only_one_binding(tmp_path):
+    registry = RelayRegistry(tmp_path)
+    device = registry.register(account(), enrollment_id='a' * 32, name='PC')
+    registry.bind_channel(account(), device.device_id, fingerprint='1' * 64)
+    registry.close()
+    barrier = Barrier(2)
+
+    def rotate(replacement):
+        connection = RelayRegistry(tmp_path)
+        try:
+            barrier.wait(timeout=5)
+            try:
+                connection.rotate_channel(account(), device.device_id,
+                                          expected_fingerprint='1' * 64,
+                                          fingerprint=replacement)
+                return replacement
+            except ValueError as error:
+                assert 'binding changed' in str(error)
+                return None
+        finally:
+            connection.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(rotate, digit * 64) for digit in ('2', '3')]
+        winners = [result for future in futures if (result := future.result(timeout=10))]
+    assert len(winners) == 1
+    reopened = RelayRegistry(tmp_path)
+    try:
+        assert reopened.channel_device(winners[0]) == (account(), device)
+        with pytest.raises(ValueError):
+            reopened.channel_device('1' * 64)
+        loser = '3' * 64 if winners[0] == '2' * 64 else '2' * 64
+        with pytest.raises(ValueError):
+            reopened.channel_device(loser)
+        assert reopened.db.execute('SELECT COUNT(*) FROM relay_channels').fetchone()[0] == 1
+    finally:
+        reopened.close()

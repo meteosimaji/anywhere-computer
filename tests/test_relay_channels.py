@@ -195,3 +195,59 @@ async def test_isolated_listener_rejects_public_bind_and_unverified_tls(tmp_path
     finally:
         await relay.close()
         registry.close()
+
+
+async def test_rotated_certificate_invalidates_live_channel_before_dispatch(
+    channel_setup, certificates,
+):
+    relay, registry, account, device_id, client = channel_setup
+    _, fingerprint = certificates
+    async with client() as old:
+        await wait_connected(relay, device_id)
+        registry.rotate_channel(account, device_id, expected_fingerprint=fingerprint('client'),
+                                fingerprint=fingerprint('stranger'))
+        with pytest.raises(ChannelUnavailable, match='registration'):
+            await relay.exchange(account, device_id,
+                                 Request(operation_id='a' * 32, tool='computer_status'))
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(old.recv(), 0.05)
+        previous = relay._channels[device_id]
+        async with client('stranger') as renewed:
+            await wait_connected(relay, device_id, previous=previous)
+            async def respond():
+                incoming = Request.model_validate_json(await renewed.recv())
+                await renewed.send(Reply(operation_id=incoming.operation_id, state='completed',
+                                         data={'renewed': True}).model_dump_json().encode())
+            responder = asyncio.create_task(respond())
+            try:
+                reply = await relay.exchange(account, device_id,
+                                             Request(operation_id='b' * 32, tool='computer_status'))
+                assert reply.data == {'renewed': True}
+                await responder
+            finally:
+                if not responder.done():
+                    responder.cancel()
+                    await asyncio.gather(responder, return_exceptions=True)
+
+
+async def test_rotation_during_execution_withholds_old_reply(channel_setup, certificates):
+    relay, registry, account, device_id, client = channel_setup
+    _, fingerprint = certificates
+    request = Request(operation_id='c' * 32, tool='computer_status')
+    async with client() as pc:
+        await wait_connected(relay, device_id)
+        exchange = asyncio.create_task(relay.exchange(account, device_id, request))
+        try:
+            incoming = Request.model_validate_json(await asyncio.wait_for(pc.recv(), 2))
+            assert incoming == request
+            registry.rotate_channel(account, device_id,
+                                    expected_fingerprint=fingerprint('client'),
+                                    fingerprint=fingerprint('stranger'))
+            await pc.send(Reply(operation_id=request.operation_id, state='completed',
+                                data={'old_reply': True}).model_dump_json().encode())
+            with pytest.raises(ChannelOutcomeUnknown):
+                await exchange
+        finally:
+            if not exchange.done():
+                exchange.cancel()
+                await asyncio.gather(exchange, return_exceptions=True)
