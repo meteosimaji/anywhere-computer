@@ -110,11 +110,35 @@ async fn management_startup_disable(
     run_management(&host, "management-startup-disable", 180).await
 }
 
+#[tauri::command]
+async fn management_device_check(
+    host: tauri::State<'_, ManagementSelection>,
+    device_id: String,
+) -> Result<String, String> {
+    if device_id.len() != 32
+        || !device_id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err("登録済みの端末を選択してください。".into());
+    }
+    run_management_selected(&host, "management-device-check", 90, Some(&device_id)).await
+}
+
 // Only fixed native commands call this helper; JavaScript cannot select CLI arguments.
 async fn run_management(
     host: &ManagementSelection,
     command: &'static str,
     seconds: u64,
+) -> Result<String, String> {
+    run_management_selected(host, command, seconds, None).await
+}
+
+async fn run_management_selected(
+    host: &ManagementSelection,
+    command: &'static str,
+    seconds: u64,
+    device_id: Option<&str>,
 ) -> Result<String, String> {
     let host = host.as_ref().map_err(|error| error.to_string())?;
     let mut process = tokio::process::Command::new(&host.python);
@@ -129,6 +153,7 @@ async fn run_management(
                 .iter()
                 .flat_map(|path| [std::ffi::OsStr::new("--state-dir"), path.as_os_str()]),
         )
+        .args(device_id.into_iter().flat_map(|id| ["--device", id]))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -184,6 +209,7 @@ fn main() {
         .manage(enrollment::EnrollmentState::default())
         .invoke_handler(tauri::generate_handler![
             management_snapshot,
+            management_device_check,
             management_start,
             management_startup_status,
             management_startup_enable,

@@ -30,6 +30,20 @@ function render(snapshot) {
   for (const device of snapshot.devices) {
     const row = document.createElement("p"); row.className = "device";
     row.textContent = `${device.name} · 現在の接続は未確認。前回：${device.last_observed_state} / ${device.checked_at === null ? "観測なし" : new Date(device.checked_at * 1000).toLocaleString()}`;
+    const check = document.createElement("button");
+    check.type = "button"; check.textContent = "接続を確認";
+    const observation = document.createElement("span");
+    check.addEventListener("click", async () => {
+      check.disabled = true; observation.textContent = " 接続を確認しています…";
+      try {
+        const result = JSON.parse(await window.__TAURI__.core.invoke("management_device_check", {deviceId: device.device_id}));
+        if (result.schema_version !== 1 || result.device_id !== device.device_id) throw new Error("Invalid observation");
+        const states = {ready: result.evidence === "authorized_catalog" ? "認証済みツール一覧を取得できました。実操作は未確認です。" : "端末エンジンの応答を確認しました。",unreachable:"接続できません。端末と接続先を確認してください。",not_ready:"接続の準備が整っていません。",authorization_required:"接続の認証が必要です。",credential_unavailable:"保存済みの認証情報を利用できません。"};
+        observation.textContent = ` ${states[result.state] ?? "接続結果は未確認です。"}（${new Date(result.observed_at).toLocaleString()}）`;
+      } catch (_) { observation.textContent = " 接続結果を確認できませんでした。自動再試行はしていません。"; }
+      finally { check.disabled = false; }
+    });
+    row.append(document.createElement("br"), check, observation);
     devices.append(row);
   }
 }

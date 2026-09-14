@@ -177,3 +177,40 @@ async def test_unreadable_startup_never_attempts_mutation(tmp_path, monkeypatch)
     assert result.state == 'not_confirmed'
     assert result.startup.state == 'unavailable'
     assert 'private-corrupt-receipt' not in result.model_dump_json()
+
+
+@pytest.mark.parametrize('transport', ['ssh', 'http'])
+async def test_explicit_device_check_uses_existing_probe_and_hides_details(
+    tmp_path, monkeypatch, transport,
+):
+    store = DeviceStore(tmp_path)
+    device = (store.add_http('Windows', 'https://fixture.example/mcp', 'test', 'test')
+              if transport == 'http' else store.add('Windows', 'fixture-vm'))
+    store.close()
+    calls = []
+
+    def probe(self, identity):
+        calls.append(identity)
+        return self.record(identity, 'ready', 'private diagnostic text')
+
+    async def probe_http(self, identity):
+        return probe(self, identity)
+
+    monkeypatch.setattr(DeviceStore, 'probe', probe)
+    monkeypatch.setattr(DeviceStore, 'probe_http', probe_http)
+    result = await ManagementController(tmp_path).check_device(device['device_id'])
+    assert calls == [device['device_id']]
+    assert result.state == 'ready'
+    assert result.evidence == ('authorized_catalog' if transport == 'http' else 'agent_status')
+    assert 'private diagnostic' not in result.model_dump_json()
+    snapshot = await ManagementController(tmp_path).snapshot()
+    assert snapshot.devices[0].live_state == 'not_checked'
+
+
+async def test_device_check_does_not_create_missing_registry(tmp_path):
+    directory = tmp_path / 'absent'
+    controller = ManagementController(directory)
+    for identity in ['bad', 'f' * 32]:
+        with pytest.raises(ValueError):
+            await controller.check_device(identity)
+    assert not directory.exists()
