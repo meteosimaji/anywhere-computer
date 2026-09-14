@@ -13,6 +13,7 @@ from typing import TypeVar, cast
 from pydantic import JsonValue
 
 from . import __version__, codex_context, codex_plugins, skills_context
+from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
 from .document_writer import write_document
@@ -324,6 +325,25 @@ class Engine:
 
         async def codex_skill_read(args: CodexSkillRead) -> Result:
             return await skills_context.read_codex_skill(args.skill_id, cwd=args.cwd)
+
+        async def common_skills_list(args: SkillsPage) -> Result:
+            return await asyncio.to_thread(list_skills, args)
+
+        async def common_skills_read(args: SkillResource) -> Result:
+            return await asyncio.to_thread(read_skill, args)
+
+        self.register(
+            "skills_list", "Discover local skills without Codex from .agents/skills or explicit "
+            "collection roots. Returns directory names, IDs and SKILL.md hashes. Does not execute "
+            "scripts. Pass the same location and returned hash to skills_read.",
+            SkillsPage, common_skills_list, read_only=True,
+        )
+        self.register(
+            "skills_read", "Read selected SKILL.md or a UTF-8 relative resource (up to 64 KiB) "
+            "without Codex. Requires the listed skill hash; rejects changed skills and paths "
+            "escaping the skill directory. Does not execute scripts or grant tool permissions.",
+            SkillResource, common_skills_read, read_only=True,
+        )
 
         self.register(
             "codex_threads_list", "Use when the user asks to find their local Codex chats. "

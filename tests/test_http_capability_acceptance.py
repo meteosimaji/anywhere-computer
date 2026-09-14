@@ -258,6 +258,17 @@ for line in sys.stdin:
             )
             assert body["skill_directory"] == str(skill.parent.resolve())
             await call("files_read", {"path": str(skill.parent / "reference.txt")})
+            common = await call("skills_list", {"roots": [str(skill.parent.parent)]})
+            common_row = next(row for row in common["skills"]
+                              if row["skill_directory"] == str(skill.parent.resolve()))
+            common_resource = await call("skills_read", {
+                "roots": [str(skill.parent.parent)], "skill_id": common_row["skill_id"],
+                "expected_skill_sha256": common_row["skill_sha256"],
+                "relative_path": "reference.txt",
+            })
+            assert common_resource["text"] == (skill.parent / "reference.txt").read_text(
+                encoding="utf-8",
+            )
             plugin = await call("codex_plugin_session_open", {"cwd": str(tmp_path)})
             psid = {"session_id": plugin["session_id"]}
             selection = {**psid, "cwd": str(tmp_path), "server": "fixture", "tool": "increment"}

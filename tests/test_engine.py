@@ -173,7 +173,7 @@ async def test_literal_search_pagination(engine, tmp_path):
 async def test_registry_schemas_validation_and_duplicate_guard(engine):
     from anywhere_computer.models import Empty
 
-    assert len(engine.tools) == 59
+    assert len(engine.tools) == 61
     for name, tool in engine.tools.items():
         assert name == tool.name
         assert tool.schema.model_json_schema()["additionalProperties"] is False

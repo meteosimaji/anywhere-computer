@@ -12,6 +12,10 @@ The public release is `0.1.0a9` (`0.1.0-alpha.9` for the Codex Plugin).
 This is an alpha, not a stable or beta release. Development on main may contain
 changes that are not included in that release.
 
+Development also includes [common local Skills](docs/COMMON-SKILLS.md), independent
+of Codex, with selected resource reads. Check the [implementation status](docs/IMPLEMENTATION-STATUS.md)
+for features still awaiting packaged release and platform acceptance.
+
 ## Get started
 
 Use the OS-specific portable ZIP from the release for a bundled Python runtime.

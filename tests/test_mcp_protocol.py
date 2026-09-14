@@ -90,10 +90,24 @@ asyncio.run(main())
                 initialized = await client.initialize()
                 assert initialized.serverInfo.name == "anywhere-computer"
                 tools = await client.list_tools()
-                assert len(tools.tools) == 59
+                assert len(tools.tools) == 61
                 # An unavailable optional integration must not disable core tools.
                 unavailable = await client.call_tool("codex_skills_list", {"cwd": str(tmp_path)})
                 assert unavailable.isError
+                # Common skills work in the same real subprocess with no Codex executable.
+                skill_root = tmp_path / "portable-skills"
+                skill_dir = skill_root / "example"
+                skill_dir.mkdir(parents=True)
+                (skill_dir / "SKILL.md").write_text("Read helper.py", encoding="utf-8")
+                (skill_dir / "helper.py").write_text("print('日本語 42')\n", encoding="utf-8")
+                listed = await client.call_tool("skills_list", {"roots": [str(skill_root)]})
+                row = listed.structuredContent["data"]["skills"][0]
+                helper = await client.call_tool("skills_read", {
+                    "roots": [str(skill_root)], "skill_id": row["skill_id"],
+                    "expected_skill_sha256": row["skill_sha256"], "relative_path": "helper.py",
+                })
+                assert not helper.isError
+                assert helper.structuredContent["data"]["text"] == "print('日本語 42')\n"
                 path = str(tmp_path / "MCP 日本語.txt")
                 written = await client.call_tool("files_write", {"path": path, "text": "stdio"})
                 assert not written.isError
