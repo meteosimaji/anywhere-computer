@@ -118,6 +118,34 @@ async def test_pc_enrolls_then_runs_signed_file_operation(registration, certific
             Request(operation_id='e' * 32, tool='operations_get',
                     arguments={'operation_id': 'd' * 32}))
         assert recovered.data['state'] == 'completed'
+
+        # Recreate the PC runtime using only its persisted state and TLS identity.
+        previous_channel = relay._channels[device.device_id]
+        previous_instance = engine.instance_id
+        await client.stop()
+        await asyncio.wait_for(task, 5)
+        task = None
+        await engine.close()
+        engine = Engine(tmp_path / 'pc-engine')
+        assert engine.instance_id != previous_instance
+        pc = AuthorizedRelayAgent(RemoteAgent(engine, {}), verifier,
+                                  account=owner, device_id=device.device_id)
+        client = PCRelayClient(f'wss://localhost:{port}/pc', context('client', True), pc)
+        task = asyncio.create_task(client.run())
+        await wait_connected(relay, device.device_id, previous=previous_channel)
+        assert registry.channel_device(fingerprint('client')) == (owner, device)
+        recovered = await relay.exchange_authorized(verifier, owner, device.device_id, grant,
+            Request(operation_id='f' * 32, tool='operations_get',
+                    arguments={'operation_id': 'd' * 32}))
+        assert recovered.data == result.model_dump(mode='json')
+
+        # A changed file distinguishes ledger recovery from silently replaying a write.
+        target.write_text('再起動後の別の編集 🔁', encoding='utf-8')
+        duplicate = await relay.exchange_authorized(verifier, owner, device.device_id, grant,
+            Request(operation_id='d' * 32, tool='files_write',
+                    arguments={'path': str(target), 'text': '登録後の操作 ✅'}))
+        assert duplicate == result
+        assert target.read_text(encoding='utf-8') == '再起動後の別の編集 🔁'
     finally:
         await client.stop()
         if task is not None:

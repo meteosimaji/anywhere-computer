@@ -620,3 +620,11 @@ starts the PC client, writes a Japanese/emoji file through signed relay executio
 and recovers the same operation from the PC ledger. This uses provisioned test
 certificates and an isolated signing key; it does not establish OS-vault provisioning,
 public-service operation or native startup integration.
+
+The same integration test now stops the PC client, closes the engine, and creates
+fresh instances against the existing state directory. It reconnects without a new
+enrollment request, verifies the engine instance changed, and retrieves the exact
+pre-restart operation result. Repeating the original write ID returns that result
+without overwriting a subsequent independent file edit. This proves persisted
+ledger recovery across engine/client recreation within one test process, not
+process-crash, OS-restart, sleep or installed-service recovery.
