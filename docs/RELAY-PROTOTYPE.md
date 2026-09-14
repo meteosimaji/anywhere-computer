@@ -576,3 +576,8 @@ Isolated TLS tests kept the old socket open, rotated its binding, verified no re
 was sent to it, and connected a replacement certificate to the same device ID for a
 successful request/reply. This establishes channel invalidation and replacement,
 not certificate issuance, OS-vault persistence or automatic resident renewal.
+
+The in-flight rotation test also sends a request before renewal, then returns an
+old-channel reply after the binding changes. The reply is withheld as
+`ChannelOutcomeUnknown`; it is not reported as a pre-dispatch failure or replayed.
+Registry/channel coverage now passes 22 tests locally.

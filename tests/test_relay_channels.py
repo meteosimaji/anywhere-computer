@@ -228,3 +228,26 @@ async def test_rotated_certificate_invalidates_live_channel_before_dispatch(
                 if not responder.done():
                     responder.cancel()
                     await asyncio.gather(responder, return_exceptions=True)
+
+
+async def test_rotation_during_execution_withholds_old_reply(channel_setup, certificates):
+    relay, registry, account, device_id, client = channel_setup
+    _, fingerprint = certificates
+    request = Request(operation_id='c' * 32, tool='computer_status')
+    async with client() as pc:
+        await wait_connected(relay, device_id)
+        exchange = asyncio.create_task(relay.exchange(account, device_id, request))
+        try:
+            incoming = Request.model_validate_json(await asyncio.wait_for(pc.recv(), 2))
+            assert incoming == request
+            registry.rotate_channel(account, device_id,
+                                    expected_fingerprint=fingerprint('client'),
+                                    fingerprint=fingerprint('stranger'))
+            await pc.send(Reply(operation_id=request.operation_id, state='completed',
+                                data={'old_reply': True}).model_dump_json().encode())
+            with pytest.raises(ChannelOutcomeUnknown):
+                await exchange
+        finally:
+            if not exchange.done():
+                exchange.cancel()
+                await asyncio.gather(exchange, return_exceptions=True)
