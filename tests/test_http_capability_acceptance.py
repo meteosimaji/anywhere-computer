@@ -269,6 +269,20 @@ for line in sys.stdin:
             assert common_resource["text"] == (skill.parent / "reference.txt").read_text(
                 encoding="utf-8",
             )
+            await call("settings_update", {
+                "key": "skill_roots", "value": [str(skill.parent.parent)],
+            })
+            defaults = await call("settings_get")
+            assert defaults["skill_roots"] == [str(skill.parent.parent.resolve())]
+            saved_common = await call("skills_list")
+            assert saved_common["skills"] == common["skills"]
+            saved_resource = await call("skills_read", {
+                "skill_id": common_row["skill_id"],
+                "expected_skill_sha256": common_row["skill_sha256"],
+                "relative_path": "reference.txt",
+            })
+            assert saved_resource["text"] == common_resource["text"]
+            await call("settings_update", {"key": "skill_roots", "value": []})
             plugin = await call("codex_plugin_session_open", {"cwd": str(tmp_path)})
             psid = {"session_id": plugin["session_id"]}
             selection = {**psid, "cwd": str(tmp_path), "server": "fixture", "tool": "increment"}
