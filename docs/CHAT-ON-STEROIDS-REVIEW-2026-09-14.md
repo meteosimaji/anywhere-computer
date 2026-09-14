@@ -53,3 +53,40 @@ require no user setup, or that account limits disappear.
 The inspected repository is useful for workflow presentation and recovery test
 ideas. It is not a substitute for authenticated multi-PC outbound relay,
 provisioning, installed macOS/Windows acceptance or public service operations.
+
+## Follow-up: 2.1.11 and roadmap acceptance
+
+Rechecked upstream main on 2026-09-14 at
+`788c93af1b0889ae8398185362452a9993ce8ecb`, one commit after the initial
+inspection. The following conclusions come from the GitHub comparison patches
+for `src/main/plugins/exposure.ts`, `src/main/plugin-refresh.ts`,
+`src/main/session/input.ts` and `src/renderer/i18n.ts`; no upstream tests or
+application were run. This is not a complete review of the release.
+
+- Plugin exposure raises the emergency tool-count ceiling from 64 to 256 while
+  retaining a 250,000-byte schema budget. Refresh accepts a legacy subset only
+  when its declarations match the new publication; completion still requires
+  the full catalog. For stage 3, test both byte and count limits, explicit
+  truncation/pagination, and cache invalidation after declaration changes. Merely
+  raising a ceiling is not evidence of better token efficiency.
+- Input retention adds retirement of confirmed delivery receipts when their
+  exact session directory is gone, before origin repair. For stage 2, test
+  deletion versus temporary unavailability and ensure recovery cannot resurrect
+  deliberately removed history. Anywhere's operation deduplication records have
+  different semantics and must not inherit this deletion rule automatically.
+- Renderer translation drops a historical WeakRef index in favor of walking
+  current document nodes. For stages 1 and 3, include repeated refresh and long
+  sessions in management UI responsiveness/memory measurement; this patch alone
+  does not establish that Anywhere has the same defect.
+
+The current README still describes Developer-mode connector setup and a loaded
+companion extension, with extension reload and app refresh after updates. Its
+automatic pairing refers to that extension workflow, not proof of a universal
+install-to-AI pairing flow. Anywhere should retain provider-independent MCP and
+one installed engine, make the remaining client-side setup explicit, and measure
+first-use steps on a clean installation. Goal/Loop/conversation compaction are
+useful workflow comparisons but do not become core dependencies or additional
+release requirements merely because this competitor offers them.
+
+Source comparison:
+https://github.com/totec448-spec/chat-on-steroids/compare/1517d66dac1e7452f63b7452c88479c92a554768...788c93af1b0889ae8398185362452a9993ce8ecb

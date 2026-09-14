@@ -5,6 +5,7 @@ cached device observations never constitute an authenticated live connection.
 """
 
 import asyncio
+import re
 import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
@@ -65,6 +66,15 @@ class ManagementSnapshot(Contract):
     changed: Literal[False] = False
 
 
+class ManagementDeviceCheck(Contract):
+    schema_version: Literal[1] = 1
+    device_id: str
+    state: str
+    observed_at: str
+    transport: str
+    evidence: Literal["agent_status", "authorized_catalog"]
+
+
 class ManagementStartResult(Contract):
     schema_version: Literal[1] = 1
     state: Literal["ready", "not_confirmed"]
@@ -81,6 +91,30 @@ class ManagementController:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.setup = SetupController(directory)
+
+    async def check_device(self, device_id: str) -> ManagementDeviceCheck:
+        if re.fullmatch(r"[a-f0-9]{32}", device_id) is None:
+            raise ValueError("Select a registered device ID")
+
+        def probe() -> ManagementDeviceCheck:
+            if not (self.directory / "devices.sqlite3").is_file():
+                raise ValueError("No device registry exists")
+            store = DeviceStore(self.directory)
+            try:
+                device = store.get(device_id)
+                http = device["transport"] == "http"
+                result = (asyncio.run(store.probe_http(device_id))
+                          if http else store.probe(device_id))
+                return ManagementDeviceCheck(
+                    device_id=device_id, state=str(result["last_observed_state"]),
+                    transport=str(result["transport"]),
+                    observed_at=datetime.now(UTC).isoformat(),
+                    evidence="authorized_catalog" if http else "agent_status",
+                )
+            finally:
+                store.close()
+
+        return await asyncio.to_thread(probe)
 
     async def startup(self) -> ManagementStartup:
         try:

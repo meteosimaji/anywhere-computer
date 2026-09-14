@@ -193,6 +193,44 @@ async def test_http_probe_real_catalog_closes_session_and_preserves_credentials(
         store.close()
 
 
+async def test_management_http_check_real_catalog_and_cached_refresh(
+    http_remote, tmp_path, monkeypatch,
+):
+    from anywhere_computer.management import ManagementController
+
+    backend, adapter, _, _, calls, _ = http_remote
+    tokens = backend.tokens
+    directory = tmp_path / "client"
+    store = DeviceStore(directory)
+    try:
+        device = store.add_http("Managed remote", tokens.resource, tokens.client, "device")
+    finally:
+        store.close()
+    saved_credentials = dict(tokens.vault.data)
+    original_probe = DeviceStore.probe_http
+
+    async def fixture_transport(self, identity):
+        # Substitute only the native vault and HTTPS transport destination.
+        # Discovery, authentication, session cleanup and registry writes remain real.
+        return await original_probe(self, identity, vault=tokens.vault, wire=backend.wire)
+
+    monkeypatch.setattr(DeviceStore, "probe_http", fixture_transport)
+    controller = ManagementController(directory)
+    result = await controller.check_device(str(device["device_id"]))
+    assert result.state == "ready"
+    assert result.evidence == "authorized_catalog"
+    assert result.transport == "http"
+    assert [packet["method"] for packet in calls if packet] == [
+        "initialize", "notifications/initialized", "tools/list",
+    ]
+    assert not adapter.sessions
+    assert tokens.vault.data == saved_credentials
+    snapshot = await controller.snapshot()
+    assert snapshot.devices[0].last_observed_state == "ready"
+    assert snapshot.devices[0].live_state == "not_checked"
+    assert snapshot.devices[0].checked_at is not None
+
+
 async def test_http_probe_missing_credentials_and_network_failure(tmp_path):
     vault = MemoryVault()
     resource = "https://example.com/mcp"

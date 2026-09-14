@@ -64,6 +64,7 @@ def main() -> None:
             "status",
             "doctor",
             "management-status",
+            "management-device-check",
             "management-start",
             "management-startup-status",
             "management-startup-enable",
@@ -259,6 +260,7 @@ def main() -> None:
         "device-rename",
         "device-remove",
         "device-status",
+        "management-device-check",
     }:
         parser.error("Device selection is not valid for this command")
     if args.command == "remote-mcp" and (bool(args.ssh_host) == has_device):
@@ -273,9 +275,18 @@ def main() -> None:
         parser.error("This command requires --device or --device-name")
     if args.command == "device-rename" and not args.name:
         parser.error("device-rename requires --name")
+    if args.command == "management-device-check" and (not args.device or args.device_name):
+        parser.error("management-device-check requires --device")
     directory = (args.state_dir or state_directory()).resolve()
     try:
-        if args.command.startswith("device") or has_device:
+        if args.command == "management-device-check":
+            from .management import ManagementController
+
+            print(asyncio.run(ManagementController(directory).check_device(
+                args.device,
+            )).model_dump_json())
+            return
+        elif args.command.startswith("device") or has_device:
             store = DeviceStore(directory)
             try:
                 if args.device_name is not None:
