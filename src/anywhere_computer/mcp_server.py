@@ -63,7 +63,10 @@ def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
     structured = cast(dict[str, JsonValue], reply.model_dump(mode="json"))
     images: list[JsonValue] = []
     data = cast(dict[str, JsonValue], structured["data"])
-    project = name in {"codex_plugin_call", "mcp_call"} and reply.state == "completed"
+    provider_result = name in {
+        "codex_plugin_call", "mcp_call", "gui_observe", "gui_type", "gui_click", "gui_key",
+    }
+    project = provider_result and reply.state == "completed"
     if name == "operations_get" and reply.state == "completed":
         # operations_get returns the original Reply. Project its typed content using
         # the same path; the outer recovery status and inner execution status differ.
@@ -103,8 +106,7 @@ def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
         "structuredContent": structured,
         "isError": (
             reply.state not in {"completed", "running"}
-            or (name in {"codex_plugin_call", "mcp_call"}
-                and reply.data.get("is_error") is True)
+            or (provider_result and reply.data.get("is_error") is True)
         ),
     }
 
@@ -295,9 +297,13 @@ async def run_mcp(directory: Path) -> None:
     from .setup_connector import SetupConnector
 
     async def catalog() -> list[JsonValue]:
+        # MCP checks the catalog before dispatch. Recover here as well as in execute,
+        # or a retained connector cannot reach execute after its agent has exited.
+        # This only prepares the selected agent; never retry a dispatched operation.
+        await asyncio.to_thread(ensure_agent, directory, replace_idle=False)
         reply = await exchange(directory, "__catalog")
         raw = reply.data.get("tools")
-        if not isinstance(raw, list):
+        if reply.state != "completed" or not isinstance(raw, list):
             raise ValueError("Agent did not return a tool catalog")
         return raw
 

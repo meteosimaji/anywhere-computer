@@ -142,8 +142,11 @@ class GUIMCP:
         )
         result = normalized(raw)
         if result['is_error']:
-            return result
-        content = raw.get('content')
+            return {**result, 'action_ready': False, 'reason': 'provider_observation_failed'}
+        if result.get('truncated'):
+            return {**result, 'action_ready': False, 'reason': 'observation_truncated'}
+        # Only visible, bounded evidence may authorize input; never parse omitted text.
+        content = result.get('content')
         texts: list[str] = []
         if isinstance(content, list):
             for row in content:
@@ -155,10 +158,17 @@ class GUIMCP:
         if applications != [args.app]:
             return {**result, 'action_ready': False,
                     'reason': 'observed_application_mismatch'}
-        match = re.search(r'^Snapshot ID: ([A-Za-z0-9_-]{1,128})$', text, re.MULTILINE)
-        if match is None:
+        snapshots = re.findall(r'^Snapshot ID: ([A-Za-z0-9_-]{1,128})$', text, re.MULTILINE)
+        if not snapshots:
             return {**result, 'action_ready': False, 'reason': 'snapshot_reference_unavailable'}
-        snapshot = match[1]
+        if len(snapshots) != 1:
+            return {**result, 'action_ready': False, 'reason': 'snapshot_reference_ambiguous'}
+        snapshot = snapshots[0]
+        element_ids = [match[1] for line in text.splitlines()
+                       if '[not actionable]' not in line
+                       and (match := re.match(r'^\s+([A-Za-z0-9_]+) - ', line))]
+        if len(element_ids) != len(set(element_ids)):
+            return {**result, 'action_ready': False, 'reason': 'element_reference_ambiguous'}
         context: JsonValue = None
         metadata = raw.get('_meta')
         coordinate_status = 'unavailable'
@@ -173,10 +183,7 @@ class GUIMCP:
                 coordinate_status = 'unsupported_or_invalid'
         observation = Observation(
             owner, uuid.uuid4().hex, args.app, snapshot,
-            frozenset(match[1] for line in text.splitlines()
-                      if '[not actionable]' not in line
-                      and (match := re.match(r'^\s+([A-Za-z0-9_]+) - ', line))),
-            time.monotonic(), args.window_id,
+            frozenset(element_ids), time.monotonic(), args.window_id,
         )
         # Bound history to currently registered sessions; no screenshots are stored here.
         self.observations = {key: value for key, value in self.observations.items()
