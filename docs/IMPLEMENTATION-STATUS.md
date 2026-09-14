@@ -1,10 +1,15 @@
 # Implementation status and beta acceptance
 
 Snapshot: 2026-09-14. This is a capability inventory, not a beta release claim.
-This integration candidate contains main through PR #33, the merged Windows
-startup correction from PR #35, the Skill configuration CLI from PR #34, and
-retained-client recovery plus GUI result/observation corrections in PR #36.
-The retained-client and GUI corrections have not been installed into the live engine.
+Main at `e8815b85026ac67aa050dcc9c745c1926faf3113` includes PRs #33–36:
+common Skills, the Skill configuration CLI, Windows owner-pipe startup recovery,
+retained-client recovery and GUI result/observation corrections.
+All five jobs in [main Quality run 34810000568](https://github.com/meteosimaji/anywhere-computer/actions/runs/34810000568)
+passed. Independent local revalidation passed 29 focused regression tests, one
+bundled-source/checksum test, Ruff and strict mypy over 97 source files.
+An offline source distribution and wheel built successfully from this checkout.
+These checks do not establish installation or live GUI/Windows acceptance.
+The retained-client and GUI corrections have not been qualified in the live engine.
 Installed alpha 9, development checkouts, CI artifacts, and published releases
 are distinct. Consult each PR for current merge status.
 
@@ -37,9 +42,10 @@ is planned. Client approvals and initial connection authentication remain separa
 
 ## Completion order
 
-1. Close the current CLI/setup changes with Windows CI and package verification.
-   Investigate the lifecycle test's initial authentication timeout without weakening
-   password verification or crash-recovery assertions.
+1. Install the integrated startup/recovery candidate in the target environments.
+   Reconcile engine and connector identities, then verify Windows catalog, file and
+   terminal operations through the same AI connection. PRs #34–36 are merged and
+   their main CI is green; live acceptance is the remaining gate.
 2. Connect pairing, credential lifecycle and resident PC transport through the shared
    controller. Prove two PCs are selectable from one AI connection in an isolated
    installation before public deployment.
