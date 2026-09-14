@@ -60,6 +60,17 @@ Evidence operation IDs:
 - Original failed result recovered: `b4da45d7950e441f9e68cca5372d4b41`.
 - Session close: `52e6f59df7e144e789a6bbb4f2ccff13`, cleanup confirmed.
 
+### Screenshot-only follow-up
+
+A second, independent direct MCP session used the provider's documented `image`
+tool with the same app and exact window ID, background capture, and no input.
+Operation `2329266599824c4385b3977d6fb653eb` returned a native PNG image successfully;
+the image visibly contained `Anywhere GUI 日本語 42 ✅`. The PNG SHA-256 was
+`3a250daf3343435059ab9c53cc87abf89e8434b40c97573b6eedf781fe0b12d3`.
+Thus window pixel capture worked while AX observation did not. This narrows the
+observed failure but does not establish its underlying cause or authorize input
+without a suitable fresh action target.
+
 ## Windows boundary
 
 The registered Windows device's catalog request failed before dispatch in operation

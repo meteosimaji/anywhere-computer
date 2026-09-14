@@ -21,6 +21,20 @@ engine. Missing saved directories fail rather than silently scanning elsewhere.
 Registration does not change remote tool grants. Older engines do not understand
 this setting; clear it before downgrading to an older engine.
 
+For a running local engine, use the CLI without editing configuration files:
+
+```sh
+anywhere skills-configure
+anywhere skills-configure --skill-root "/absolute/skills"
+anywhere skills-configure --clear-skill-roots
+```
+
+Repeat `--skill-root` to select multiple collections. On Windows, use an absolute
+Windows directory such as `"C:\Users\you\Skills"`; the portable launcher is
+`anywhere.cmd`. Supply the same `--state-dir` used by your engine when it is not
+the default. This command reports engine errors and does not start or replace an
+engine automatically; run `anywhere start` first if it is stopped.
+
 ```json
 {"roots": ["/absolute/skills"], "limit": 30}
 ```
