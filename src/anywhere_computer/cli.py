@@ -57,6 +57,7 @@ def main() -> None:
         "command",
         choices=[
             "setup",
+            "skills-configure",
             "start",
             "update",
             "auto-update-enable",
@@ -149,7 +150,15 @@ def main() -> None:
     parser.add_argument("--startup-id", help=argparse.SUPPRESS)
     parser.add_argument("--codex-executable",
                         help="Optional pinned Codex CLI for supervised services")
+    skill_options = parser.add_mutually_exclusive_group()
+    skill_options.add_argument("--skill-root", action="append",
+                               help="Absolute skill collection directory; repeat to select several")
+    skill_options.add_argument("--clear-skill-roots", action="store_true",
+                               help="Restore standard .agents/skills discovery")
     args = parser.parse_args()
+    if ((args.skill_root is not None or args.clear_skill_roots)
+            and args.command != "skills-configure"):
+        parser.error("Skill root options are only valid for skills-configure")
     if args.command == "setup":
         if any(value != parser.get_default(name) for name, value in vars(args).items()
                if name not in {"command", "state_dir"}):
@@ -544,6 +553,16 @@ def main() -> None:
             raise SystemExit(run_ssh_mcp(args.ssh_host))
         elif args.command == "serve":
             asyncio.run(serve(directory))
+        elif args.command == "skills-configure":
+            if args.skill_root is not None or args.clear_skill_roots:
+                reply = asyncio.run(exchange(directory, "settings_update", {
+                    "key": "skill_roots", "value": args.skill_root or [],
+                }))
+            else:
+                reply = asyncio.run(exchange(directory, "settings_get"))
+            print(reply.model_dump_json(indent=2))
+            if reply.state != "completed":
+                raise SystemExit(1)
         elif args.command == "start":
             print(json.dumps(ensure_agent(directory, replace_idle=True), indent=2))
         elif args.command in {"auto-update-enable", "auto-update-disable"}:
