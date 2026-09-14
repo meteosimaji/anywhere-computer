@@ -10,6 +10,7 @@ from .models import Reply, Request
 from .relay_registry import RelayAccount
 from .relay_tokens import SignedRelayToken
 from .remote_bridge import RemoteAgent
+from .remote_transport import FRAME_LIMIT
 
 
 class ExecutionRejected(ValueError):
@@ -65,6 +66,12 @@ class ExecutionVerifier:
             raise ExecutionRejected('Execution authorization was rejected') from None
 
 
+class ExecutionEnvelope(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True, hide_input_in_errors=True)
+    token: str = Field(min_length=1, max_length=16384, repr=False)
+    request: Request
+
+
 class AuthorizedRelayAgent:
     """PC boundary; ownership is fixed by trusted provisioning, not a frame.
 
@@ -76,6 +83,18 @@ class AuthorizedRelayAgent:
                  account: RelayAccount, device_id: str) -> None:
         self.agent, self.verifier = agent, verifier
         self.account, self.device_id = account, device_id
+
+    async def dispatch_frame(self, payload: bytes) -> bytes:
+        # Reject malformed frames without inventing an operation ID or echoing
+        # their input. Transport callers close the channel on this exception.
+        try:
+            if len(payload) > FRAME_LIMIT:
+                raise ValueError('Frame too large')
+            frame = ExecutionEnvelope.model_validate_json(payload)
+        except ValueError:
+            raise ExecutionRejected('Invalid execution frame') from None
+        reply = await self.dispatch(frame.token, frame.request)
+        return reply.model_dump_json().encode()
 
     async def dispatch(self, token: str, request: Request) -> Reply:
         try:

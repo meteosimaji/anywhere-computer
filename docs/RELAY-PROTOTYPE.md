@@ -462,6 +462,19 @@ Local tests use a real Engine and disposable signed tokens to create a UTF-8 fil
 recover its result after expiry extension, reject another grant's result lookup,
 and reject revoked, expired, wrong-purpose, wrong-account/device/client and
 incomplete grants before file mutation. These are synthetic provider tests, not
-real OAuth consent or deployed relay acceptance. The WSS channel still carries
-plain Request frames: signed-envelope transport, AI endpoint integration, trusted
-PC provisioning and a production revocation provider remain to be connected.
+real OAuth consent or deployed relay acceptance. `exchange_authorized` now carries a bounded execution envelope over the WSS
+channel; `dispatch_frame` independently verifies it on the PC. The relay verifies
+again before returning results, withholding a reply if authorization changed while
+execution was in progress. That outcome is unknown to the caller, not a claim
+that the operation did not run. Plain Request frames are refused by this PC entry.
+
+Five actual loopback mTLS/WSS tests exercise signed file execution and refreshed
+result recovery after lost reply, PC-side revocation after relay dispatch,
+enrollment-token refusal without a sent frame, malformed/unsigned frame refusal,
+and result withholding after execution-time revocation. These use synthetic
+signed provider claims and revocation callbacks, with one in-process PC Engine.
+They do not prove a deployed provider, independent PC process lifecycle or Windows
+VM behavior. The original trusted `exchange` API remains a transport test entry;
+it must not be selected as a fallback for failed authorization. No public AI MCP
+endpoint currently exposes either entry. AI endpoint integration, trusted PC
+provisioning, negotiated production framing and a revocation provider remain open.
