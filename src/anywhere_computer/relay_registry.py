@@ -149,6 +149,36 @@ class RelayRegistry:
                 raise ValueError("PC channel identity is already bound")
             self.db.execute("INSERT INTO relay_channels VALUES(?,?)", (fingerprint, device_id))
 
+    def rotate_channel(self, account: RelayAccount, device_id: str, *,
+                       expected_fingerprint: str, fingerprint: str) -> None:
+        """Trusted provisioning only: replace an exact binding atomically.
+
+        The caller must authenticate renewal and prove possession of the new
+        certificate. Fingerprint knowledge alone is not authorization. A stale
+        renewal never overwrites a later binding; the device and ledger IDs stay
+        unchanged. Existing channels recheck their old fingerprint on dispatch.
+        """
+        self._fingerprint(expected_fingerprint)
+        self._fingerprint(fingerprint)
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            if self.get(account, device_id).state != "registered":
+                raise ValueError("Device registration is revoked")
+            existing = self.db.execute(
+                "SELECT fingerprint FROM relay_channels WHERE device_id=?", (device_id,),
+            ).fetchone()
+            if existing is None or existing["fingerprint"] != expected_fingerprint:
+                raise ValueError("PC channel binding changed; inspect before renewal")
+            conflict = self.db.execute(
+                "SELECT device_id FROM relay_channels WHERE fingerprint=?", (fingerprint,),
+            ).fetchone()
+            if conflict is not None and conflict["device_id"] != device_id:
+                raise ValueError("PC channel identity is already bound")
+            self.db.execute(
+                "UPDATE relay_channels SET fingerprint=? WHERE device_id=? AND fingerprint=?",
+                (fingerprint, device_id, expected_fingerprint),
+            )
+
     @staticmethod
     def _fingerprint(fingerprint: str) -> None:
         if re.fullmatch(r"[a-f0-9]{64}", fingerprint) is None:

@@ -562,3 +562,17 @@ receive loop. A real WSS connection with a controlled handshake-return delay
 reproduces the old hang and verifies termination after the fix. This is an
 explicit client stop; closing the management UI must still leave independently
 owned permitted work running.
+
+## Certificate renewal binding (development, 2026-09-14)
+
+`RelayRegistry.rotate_channel` atomically replaces an expected current certificate
+fingerprint for the authenticated account's registered device. It preserves the
+device/enrollment IDs and does not modify operation ledgers. Stale writers,
+cross-account access, revoked devices and another device's fingerprint are rejected.
+The caller must authenticate renewal and verify possession of the replacement key;
+this internal storage method is not a public provisioning endpoint.
+
+Isolated TLS tests kept the old socket open, rotated its binding, verified no request
+was sent to it, and connected a replacement certificate to the same device ID for a
+successful request/reply. This establishes channel invalidation and replacement,
+not certificate issuance, OS-vault persistence or automatic resident renewal.
