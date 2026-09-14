@@ -28,6 +28,12 @@ class DeviceTarget(Contract):
     device_id: str = Field(min_length=1, max_length=32, pattern=r"^(local|[a-f0-9]{32})$")
 
 
+class DeviceTools(DeviceTarget):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    query: str | None = Field(default=None, min_length=1, max_length=1000)
+    summary: bool = False
+
+
 class DeviceCall(DeviceTarget):
     tool: str = Field(min_length=1, max_length=200)
     arguments: dict[str, JsonValue] = Field(default_factory=dict)
@@ -124,8 +130,11 @@ class DeviceRouter:
              "No connection check is performed; local refers to this connector's computer.",
              Empty, True),
             ("devices_tools", "Fetch the current authorized tool schemas from an explicit "
-             "device_id. Use this before devices_call. Registration/login use the local CLI.",
-             DeviceTarget, True),
+             "device_id. Use name for one exact schema, query to search names and full "
+             "descriptions, "
+             "or summary=true to omit schemas. Filters combine; absent filters preserve the full "
+             "catalog. Fetches current authorization each time. Use before devices_call. "
+             "Registration/login use the local CLI.", DeviceTools, True),
             ("devices_call", "Execute a tool on an explicit device_id using its saved SSH/HTTP "
              "authorization. May write files or run commands. Nested device routing is forbidden. "
              "On response loss, query operations_get on the SAME device with the operation_id; "
@@ -162,7 +171,7 @@ class DeviceRouter:
                 return Reply(operation_id=request.operation_id, state="completed",
                              data={"devices": devices})
             args = (DeviceCall.model_validate(request.arguments) if request.tool == "devices_call"
-                    else DeviceTarget.model_validate(request.arguments))
+                    else DeviceTools.model_validate(request.arguments))
             target = args.device_id
             if isinstance(args, DeviceCall) and REQUEST_ID_ARGUMENT in args.arguments:
                 return Reply(
@@ -182,9 +191,21 @@ class DeviceRouter:
             tools = self._remote_tools(
                 await backend.catalog() if backend is not None else await self.local_catalog()
             )
-            if not isinstance(args, DeviceCall):
+            if isinstance(args, DeviceTools):
+                selected: list[JsonValue] = []
+                for tool in tools:
+                    assert isinstance(tool, dict)  # _remote_tools validated each entry.
+                    if args.name is not None and tool["name"] != args.name:
+                        continue
+                    if args.query is not None and args.query.casefold() not in (
+                        f"{tool['name']} {tool.get('description', '')}".casefold()
+                    ):
+                        continue
+                    selected.append({"name": tool["name"],
+                                     "description": tool.get("description", "")}
+                                    if args.summary else tool)
                 return Reply(operation_id=request.operation_id, state="completed",
-                             data={"device_id": args.device_id, "tools": tools})
+                             data={"device_id": args.device_id, "tools": selected})
             if not any(isinstance(tool, dict) and tool.get("name") == args.tool for tool in tools):
                 raise ValueError("Tool is not available in this device's authorized catalog")
             if not self._claim_dispatch(request.operation_id):

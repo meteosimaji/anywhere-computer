@@ -43,7 +43,9 @@ is planned. Client approvals and initial connection authentication remain separa
 3. Exercise app close, reconnect, sleep, restart and update with identity and ledger
    continuity; complete bundled installation and verification-tool delivery.
 4. Finish selective catalog retrieval/invalidation and measure requests, bytes and
-   latency on identical tasks. `device_router.py` currently retrieves full catalogs.
+   latency on identical tasks. `device_router.py` now filters the returned catalog by name/query or omits schemas
+   for summaries; upstream retrieval remains a full current catalog. Caching,
+   invalidation and end-to-end latency measurement remain unfinished.
 5. Select and integrate independent GUI/browser defaults; qualify Mac and Windows
    separately. Finish PTY/ConPTY, document preview/editing and common Skills.
 6. Run fresh ChatGPT 5.6 acceptance plus machine-reproduced authenticated HTTP/MCP
