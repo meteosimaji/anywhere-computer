@@ -440,3 +440,28 @@ The tests use a synthetic expiring RemoteAgent grant. Verified AI grant propagat
 and independent PC verification must be implemented before connecting untrusted
 AI requests to this transport. Certificate provisioning, OS-vault key storage,
 rotation, the production PC client lifecycle and proxy compatibility remain open.
+
+### Execution-grant verification (isolated PC boundary)
+
+`relay_tokens.py` shares the existing fixed-key RS256 signature verification with
+registration. `relay_grants.py` adds a separate execution profile requiring
+`device:execute`, the configured execution audience and AI client, one device ID,
+a stable server-issued grant ID and explicit tool names. Enrollment tokens do not
+satisfy this profile. The issuer must issue the execution claims from authorized
+state; this module does not issue tokens or authorize a requested scope itself.
+
+`AuthorizedRelayAgent` fixes account/device from trusted PC provisioning, verifies
+each signed grant and checks its current revocation status before passing a
+request to `RemoteAgent`. A required trusted `is_current` callback supplies the
+revocation decision; no default allow callback or public revocation provider is
+provided. The existing engine validates known/local-only tools. Tokens never enter
+engine arguments or the operation ledger. An expiry refresh preserves the ledger
+namespace only for the same issuer, subject, AI client, device and grant ID.
+
+Local tests use a real Engine and disposable signed tokens to create a UTF-8 file,
+recover its result after expiry extension, reject another grant's result lookup,
+and reject revoked, expired, wrong-purpose, wrong-account/device/client and
+incomplete grants before file mutation. These are synthetic provider tests, not
+real OAuth consent or deployed relay acceptance. The WSS channel still carries
+plain Request frames: signed-envelope transport, AI endpoint integration, trusted
+PC provisioning and a production revocation provider remain to be connected.
