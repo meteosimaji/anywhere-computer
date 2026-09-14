@@ -10,6 +10,14 @@ ZIP生成・展開後のruntime-only試験・出所証明の生成と検証を�
 macOSの常駐更新は[更新検証記録](UPDATE-VERIFICATION-2026-09-12.md)、更新手順は
 [更新ガイド](UPDATING.md)を参照してください。日付付きの記録はその時点の検証範囲です。
 
+## Beta 1 verification note
+
+Beta 1 freezes the existing features; see [scope and acceptance](BETA1.md).
+When using the extracted interpreter to verify its own package, start the verifier
+with `-B -I` so Python does not rewrite timestamp-based bytecode before the manifest
+check. Always use a fresh extraction. A verifier running from an independent
+development environment does not modify the target before checking it.
+
 ## ビルドと利用
 
 開発機の信頼済み python-build-standalone と、プラグインのチェックサム付き wheel・

@@ -13,6 +13,10 @@ The retained-client and GUI corrections have not been qualified in the live engi
 Installed alpha 9, development checkouts, CI artifacts, and published releases
 are distinct. Consult each PR for current merge status.
 
+The owner froze beta 1 to existing capabilities on 2026-09-14. See [beta scope](BETA1.md).
+The remaining feature inventory below is a roadmap; it is not newly implemented
+or a prerequisite to the scoped beta. Operational release gates still apply.
+
 ## Product direction
 
 English is the default for public documentation and connection UI. Japanese
@@ -58,8 +62,8 @@ is planned. Client approvals and initial connection authentication remain separa
 5. Select and integrate independent GUI/browser defaults; qualify Mac and Windows
    separately. Finish PTY/ConPTY, document preview/editing and common Skills.
 6. Run fresh ChatGPT 5.6 acceptance plus machine-reproduced authenticated HTTP/MCP
-   acceptance against the actual candidate; publish beta only after all requirements
-   in the development directive are reconciled with evidence.
+   acceptance against the actual candidate; publish beta only after the frozen [beta scope](BETA1.md) is reconciled with
+   evidence, with deferred roadmap features clearly identified.
 
 ## Evidence and limits
 
