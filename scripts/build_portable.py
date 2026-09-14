@@ -151,7 +151,7 @@ def build_portable(
             include_manager(app, manager, platform=sys.platform)
         shutil.copyfile(root / "LICENSE", app / "LICENSE")
         (app / "README.txt").write_text(
-            "Anywhere Computer portable alpha\n"
+            "Anywhere Computer portable\n"
             + ("Open Anywhere Computer Manager to view status and configure local startup.\n"
                "Keep the manager and runtime together when moving this directory.\n"
                if manager is not None else "") +
