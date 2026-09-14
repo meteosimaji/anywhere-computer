@@ -99,7 +99,7 @@ asyncio.run(main())
                 skill_dir = skill_root / "example"
                 skill_dir.mkdir(parents=True)
                 (skill_dir / "SKILL.md").write_text("Read helper.py", encoding="utf-8")
-                (skill_dir / "helper.py").write_text("print('日本語 42')\n", encoding="utf-8")
+                (skill_dir / "helper.py").write_bytes("print('日本語 42')\n".encode())
                 listed = await client.call_tool("skills_list", {"roots": [str(skill_root)]})
                 row = listed.structuredContent["data"]["skills"][0]
                 helper = await client.call_tool("skills_read", {

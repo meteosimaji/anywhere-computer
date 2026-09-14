@@ -16,10 +16,10 @@ def make_skill(root, name="example"):
     directory.mkdir(parents=True)
     (directory / "SKILL.md").write_text(
         "---\nname: example\ndescription: Test\n---\nRead references/日本語.md.\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="",
     )
     (directory / "references").mkdir()
-    (directory / "references/日本語.md").write_text("値: 42 ✅\n", encoding="utf-8")
+    (directory / "references/日本語.md").write_text("値: 42 ✅\n", encoding="utf-8", newline="")
     return directory
 
 
@@ -228,3 +228,19 @@ async def test_saved_skill_roots_restart_override_and_clear(tmp_path, monkeypatc
         assert paths == [str(default.resolve())]
     finally:
         await engine.close()
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_skill_resources_preserve_original_newlines_and_hashes(tmp_path, newline):
+    directory = make_skill(tmp_path / "skills")
+    body = newline.join(["# Skill", "Read references/日本語.md", ""])
+    reference = newline.join(["日本語 42 ✅", "second line", ""])
+    (directory / "SKILL.md").write_bytes(body.encode())
+    (directory / "references/日本語.md").write_bytes(reference.encode())
+    row = selected(directory.parent)
+    assert row["skill_sha256"] == hashlib.sha256(body.encode()).hexdigest()
+    for relative, expected in (("SKILL.md", body), ("references/日本語.md", reference)):
+        result = read_skill(resource(directory.parent, row, relative))
+        assert result["text"] == expected
+        assert result["sha256"] == hashlib.sha256(expected.encode()).hexdigest()
+        assert result["bytes"] == len(expected.encode())
