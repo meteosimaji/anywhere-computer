@@ -509,3 +509,19 @@ transport retry loop; after the fix, it stops with an unknown execution outcome
 and does not imply reconnection repairs the engine. The test was observed failing
 before the change and passing afterward. Network retries remain limited to errors
 originating outside the local dispatch call.
+
+### MCP protocol adapter
+
+`RelayMCPBackend` connects the existing `MCPSession` catalog and execution hooks
+to authorized WSS exchange, without another execution engine. It binds the session
+to the verified account/client/device/grant identity. Each operation obtains a
+fresh bearer from its trusted request-scoped provider; expiry refresh within the
+same grant is accepted, while changing the grant identity requires a new session.
+The adapter neither authenticates an HTTP caller nor stores a global current token.
+
+An actual protocol integration test performs MCP initialize/initialized, tools/list,
+UTF-8 files_write and refreshed-token operations_get through the real PC client
+and Engine. It checks changed-grant and revoked authorization refusal. This uses
+in-process MCP packets, WSS loopback, and synthetic provider tokens. HTTP request
+context isolation, authentication metadata and multi-device AI routing still need
+integration before this can be exposed as a client-facing endpoint.
