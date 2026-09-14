@@ -59,7 +59,10 @@ async def test_mcp_discovery_write_refresh_and_session_binding(
         await asyncio.wait_for(task, timeout=10)
 
 
-async def test_http_to_real_pc_write_refresh_and_revocation(channel_setup, execution, certificates):
+@pytest.mark.parametrize("lose_reply", [False, True])
+async def test_http_to_real_pc_write_refresh_and_revocation(
+    channel_setup, execution, certificates, lose_reply, monkeypatch,
+):
     import httpx
     from test_http_mcp import HEADERS, INITIALIZE
 
@@ -71,6 +74,21 @@ async def test_http_to_real_pc_write_refresh_and_revocation(channel_setup, execu
     pc.device_id = device_id
     port = relay._server.sockets[0].getsockname()[1]
     client = PCRelayClient(f'wss://localhost:{port}/pc', context('client', True), pc)
+    original_dispatch = pc.dispatch_frame
+    lost = False
+    writes = 0
+
+    async def dispatch(payload):
+        nonlocal lost, writes
+        if b'"tool":"files_write"' in payload:
+            writes += 1
+        result = await original_dispatch(payload)
+        if lose_reply and not lost and b'"tool":"files_write"' in payload:
+            lost = True
+            await relay._channels[device_id].socket.close(code=1012)
+        return result
+
+    monkeypatch.setattr(pc, 'dispatch_frame', dispatch)
     adapter = relay_http_mcp(relay, pc.verifier, account=account, device_id=device_id)
     http_port = await adapter.start()
     task = asyncio.create_task(client.run())
@@ -88,7 +106,10 @@ async def test_http_to_real_pc_write_refresh_and_revocation(channel_setup, execu
             write = await http.post('/mcp', json={'jsonrpc': '2.0', 'id': 2,
                 'method': 'tools/call', 'params': {'name': 'files_write', 'arguments': {
                     'path': str(target), 'text': 'HTTP 🚀', 'request_id': 'e' * 32}}})
-            assert write.json()['result']['structuredContent']['state'] == 'completed'
+            assert write.json()['result']['structuredContent']['state'] == (
+                'unknown' if lose_reply else 'completed')
+            if lose_reply:
+                await wait_connected(relay, device_id)
             assert target.read_text(encoding='utf-8') == 'HTTP 🚀'
             http.headers['Authorization'] = 'Bearer ' + sign({
                 'device_id': device_id, 'exp': claims['exp'] + 60})
@@ -96,6 +117,8 @@ async def test_http_to_real_pc_write_refresh_and_revocation(channel_setup, execu
                 'method': 'tools/call', 'params': {'name': 'operations_get', 'arguments': {
                     'operation_id': 'e' * 32, 'request_id': '2' * 32}}})
             assert recovered.json()['result']['structuredContent']['data']['state'] == 'completed'
+            assert writes == 1
+            assert lost == lose_reply
             http.headers['Authorization'] = 'Bearer ' + sign({
                 'device_id': device_id, 'grant_id': 'c' * 32})
             assert (await http.post('/mcp', json=INITIALIZE)).status_code == 404
