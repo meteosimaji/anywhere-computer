@@ -2,7 +2,7 @@
 
 ## 現在の配布状況
 
-[公開alpha9](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0a9)でOS別の実行用ZIPを配布します。正式stable版ではありません。
+[公開beta 1](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0b1)でOS別の実行用ZIPを配布します。正式stable版ではありません。
 GitHubのソースZIPには実行用Pythonは含まれません。以下は同梱ZIPの生成・利用手順です。
 公開alpha 6のQuality CI run 34693834133はmacOS・Windows・Ubuntuすべて成功し、
 ZIP生成・展開後のruntime-only試験・出所証明の生成と検証を通過しました。

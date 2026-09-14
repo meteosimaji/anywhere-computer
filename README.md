@@ -7,7 +7,7 @@ such as ChatGPT and Codex. Your connected AI plans the work; Anywhere Computer
 runs file, search, document and terminal operations on the selected PC. Core file
 and terminal operations do not require a Codex model turn.
 
-The current release candidate is `0.1.0b1` (`0.1.0-beta.1` for the Codex Plugin).
+The first beta release is `0.1.0b1` (`0.1.0-beta.1` for the Codex Plugin).
 [Releases and downloads](https://github.com/meteosimaji/anywhere-computer/releases).
 Beta 1 freezes the existing file, search, pipe-terminal, document extraction,
 Skills and MCP/device-routing capabilities. It is a prerelease, not a stable release.

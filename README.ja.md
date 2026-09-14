@@ -5,7 +5,7 @@
 ChatGPT・CodexなどのMCPクライアントから、自分のPCのファイル・検索・文書・端末を扱うための、セルフホスト型の実行エージェントです。
 判断は接続したAIが行い、PC上のAnywhere Computerが操作を実行します。ファイルや端末の基本機能にCodexのモデル実行は必要ありません。
 
-現在のリリース候補は `0.1.0b1`、Codex Pluginの表記は `0.1.0-beta.1` です。
+最初のベータ公開版は `0.1.0b1`、Codex Pluginの表記は `0.1.0-beta.1` です。
 [リリースとダウンロード](https://github.com/meteosimaji/anywhere-computer/releases)。
 既存のファイル・検索・pipe端末・文書抽出・Skills・MCP／端末ルーティングを固定したベータです。
 正式stable版ではありません。[ベータの対応範囲と受け入れ状況](docs/BETA1.md)を確認してください。

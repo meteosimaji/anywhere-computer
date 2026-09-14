@@ -48,8 +48,27 @@ The optional management application remains a preview.
 The status below is updated only from completed checks. This document is not by
 itself evidence that the release gates have passed.
 
-## Candidate evidence
+## Beta 1 acceptance evidence
 
-Candidate preparation is in progress. The preceding main commit e8815b8 passed
-all five Quality jobs and local targeted regression/build checks. Those receipts
-do not qualify the beta-versioned candidate or the installed clients.
+The beta candidate passed 1,254 local tests with 16 skips (native startup tests
+are run separately in CI), Ruff, mypy and the bundled-plugin/source consistency
+check. The installed macOS and Windows VM engines reported `0.1.0b1` and runtime
+`610d345e138bc74bbd01877c0fd7d2c5160c5cd74f452e12f5278de05fa735e2`.
+
+A fresh ChatGPT GPT-5.6 Sol medium conversation passed Mac UTF-8 file creation,
+readback, SHA-256 conditional append, search and continuous terminal input/output
+with cleanup. It read Codex Skills; that receipt does not establish common-Skill
+acceptance. Its first Windows request failed while the Windows agent was offline.
+After restoration, actual Plugin device routing fetched the Windows tools, read
+status and executed `hostname`, recovering output and exit code 0. This does not
+qualify every Windows workflow or Windows GUI from ChatGPT.
+
+The macOS portable native-agent check passed manifest verification, file roundtrip,
+regex child, terminal reconnection, busy-stop refusal and credential cleanup. The
+Windows candidate passed fresh-extraction manifest/runtime checks and was started
+in the interactive Windows user context using the existing credential store.
+
+The versioned GitHub release includes `release-evidence.json`, archive checksums
+and links to completed release-commit CI. Consult those receipts for the exact
+published source and per-platform build/relocation/provenance results. Historical
+alpha test records elsewhere in this repository remain historical.
