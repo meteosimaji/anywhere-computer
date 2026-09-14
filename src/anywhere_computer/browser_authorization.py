@@ -28,16 +28,16 @@ _PASSWORD_VISIBILITY_SCRIPT = """(() => {
   const toggle = document.getElementById('password-visibility');
   function hide() {
     field.type = 'password';
-    toggle.textContent = '表示';
+    toggle.textContent = 'Show';
     toggle.setAttribute('aria-pressed', 'false');
-    toggle.setAttribute('aria-label', 'パスワードを表示');
+    toggle.setAttribute('aria-label', 'Show password');
   }
   toggle.addEventListener('click', () => {
     if (field.type === 'text') { hide(); return; }
     field.type = 'text';
-    toggle.textContent = '隠す';
+    toggle.textContent = 'Hide';
     toggle.setAttribute('aria-pressed', 'true');
-    toggle.setAttribute('aria-label', 'パスワードを隠す');
+    toggle.setAttribute('aria-label', 'Hide password');
   });
   field.form.addEventListener('submit', hide);
   window.addEventListener('pagehide', hide);
@@ -155,14 +155,14 @@ class BrowserAuthorization:
         escape = html.escape
         tools = "".join(f"<li><code>{escape(tool)}</code></li>" for tool in sorted(record.tools))
         warning = (
-            "端末操作を許可すると、この端末のユーザー権限でコマンドを実行できます。"
+            "Terminal access allows commands to run with this device user’s permissions."
             if any(tool.startswith("terminal_") for tool in record.tools)
-            else "許可したツールは、この端末のユーザーがアクセスできるデータを扱います。"
+            else "Allowed tools can access data available to this device’s user."
         )
         return (
-            "<!doctype html><html lang=ja><meta charset=utf-8>"
+            "<!doctype html><html lang=en><meta charset=utf-8>"
             "<meta name=viewport content='width=device-width, initial-scale=1'>"
-            "<title>接続の確認 — Anywhere Computer</title>"
+            "<title>Connect — Anywhere Computer</title>"
             "<style>body{font:16px/1.65 system-ui;background:#f4f6f8;color:#172334;margin:0}"
             "main{max-width:620px;margin:40px auto;padding:32px;background:white;"
             "border:1px solid #dce2e8;border-radius:16px}h1{font-size:28px;line-height:1.3}"
@@ -176,27 +176,28 @@ class BrowserAuthorization:
             ".password-row input{min-width:0;flex:1}"
             ".password-row button{margin:0;flex:none;background:white;color:#244a6f}"
             "small{color:#475669}@media(max-width:680px){main{margin:12px;padding:20px}}"
-            "</style><main><small>Anywhere Computer</small><h1>この接続を許可しますか？</h1>"
-            f"<dl><dt>クライアント ID</dt><dd>{escape(record.client)}</dd>"
-            f"<dt>端末</dt><dd>{escape(self.device)}</dd>"
-            f"<dt>接続先</dt><dd>{escape(record.resource)}</dd>"
-            f"<dt>認可後の戻り先</dt><dd>{escape(record.redirect)}</dd></dl>"
-            f"<p>許可する機能</p><ul>{tools}</ul><p>{warning}</p>"
-            "<p>接続の認可に有効期限はありません。接続は後から取り消せます。要求した覚えがない場合は拒否してください。</p>"
+            "</style><main><small>Anywhere Computer</small><h1>Allow this connection?</h1>"
+            f"<dl><dt>Client ID</dt><dd>{escape(record.client)}</dd>"
+            f"<dt>Device</dt><dd>{escape(self.device)}</dd>"
+            f"<dt>Resource</dt><dd>{escape(record.resource)}</dd>"
+            f"<dt>Return address</dt><dd>{escape(record.redirect)}</dd></dl>"
+            f"<p>Requested tools</p><ul>{tools}</ul><p>{warning}</p>"
+            "<p>This connection remains authorized until revoked. "
+            "Deny it if you did not request it.</p>"
             f"<p class=error role=alert>{escape(error)}</p>"
             "<form method=post action=/authorize>"
             f"<input type=hidden name=request_id value='{escape(identity)}'>"
             f"<input type=hidden name=csrf value='{escape(csrf)}'>"
-            "<label for=password>端末所有者のパスワード</label>"
+            "<label for=password>Device owner password</label>"
             "<div class=password-row>"
             "<input id=password type=password name=password autocomplete=current-password "
             "maxlength=1024>"
             "<button type=button id=password-visibility aria-controls=password "
-            "aria-pressed=false aria-label='パスワードを表示'>表示</button></div>"
-            "<button type=submit name=approve value=yes>確認して接続を許可</button>"
-            "<button type=submit name=deny value=yes>拒否</button>"
-            "</form><p><small>この要求は5分で期限切れになります。"
-            "パスワードは接続元のクライアントには渡しません。</small></p></main>"
+            "aria-pressed=false aria-label='Show password'>Show</button></div>"
+            "<button type=submit name=approve value=yes>Allow connection</button>"
+            "<button type=submit name=deny value=yes>Deny</button>"
+            "</form><p><small>This request expires in 5 minutes. "
+            "Your password is not shared with the connecting client.</small></p></main>"
             f"<script>{_PASSWORD_VISIBILITY_SCRIPT}</script></html>"
         ).encode()
 
@@ -204,7 +205,7 @@ class BrowserAuthorization:
         return (
             status,
             (
-                "<!doctype html><html lang=ja><meta charset=utf-8>"
+                "<!doctype html><html lang=en><meta charset=utf-8>"
                 "<title>Anywhere Computer</title><p>" + html.escape(message) + "</p></html>"
             ).encode(),
             self._headers(),
@@ -215,7 +216,7 @@ class BrowserAuthorization:
         self.pending = {key: item for key, item in self.pending.items() if item.expires > now}
         self.attempts = {key: value for key, value in self.attempts.items() if key in self.pending}
         if len(self.pending) >= 64:
-            return self._error(429, "接続要求が多すぎます。少し待ってからやり直してください。")
+            return self._error(429, "Too many connection requests. Wait a moment and try again.")
         params = _fields(query)
         required = {
             "response_type",
@@ -286,7 +287,9 @@ class BrowserAuthorization:
 
     async def _decide(self, headers: dict[str, str], body: bytes) -> HTTPResult:
         if headers.get("origin") != self.origin:
-            return self._error(403, "この接続要求は確認できません。接続元からやり直してください。")
+            return self._error(
+                403, "Cannot verify this connection request. Start again from your client."
+            )
         if (
             len(body) > 16384
             or headers.get("content-type", "").split(";")[0].strip().lower()
@@ -302,18 +305,20 @@ class BrowserAuthorization:
         cookies.load(headers.get("cookie", ""))
         cookie = cookies.get(self._cookie_name(identity))
         if record is None or record.expires <= time.monotonic():
-            return self._error(403, "この接続要求は期限切れです。接続元からやり直してください。")
+            return self._error(
+                403, "This connection request expired. Start again from your client."
+            )
         if cookie is None:
             return self._error(
-                403, "接続確認用の Cookie が届いていません。"
-                "同じブラウザーで接続元からやり直してください。"
+                403, "The connection cookie is missing. "
+                "Start again from your client using the same browser."
             )
         if (
             not hmac.compare_digest(record.browser_hash, _digest(cookie.value))
             or not hmac.compare_digest(record.csrf_hash, _digest(csrf))
         ):
             return self._error(
-                403, "この接続要求は無効か期限切れです。接続元からやり直してください。"
+                403, "This connection request is invalid or expired. Start again from your client."
             )
         if ("approve" in params) == ("deny" in params):
             raise ValueError("Choose one consent decision")
@@ -323,28 +328,30 @@ class BrowserAuthorization:
             while attempts and attempts[0] <= now - 60:
                 attempts.popleft()
             if len(attempts) >= 10:
-                return self._error(429, "確認の試行回数を超えました。1分後にやり直してください。")
+                return self._error(
+                    429, "Too many authentication attempts. Try again in one minute."
+                )
             attempts.append(now)
             try:
                 valid = await asyncio.to_thread(self._verify_password, params.get("password", ""))
             except Exception:
                 return self._error(
-                    503, "所有者の認証を利用できません。端末の資格情報ストアを確認してください。"
+                    503, "Owner authentication is unavailable. Check the device credential store."
                 )
             if valid is None:
                 return self._error(
-                    503, "認証処理が混み合っています。少し待ってから再試行してください。"
+                    503, "Authentication is busy. Wait a moment and try again."
                 )
             if not valid:
                 return (
                     403,
-                    self._page(identity, record, csrf, error="パスワードを確認してください。"),
+                    self._page(identity, record, csrf, error="Check your password."),
                     self._headers(record.redirect),
                 )
         # Verification yields to other requests. Only one decision can consume this
         # exact request, and its deadline must still hold after password verification.
         if record.expires <= time.monotonic() or self.pending.pop(identity, None) is not record:
-            return self._error(403, "この接続要求は既に処理済みか期限切れです。")
+            return self._error(403, "This connection request was already processed or has expired.")
         self.attempts.pop(identity, None)
         result = {"state": record.state, "iss": self.issuer}
         if "deny" in params:
@@ -386,4 +393,6 @@ class BrowserAuthorization:
             return 405, None, {"Allow": "GET, POST", "Cache-Control": "no-store"}
         except (ValueError, UnicodeError, CookieError):
             # Never redirect an invalid request to an unverified callback.
-            return self._error(400, "接続要求を確認できません。接続元からやり直してください。")
+            return self._error(
+                400, "Cannot verify the connection request. Start again from your client."
+            )
