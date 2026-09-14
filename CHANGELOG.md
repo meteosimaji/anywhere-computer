@@ -3,6 +3,20 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 詳しい実機結果は[更新・再接続の検証記録](docs/UPDATE-VERIFICATION-2026-09-12.md)を参照してください。
 
+## Unreleased — main after public alpha 9
+
+- Common local Skills and hash-checked resource reads without Codex; persistent
+  collection configuration through `anywhere skills-configure`.
+- Windows startup recovery when the owner pipe is unavailable, while preserving
+  a live unresponsive agent and its work.
+- Retained MCP/HTTP clients prepare the selected agent before catalog lookup;
+  authorization is rechecked after startup and dispatched writes are not replayed.
+- Typed GUI calls preserve provider errors and native images. Incomplete or
+  ambiguous observations cannot authorize input.
+- These changes are integrated through PR #36. They are not included in the
+  published alpha 9 ZIP and do not complete the beta acceptance requirements.
+  See [implementation status](docs/IMPLEMENTATION-STATUS.md).
+
 ## 0.1.0a9 / Plugin 0.1.0-alpha.9 — 開発版
 
 - ChatGPTのHTTP入口に、明示的な端末指定のdevices_list / devices_tools / devices_callを追加。
