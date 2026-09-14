@@ -90,3 +90,35 @@ async def test_revoked_registration_stops_retrying(channel_setup, execution, cer
     with pytest.raises(ConnectionClosed):
         await asyncio.wait_for(client.run(), timeout=10)
     assert client.state == 'failed'
+
+
+async def test_engine_io_failure_is_not_classified_as_reconnectable_network(
+    channel_setup, execution, certificates, monkeypatch,
+):
+    relay, _, account, device_id, _ = channel_setup
+    pc, sign, _, _, _ = execution
+    context, _ = certificates
+    pc.device_id = device_id
+    calls = []
+    async def failed_engine(payload):
+        calls.append(payload)
+        raise OSError('isolated engine storage failure')
+    monkeypatch.setattr(pc, 'dispatch_frame', failed_engine)
+    port = relay._server.sockets[0].getsockname()[1]
+    client = PCRelayClient(f'wss://localhost:{port}/pc', context('client', True), pc)
+    task = asyncio.create_task(client.run())
+    try:
+        await wait_connected(relay, device_id)
+        with pytest.raises(ChannelOutcomeUnknown):
+            await relay.exchange_authorized(
+                pc.verifier, account, device_id, sign({'device_id': device_id}),
+                Request(operation_id='e' * 32, tool='__catalog'),
+            )
+        async with asyncio.timeout(2):
+            with pytest.raises(RuntimeError, match='execution failed'):
+                await asyncio.shield(task)
+        assert client.state == 'failed' and len(calls) == 1
+    finally:
+        await client.stop()
+        if not task.done():
+            await asyncio.wait_for(task, timeout=10)

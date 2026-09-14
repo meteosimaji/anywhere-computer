@@ -73,7 +73,12 @@ class PCRelayClient:
                                 break
                             if not isinstance(payload, bytes):
                                 raise ExecutionRejected('Expected binary PC frame')
-                            reply = await self.agent.dispatch_frame(payload)
+                            try:
+                                reply = await self.agent.dispatch_frame(payload)
+                            except (OSError, TimeoutError):
+                                # These came from local execution, not the socket.
+                                # Reconnecting cannot repair an engine/storage failure.
+                                raise RuntimeError('PC execution failed; outcome unknown') from None
                             await socket.send(reply)
                             failures = 0
                         break  # Normal close/replacement requires explicit restart.

@@ -502,3 +502,10 @@ replacement without a reconnect fight; and revoked-registration refusal without
 an endless retry. They use the actual client and in-process Engine with disposable
 credentials. Cross-process startup exclusion, OS service integration, proxy
 compatibility, production framing negotiation and real sleep/resume remain open.
+
+An additional fault-injection regression distinguishes a local execution/storage
+`OSError` or timeout from network failure. Before the fix, the client entered its
+transport retry loop; after the fix, it stops with an unknown execution outcome
+and does not imply reconnection repairs the engine. The test was observed failing
+before the change and passing afterward. Network retries remain limited to errors
+originating outside the local dispatch call.
