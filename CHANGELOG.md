@@ -3,7 +3,7 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 詳しい実機結果は[更新・再接続の検証記録](docs/UPDATE-VERIFICATION-2026-09-12.md)を参照してください。
 
-## Unreleased — main after public alpha 9
+## 0.1.0b1 / Plugin 0.1.0-beta.1 — release candidate
 
 - Common local Skills and hash-checked resource reads without Codex; persistent
   collection configuration through `anywhere skills-configure`.
@@ -14,7 +14,8 @@
 - Typed GUI calls preserve provider errors and native images. Incomplete or
   ambiguous observations cannot authorize input.
 - These changes are integrated through PR #36. They are not included in the
-  published alpha 9 ZIP and do not complete the beta acceptance requirements.
+  published alpha 9 ZIP. Beta 1 freezes existing features; remaining roadmap
+  features are explicitly outside its supported scope.
   See [implementation status](docs/IMPLEMENTATION-STATUS.md).
 
 ## 0.1.0a9 / Plugin 0.1.0-alpha.9 — 開発版

@@ -5,14 +5,14 @@
 ChatGPT・CodexなどのMCPクライアントから、自分のPCのファイル・検索・文書・端末を扱うための、セルフホスト型の実行エージェントです。
 判断は接続したAIが行い、PC上のAnywhere Computerが操作を実行します。ファイルや端末の基本機能にCodexのモデル実行は必要ありません。
 
-公開版は `0.1.0a9`、Codex Pluginの表記は `0.1.0-alpha.9` です。
-[alpha9をダウンロード](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0a9)。
-誰でも取得できる公開alphaリリースです。正式stable版ではありません。
-監査の4件の実行管理修正、直接MCPの要約・検索、Peekaboo向け型付きGUI操作、HTTP経由の複数端末指定を含みます。
+現在のリリース候補は `0.1.0b1`、Codex Pluginの表記は `0.1.0-beta.1` です。
+[リリースとダウンロード](https://github.com/meteosimaji/anywhere-computer/releases)。
+既存のファイル・検索・pipe端末・文書抽出・Skills・MCP／端末ルーティングを固定したベータです。
+正式stable版ではありません。[ベータの対応範囲と受け入れ状況](docs/BETA1.md)を確認してください。
 
 ## できること
 
-| 機能 | 公開alphaでの対応 |
+| 機能 | ベータでの対応 |
 |---|---|
 | ファイル | 一覧・検索・部分読取・書込・限定置換・移動・バックアップ・復元 |
 | ファイル受け渡し | 分割アップロード／ダウンロード、ハッシュ確認、中断後の再開 |
@@ -51,7 +51,7 @@ git clone https://github.com/meteosimaji/anywhere-computer.git
 cd anywhere-computer
 ```
 
-[GitHub Releases](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0a9)からOS別のPython同梱ZIPとCodex Plugin ZIPを取得できます。GitHubの「Download ZIP」はソース一式であり、Python同梱の実行用ZIPとは異なります。実行用ZIPはCIで生成・検証しており、配布構造とビルド方法は[ランタイム同梱配布物](docs/PORTABLE.md)にまとめています。
+[GitHub Releases](https://github.com/meteosimaji/anywhere-computer/releases)からOS別のPython同梱ZIPとCodex Plugin ZIPを取得できます。GitHubの「Download ZIP」はソース一式であり、Python同梱の実行用ZIPとは異なります。実行用ZIPはCIで生成・検証しており、配布構造とビルド方法は[ランタイム同梱配布物](docs/PORTABLE.md)にまとめています。
 
 ## ソースから起動する
 

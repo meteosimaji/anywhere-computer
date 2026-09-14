@@ -7,14 +7,12 @@ such as ChatGPT and Codex. Your connected AI plans the work; Anywhere Computer
 runs file, search, document and terminal operations on the selected PC. Core file
 and terminal operations do not require a Codex model turn.
 
-The public release is `0.1.0a9` (`0.1.0-alpha.9` for the Codex Plugin).
-[Download alpha9](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0a9).
-This is an alpha, not a stable or beta release. Development on main may contain
-changes that are not included in that release.
-
-Development also includes [common local Skills](docs/COMMON-SKILLS.md), independent
-of Codex, with selected resource reads. Check the [implementation status](docs/IMPLEMENTATION-STATUS.md)
-for features still awaiting packaged release and platform acceptance.
+The current release candidate is `0.1.0b1` (`0.1.0-beta.1` for the Codex Plugin).
+[Releases and downloads](https://github.com/meteosimaji/anywhere-computer/releases).
+Beta 1 freezes the existing file, search, pipe-terminal, document extraction,
+Skills and MCP/device-routing capabilities. It is a prerelease, not a stable release.
+See the [beta scope and acceptance](docs/BETA1.md) for supported workflows,
+experimental adapters and verification status.
 
 ## Get started
 
@@ -48,9 +46,9 @@ connection does not silently replace it with another build. See the
 [MCP client guide](docs/MCP-CLIENTS.md) for client-specific configuration and the
 limits of the recorded Claude Code and Gemini CLI validation.
 
-## Guided command entry (development main)
+## Guided command entry
 
-With the development runtime installed, run `anywhere setup` (or
+With the beta runtime installed, run `anywhere setup` (or
 `uv run --locked anywhere setup` from source). The English menu selects the existing
 local start, ChatGPT HTTPS setup, or native OAuth HTTPS setup. Use the same
 `--state-dir` to resume an existing configuration. Cancel before selecting a route
@@ -58,7 +56,7 @@ to leave setup untouched. Advanced commands remain available for scripts.
 
 This selector does not provision a managed relay, a public URL, or AI-client
 registration. The local route has the same idle-engine replacement behavior as
-`anywhere start`. It is not part of the previously published alpha9 ZIP.
+`anywhere start`. It is included in beta 1; the previously published alpha9 ZIP does not contain it.
 
 ## Connect ChatGPT
 
@@ -89,7 +87,7 @@ requirements still apply.
 
 ## Capabilities and limits
 
-| Area | Public alpha functionality |
+| Area | Beta functionality |
 | --- | --- |
 | Files | Listing, search, partial reads, writes, targeted edits, moves, backups and restore |
 | Transfers | Chunked uploads/downloads, hashes and interrupted-transfer recovery |
