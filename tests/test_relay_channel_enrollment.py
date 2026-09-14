@@ -1,4 +1,5 @@
 import asyncio
+import json
 
 import pytest
 from test_relay_channels import wait_connected
@@ -43,15 +44,19 @@ async def test_first_tls_connection_binds_only_authenticated_enrolled_device(
                 assert pc.close_code == 1008
                 assert registry.db.execute('SELECT COUNT(*) FROM relay_channels').fetchone()[0] == 0
             else:
-                await wait_connected(relay, device.device_id)
+                receipt = json.loads(await asyncio.wait_for(pc.recv(), 2))
+                assert receipt == {'version': 1, 'state': 'bound',
+                                   'device_id': device.device_id,
+                                   'fingerprint': fingerprint('client')}
+                assert device.device_id not in relay._channels
                 assert registry.channel_device(fingerprint('client')) == (
                     RelayAccount(issuer=claims['iss'], subject=claims['sub']), device,
                 )
                 with pytest.raises(ValueError):
                     registry.channel_device(fingerprint('stranger'))
                 # Registration establishes a connection, not an operation or AI grant.
-                with pytest.raises(TimeoutError):
-                    await asyncio.wait_for(pc.recv(), 0.05)
+                await asyncio.wait_for(pc.wait_closed(), 2)
+                assert pc.close_code == 1000
         if invalid is None:
             previous = relay._channels.get(device.device_id)
             async with connect(

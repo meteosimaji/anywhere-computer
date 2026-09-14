@@ -587,7 +587,12 @@ Registry/channel coverage now passes 22 tests locally.
 An explicitly configured `RelayChannels(..., enrollment=service)` accepts
 `/pc/enroll` using `anywhere-pc.signed.v1`. It verifies the existing enrollment
 bearer from `Authorization` and the registered `X-Anywhere-Device` against the
-account, then binds the actual verified TLS peer certificate. No client-provided
+account, then binds the actual verified TLS peer certificate. It returns a versioned
+`bound` receipt containing the exact device ID and public certificate fingerprint,
+then closes normally. This socket never enters the execution-channel map. The PC
+must verify that receipt before treating enrollment as confirmed; a lost response
+remains unconfirmed. Normal operation starts on a separate `/pc` connection.
+No client-provided
 fingerprint is used. The listener remains loopback-only and requires a trusted
 client certificate; it does not issue certificates or weaken TLS verification.
 

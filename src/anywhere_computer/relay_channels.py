@@ -8,6 +8,7 @@ only authenticates the PC connection and binds it to durable device ownership.
 import asyncio
 import hashlib
 import ipaddress
+import json
 import ssl
 from dataclasses import dataclass, field
 
@@ -94,6 +95,12 @@ class RelayChannels:
                     raise ValueError('Invalid enrollment header')
                 self.enrollment.bind_channel(token, device_id=device_id,
                                              peer_fingerprint=fingerprint)
+                await socket.send(json.dumps({
+                    'version': 1, 'state': 'bound', 'device_id': device_id,
+                    'fingerprint': fingerprint,
+                }).encode())
+                await socket.close(code=1000, reason='PC enrollment complete')
+                return
             _, device = self.registry.channel_device(fingerprint)
         except (ValueError, LookupError):
             await socket.close(code=1008, reason='PC registration unavailable')
