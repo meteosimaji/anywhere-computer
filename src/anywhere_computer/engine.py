@@ -13,6 +13,7 @@ from typing import TypeVar, cast
 from pydantic import JsonValue
 
 from . import __version__, codex_context, codex_plugins, skills_context
+from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
 from .document_writer import write_document
@@ -325,6 +326,29 @@ class Engine:
         async def codex_skill_read(args: CodexSkillRead) -> Result:
             return await skills_context.read_codex_skill(args.skill_id, cwd=args.cwd)
 
+        async def common_skills_list(args: SkillsPage) -> Result:
+            if args.roots is None and (roots := self.settings().skill_roots):
+                args = args.model_copy(update={"roots": roots})
+            return await asyncio.to_thread(list_skills, args)
+
+        async def common_skills_read(args: SkillResource) -> Result:
+            if args.roots is None and (roots := self.settings().skill_roots):
+                args = args.model_copy(update={"roots": roots})
+            return await asyncio.to_thread(read_skill, args)
+
+        self.register(
+            "skills_list", "Discover local skills without Codex from .agents/skills or explicit "
+            "collection roots. Returns directory names, IDs and SKILL.md hashes. Does not execute "
+            "scripts. Pass the same location and returned hash to skills_read.",
+            SkillsPage, common_skills_list, read_only=True,
+        )
+        self.register(
+            "skills_read", "Read selected SKILL.md or a UTF-8 relative resource (up to 64 KiB) "
+            "without Codex. Requires the listed skill hash; rejects changed skills and paths "
+            "escaping the skill directory. Does not execute scripts or grant tool permissions.",
+            SkillResource, common_skills_read, read_only=True,
+        )
+
         self.register(
             "codex_threads_list", "Use when the user asks to find their local Codex chats. "
             "Returns bounded titles/IDs only, not message previews. Requires installed Codex; "
@@ -379,16 +403,26 @@ class Engine:
                     and not Path(updated.default_shell).is_absolute()
                 ):
                     raise ValueError("Default shell must be an absolute path")
+                if args.key == "skill_roots":
+                    resolved_roots: list[str] = []
+                    for root in updated.skill_roots:
+                        path = Path(root)
+                        if not path.is_absolute() or not path.is_dir():
+                            raise ValueError("Skill roots must be existing absolute directories")
+                        resolved = str(path.resolve(strict=True))
+                        if resolved not in resolved_roots:
+                            resolved_roots.append(resolved)
+                    updated.skill_roots = resolved_roots
                 self.ledger.connection.execute(
                     "INSERT INTO runtime_settings VALUES(1,?) "
                     "ON CONFLICT(id) DO UPDATE SET value=excluded.value",
-                    (updated.model_dump_json(),),
+                    (updated.model_dump_json(exclude_defaults=True),),
                 )
             return cast(Result, updated.model_dump(mode="json"))
 
         self.register(
             "settings_get",
-            "Read persisted engine defaults and line limits.",
+            "Read persisted engine defaults, skill roots and line limits.",
             Empty,
             settings_get,
             read_only=True,
@@ -396,7 +430,8 @@ class Engine:
         self.register(
             "settings_update",
             "Update shared engine defaults persistently. Changing default_shell affects "
-            "future terminal execution for every client using this engine.",
+            "future terminal execution for every client using this engine. skill_roots selects "
+            "default skill collections for all clients; [] restores convention directories.",
             UpdateSetting,
             settings_update,
             destructive=True,

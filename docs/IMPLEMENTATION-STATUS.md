@@ -1,7 +1,7 @@
 # Implementation status and beta acceptance
 
 Snapshot: 2026-09-14. This is a capability inventory, not a beta release claim.
-The development code inspected here includes PRs #25–27 on top of main's PR #24.
+Main includes PRs #25–32. The common-skills work is a subsequent development change.
 Installed alpha 9, the development checkout, CI artifacts, and published releases
 are distinct. Consult each PR for current merge status.
 
@@ -22,7 +22,7 @@ is planned. Client approvals and initial connection authentication remain separa
 | Terminal | `sessions.py` owns persistent pipe processes, input, output cursors and cleanup. | Actual PTY and Windows ConPTY, terminal resize and interactive programs. A pipe session is not a PTY. |
 | Operations | Persistent engine ledger, owner/device binding, result recovery and duplicate-dispatch prevention. | End-to-end recovery across public relay credentials, OS sleep/restart and real release updates. Do not promise terminal memory survives an engine or OS restart. |
 | MCP and optional Codex | Direct stdio MCP sessions plus optional Codex Plugin discovery/calls. State continuation and result recovery have tests and historical Chat receipts. | Packaged independent backends, compatibility policy and realistic cross-platform acceptance. Codex-owned Computer Use is not a generally usable external backend. |
-| Skills | `skills_context.py` reads the enabled Codex catalog and SKILL.md, returning its directory for existing file tools. | Independent common Skills discovery and bounded relative resource resolution without Codex. Reading a Skill does not install its tools. |
+| Skills | Optional Codex catalog remains. Development `skills_list` / `skills_read` discover .agents/skills or explicit roots and read hash-checked SKILL.md and UTF-8 resources without Codex. | Custom roots persist through settings_update; packaged release and cross-platform acceptance remain. Reading a Skill does not install its tools. See [common skills](COMMON-SKILLS.md). |
 | Documents | Office text extraction (`documents.py`); basic DOCX/XLSX creation (`document_writer.py`). | Rendered preview, meaningful diffs and targeted edits that preserve unrelated document content. Text extraction is not Office app automation. |
 | Multiple PCs | Saved SSH/HTTP device router; exact device IDs, authorized catalogs and operation bindings. Isolated relay tests include multiple devices. | Unified account/relay-backed device listing and selection from one AI connection; Windows VM end-to-end success. Saved registration does not prove reachability. |
 | Setup | Shared setup/controller functions; management status/checks; PR #26 adds interactive `anywhere setup` using existing flows. Isolated Mac local startup, persistence after CLI exit, status and stop were exercised. | Bundled dependency-free installation, pairing-to-AI setup, OS startup integration and clean Mac/Windows first-install acceptance. Current HTTPS setup still needs hosting details. |
