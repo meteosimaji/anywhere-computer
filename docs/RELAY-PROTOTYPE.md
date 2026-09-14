@@ -478,3 +478,27 @@ VM behavior. The original trusted `exchange` API remains a transport test entry;
 it must not be selected as a fallback for failed authorization. No public AI MCP
 endpoint currently exposes either entry. AI endpoint integration, trusted PC
 provisioning, negotiated production framing and a revocation provider remain open.
+
+### Isolated PC client lifecycle
+
+`PCRelayClient` owns one explicitly started outbound connection. It accepts only
+loopback WSS development endpoints and verified TLS contexts, passes binary
+execution envelopes to `AuthorizedRelayAgent`, and never retains a request for
+replay. Transient network failures and service-restart/overload closes reconnect
+with jittered exponential delay capped at 30 seconds. A handshake alone does not
+reset backoff. TLS verification, registration/policy and protocol failures stop;
+normal closure or replacement also stops rather than competing with the new PC
+connection. Duplicate `run` calls on the same instance are rejected.
+
+`stop` closes transport and wakes a retry delay. It does not terminate the shared
+Engine or deliberately cancel an operation already executing. A lost response
+therefore remains unknown until ledger recovery. Cancellation by the owning task
+has separate engine cancellation semantics; this is not a durable service manager.
+The `connected` state means transport only, not refreshed capability readiness.
+
+Three real loopback tests exercise a committed write losing its reply, automatic
+client reconnection and explicit result lookup with exactly one mutation frame;
+replacement without a reconnect fight; and revoked-registration refusal without
+an endless retry. They use the actual client and in-process Engine with disposable
+credentials. Cross-process startup exclusion, OS service integration, proxy
+compatibility, production framing negotiation and real sleep/resume remain open.
