@@ -67,3 +67,60 @@ async def test_first_tls_connection_binds_only_authenticated_enrolled_device(
                 assert registry.channel_device(fingerprint('client'))[1] == device
     finally:
         await relay.close()
+
+
+async def test_pc_enrolls_then_runs_signed_file_operation(registration, certificates, tmp_path):
+    from cryptography.hazmat.primitives import serialization
+
+    from anywhere_computer.engine import Engine
+    from anywhere_computer.models import Request
+    from anywhere_computer.relay_client import PCRelayClient
+    from anywhere_computer.relay_grants import AuthorizedRelayAgent, ExecutionVerifier
+    from anywhere_computer.relay_tokens import SignedRelayToken
+    from anywhere_computer.remote_bridge import RemoteAgent
+
+    key, registry, service, claims = registration
+    context, fingerprint = certificates
+    token = signed(key, claims)
+    device = service.register(token, enrollment_id='b' * 32, name='PC')
+    owner = service.account(token)
+    public = key.public_key().public_bytes(
+        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode()
+    verifier = ExecutionVerifier(SignedRelayToken(
+        issuer=claims['iss'], audience='https://relay.example/execute', client='ai',
+        public_keys={'fixture': public},
+    ), is_current=lambda _: True)
+    engine = Engine(tmp_path / 'pc-engine')
+    pc = AuthorizedRelayAgent(RemoteAgent(engine, {}), verifier,
+                              account=owner, device_id=device.device_id)
+    relay = RelayChannels(registry, context('server', False), enrollment=service)
+    port = await relay.start()
+    client = PCRelayClient(f'wss://localhost:{port}/pc', context('client', True), pc)
+    task = None
+    try:
+        receipt = await client.enroll(token, fingerprint=fingerprint('client'))
+        assert receipt.device_id == device.device_id and client.state == 'enrolled'
+        assert not relay._channels
+        task = asyncio.create_task(client.run())
+        await wait_connected(relay, device.device_id)
+        grant = signed(key, {**claims, 'aud': 'https://relay.example/execute', 'azp': 'ai',
+                             'scope': 'device:execute', 'device_id': device.device_id,
+                             'grant_id': 'c' * 32, 'tools': ['files_write', 'operations_get']})
+        target = tmp_path / 'first-connection.txt'
+        result = await relay.exchange_authorized(verifier, owner, device.device_id, grant, Request(
+            operation_id='d' * 32, tool='files_write',
+            arguments={'path': str(target), 'text': '登録後の操作 ✅'},
+        ))
+        assert result.state == 'completed'
+        assert target.read_text() == '登録後の操作 ✅'
+        recovered = await relay.exchange_authorized(verifier, owner, device.device_id, grant,
+            Request(operation_id='e' * 32, tool='operations_get',
+                    arguments={'operation_id': 'd' * 32}))
+        assert recovered.data['state'] == 'completed'
+    finally:
+        await client.stop()
+        if task is not None:
+            await asyncio.wait_for(task, 5)
+        await relay.close()
+        await engine.close()

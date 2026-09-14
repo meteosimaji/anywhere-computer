@@ -609,3 +609,14 @@ an enrollment bearer. This connects registration to transport, but the resident
 PC controller, credential provisioning and OS-vault storage are still not wired
 into a complete installation flow. Never put the enrollment bearer in a URL or
 CLI argument.
+
+`PCRelayClient.enroll` now verifies the bounded receipt against its device ID and
+the configured certificate fingerprint. The setup controller supplies the grant
+in memory. Enrollment redirects and automatic retries are disabled; ambiguous
+completion returns a fixed failure without exposing the bearer. `run()` remains
+a separate connection using only TLS credentials and signed execution envelopes.
+An isolated real-TLS integration test registers a device, confirms enrollment,
+starts the PC client, writes a Japanese/emoji file through signed relay execution,
+and recovers the same operation from the PC ledger. This uses provisioned test
+certificates and an isolated signing key; it does not establish OS-vault provisioning,
+public-service operation or native startup integration.

@@ -3,15 +3,32 @@
 import asyncio
 import ipaddress
 import random
+import re
 import ssl
+from typing import Literal
 from urllib.parse import urlsplit
 
+from pydantic import BaseModel, ConfigDict, Field
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
 from .relay_channels import SIGNED_PC_PROTOCOL
 from .relay_grants import AuthorizedRelayAgent, ExecutionRejected
 from .remote_transport import FRAME_LIMIT, check_tls
+
+
+class _EnrollmentConnect(connect):
+    def process_redirect(self, exc: Exception) -> Exception | str:
+        # Never forward enrollment headers or client identity to a redirect target.
+        return exc
+
+
+class PCEnrollmentReceipt(BaseModel):
+    model_config = ConfigDict(strict=True, frozen=True, extra='forbid')
+    version: Literal[1]
+    state: Literal['bound']
+    device_id: str = Field(pattern=r'^[a-f0-9]{32}$')
+    fingerprint: str = Field(pattern=r'^[a-f0-9]{64}$')
 
 
 class PCRelayClient:
@@ -41,6 +58,49 @@ class PCRelayClient:
         self._running = False
         self._stop = asyncio.Event()
         self._socket: ClientConnection | None = None
+
+    async def enroll(self, token: str, *, fingerprint: str) -> PCEnrollmentReceipt:
+        """Explicit trusted setup; no token persistence or automatic enrollment retry.
+
+        The controller supplies a current vault grant and the certificate's public
+        fingerprint. A verified receipt permits a separate run() connection. Lost
+        replies remain unconfirmed, even if the server committed the binding.
+        """
+        if self._running:
+            raise RuntimeError('PC relay client is already running')
+        if (not token or len(token) > 8192 or any(ord(c) < 33 or ord(c) > 126 for c in token)
+                or re.fullmatch(r'[a-f0-9]{64}', fingerprint) is None):
+            raise ValueError('Invalid PC enrollment credentials')
+        self._running = True
+        self.state = 'enrolling'
+        try:
+            async with asyncio.timeout(10):
+                async with _EnrollmentConnect(
+                    self.endpoint + '/enroll', ssl=self.context,
+                    subprotocols=[SIGNED_PC_PROTOCOL], proxy=None, compression=None,
+                    max_size=4096, max_queue=1, open_timeout=5, close_timeout=1,
+                    additional_headers={'Authorization': 'Bearer ' + token,
+                                        'X-Anywhere-Device': self.agent.device_id},
+                ) as socket:
+                    if socket.subprotocol != SIGNED_PC_PROTOCOL:
+                        raise ValueError('Unsupported enrollment protocol')
+                    raw = await socket.recv()
+                    if not isinstance(raw, bytes):
+                        raise ValueError('Invalid enrollment receipt frame')
+                    receipt = PCEnrollmentReceipt.model_validate_json(raw)
+                    if (receipt.device_id != self.agent.device_id
+                            or receipt.fingerprint != fingerprint):
+                        raise ValueError('PC enrollment receipt does not match')
+                    self.state = 'enrolled'
+                    return receipt
+        except asyncio.CancelledError:
+            self.state = 'failed'
+            raise
+        except Exception:
+            self.state = 'failed'
+            raise RuntimeError('PC enrollment was not confirmed; inspect before retrying') from None
+        finally:
+            self._running = False
 
     async def stop(self) -> None:
         self._stop.set()
