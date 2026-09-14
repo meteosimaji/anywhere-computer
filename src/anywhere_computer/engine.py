@@ -327,9 +327,13 @@ class Engine:
             return await skills_context.read_codex_skill(args.skill_id, cwd=args.cwd)
 
         async def common_skills_list(args: SkillsPage) -> Result:
+            if args.roots is None and (roots := self.settings().skill_roots):
+                args = args.model_copy(update={"roots": roots})
             return await asyncio.to_thread(list_skills, args)
 
         async def common_skills_read(args: SkillResource) -> Result:
+            if args.roots is None and (roots := self.settings().skill_roots):
+                args = args.model_copy(update={"roots": roots})
             return await asyncio.to_thread(read_skill, args)
 
         self.register(
@@ -399,16 +403,26 @@ class Engine:
                     and not Path(updated.default_shell).is_absolute()
                 ):
                     raise ValueError("Default shell must be an absolute path")
+                if args.key == "skill_roots":
+                    resolved_roots: list[str] = []
+                    for root in updated.skill_roots:
+                        path = Path(root)
+                        if not path.is_absolute() or not path.is_dir():
+                            raise ValueError("Skill roots must be existing absolute directories")
+                        resolved = str(path.resolve(strict=True))
+                        if resolved not in resolved_roots:
+                            resolved_roots.append(resolved)
+                    updated.skill_roots = resolved_roots
                 self.ledger.connection.execute(
                     "INSERT INTO runtime_settings VALUES(1,?) "
                     "ON CONFLICT(id) DO UPDATE SET value=excluded.value",
-                    (updated.model_dump_json(),),
+                    (updated.model_dump_json(exclude_defaults=True),),
                 )
             return cast(Result, updated.model_dump(mode="json"))
 
         self.register(
             "settings_get",
-            "Read persisted engine defaults and line limits.",
+            "Read persisted engine defaults, skill roots and line limits.",
             Empty,
             settings_get,
             read_only=True,
@@ -416,7 +430,8 @@ class Engine:
         self.register(
             "settings_update",
             "Update shared engine defaults persistently. Changing default_shell affects "
-            "future terminal execution for every client using this engine.",
+            "future terminal execution for every client using this engine. skill_roots selects "
+            "default skill collections for all clients; [] restores convention directories.",
             UpdateSetting,
             settings_update,
             destructive=True,

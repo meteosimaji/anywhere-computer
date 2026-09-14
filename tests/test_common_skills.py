@@ -178,3 +178,53 @@ def test_resource_replaced_between_stat_and_open_is_not_returned(tmp_path, monke
     monkeypatch.setattr(common_skills.os, "open", replace_then_open)
     with pytest.raises(ValueError, match="changed while opening"):
         common_skills._read(directory, path)
+
+
+async def test_saved_skill_roots_restart_override_and_clear(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    default = make_skill(home / ".agents/skills", "default")
+    monkeypatch.setattr(common_skills.Path, "home", lambda: home)
+    registered = make_skill(tmp_path / "registered", "registered")
+    override = make_skill(tmp_path / "override", "override")
+    engine = Engine(tmp_path / "state")
+
+    async def call(tool, **arguments):
+        return await engine.execute(Request(operation_id=uuid.uuid4().hex,
+                                            tool=tool, arguments=arguments))
+
+    try:
+        saved = await call("settings_update", key="skill_roots",
+                           value=[str(registered.parent), str(registered.parent)])
+        assert saved.state == "completed"
+        assert saved.data["skill_roots"] == [str(registered.parent.resolve())]
+        for invalid in (["relative"], [str(tmp_path / "missing")],
+                        [str(registered / "SKILL.md")], None, "not-a-list"):
+            rejected = await call("settings_update", key="skill_roots", value=invalid)
+            assert rejected.state == "failed"
+            assert engine.settings().skill_roots == [str(registered.parent.resolve())]
+        await engine.close()
+        engine = Engine(tmp_path / "state")
+        listed = await call("skills_list")
+        assert listed.state == "completed"
+        assert [row["name"] for row in listed.data["skills"]] == ["registered"]
+        row = listed.data["skills"][0]
+        read = await call("skills_read", skill_id=row["skill_id"],
+                          expected_skill_sha256=row["skill_sha256"],
+                          relative_path="references/日本語.md")
+        assert read.state == "completed" and read.data["text"] == "値: 42 ✅\n"
+        other = await call("skills_list", roots=[str(override.parent)])
+        assert [row["name"] for row in other.data["skills"]] == ["override"]
+        registered.parent.rename(tmp_path / "moved")
+        assert (await call("skills_list")).state == "failed"
+        unrelated = await call("settings_update", key="file_read_line_limit", value=10)
+        assert unrelated.state == "completed"
+        assert (await call("settings_update", key="skill_roots", value=[])).state == "completed"
+        persisted = engine.ledger.connection.execute(
+            "SELECT value FROM runtime_settings WHERE id=1"
+        ).fetchone()[0]
+        assert "skill_roots" not in persisted
+        conventional = await call("skills_list")
+        paths = [row["skill_directory"] for row in conventional.data["skills"]]
+        assert paths == [str(default.resolve())]
+    finally:
+        await engine.close()

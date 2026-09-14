@@ -11,8 +11,15 @@ directory is not recursively searched.
 
 For another collection, pass `roots` as an explicit list of absolute directories.
 This selects directories for that request; it does not save a registration. Use
-the same `roots` and `cwd` in subsequent reads. Persistent custom-directory
-registration through setup remains to be integrated.
+the same `roots` and `cwd` in subsequent reads. To save engine-wide defaults,
+call `settings_update` with `key: "skill_roots"` and an array of absolute
+collection paths as `value`. Existing directories are validated and canonicalized.
+Saved roots replace convention directories when a request omits `roots`; explicit
+request roots always override them. Set `value: []` to restore convention discovery.
+The setting survives engine restart and applies to all authorized clients of that
+engine. Missing saved directories fail rather than silently scanning elsewhere.
+Registration does not change remote tool grants. Older engines do not understand
+this setting; clear it before downgrading to an older engine.
 
 ```json
 {"roots": ["/absolute/skills"], "limit": 30}

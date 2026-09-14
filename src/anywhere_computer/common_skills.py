@@ -24,7 +24,8 @@ class SkillLocation(Contract):
     roots: list[Annotated[str, Field(min_length=1, max_length=4096)]] | None = Field(
         default=None, min_length=1, max_length=16,
         description="Explicit absolute skill collection directories. When omitted, use "
-        "~/.agents/skills and cwd/.agents/skills. Each immediate child contains SKILL.md. "
+        "saved engine skill_roots, or ~/.agents/skills and cwd/.agents/skills when none are saved. "
+        "Each immediate child contains SKILL.md. "
         "Pass the same roots and cwd when reading. Does not persist registration.",
     )
 

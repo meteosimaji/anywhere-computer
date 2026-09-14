@@ -70,14 +70,17 @@ class PluginSessionId(Contract):
 
 
 class RuntimeSettings(Contract):
+    skill_roots: list[Annotated[str, Field(min_length=1, max_length=4096)]] = Field(
+        default_factory=list, max_length=16,
+    )
     default_shell: str | None = None
     file_read_line_limit: int = Field(default=5000, ge=1, le=5000)
     file_write_line_limit: int = Field(default=10000, ge=1, le=100000)
 
 
 class UpdateSetting(Contract):
-    key: Literal["default_shell", "file_read_line_limit", "file_write_line_limit"]
-    value: str | int | None
+    key: Literal["default_shell", "file_read_line_limit", "file_write_line_limit", "skill_roots"]
+    value: str | int | list[str] | None
 
 
 class ListProcesses(Contract):
