@@ -33,9 +33,9 @@ async def channel_setup(tmp_path, certificates):
     registry.bind_channel(account, device.device_id, fingerprint=fingerprint('client'))
     relay = RelayChannels(registry, context('server', False))
     port = await relay.start()
-    def client(name='client'):
+    def client(name='client', *, protocol=PC_PROTOCOL):
         return connect(f'wss://localhost:{port}/pc', ssl=context(name, True),
-                       subprotocols=[PC_PROTOCOL], proxy=None, compression=None,
+                       subprotocols=[protocol], proxy=None, compression=None,
                        close_timeout=1)
     try:
         yield relay, registry, account, device.device_id, client
