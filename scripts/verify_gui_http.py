@@ -131,7 +131,10 @@ async def verify(
                                 assert row["state"] == "completed", name
                                 return row
 
-                            await call("computer_status", {})
+                            initial = await call("computer_status", {})
+                            report["engine"] = {key: initial["data"][key] for key in
+                                ("version", "engine_api_version", "instance_id", "runtime_id")}
+                            report["target"] = {"app": app, "window_id": window_id}
                             opened = await call(
                                 "mcp_session_open",
                                 {
@@ -294,6 +297,8 @@ async def verify(
                                 report["cleanup_confirmed"] = closed["data"]["cleanup_confirmed"]
                             final = await call("computer_status", {})
                             assert final["data"]["active_resources"]["direct_mcp_sessions"] == 0
+                            assert final["data"]["instance_id"] == report["engine"]["instance_id"]
+                            assert final["data"]["runtime_id"] == report["engine"]["runtime_id"]
                             report["completed"] = True
             finally:
                 await adapter.close()
