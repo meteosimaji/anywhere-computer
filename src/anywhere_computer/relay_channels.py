@@ -20,6 +20,7 @@ from .relay_registry import RelayAccount, RelayRegistry
 from .remote_transport import FRAME_LIMIT, check_tls
 
 PC_PROTOCOL = Subprotocol('anywhere-pc.v1')
+SIGNED_PC_PROTOCOL = Subprotocol('anywhere-pc.signed.v1')
 
 
 class ChannelUnavailable(RuntimeError):
@@ -63,13 +64,13 @@ class RelayChannels:
             raise ValueError('This isolated PC relay requires a loopback listener')
         self._server = await serve(
             self._accept, host, port, ssl=self.context, origins=[None],
-            subprotocols=[PC_PROTOCOL], compression=None, max_size=FRAME_LIMIT,
+            subprotocols=[SIGNED_PC_PROTOCOL, PC_PROTOCOL], compression=None, max_size=FRAME_LIMIT,
             max_queue=1, open_timeout=5, close_timeout=1,
         )
         return int(self._server.sockets[0].getsockname()[1])
 
     async def _accept(self, socket: ServerConnection) -> None:
-        if (socket.subprotocol != PC_PROTOCOL or socket.request is None
+        if (socket.subprotocol not in {PC_PROTOCOL, SIGNED_PC_PROTOCOL} or socket.request is None
                 or socket.request.path != '/pc'):
             await socket.close(code=1008, reason='Unsupported PC channel')
             return
@@ -115,7 +116,8 @@ class RelayChannels:
                        *, timeout: float = 65) -> Reply:
         """Trusted internal caller only; account construction is not authentication."""
         return await self._exchange_payload(account, device_id, request,
-                                             request.model_dump_json().encode(), timeout=timeout)
+                                             request.model_dump_json().encode(),
+                                             protocol=PC_PROTOCOL, timeout=timeout)
 
     async def exchange_authorized(self, verifier: ExecutionVerifier, account: RelayAccount,
                                   device_id: str, token: str, request: Request,
@@ -127,7 +129,8 @@ class RelayChannels:
         """
         verifier.verify(token, account=account, device_id=device_id, tool=request.tool)
         payload = ExecutionEnvelope(token=token, request=request).model_dump_json().encode()
-        reply = await self._exchange_payload(account, device_id, request, payload, timeout=timeout)
+        reply = await self._exchange_payload(account, device_id, request, payload,
+                                             protocol=SIGNED_PC_PROTOCOL, timeout=timeout)
         try:
             verifier.verify(token, account=account, device_id=device_id, tool=request.tool)
         except ValueError:
@@ -135,12 +138,16 @@ class RelayChannels:
         return reply
 
     async def _exchange_payload(self, account: RelayAccount, device_id: str, request: Request,
-                                payload: bytes, *, timeout: float) -> Reply:
+                                payload: bytes, *, protocol: Subprotocol, timeout: float) -> Reply:
         if not 0 < timeout <= 120:
             raise ValueError('Invalid PC exchange timeout')
         if len(payload) > FRAME_LIMIT:
             raise ValueError('PC request exceeds frame limit')
         channel = self._owned_channel(account, device_id)
+        if channel.socket.subprotocol != protocol:
+            raise ChannelUnavailable(
+                "PC protocol does not support this request; request was not dispatched",
+            )
         if channel.lock.locked():
             raise ChannelUnavailable('PC is busy; request was not dispatched')
         async with channel.lock:

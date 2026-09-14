@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import ConnectionClosed
 
-from .relay_channels import PC_PROTOCOL
+from .relay_channels import SIGNED_PC_PROTOCOL
 from .relay_grants import AuthorizedRelayAgent, ExecutionRejected
 from .remote_transport import FRAME_LIMIT, check_tls
 
@@ -58,12 +58,12 @@ class PCRelayClient:
                 self.state = 'connecting'
                 try:
                     async with connect(
-                        self.endpoint, ssl=self.context, subprotocols=[PC_PROTOCOL],
+                        self.endpoint, ssl=self.context, subprotocols=[SIGNED_PC_PROTOCOL],
                         proxy=None, compression=None, max_size=FRAME_LIMIT, max_queue=1,
                         open_timeout=5, close_timeout=1,
                     ) as socket:
                         self._socket = socket
-                        if socket.subprotocol != PC_PROTOCOL:
+                        if socket.subprotocol != SIGNED_PC_PROTOCOL:
                             raise ExecutionRejected('Unsupported PC protocol')
                         self.state = 'connected'
                         # Do not reset backoff on handshake alone: a peer that

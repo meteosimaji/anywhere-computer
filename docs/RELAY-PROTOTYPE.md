@@ -540,3 +540,18 @@ write UTF-8 content, refresh authorization, recover the prior result, and reject
 grant substitution and revocation. Concurrent request tests check token isolation
 and scope cleanup. This is an isolated single-device entry, not the final
 multi-device AI catalog, OAuth issuer, public endpoint, or production deployment.
+
+### Explicit PC frame compatibility
+
+Signed execution now negotiates `anywhere-pc.signed.v1`; `PCRelayClient` offers
+only this subprotocol. The isolated listener also accepts `anywhere-pc.v1` for
+existing trusted transport fixtures. `exchange_authorized` requires the signed
+protocol and `exchange` requires the original protocol before sending any bytes.
+There is no automatic downgrade or fallback between frame formats. A protocol
+mismatch is `ChannelUnavailable` (not dispatched), preserving the connection for
+compatible requests rather than treating an unsupported frame as a lost result.
+
+Two mismatch tests verify that neither direction sends a frame. The original
+implementation failed these tests; the signed/legacy channel, PC lifecycle and
+MCP integration suite passes with the separation (21 tests). This is development
+protocol compatibility, not public provisioning, key rotation or OS acceptance.

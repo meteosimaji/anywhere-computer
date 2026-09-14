@@ -7,7 +7,11 @@ from test_relay_grants import execution as execution
 from test_remote_transport import certificates as certificates
 
 from anywhere_computer.models import Reply, Request
-from anywhere_computer.relay_channels import ChannelOutcomeUnknown
+from anywhere_computer.relay_channels import (
+    SIGNED_PC_PROTOCOL,
+    ChannelOutcomeUnknown,
+    ChannelUnavailable,
+)
 from anywhere_computer.relay_grants import ExecutionRejected, ExecutionVerifier
 
 
@@ -21,7 +25,7 @@ async def test_signed_wss_write_lost_reply_and_refreshed_recovery(channel_setup,
     write = Request(operation_id='6' * 32, tool='files_write',
                     arguments={'path': str(target), 'text': '中継 🚀'})
     calls = []
-    async with client() as socket:
+    async with client(protocol=SIGNED_PC_PROTOCOL) as socket:
         await wait_connected(relay, device_id)
         async def lose_reply():
             payload = await socket.recv()
@@ -34,7 +38,7 @@ async def test_signed_wss_write_lost_reply_and_refreshed_recovery(channel_setup,
             await relay.exchange_authorized(verifier, account, device_id, token, write)
         await responder
     assert target.read_text(encoding='utf-8') == '中継 🚀'
-    async with client() as socket:
+    async with client(protocol=SIGNED_PC_PROTOCOL) as socket:
         await wait_connected(relay, device_id)
         async def recover():
             payload = await socket.recv()
@@ -60,7 +64,7 @@ async def test_pc_rechecks_revocation_after_relay_dispatch(channel_setup, execut
     target = root / 'denied.txt'
     request = Request(operation_id='8' * 32, tool='files_write',
                       arguments={'path': str(target), 'text': 'must not write'})
-    async with client() as socket:
+    async with client(protocol=SIGNED_PC_PROTOCOL) as socket:
         await wait_connected(relay, device_id)
         async def revoked_pc():
             payload = await socket.recv()
@@ -77,7 +81,7 @@ async def test_pc_rechecks_revocation_after_relay_dispatch(channel_setup, execut
 async def test_enrollment_token_is_not_sent_to_pc(channel_setup, execution):
     relay, _, account, device_id, client = channel_setup
     pc, sign, _, _, _ = execution
-    async with client() as socket:
+    async with client(protocol=SIGNED_PC_PROTOCOL) as socket:
         await wait_connected(relay, device_id)
         with pytest.raises(ExecutionRejected):
             await relay.exchange_authorized(
@@ -110,7 +114,7 @@ async def test_relay_withholds_reply_when_grant_revoked_during_execution(channel
     target = root / 'committed.txt'
     request = Request(operation_id='b' * 32, tool='files_write',
                       arguments={'path': str(target), 'text': 'committed'})
-    async with client() as socket:
+    async with client(protocol=SIGNED_PC_PROTOCOL) as socket:
         await wait_connected(relay, device_id)
         async def revoke_before_reply():
             payload = await socket.recv()
@@ -124,3 +128,30 @@ async def test_relay_withholds_reply_when_grant_revoked_during_execution(channel
             )
         await responder
     assert target.read_text(encoding='utf-8') == 'committed'
+
+
+async def test_signed_request_rejects_legacy_peer_before_sending(channel_setup, execution):
+    relay, _, account, device_id, client = channel_setup
+    pc, sign, _, _, _ = execution
+    verifier = ExecutionVerifier(pc.verifier.tokens, is_current=lambda _: True)
+    async with client() as socket:
+        await wait_connected(relay, device_id)
+        with pytest.raises(ChannelUnavailable, match="protocol"):
+            await relay.exchange_authorized(
+                verifier, account, device_id, sign({'device_id': device_id}),
+                Request(operation_id='9' * 32, tool='operations_get',
+                        arguments={'operation_id': '1' * 32}),
+            )
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(socket.recv(), timeout=0.05)
+
+
+async def test_legacy_request_rejects_signed_peer_before_sending(channel_setup):
+    relay, _, account, device_id, client = channel_setup
+    async with client(protocol=SIGNED_PC_PROTOCOL) as socket:
+        await wait_connected(relay, device_id)
+        with pytest.raises(ChannelUnavailable, match="protocol"):
+            await relay.exchange(account, device_id,
+                                 Request(operation_id='9' * 32, tool='computer_status'))
+        with pytest.raises(TimeoutError):
+            await asyncio.wait_for(socket.recv(), timeout=0.05)
