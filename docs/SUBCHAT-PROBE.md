@@ -1,8 +1,12 @@
-# Ordinary ChatGPT Worker transport investigation
+# ChatGPT subchat transport investigation
 
-Status: experimental investigation, not an available Worker feature.
+Status: experimental investigation, not an available subchat feature.
 
-The requested Worker uses ordinary ChatGPT Chat, not a Codex task, ChatGPT
+Product name: `subchat` (Japanese: サブチャット). A subchat is an ordinary
+ChatGPT Chat created for a delegated task. It is not a ChatGPT Work task.
+Historical `AC_CHAT_WORKER_...` test markers below are retained as evidence.
+
+The requested subchat uses ordinary ChatGPT Chat, not a Codex task, ChatGPT
 Work task, or paid OpenAI API. Creating a new conversation and recovering its
 identity are required; appending to an existing conversation is insufficient.
 
@@ -27,7 +31,7 @@ identity are required; appending to an existing conversation is insufficient.
 Run the read-only probe in the owning Codex environment:
 
 ```sh
-python scripts/probe_chat_worker.py --server /absolute/path/to/codex-app-tools/server.mjs
+python scripts/probe_subchat.py --server /absolute/path/to/codex-app-tools/server.mjs
 ```
 
 Optionally add `--read-thread` with an explicitly selected acceptance conversation
@@ -41,7 +45,7 @@ another Codex task to invoke Chat is not an inference-free substitute.
 1. Establish a supported live connection for the selected adapter.
 2. Create an ordinary Chat and verify the requested model before submission.
 3. Capture conversation ID and the submitted user message ID.
-4. Recover the corresponding assistant response and continue the same Worker.
+4. Recover the corresponding assistant response and continue the same subchat.
 5. Simulate a lost acknowledgement without creating a second conversation or
    repeating a submitted prompt. Report an unknown outcome when reconciliation
    cannot establish whether submission occurred.
@@ -50,7 +54,7 @@ CoS currently uses a browser companion for normal Chat creation and submission;
 an API-shaped external interface does not eliminate that browser dependency.
 Anywhere may need that adapter for creation even if the Codex app's existing
 conversation read/send tools can be reused. This remains unverified, and no
-production Worker tool should advertise support on the strength of this probe.
+production subchat tool should advertise support on the strength of this probe.
 
 ## Ordinary Chat live trial
 
@@ -69,15 +73,15 @@ answer. Its response-model menu said `5.6 Sol`.
 However, subsequent `read_thread` calls continued returning only the first turn,
 including the old updated timestamp, even after the second answer was visible in
 the browser. Treat this as stale read evidence, not a missing-send conclusion;
-do not replay the follow-up. A Worker result collector must match the expected
+do not replay the follow-up. A subchat result collector must match the expected
 new user/assistant message pair and cannot accept an arbitrary idle snapshot.
 
 This establishes browser creation plus Codex-app follow-up submission. It does
 not establish headless creation, fresh tool-only result recovery, or the complete
-Chat -> Anywhere -> Codex app -> Worker path. The external MCP endpoint remains
+Chat -> Anywhere -> Codex app -> subchat path. The external MCP endpoint remains
 missing in the current executor environment. The two socket-preflight tests
 exercise absent caller context and an unlinked-but-open Unix socket; they are not
-Worker end-to-end acceptance tests.
+subchat end-to-end acceptance tests.
 
 ### Follow-up recovery and bounded waiting
 
@@ -101,4 +105,4 @@ not the response text. A timeout exits nonzero with `reply_unconfirmed`.
 Nine targeted tests cover endpoint context, the unlinked socket, old snapshots,
 wrong Chat/prompt/baseline, active or incomplete responses, duplicate matches,
 truncation, eventual freshness and bounded read timeout. They validate collector
-logic, not the complete external Worker connection.
+logic, not the complete external subchat connection.

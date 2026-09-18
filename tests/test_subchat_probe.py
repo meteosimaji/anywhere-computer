@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "probe_chat_worker.py"
-SPEC = importlib.util.spec_from_file_location("chat_worker_probe", SCRIPT)
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "probe_subchat.py"
+SPEC = importlib.util.spec_from_file_location("subchat_probe", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 probe = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(probe)
