@@ -10,6 +10,8 @@ from typing import Literal, cast
 
 from pydantic import JsonValue
 
+from .execution_environment import with_tool_path
+
 WIRE_LIMIT = 8 * 1024 * 1024
 TEXT_LIMIT = 64 * 1024
 MAX_MESSAGES = 1000
@@ -25,7 +27,7 @@ def _executable(explicit: Path | None) -> Path:
             raise ValueError("Codex executable must be an absolute path outside the cwd")
         selected = explicit
     else:
-        found = shutil.which("codex")
+        found = shutil.which("codex", path=with_tool_path(os.environ).get("PATH"))
         if found is None:
             raise FileNotFoundError("Codex executable was not found")
         selected = Path(found)
@@ -53,6 +55,7 @@ async def codex_request(
         str(program), "app-server", "--listen", "stdio://",
         stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.DEVNULL, cwd=str(Path.home()), limit=WIRE_LIMIT,
+        env=with_tool_path(os.environ),
     )
     request_id = 0
 

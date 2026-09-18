@@ -5,6 +5,57 @@ import pytest
 from anywhere_computer.engine import Engine
 
 
+async def test_large_paginated_catalog_keeps_empty_filtered_page_cursor_and_last_tool(tmp_path):
+    server = tmp_path / 'catalog.py'
+    server.write_text('''import asyncio
+from mcp import types
+from mcp.server.lowlevel import Server
+from mcp.server.stdio import stdio_server
+m = Server('large-catalog')
+cursor = 'opaque/日本語+='
+@m.list_tools()
+async def catalog(request: types.ListToolsRequest) -> types.ListToolsResult:
+    page = request.params.cursor if request.params else None
+    assert page in (None, cursor)
+    start, stop = (0, 80) if page is None else (80, 118)
+    return types.ListToolsResult(tools=[types.Tool(
+        name=f'tool_{i:03}', description='ordinary ' * 100 + ('needle' if i == 117 else ''),
+        inputSchema={'type': 'object', 'properties': {}},
+    ) for i in range(start, stop)], nextCursor=cursor if page is None else None)
+@m.call_tool()
+async def call(name: str, arguments: dict):
+    assert name == 'tool_117'
+    return [types.TextContent(type='text', text='42')]
+async def main():
+    async with stdio_server() as (read, write):
+        await m.run(read, write, m.create_initialization_options())
+asyncio.run(main())
+''', encoding='utf-8')
+    engine = Engine(tmp_path / 'engine')
+    pool = engine.direct_mcp_sessions
+    try:
+        opened = await pool.open([sys.executable, '-I', str(server)], tmp_path, owner=None)
+        sid = opened['session_id']
+        first = await pool.tools(sid, owner=None)
+        second = await pool.tools(sid, owner=None, cursor=first['nextCursor'])
+        assert len(first['tools']) == 80
+        assert len(second['tools']) == 38
+        assert len({row['name'] for row in first['tools'] + second['tools']}) == 118
+        filtered = await pool.tools(sid, owner=None, query='NEEDLE', summary=True)
+        assert filtered['tools'] == []
+        assert filtered['nextCursor'] == 'opaque/日本語+='
+        last = await pool.tools(sid, owner=None, query='NEEDLE', summary=True,
+                                cursor=filtered['nextCursor'])
+        assert [row['name'] for row in last['tools']] == ['tool_117']
+        assert 'inputSchema' not in last['tools'][0]
+        exact = await pool.tools(sid, owner=None, name='tool_117', cursor=first['nextCursor'])
+        assert 'inputSchema' in exact['tools'][0]
+        result = await pool.call(sid, 'tool_117', {}, owner=None)
+        assert result['content'][0]['text'] == '42'
+    finally:
+        await engine.close()
+
+
 async def test_real_session_ownership_and_update_blocker(tmp_path):
     server = tmp_path / 'server.py'
     server.write_text('''from mcp.server.fastmcp import FastMCP

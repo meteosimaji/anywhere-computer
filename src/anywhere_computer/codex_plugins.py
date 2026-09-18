@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import cast
@@ -10,6 +11,7 @@ from typing import cast
 from pydantic import JsonValue
 
 from .codex_context import WIRE_LIMIT, _executable
+from .execution_environment import with_tool_path
 from .mcp_results import normalize_tool_result as _tool_result
 from .plugin_diagnostics import (
     STDERR_CHUNK,
@@ -171,6 +173,7 @@ class _Session:
             str(self.executable), "app-server", "--listen", "stdio://",
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE, cwd=str(Path.home()), limit=WIRE_LIMIT,
+            env=with_tool_path(os.environ),
         )
         self._stderr_task = asyncio.create_task(self._drain_stderr())
         try:

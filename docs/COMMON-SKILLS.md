@@ -1,4 +1,4 @@
-# Common skills (development)
+# Common skills
 
 `skills_list` and `skills_read` discover and read local skill packages without
 starting Codex or another model. The existing `codex_skills_list` and
@@ -51,6 +51,22 @@ Full metadata and instructions remain in the selected SKILL.md. Read it with:
   "relative_path": "SKILL.md"
 }
 ```
+
+On the post-beta-1 development branch, `skills_list` also accepts `query`, a
+case-insensitive literal substring (1–500 characters). It searches directory
+names and the entire bounded SKILL.md, including frontmatter and text after the
+opening paragraphs, before pagination. It does not load referenced resources or
+execute anything. For example:
+
+```json
+{"roots": ["/absolute/skills"], "query": "spreadsheet", "limit": 10}
+```
+
+Pass the same `query`, `roots`, and `cwd` with `after: "<next_cursor>"` for the
+next page. Restart pagination when changing the search. Search results contain
+the same compact metadata and hashes as an unfiltered list, not every skill's
+body. Read only the selected package using `skills_read`. Beta 1's published
+archives do not accept this new argument.
 
 Use the same operation with `relative_path: "references/example.md"` or
 `"scripts/example.py"` to read supporting text. Paths use `/` on both OSes.

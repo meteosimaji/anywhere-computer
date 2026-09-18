@@ -1,5 +1,12 @@
 # Implementation status and beta acceptance
 
+Current direction (2026-09-18): beta 1 was published; its supported scope and
+completed evidence are in [BETA1.md](BETA1.md). The development branch targets
+0.2.0a1. [PRODUCT-ROADMAP.md](PRODUCT-ROADMAP.md) supersedes the completion order
+below: interactive terminals, native GUI, then browser providers, before managed
+pairing and durable workers. The snapshot below remains historical, not a claim
+that beta 1 is unpublished or that these new milestones are implemented.
+
 Snapshot: 2026-09-14. This is a capability inventory, not a beta release claim.
 Main at `e8815b85026ac67aa050dcc9c745c1926faf3113` includes PRs #33–36:
 common Skills, the Skill configuration CLI, Windows owner-pipe startup recovery,

@@ -27,6 +27,26 @@ def selected(root):
     return list_skills(SkillsPage(roots=[str(root)]))["skills"][0]
 
 
+def test_search_matches_full_body_before_pagination_without_returning_body(tmp_path):
+    for name in ("first", "second", "unrelated"):
+        directory = make_skill(tmp_path, name)
+        (directory / "SKILL.md").write_text(
+            "# Example\n" + "ordinary context\n" * 200
+            + ("日本語 Needle" if name != "unrelated" else "other"), encoding="utf-8",
+        )
+    first = list_skills(SkillsPage(roots=[str(tmp_path)], query="日本語 needle", limit=1))
+    second = list_skills(SkillsPage(
+        roots=[str(tmp_path)], query="日本語 needle", limit=1, after=first["next_cursor"],
+    ))
+    assert {first["skills"][0]["name"], second["skills"][0]["name"]} == {"first", "second"}
+    assert second["next_cursor"] is None
+    assert "text" not in first["skills"][0]
+    assert list_skills(SkillsPage(roots=[str(tmp_path)], query="UNRELATED"))["skills"][0][
+        "name"
+    ] == "unrelated"
+    assert list_skills(SkillsPage(roots=[str(tmp_path)], query="absent"))["skills"] == []
+
+
 def resource(root, row, relative_path="SKILL.md"):
     return SkillResource(roots=[str(root)], skill_id=row["skill_id"],
                          expected_skill_sha256=row["skill_sha256"], relative_path=relative_path)
@@ -142,7 +162,9 @@ async def test_remote_grants_ledger_recovery_and_no_codex(tmp_path, monkeypatch)
 
     try:
         assert (await call("old", "skills_list", {"roots": [str(root)]})).state == "failed"
-        listed = await call("allowed", "skills_list", {"roots": [str(root)]})
+        listed = await call("allowed", "skills_list", {
+            "roots": [str(root)], "query": "日本語",
+        })
         assert listed.state == "completed"
         row = listed.data["skills"][0]
         args = resource(root, row, "references/日本語.md").model_dump()
@@ -204,7 +226,7 @@ async def test_saved_skill_roots_restart_override_and_clear(tmp_path, monkeypatc
             assert engine.settings().skill_roots == [str(registered.parent.resolve())]
         await engine.close()
         engine = Engine(tmp_path / "state")
-        listed = await call("skills_list")
+        listed = await call("skills_list", query="REGISTERED")
         assert listed.state == "completed"
         assert [row["name"] for row in listed.data["skills"]] == ["registered"]
         row = listed.data["skills"][0]
