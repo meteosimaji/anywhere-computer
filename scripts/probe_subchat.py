@@ -190,7 +190,8 @@ def main() -> None:
         parser.error("reply verification requires --read-thread")
     if not 1 <= args.wait_seconds <= 300:
         parser.error("--wait-seconds must be between 1 and 300")
-    prompt = args.expected_prompt_file.read_text(encoding="utf-8") if args.expected_prompt_file else None
+    prompt = (args.expected_prompt_file.read_text(encoding="utf-8")
+              if args.expected_prompt_file else None)
     result = asyncio.run(asyncio.wait_for(
         probe(args.server, args.read_thread, args.after_user_id, prompt, args.wait_seconds),
         timeout=30 + args.wait_seconds,
