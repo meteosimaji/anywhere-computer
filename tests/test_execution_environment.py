@@ -32,7 +32,7 @@ async def test_terminal_finds_later_installed_tool_with_restricted_path(tmp_path
     sessions = Sessions()
     installed.mkdir()
     tool = installed / ("anywhere-fixture.cmd" if windows else "anywhere-fixture")
-    tool.write_text("@echo off\n<nul set /p=fixture-42\n" if windows else
+    tool.write_text("@echo off\n<nul set /p=fixture-42\nexit /b 0\n" if windows else
                     "#!/bin/sh\nprintf 'fixture-42'\n", encoding="utf-8")
     tool.chmod(0o700)
     started = await sessions.start(StartSession(
