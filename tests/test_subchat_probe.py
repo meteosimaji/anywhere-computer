@@ -97,3 +97,56 @@ async def test_read_timeout_is_unknown_not_failed_send():
 
     result = await probe.wait_for_reply(read, "chat", "old", "new request", .01)
     assert result == {"state": "reply_unconfirmed", "read_attempts": 1, "resend": False}
+
+
+def test_first_reply_uses_observed_submission_identity_without_baseline():
+    data = snapshot()
+    data["turns"] = data["turns"][:1]
+    # The baseline-only mode cannot collect the first reply in a new Chat.
+    assert probe.matching_reply(data, "chat", "old", "new request") is None
+    result = probe.matching_reply(data, "chat", None, "new request", submitted_user_id="new")
+    assert result == {"user_message_id": "new", "answer_message_id": "new-answer", "text": "42"}
+    assert probe.matching_reply(data, "chat", None, "new request",
+                                submitted_user_id="absent") is None
+    assert probe.matching_reply(data, "other", None, "new request",
+                                submitted_user_id="new") is None
+    assert probe.matching_reply(data, "chat", None, "different",
+                                submitted_user_id="new") is None
+
+
+@pytest.mark.parametrize("change", ["active", "truncated", "missing", "duplicate", "wrong_id"])
+def test_first_reply_rejects_uncertain_receipts(change):
+    import copy
+    data = snapshot()
+    if change == "active":
+        data["thread"]["status"] = {"type": "active"}
+    elif change == "truncated":
+        data["turns"][0]["items"][1]["truncated"] = True
+    elif change == "missing":
+        data["turns"][0]["items"].pop()
+    elif change == "duplicate":
+        data["turns"].append(copy.deepcopy(data["turns"][0]))
+    else:
+        data["turns"][0]["items"][0]["id"] = "different"
+    assert probe.matching_reply(data, "chat", None, "new request",
+                                submitted_user_id="new") is None
+
+
+async def test_first_reply_waits_for_acknowledged_message():
+    values = iter([snapshot(old_only=True), snapshot()])
+
+    async def read():
+        return next(values)
+
+    result = await probe.wait_for_reply(read, "chat", None, "new request", 1, .001,
+                                        submitted_user_id="new")
+    assert result["state"] == "reply_observed"
+    assert result["user_message_id"] == "new"
+    assert result["read_attempts"] == 2
+
+
+def test_identity_selectors_are_exclusive():
+    with pytest.raises(ValueError, match="exactly one"):
+        probe.matching_reply(snapshot(), "chat", None, "new request")
+    with pytest.raises(ValueError, match="exactly one"):
+        probe.matching_reply(snapshot(), "chat", "old", "new request", submitted_user_id="new")
