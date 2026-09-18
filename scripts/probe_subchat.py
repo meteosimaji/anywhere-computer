@@ -54,7 +54,9 @@ def matching_reply(
                 or part.get("text") != prompt or part.get("truncated") or answer.get("truncated")):
             continue
         user_id, answer_id, text = user.get("id"), answer.get("id"), answer.get("text")
-        if not all(isinstance(value, str) and value for value in (user_id, answer_id, text)):
+        if (not isinstance(user_id, str) or not user_id
+                or not isinstance(answer_id, str) or not answer_id
+                or not isinstance(text, str) or not text):
             continue
         if user_id != turn.get("id") or user_id == previous_user_id:
             continue
@@ -188,7 +190,7 @@ def main() -> None:
         parser.error("reply verification requires --read-thread")
     if not 1 <= args.wait_seconds <= 300:
         parser.error("--wait-seconds must be between 1 and 300")
-    prompt = args.expected_prompt_file.read_text() if args.expected_prompt_file else None
+    prompt = args.expected_prompt_file.read_text(encoding="utf-8") if args.expected_prompt_file else None
     result = asyncio.run(asyncio.wait_for(
         probe(args.server, args.read_thread, args.after_user_id, prompt, args.wait_seconds),
         timeout=30 + args.wait_seconds,
@@ -196,7 +198,9 @@ def main() -> None:
     print(json.dumps(result, ensure_ascii=False))
     if result["state"] != "catalog_received" or result.get("read_tool_error"):
         raise SystemExit(1)
-    if "reply" in result and result["reply"]["state"] != "reply_observed":
+    reply = result.get("reply")
+    if reply is not None and (not isinstance(reply, dict)
+                              or reply.get("state") != "reply_observed"):
         raise SystemExit(1)
 
 

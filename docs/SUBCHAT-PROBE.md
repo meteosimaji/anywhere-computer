@@ -106,3 +106,8 @@ Nine targeted tests cover endpoint context, the unlinked socket, old snapshots,
 wrong Chat/prompt/baseline, active or incomplete responses, duplicate matches,
 truncation, eventual freshness and bounded read timeout. They validate collector
 logic, not the complete external subchat connection.
+
+The matching function was also run against a fresh real `read_thread` response
+from the two-turn acceptance Chat. It selected the second user and answer IDs
+and matched the expected `B 43` text. This verifies real response compatibility;
+the separately launched MCP connection remains unverified.
