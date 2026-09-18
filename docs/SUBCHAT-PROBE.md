@@ -111,3 +111,8 @@ The matching function was also run against a fresh real `read_thread` response
 from the two-turn acceptance Chat. It selected the second user and answer IDs
 and matched the expected `B 43` text. This verifies real response compatibility;
 the separately launched MCP connection remains unverified.
+
+A further source check found `staleTime: ONE_MINUTE` on the installed Chat
+conversation query. The probe defaults to a 120-second deadline and a five-second
+read interval so the default deadline does not coincide with the nominal cache
+expiry. This is a version-specific observation, not a public timing guarantee.

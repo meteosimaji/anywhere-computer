@@ -66,7 +66,7 @@ def matching_reply(
 
 async def wait_for_reply(
     read: Callable[[], Awaitable[object]], thread_id: str, previous_user_id: str,
-    prompt: str, timeout: float, interval: float = 2,
+    prompt: str, timeout: float, interval: float = 5,
 ) -> dict[str, object]:
     if timeout <= 0 or interval <= 0:
         raise ValueError("timeout and interval must be positive")
@@ -101,7 +101,7 @@ def connection_state(environment: dict[str, str]) -> str:
 
 async def probe(
     server: Path, thread_id: str | None, previous_user_id: str | None = None,
-    expected_prompt: str | None = None, wait_seconds: float = 60,
+    expected_prompt: str | None = None, wait_seconds: float = 120,
 ) -> dict[str, object]:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
@@ -180,7 +180,7 @@ def main() -> None:
     parser.add_argument("--after-user-id", help="Known user-message ID before the tested send")
     parser.add_argument("--expected-prompt-file", type=Path,
                         help="UTF-8 file with the exact already-submitted test prompt")
-    parser.add_argument("--wait-seconds", type=float, default=60)
+    parser.add_argument("--wait-seconds", type=float, default=120)
     args = parser.parse_args()
     if not args.server.is_absolute() or not args.server.is_file():
         parser.error("--server must be an existing absolute file path")
