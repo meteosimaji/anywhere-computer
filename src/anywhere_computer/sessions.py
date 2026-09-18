@@ -13,6 +13,7 @@ from pathlib import Path
 import psutil
 from pydantic import JsonValue
 
+from .execution_environment import with_tool_path
 from .files import absolute_path
 from .models import SessionInput, SessionOutput, StartSession
 
@@ -79,6 +80,7 @@ class Sessions:
             shell, args.command, cwd=cwd,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT, start_new_session=os.name != "nt",
+            env=with_tool_path(os.environ),
         )
         session = Session(uuid.uuid4().hex, process, time.time())
         self.sessions[session.session_id] = session

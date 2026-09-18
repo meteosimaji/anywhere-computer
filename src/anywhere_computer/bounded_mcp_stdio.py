@@ -5,6 +5,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .execution_environment import with_tool_path
+
 if TYPE_CHECKING:
     from anyio.abc import ByteReceiveStream
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
@@ -73,7 +75,8 @@ async def bounded_stdio(
             lifecycle.cleanup_confirmed = False
         try:
             process = await _create_platform_compatible_process(
-                server.command, server.args, get_default_environment(), errors, server.cwd,
+                server.command, server.args, with_tool_path(get_default_environment()),
+                errors, server.cwd,
             )
         except OSError:
             # OS-level spawn rejection acquired no process to clean up. Do not

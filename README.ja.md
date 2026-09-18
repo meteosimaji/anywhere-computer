@@ -2,6 +2,10 @@
 
 [English](README.md) | 日本語
 
+開発ブランチは現在 `0.2.0a1` です。公開済み beta 1 の配布物とは異なります。
+[0.2〜1.0の方針](docs/PRODUCT-ROADMAP.md)と
+[CoS比較・適用する修正](docs/CHAT-ON-STEROIDS-REVIEW-2026-09-18.md)を参照してください。
+
 ChatGPT・CodexなどのMCPクライアントから、自分のPCのファイル・検索・文書・端末を扱うための、セルフホスト型の実行エージェントです。
 判断は接続したAIが行い、PC上のAnywhere Computerが操作を実行します。ファイルや端末の基本機能にCodexのモデル実行は必要ありません。
 

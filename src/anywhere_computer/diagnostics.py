@@ -1,5 +1,6 @@
 """Read-only connection diagnosis without starting, stopping or repairing an agent."""
 
+import os
 import shutil
 import sys
 from importlib.metadata import PackageNotFoundError, version
@@ -10,6 +11,7 @@ from pydantic import JsonValue
 
 from .connection import exchange, load_endpoint
 from .credentials import local_credential
+from .execution_environment import with_tool_path
 from .runtime_identity import runtime_identity
 
 
@@ -22,11 +24,17 @@ def runtime_environment() -> dict[str, JsonValue]:
     executables: dict[str, JsonValue] = {
         name: shutil.which(name) for name in ('node', 'uv', 'codex')
     }
+    child_path = next((value for key, value in with_tool_path(os.environ).items()
+                       if key.upper() == 'PATH'), '')
+    child_executables: dict[str, JsonValue] = {
+        name: shutil.which(name, path=child_path) for name in ('node', 'uv', 'codex')
+    }
     return {
         'scope': 'diagnostic_process',
         'python': sys.executable,
         'python_version': sys.version.split()[0],
         'executables_on_path': executables,
+        'executables_for_new_children': child_executables,
         'mcp_sdk_version': sdk_version,
         'direct_mcp_dependency': 'ready' if sdk_version == '1.30.0' else (
             'missing' if sdk_version is None else 'untested_version'),

@@ -338,7 +338,8 @@ class Engine:
 
         self.register(
             "skills_list", "Discover local skills without Codex from .agents/skills or explicit "
-            "collection roots. Returns directory names, IDs and SKILL.md hashes. Does not execute "
+            "collection roots. Optional query searches names and full SKILL.md before pagination; "
+            "keep it unchanged between pages. Returns names, IDs and hashes. Does not execute "
             "scripts. Pass the same location and returned hash to skills_read.",
             SkillsPage, common_skills_list, read_only=True,
         )

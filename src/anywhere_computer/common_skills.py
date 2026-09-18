@@ -33,6 +33,11 @@ class SkillLocation(Contract):
 class SkillsPage(SkillLocation):
     limit: int = Field(default=30, ge=1, le=100)
     after: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    query: str | None = Field(
+        default=None, min_length=1, max_length=500,
+        description="Case-insensitive literal search of directory names and full SKILL.md, "
+        "before pagination. Keep the same query and roots for subsequent pages.",
+    )
 
 
 class SkillResource(SkillLocation):
@@ -90,7 +95,9 @@ def _read(root: Path, path: Path) -> bytes:
     return data
 
 
-def _catalog(args: SkillLocation) -> tuple[list[dict[str, JsonValue]], int]:
+def _catalog(
+    args: SkillLocation, *, query: str | None = None,
+) -> tuple[list[dict[str, JsonValue]], int]:
     entries: list[dict[str, JsonValue]] = []
     seen: set[str] = set()
     errors = 0
@@ -108,11 +115,15 @@ def _catalog(args: SkillLocation) -> tuple[list[dict[str, JsonValue]], int]:
                     if not directory.is_dir() or not (directory / "SKILL.md").exists():
                         continue
                     body = _read(directory, directory / "SKILL.md")
-                    body.decode("utf-8")
+                    text = body.decode("utf-8")
                     identity = hashlib.sha256(str(directory).encode("utf-8")).hexdigest()
                     if identity in seen:
                         continue
                     seen.add(identity)
+                    if query is not None and query.casefold() not in (
+                        child.name + "\n" + text
+                    ).casefold():
+                        continue
                     entries.append({
                         "skill_id": identity, "name": child.name,
                         "skill_directory": str(directory),
@@ -125,7 +136,7 @@ def _catalog(args: SkillLocation) -> tuple[list[dict[str, JsonValue]], int]:
 
 
 def list_skills(args: SkillsPage) -> dict[str, JsonValue]:
-    entries, errors = _catalog(args)
+    entries, errors = _catalog(args, query=args.query)
     remaining = [row for row in entries if args.after is None or str(row["skill_id"]) > args.after]
     page = remaining[:args.limit]
     return {"skills": [row for row in page], "catalog_errors": errors,

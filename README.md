@@ -14,6 +14,11 @@ Skills and MCP/device-routing capabilities. It is a prerelease, not a stable rel
 See the [beta scope and acceptance](docs/BETA1.md) for supported workflows,
 experimental adapters and verification status.
 
+The development branch targets `0.2.0a1`; it is not the published beta 1 archive.
+See the [0.2–1.0 roadmap](docs/PRODUCT-ROADMAP.md),
+[CoS reliability review](docs/CHAT-ON-STEROIDS-REVIEW-2026-09-18.md), and
+[resident tool discovery](docs/EXECUTION-ENVIRONMENT.md).
+
 ## Get started
 
 Use the OS-specific portable ZIP from the release for a bundled Python runtime.
