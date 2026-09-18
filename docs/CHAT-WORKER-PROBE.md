@@ -78,3 +78,27 @@ Chat -> Anywhere -> Codex app -> Worker path. The external MCP endpoint remains
 missing in the current executor environment. The two socket-preflight tests
 exercise absent caller context and an unlinked-but-open Unix socket; they are not
 Worker end-to-end acceptance tests.
+
+### Follow-up recovery and bounded waiting
+
+A later Codex read recovered the second turn with a new user-message ID and
+assistant-message ID. The user independently confirmed both turns in the mobile
+ChatGPT app. The installed reader uses a cache-aware `getOrFetch`, while send's
+preflight uses explicit `refetch`. This supports delayed read visibility; it does
+not prove the exact cache expiry or notification responsible for the delay.
+
+The probe now accepts `--after-user-id`, `--expected-prompt-file`, and
+`--wait-seconds` (1–300) with `--read-thread`. These only read an already-submitted
+prompt. They never send or resend it. The collector requires the selected Chat,
+a visible baseline turn, exactly one subsequent matching prompt, a distinct
+answer ID, an idle thread, completed turn and untruncated text. Ambiguous,
+truncated, active, missing-baseline or stale snapshots remain unconfirmed. The
+current prototype deliberately does not accept multi-item/tool-bearing turns;
+that broader contract remains unimplemented. Prompt file contents are compared
+exactly, including trailing newlines. Output contains IDs and character counts,
+not the response text. A timeout exits nonzero with `reply_unconfirmed`.
+
+Nine targeted tests cover endpoint context, the unlinked socket, old snapshots,
+wrong Chat/prompt/baseline, active or incomplete responses, duplicate matches,
+truncation, eventual freshness and bounded read timeout. They validate collector
+logic, not the complete external Worker connection.

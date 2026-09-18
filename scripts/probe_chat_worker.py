@@ -10,7 +10,75 @@ import asyncio
 import json
 import os
 import stat
+from collections.abc import Awaitable, Callable
 from pathlib import Path
+
+
+def matching_reply(
+    snapshot: object, thread_id: str, previous_user_id: str, prompt: str,
+) -> dict[str, str] | None:
+    """Match a new turn after a known baseline, never an idle cached result."""
+    if not isinstance(snapshot, dict):
+        return None
+    thread = snapshot.get("thread")
+    if not isinstance(thread, dict) or thread.get("id") != thread_id:
+        return None
+    if thread.get("kind") != "chatgpt" or thread.get("status") != {"type": "idle"}:
+        return None
+    turns = snapshot.get("turns")
+    if not isinstance(turns, list):
+        return None
+    # read_thread returns newest first. An absent baseline may mean pagination
+    # or stale data; neither is evidence that a matching turn is new.
+    baseline = next((i for i, turn in enumerate(turns)
+                     if isinstance(turn, dict) and turn.get("id") == previous_user_id), None)
+    if baseline is None:
+        return None
+    matches: list[dict[str, str]] = []
+    for turn in turns[:baseline]:
+        if not isinstance(turn, dict) or turn.get("status") != "completed" or turn.get("error"):
+            continue
+        items = turn.get("items")
+        if not isinstance(items, list) or len(items) != 2:
+            continue
+        user, answer = items
+        if not isinstance(user, dict) or not isinstance(answer, dict):
+            continue
+        if user.get("type") != "userMessage" or answer.get("type") != "agentMessage":
+            continue
+        content = user.get("content")
+        if not isinstance(content, list) or len(content) != 1:
+            continue
+        part = content[0]
+        if (not isinstance(part, dict) or part.get("type") != "text"
+                or part.get("text") != prompt or part.get("truncated") or answer.get("truncated")):
+            continue
+        user_id, answer_id, text = user.get("id"), answer.get("id"), answer.get("text")
+        if not all(isinstance(value, str) and value for value in (user_id, answer_id, text)):
+            continue
+        if user_id != turn.get("id") or user_id == previous_user_id:
+            continue
+        matches.append({"user_message_id": user_id, "answer_message_id": answer_id, "text": text})
+    return matches[0] if len(matches) == 1 else None
+
+
+async def wait_for_reply(
+    read: Callable[[], Awaitable[object]], thread_id: str, previous_user_id: str,
+    prompt: str, timeout: float, interval: float = 2,
+) -> dict[str, object]:
+    if timeout <= 0 or interval <= 0:
+        raise ValueError("timeout and interval must be positive")
+    attempts = 0
+    try:
+        async with asyncio.timeout(timeout):
+            while True:
+                attempts += 1
+                reply = matching_reply(await read(), thread_id, previous_user_id, prompt)
+                if reply is not None:
+                    return {"state": "reply_observed", "read_attempts": attempts, **reply}
+                await asyncio.sleep(interval)
+    except TimeoutError:
+        return {"state": "reply_unconfirmed", "read_attempts": attempts, "resend": False}
 
 
 def connection_state(environment: dict[str, str]) -> str:
@@ -29,7 +97,10 @@ def connection_state(environment: dict[str, str]) -> str:
     return "ready_to_probe"
 
 
-async def probe(server: Path, thread_id: str | None) -> dict[str, object]:
+async def probe(
+    server: Path, thread_id: str | None, previous_user_id: str | None = None,
+    expected_prompt: str | None = None, wait_seconds: float = 60,
+) -> dict[str, object]:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
@@ -75,6 +146,27 @@ async def probe(server: Path, thread_id: str | None) -> dict[str, object]:
                 # Do not print private conversation text as probe diagnostics.
                 result["read_tool_error"] = bool(response.isError)
                 result["read_content_blocks"] = len(response.content)
+                if previous_user_id is not None and expected_prompt is not None:
+                    async def read() -> object:
+                        response = await session.call_tool(
+                            "read_thread",
+                            {"threadId": thread_id, "turnLimit": 10,
+                             "maxOutputCharsPerItem": 20000},
+                            meta={"codexThreadId": os.environ["CODEX_THREAD_ID"]},
+                        )
+                        if response.isError:
+                            raise RuntimeError("Chat read tool returned an error")
+                        if len(response.content) != 1 or response.content[0].type != "text":
+                            raise RuntimeError("Unexpected Chat read result shape")
+                        return json.loads(response.content[0].text)
+
+                    receipt = await wait_for_reply(
+                        read, thread_id, previous_user_id, expected_prompt, wait_seconds,
+                    )
+                    answer = receipt.pop("text", None)
+                    if isinstance(answer, str):
+                        receipt["answer_characters"] = len(answer)
+                    result["reply"] = receipt
             return result
 
 
@@ -83,12 +175,28 @@ def main() -> None:
     parser.add_argument("--server", required=True, type=Path,
                         help="Installed codex-app-tools server.mjs absolute path")
     parser.add_argument("--read-thread", help="Explicitly selected test conversation ID")
+    parser.add_argument("--after-user-id", help="Known user-message ID before the tested send")
+    parser.add_argument("--expected-prompt-file", type=Path,
+                        help="UTF-8 file with the exact already-submitted test prompt")
+    parser.add_argument("--wait-seconds", type=float, default=60)
     args = parser.parse_args()
     if not args.server.is_absolute() or not args.server.is_file():
         parser.error("--server must be an existing absolute file path")
-    result = asyncio.run(asyncio.wait_for(probe(args.server, args.read_thread), timeout=30))
+    if bool(args.after_user_id) != bool(args.expected_prompt_file):
+        parser.error("--after-user-id and --expected-prompt-file must be provided together")
+    if args.after_user_id and not args.read_thread:
+        parser.error("reply verification requires --read-thread")
+    if not 1 <= args.wait_seconds <= 300:
+        parser.error("--wait-seconds must be between 1 and 300")
+    prompt = args.expected_prompt_file.read_text() if args.expected_prompt_file else None
+    result = asyncio.run(asyncio.wait_for(
+        probe(args.server, args.read_thread, args.after_user_id, prompt, args.wait_seconds),
+        timeout=30 + args.wait_seconds,
+    ))
     print(json.dumps(result, ensure_ascii=False))
     if result["state"] != "catalog_received" or result.get("read_tool_error"):
+        raise SystemExit(1)
+    if "reply" in result and result["reply"]["state"] != "reply_observed":
         raise SystemExit(1)
 
 
