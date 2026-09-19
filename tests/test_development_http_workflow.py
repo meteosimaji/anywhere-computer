@@ -57,7 +57,7 @@ async def test_chat_creates_runs_code_and_recovers_after_engine_restart(tmp_path
         "from pathlib import Path\n"
         "values = [1200, 980, 800, 520]\n"
         "print(sum(values), flush=True)\n"
-        "with Path('runs.txt').open('a', encoding='utf-8') as record:\n"
+        "with Path('runs.txt').open('a', encoding='utf-8', newline='') as record:\n"
         "    record.write('executed\\n')\n"
     )
     command = python_command(f"import runpy; runpy.run_path({str(path)!r}, run_name='__main__')")

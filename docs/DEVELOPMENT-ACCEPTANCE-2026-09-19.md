@@ -91,3 +91,12 @@ skips. Ruff passed for src/tests/scripts and mypy passed for 98 source files.
 The original ordinary Chat subsequently performed only status and receipt lookup,
 and independently reported the new instance ID and the same saved stdout/exit code.
 It did not create another terminal or rerun the source for this recovery check.
+
+## Windows CI correction
+
+The first Windows run reached the final duplicate-execution check but failed
+because the fixture's text-mode append translated LF to CRLF. It reported
+1,280 passed, 32 skipped and this one failure. The generated script now explicitly
+disables newline translation for its execution marker; the exact one-marker
+assertion and the real HTTP/file/subprocess/restart workflow are unchanged.
+The corrected test passed locally; Windows confirmation requires the new CI run.
