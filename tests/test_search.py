@@ -316,3 +316,36 @@ async def test_word_table_search_roundtrips_location_across_document_pages(tmp_p
     assert reread["entries"] == [location]
     assert reread["sha256"] == match["source_sha256"] == hashlib.sha256(before).hexdigest()
     assert path.read_bytes() == before
+
+
+def test_literal_worker_stops_collecting_at_byte_budget(tmp_path, monkeypatch):
+    import anywhere_computer.search as module
+
+    monkeypatch.setattr(module, "SEARCH_OUTPUT_LIMIT", 500)
+    path = tmp_path / "matches.txt"
+    path.write_text(("hit" + "x" * 200 + "\n") * 1000)
+    batch = Searches._file_matches(path, "hit", False, 1000, False, threading.Event())
+    # One fitting row and one overflow row suffice to report truncation; the
+    # worker must not materialize the remaining 998 rows before the outer cap.
+    assert len(batch) == 2
+
+
+def test_literal_worker_uses_remaining_budget_including_unicode_context(tmp_path):
+    import json
+
+    path = tmp_path / "unicode.txt"
+    path.write_text("hit 日本語\nhit 日本語\nhit 日本語\n", encoding="utf-8")
+    all_rows = Searches._file_matches(
+        path, "hit", False, 100, False, threading.Event(), context_lines=1,
+    )
+    first_size = len(json.dumps(all_rows[0], ensure_ascii=False).encode("utf-8"))
+    batch = Searches._file_matches(
+        path, "hit", False, 100, False, threading.Event(),
+        context_lines=1, byte_budget=first_size,
+    )
+    assert batch == all_rows[:2]
+    exhausted = Searches._file_matches(
+        path, "hit", False, 100, False, threading.Event(),
+        context_lines=1, byte_budget=0,
+    )
+    assert exhausted == all_rows[:1]
