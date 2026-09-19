@@ -68,3 +68,95 @@ a background adapter or an Anywhere catalog API. Some unselected menu content
 also contains generic locked-access text, so mere DOM presence must not be taken
 as a reliable per-choice availability signal. Successful selection is stronger
 UI evidence, but still does not promise a successful subsequent generation.
+
+
+## Visible-menu extractor prototype
+
+`scripts/subchat_model_menu.js` provides a read-only function for an already
+opened model menu. It extracts displayed labels, separate notices, checked state
+and explicit DOM disabled state. These are not provider IDs or quota guarantees.
+The active menu must be unique; hidden/inert model panels are excluded. Missing,
+changed or ambiguous markup returns a non-success state rather than an empty
+successful catalog. This distinction matters because the live simple picker
+retains its model rows inside an inert, aria-hidden panel.
+
+A live expanded Chrome menu produced three labels and separated the retirement
+notice from its model label without version-name matching. No model selection or
+message submission was performed. The extractor is experimental, not registered
+as a production MCP tool. It does not yet enumerate effort labels, open menus,
+manage login, cache catalogs or create subchats.
+
+The optional real-DOM test uses local HTML in headless Chrome, with arbitrary
+future model names, Japanese notices, hidden/inert panels, duplicate labels,
+multiple checked rows and changed markup. Run with the browser extra installed:
+`uv run --extra browser pytest -q tests/test_subchat_model_menu.py`.
+It skips when the optional Playwright dependency or Chrome is absent; such a skip
+is not browser acceptance. On the development Mac, this test and the subchat
+collector tests passed (28 tests, no skips).
+
+
+The same prototype now includes `observeSubchatEffort(document)`. It reads the
+unique visible keyboard control's minimum, maximum, current integer position and
+its associated status description. The current UI's hidden thumb is only read
+inside that visible control. Missing descriptions, non-integer/out-of-range
+positions and hidden controls return non-success states. Values and descriptions
+are observations, not canonical API effort IDs. A live menu reported 0..4/current
+1 with a medium description; DOM tests instead use seven positions and an
+arbitrary label to prevent a fixed five-level assumption. This remains current
+position observation, not full traversal or verified restoration of settings.
+
+
+`scripts/subchat_efforts.py` adds bounded traversal using supplied DOM-read and
+keyboard-step callbacks for an owned empty Chat's already open control. It
+confirms every adjacent step, collects descriptions at each position, and verifies
+return to the original position and description before reporting success. A
+changed range, missing key effect, transport failure or changed restored description
+cannot return a complete catalog. At most 32 positions are supported by this probe.
+It does not reconnect/reopen or resubmit a prompt after failure.
+
+Tests cover dropped keys, response loss, range changes and description changes.
+A real headless Chrome fixture connects the DOM extractor and keyboard callbacks,
+collects seven positions and verifies restoration. This is browser-fixture
+acceptance, not live ChatGPT traversal through the standalone adapter. Page
+ownership, empty-composer checks and login remain caller prerequisites and are
+not implemented by this helper. No production tool is registered yet.
+
+
+## Dedicated browser probe entry point
+
+`probe_subchat_catalog.py` connects these parts to Playwright. It creates a new
+page in a dedicated profile, requires an empty root ordinary Chat with Chat
+selected, opens the picker and reads the model rows. It collects efforts only for
+the currently selected model, verifies restoration and unchanged model rows, and
+confirms picker closure. Existing drafts fail the preflight without edits.
+
+```sh
+uv run --extra browser python scripts/probe_subchat_catalog.py --profile /absolute/dedicated/profile
+```
+
+Use only a dedicated authorized profile after closing its other browser process;
+the probe owns and closes its browser context. Do not use the normal Chrome
+profile. The optional `--headed` flag makes this probe visible. Login is not
+performed automatically. Browser/connection errors return `probe_unconfirmed`,
+without raw peer text, and no prompt is submitted. This entry point has been
+verified against a locally served browser fixture (including a preserved draft),
+not authenticated live ChatGPT. An account login is still needed for that gate.
+The reported efforts are explicitly for the selected model only, not every model.
+
+
+## Standalone failure-path acceptance, 2026-09-20 JST
+
+The actual CLI was run with disposable unauthenticated profiles against ChatGPT.
+It did not report catalog success, submitted no message, and left no processes
+referencing the test profile after exit. Initial output was an unconfirmed timeout.
+A focused recheck found an HTTP 403 and a waiting-page title; this does not prove
+why the service rejected that request. No challenge bypass was attempted.
+
+The probe now returns `page_unavailable` with the observed HTTP status before
+waiting for model controls on a failed navigation. Repeating the corrected CLI
+produced `page_unavailable`, status 403, submitted false, and no surviving profile
+processes. Visible Japanese/English Login buttons yield `login_required` (verified
+with browser fixtures). Other unmatched UI still fails as unconfirmed; no universal
+locale or headless compatibility claim is made. This failure-path acceptance does
+not establish authenticated catalog extraction. The separate headed login profile
+was left untouched for the user's pending login.
