@@ -1,9 +1,11 @@
 # 更新と接続の引き継ぎ
 
-公開版はPython `0.1.0a9` / Codex Plugin `0.1.0-alpha.9`。
+2026-09-19時点の公開版はPython `0.1.0b1` / Codex Plugin `0.1.0-beta.1`です。
+[Beta 1の配布物](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0b1)は
+プレリリースです。mainの `0.2.0a1` / `0.2.0-alpha.1` は開発版で、公開betaとは異なります。
 正式stableリリースと一般向け自動更新の受け入れは未完了です。
 
-## 公開alphaを手動で更新する
+## 公開beta／alphaを手動で更新する
 
 更新したい版を取得し、現在の状態保存先を引き継ぎます。実行フォルダーと、
 資格情報・設定・操作履歴の保存先は別です。新しい空の状態保存先を指定すると、
@@ -74,7 +76,7 @@ instance IDが異なるのが正常です。同じalpha版の修正でもruntime
 
 ## stable向け更新コマンド
 
-以下はalpha9に含まれます。alpha版は自動適用せず、正式stable候補だけを対象にします。
+以下は公開beta 1にも含まれます。alpha／betaのプレリリースは対象にせず、正式stable候補だけを対象にします。
 
 ```sh
 uv run --locked anywhere update --state-dir <ローカル状態保存先> --verifier <ghの絶対パス>
@@ -126,9 +128,9 @@ uv run --locked anywhere autostart-start --state-dir <既存のHTTP設定保存�
 です。前二者は確認済みですが、正式stableによる一連の更新成功はまだ確認していません。
 
 
-### Development CLI: verifier discovery
+### Beta 1 and development CLI: verifier discovery
 
-Development builds allow `anywhere update` to find an installed GitHub CLI (`gh`)
+Beta 1 and development builds allow `anywhere update` to find an installed GitHub CLI (`gh`)
 on the current PATH. `--verifier` still takes precedence and must be absolute.
 An unavailable verifier stops before an update begins; nothing is downloaded or
 installed to satisfy this prerequisite automatically. The existing provenance
