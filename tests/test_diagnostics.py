@@ -109,3 +109,27 @@ def test_missing_sdk_diagnosis_has_action_without_loading_sdk(monkeypatch):
     report = diagnostics.runtime_environment()
     assert report['direct_mcp_dependency'] == 'missing'
     assert '--extra mcp' in report['direct_mcp_action']
+
+
+def test_codex_diagnosis_uses_actual_override_without_executing(tmp_path, monkeypatch):
+    from anywhere_computer.diagnostics import runtime_environment
+
+    executable = tmp_path / 'selected-codex'
+    executable.write_text('not executable: diagnosis must not launch it')
+    monkeypatch.setenv('ANYWHERE_CODEX_EXECUTABLE', str(executable))
+    result = runtime_environment()['codex_selection']
+    assert result == {'source': 'explicit_override', 'state': 'resolved',
+                      'path': str(executable.resolve()), 'execution_verified': False}
+
+
+@pytest.mark.parametrize('override', ['relative-private-value', '/absent/codex'])
+def test_bad_codex_override_is_not_replaced_by_path_lookup(monkeypatch, override):
+    from anywhere_computer.diagnostics import runtime_environment
+
+    monkeypatch.setenv('ANYWHERE_CODEX_EXECUTABLE', override)
+    result = runtime_environment()['codex_selection']
+    assert result['source'] == 'explicit_override'
+    assert result['state'] == 'unresolved'
+    assert result['path'] is None
+    assert result['execution_verified'] is False
+    assert override not in json.dumps(result)

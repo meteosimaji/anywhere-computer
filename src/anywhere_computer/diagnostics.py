@@ -9,6 +9,7 @@ from pathlib import Path
 import psutil
 from pydantic import JsonValue
 
+from .codex_context import _executable
 from .connection import exchange, load_endpoint
 from .credentials import local_credential
 from .execution_environment import with_tool_path
@@ -29,12 +30,23 @@ def runtime_environment() -> dict[str, JsonValue]:
     child_executables: dict[str, JsonValue] = {
         name: shutil.which(name, path=child_path) for name in ('node', 'uv', 'codex')
     }
+    codex_selection: dict[str, JsonValue] = {
+        'source': 'explicit_override' if os.environ.get('ANYWHERE_CODEX_EXECUTABLE') else 'path',
+        'state': 'unresolved', 'path': None, 'execution_verified': False,
+    }
+    try:
+        codex_selection.update(state='resolved', path=str(_executable(None)))
+    except (OSError, ValueError):
+        # Use the same selection contract as execution, without launching Codex
+        # or printing a malformed override/exception containing private values.
+        pass
     return {
         'scope': 'diagnostic_process',
         'python': sys.executable,
         'python_version': sys.version.split()[0],
         'executables_on_path': executables,
         'executables_for_new_children': child_executables,
+        'codex_selection': codex_selection,
         'mcp_sdk_version': sdk_version,
         'direct_mcp_dependency': 'ready' if sdk_version == '1.30.0' else (
             'missing' if sdk_version is None else 'untested_version'),
