@@ -241,6 +241,20 @@ async def probe(
                 "diagnostic": diagnostic}
 
 
+
+async def bounded_probe(
+    run: Callable[[], Awaitable[dict[str, object]]], timeout: float,
+) -> dict[str, object]:
+    """Bound the whole read-only probe, including startup and cleanup."""
+    try:
+        async with asyncio.timeout(timeout):
+            return await run()
+    except TimeoutError:
+        return {"state": "probe_timeout", "inference_requested": False,
+                "send_tested": False, "ordinary_chat_creation_tested": False,
+                "resend": False}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--server", required=True, type=Path,
@@ -263,8 +277,8 @@ def main() -> None:
         parser.error("--wait-seconds must be between 1 and 300")
     prompt = (args.expected_prompt_file.read_text(encoding="utf-8")
               if args.expected_prompt_file else None)
-    result = asyncio.run(asyncio.wait_for(
-        probe(args.server, args.read_thread, args.after_user_id, prompt, args.wait_seconds,
+    result = asyncio.run(bounded_probe(
+        lambda: probe(args.server, args.read_thread, args.after_user_id, prompt, args.wait_seconds,
               submitted_user_id=args.user_message_id),
         timeout=30 + args.wait_seconds,
     ))
