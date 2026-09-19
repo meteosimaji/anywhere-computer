@@ -144,6 +144,7 @@ async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
             await page.route("https://chatgpt.com/", lambda route: route.fulfill(
                 status=200, content_type="text/html", body=html))
             await page.goto("https://chatgpt.com/")
+            assert await catalog.picker_ready(page) is True
             result = await catalog.collect_page(page)
             assert result["state"] == "catalog_observed"
             assert result["submitted"] is False
@@ -152,5 +153,9 @@ async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
             await page.get_by_role("textbox").fill("Keep this draft")
             assert await catalog.collect_page(page) == {"state": "empty_chat_unconfirmed"}
             assert await page.get_by_role("textbox").inner_text() == "Keep this draft"
+            await page.set_content('<button>ログイン</button>')
+            assert await catalog.picker_ready(page) is False
+            await page.set_content('<button>Log in</button>')
+            assert await catalog.picker_ready(page) is False
         finally:
             await browser.close()

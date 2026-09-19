@@ -142,3 +142,21 @@ without raw peer text, and no prompt is submitted. This entry point has been
 verified against a locally served browser fixture (including a preserved draft),
 not authenticated live ChatGPT. An account login is still needed for that gate.
 The reported efforts are explicitly for the selected model only, not every model.
+
+
+## Standalone failure-path acceptance, 2026-09-20 JST
+
+The actual CLI was run with disposable unauthenticated profiles against ChatGPT.
+It did not report catalog success, submitted no message, and left no processes
+referencing the test profile after exit. Initial output was an unconfirmed timeout.
+A focused recheck found an HTTP 403 and a waiting-page title; this does not prove
+why the service rejected that request. No challenge bypass was attempted.
+
+The probe now returns `page_unavailable` with the observed HTTP status before
+waiting for model controls on a failed navigation. Repeating the corrected CLI
+produced `page_unavailable`, status 403, submitted false, and no surviving profile
+processes. Visible Japanese/English Login buttons yield `login_required` (verified
+with browser fixtures). Other unmatched UI still fails as unconfirmed; no universal
+locale or headless compatibility claim is made. This failure-path acceptance does
+not establish authenticated catalog extraction. The separate headed login profile
+was left untouched for the user's pending login.

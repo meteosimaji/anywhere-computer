@@ -6,6 +6,7 @@ Do not point this at the user's normal browser profile.
 import argparse
 import asyncio
 import json
+import re
 from pathlib import Path
 
 from playwright.async_api import Error, Page, async_playwright
@@ -73,6 +74,16 @@ async def collect_page(page: Page) -> dict[str, object]:
             raise ConnectionError("picker closure was not confirmed")
 
 
+async def picker_ready(page: Page) -> bool:
+    trigger = page.locator(TRIGGER)
+    login = page.get_by_role("button", name=re.compile(r"^(ログイン|Log in)$"))
+    await trigger.or_(login).filter(visible=True).first.wait_for(state="visible")
+    if await login.filter(visible=True).count():
+        return False
+    await trigger.wait_for(state="visible")
+    return True
+
+
 async def probe(profile: Path, headed: bool) -> dict[str, object]:
     async with async_playwright() as driver:
         context = await driver.chromium.launch_persistent_context(
@@ -80,8 +91,12 @@ async def probe(profile: Path, headed: bool) -> dict[str, object]:
         try:
             page = await context.new_page()
             page.set_default_timeout(10_000)
-            await page.goto("https://chatgpt.com/", wait_until="domcontentloaded")
-            await page.locator(TRIGGER).wait_for(state="visible")
+            response = await page.goto("https://chatgpt.com/", wait_until="domcontentloaded")
+            if response is None or not response.ok:
+                return {"state": "page_unavailable",
+                        "http_status": response.status if response else None, "submitted": False}
+            if not await picker_ready(page):
+                return {"state": "login_required", "submitted": False}
             return await collect_page(page)
         finally:
             await context.close()
