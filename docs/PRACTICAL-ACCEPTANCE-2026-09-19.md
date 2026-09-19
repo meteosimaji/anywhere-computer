@@ -41,3 +41,26 @@ cello-suite prelude. The visible player showed a pause control, unmuted audio,
 and elapsed time advancing from 0 to 2 seconds. Speaker output was not measured.
 The tab was retained for the user. This was a Codex browser-tool trial, not an
 Anywhere browser-provider acceptance. Those routes must not be conflated.
+
+## Fresh ordinary Chat, AC_ACCEPT_20260919_C
+
+A fresh ordinary Chat was submitted in Chrome with GPT-5.6 Sol / medium selected
+in the actual picker. The response was allowed to finish without stop, reload or
+repeat submission. The browser reported completion, and Codex's `read_thread`
+subsequently returned the same completed response with distinct user/answer IDs.
+The returned thread kind was `chatgpt`, status `idle`, and turn status `completed`.
+The response text reported engine `0.1.0b1`, matching the separately observed
+local runtime ID. It reported successful temporary Python-file creation,
+execution returning `3500`, and exit code 0. The actual temporary source was
+independently read and contained `sum([1200, 980, 800, 520])` expressed through a
+`values` variable. This independent read verifies the artifact, not every execution
+claim in the assistant's prose; the app reader does not expose the underlying
+MCP call receipts in this response shape.
+
+The Chat reported one initial request-ID schema rejection and recovery with a
+valid ID before execution. This is a usability observation, not grounds to remove
+operation identity or replay an operation with uncertain effects. The installed
+engine was beta 1, not the new development commits. This trial establishes normal
+Chat completion plus owning-app result retrieval; it does not establish external
+subchat transport, Windows GUI or dynamic model-catalog support. Private account
+and conversation identifiers are omitted from this public record.
