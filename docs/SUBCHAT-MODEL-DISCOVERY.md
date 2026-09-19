@@ -104,3 +104,19 @@ are observations, not canonical API effort IDs. A live menu reported 0..4/curren
 1 with a medium description; DOM tests instead use seven positions and an
 arbitrary label to prevent a fixed five-level assumption. This remains current
 position observation, not full traversal or verified restoration of settings.
+
+
+`scripts/subchat_efforts.py` adds bounded traversal using supplied DOM-read and
+keyboard-step callbacks for an owned empty Chat's already open control. It
+confirms every adjacent step, collects descriptions at each position, and verifies
+return to the original position and description before reporting success. A
+changed range, missing key effect, transport failure or changed restored description
+cannot return a complete catalog. At most 32 positions are supported by this probe.
+It does not reconnect/reopen or resubmit a prompt after failure.
+
+Tests cover dropped keys, response loss, range changes and description changes.
+A real headless Chrome fixture connects the DOM extractor and keyboard callbacks,
+collects seven positions and verifies restoration. This is browser-fixture
+acceptance, not live ChatGPT traversal through the standalone adapter. Page
+ownership, empty-composer checks and login remain caller prerequisites and are
+not implemented by this helper. No production tool is registered yet.

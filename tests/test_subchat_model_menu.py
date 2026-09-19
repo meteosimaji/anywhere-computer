@@ -1,4 +1,5 @@
 """Real DOM checks; optional browser dependency, no account or network needed."""
+import importlib.util
 from pathlib import Path
 
 import pytest
@@ -64,5 +65,36 @@ async def test_model_menu_visibility_and_identity() -> None:
                                                 'data-reasoning-slider="true" inert'),
                                  "observeSubchatEffort") == {
                 "state": "effort_control_unconfirmed"}
+            spec = importlib.util.spec_from_file_location(
+                "effort_collector", Path(__file__).parents[1] / "scripts/subchat_efforts.py")
+            assert spec and spec.loader
+            collector = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(collector)
+            await page.set_content(effort.replace('data-reasoning-slider="true"',
+                                                  'data-reasoning-slider="true" tabindex="0"'))
+            await page.evaluate('''() => {
+              const control = document.querySelector('[data-reasoning-slider]');
+              control.addEventListener('keydown', event => {
+                const thumb = control.querySelector('[role="slider"]');
+                const index = Number(thumb.getAttribute('aria-valuenow'));
+                const delta = event.key === 'ArrowRight' ? 1 : -1;
+                const next = Math.max(0, Math.min(6, index + delta));
+                thumb.setAttribute('aria-valuenow', String(next));
+                document.getElementById('level').textContent =
+                  next === 3 ? '新しい強度、7件中4番目' : 'Choice ' + next;
+              });
+            }''')
+
+            async def read_effort():
+                return await page.evaluate(source + "\nobserveSubchatEffort(document)")
+
+            async def step_effort(key):
+                await page.locator('[data-reasoning-slider="true"]').press(key)
+
+            collected = await collector.collect_efforts(read_effort, step_effort)
+            assert collected["state"] == "efforts_observed"
+            assert len(collected["positions"]) == 7
+            assert collected["restored"] is True
+            assert (await read_effort())["index"] == 3
         finally:
             await browser.close()
