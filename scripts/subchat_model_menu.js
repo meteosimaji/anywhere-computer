@@ -3,7 +3,7 @@
  */
 function subchatMenuElementVisible(document, element) {
   return !element.closest('[hidden], [inert], [aria-hidden="true"]')
-    && element.getClientRects().length > 0
+    && Array.from(element.getClientRects()).some(rect => rect.width > 0 && rect.height > 0)
     && document.defaultView.getComputedStyle(element).visibility === 'visible';
 }
 

@@ -6,7 +6,7 @@ import pytest
 
 
 @pytest.mark.asyncio
-async def test_model_menu_visibility_and_identity() -> None:
+async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
     playwright = pytest.importorskip("playwright.async_api")
     source = (Path(__file__).parents[1] / "scripts/subchat_model_menu.js").read_text()
     async with playwright.async_playwright() as driver:
@@ -18,6 +18,7 @@ async def test_model_menu_visibility_and_identity() -> None:
             raise
         try:
             page = await browser.new_page()
+            page.set_default_timeout(2000)
             async def observe(html: str, function: str = "observeSubchatModelMenu") -> object:
                 await page.set_content(html)
                 return await page.evaluate(source + f"\n{function}(document)")
@@ -32,6 +33,9 @@ async def test_model_menu_visibility_and_identity() -> None:
             hidden_menu = '<div role="menu" style="visibility:hidden">' + rows + '</div>'
             assert await observe(hidden_menu) == {
                 "state": "menu_unconfirmed"}
+            zero_menu = ('<div role="menu" style="width:0;height:0;overflow:hidden">'
+                         + rows + '</div>')
+            assert await observe(zero_menu) == {"state": "menu_unconfirmed"}
             result = await observe('<div role="menu">' + rows + '</div>')
             assert result == {"state": "models_observed", "models": [
                 {"label": "Future model", "notices": [], "selected": True, "disabled": False},
@@ -48,7 +52,7 @@ async def test_model_menu_visibility_and_identity() -> None:
                     "state": "unsupported_menu"}
             effort = '''<div role="menu">
               <span role="status" id="level">新しい強度、7件中4番目</span>
-              <div data-reasoning-slider="true" aria-describedby="level">
+              <div style="height:20px" data-reasoning-slider="true" aria-describedby="level">
                 <span role="slider" aria-hidden="true" aria-valuemin="0"
                   aria-valuemax="6" aria-valuenow="3"></span></div></div>'''
             assert await observe(effort, "observeSubchatEffort") == {
@@ -96,5 +100,57 @@ async def test_model_menu_visibility_and_identity() -> None:
             assert len(collected["positions"]) == 7
             assert collected["restored"] is True
             assert (await read_effort())["index"] == 3
+            monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "scripts"))
+            import probe_subchat_catalog as catalog
+            html = '''<button aria-pressed="true">Chat</button>
+              <div role="textbox" contenteditable="true" data-composer-markdown></div>
+              <button data-composer-navigation-target="reasoning"
+                aria-expanded="false">Picker</button>
+              <div role="menu" tabindex="-1" hidden>
+                <button data-model-picker-view-toggle="true">Models</button>
+                <div id="models" inert><div role="menuitemradio" aria-checked="true">
+                  <span>Future model</span></div></div>
+                <span role="status" id="level">Choice 3</span>
+                <div style="height:20px" data-reasoning-slider="true"
+                  aria-describedby="level" tabindex="0">
+                  <span role="slider" aria-valuemin="0" aria-valuemax="6" aria-valuenow="3"
+                    aria-hidden="true"></span></div></div>
+              <script>
+                const menu = document.querySelector('[role=menu]');
+                const trigger = document.querySelector('[data-composer-navigation-target]');
+                const control = document.querySelector('[data-reasoning-slider]');
+                const models = document.getElementById('models');
+                trigger.onclick = () => {
+                  menu.hidden = false; trigger.setAttribute('aria-expanded', 'true');
+                  models.inert = true; control.inert = false;
+                };
+                document.querySelector('[data-model-picker-view-toggle]').onclick = () => {
+                  models.inert = false; control.inert = true;
+                };
+                menu.onkeydown = event => {
+                  if (event.key === 'Escape') {
+                    menu.hidden = true; trigger.setAttribute('aria-expanded', 'false');
+                  }
+                };
+                control.onkeydown = event => {
+                  if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+                  const thumb = control.querySelector('[role=slider]');
+                  const next = Number(thumb.getAttribute('aria-valuenow')) +
+                    (event.key === 'ArrowRight' ? 1 : -1);
+                  thumb.setAttribute('aria-valuenow', String(next));
+                  document.getElementById('level').textContent = 'Choice ' + next;
+                };
+              </script>'''
+            await page.route("https://chatgpt.com/", lambda route: route.fulfill(
+                status=200, content_type="text/html", body=html))
+            await page.goto("https://chatgpt.com/")
+            result = await catalog.collect_page(page)
+            assert result["state"] == "catalog_observed"
+            assert result["submitted"] is False
+            assert len(result["efforts_for_selected_model"]["positions"]) == 7
+            assert await page.locator(catalog.TRIGGER).get_attribute("aria-expanded") == "false"
+            await page.get_by_role("textbox").fill("Keep this draft")
+            assert await catalog.collect_page(page) == {"state": "empty_chat_unconfirmed"}
+            assert await page.get_by_role("textbox").inner_text() == "Keep this draft"
         finally:
             await browser.close()

@@ -120,3 +120,25 @@ collects seven positions and verifies restoration. This is browser-fixture
 acceptance, not live ChatGPT traversal through the standalone adapter. Page
 ownership, empty-composer checks and login remain caller prerequisites and are
 not implemented by this helper. No production tool is registered yet.
+
+
+## Dedicated browser probe entry point
+
+`probe_subchat_catalog.py` connects these parts to Playwright. It creates a new
+page in a dedicated profile, requires an empty root ordinary Chat with Chat
+selected, opens the picker and reads the model rows. It collects efforts only for
+the currently selected model, verifies restoration and unchanged model rows, and
+confirms picker closure. Existing drafts fail the preflight without edits.
+
+```sh
+uv run --extra browser python scripts/probe_subchat_catalog.py --profile /absolute/dedicated/profile
+```
+
+Use only a dedicated authorized profile after closing its other browser process;
+the probe owns and closes its browser context. Do not use the normal Chrome
+profile. The optional `--headed` flag makes this probe visible. Login is not
+performed automatically. Browser/connection errors return `probe_unconfirmed`,
+without raw peer text, and no prompt is submitted. This entry point has been
+verified against a locally served browser fixture (including a preserved draft),
+not authenticated live ChatGPT. An account login is still needed for that gate.
+The reported efforts are explicitly for the selected model only, not every model.
