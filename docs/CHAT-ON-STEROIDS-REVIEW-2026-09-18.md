@@ -65,3 +65,47 @@ native Windows execution. CI supplies the latter. They do not establish a new
 ChatGPT conversation, live Windows VM availability or a repaired native GUI.
 The beta 1 assets remain immutable. This is a post-beta-1 change, not a retrospective
 claim that beta 1 contained Skills search or augmented child PATH.
+
+## Follow-up source and issue review, 2026-09-19
+
+The additional source review used upstream main
+[`f38852167314a5b75a7e17cd97aaf5c2c13a8889`](https://github.com/totec448-spec/chat-on-steroids/tree/f38852167314a5b75a7e17cd97aaf5c2c13a8889).
+This is a pinned observation, not a claim that upstream will remain at that revision.
+No upstream implementation was copied. Issue claims below are distinguished from
+source behavior and from locally reproduced Anywhere defects.
+
+| Evidence | Applicability and decision |
+| --- | --- |
+| [#305](https://github.com/totec448-spec/chat-on-steroids/issues/305) asks expiry diagnostics to distinguish a command never claimed by the browser from one claimed without a result. | Preserve the existing Anywhere distinction between pre-dispatch rejection and unknown effects. Direct MCP response-loss tests already verify an effect occurs once and is not replayed. A future subchat adapter must separately record receipt, submission and result evidence; a timeout must not cause another message. There is no current Anywhere browser wake queue to patch. |
+| [#306](https://github.com/totec448-spec/chat-on-steroids/issues/306) reports Windows foreground activation requiring additional temporary thread-input attachments. | Current `gui_mcp.py` delegates exact-window operations to an explicitly selected Peekaboo MCP provider; it does not own the reported Windows native focus routine. Do not transplant a platform-specific workaround without an Anywhere reproduction. Retain background-window activation, target ownership and input-release checks as native-provider acceptance requirements. |
+| [#307](https://github.com/totec448-spec/chat-on-steroids/issues/307) reports macOS off-Space discovery and different pointer/keyboard focus proofs. | Treat discoverability separately from permission to act on current pixels or keyboard focus. This belongs in native GUI acceptance, including wrong-window rejection after focus changes. The existing adapter's snapshot binding is not proof that these OS-specific cases pass. |
+| `src/main/computer/windows-api.ts` at the pinned revision bounds observation filters, fences superseded observations, rechecks app identity and clears observation state before mutation. | Anywhere already serializes its adapter interactions and consumes observations before input, including across provider sessions. Preserve those invariants. Native PID/window verification and separate capture/accessibility failures remain provider work; adding unused fields to the existing adapter would not implement them. |
+| `src/main/bridge.ts` at the pinned revision reconciles final responses with the current request rather than accepting transcript presentation order. | The experimental subchat collector already requires matching conversation and submitted user-message evidence, rejects duplicate matching prompts and does not replay submission. Its ordinary-Chat live read evidence is recorded in `SUBCHAT-PROBE.md`; external transport and general tool-bearing replies remain incomplete. Do not advertise production subchat support. |
+
+The practical code-writing workflow is now represented by a real HTTP/MCP test:
+source and CSV creation, process execution, stdout and result-file verification,
+fresh-client result recovery, conditional source editing and repeat execution.
+An execution audit verifies that duplicate start requests do not launch extra
+processes. See [the acceptance record](PRACTICAL-ACCEPTANCE-2026-09-19.md) for the
+boundary between static-authentication machine tests, live plugin execution and
+Codex-owned browser playback. This evidence does not complete the broader 0.2
+native-control roadmap.
+
+## Latest receipt review
+
+Upstream was rechecked at `c5ab88714d3bdfa7acc5861aa1c3903e0263eaa6`.
+[PR #312](https://github.com/totec448-spec/chat-on-steroids/pull/312) separates
+local execution drain from native result receipts before automatic compaction;
+its `extension/content.js` and `extension/fiber.js` changes retain request identity
+through missing rows and Code Mode batches. Anywhere has no automatic compaction
+controller to transplant this into. Its experimental subchat reader did, however,
+accept an old answer ID repeated under a new submission. A synthetic snapshot
+reproduced that acceptance. The reader now rejects duplicate message identities
+across the returned snapshot. The regression fails before the fix and passes
+after it; the existing duplicate-prompt fixture now gives genuinely distinct
+answers distinct IDs so it continues testing prompt ambiguity separately.
+This protects receipt matching, not the still-unavailable external transport.
+
+The other new upstream change, PR #313, changes a pinned GVDB source mirror and
+release metadata. Anywhere does not distribute that native dependency; no mirror
+or dependency change is adopted.
