@@ -191,3 +191,10 @@ No submission is attempted and no alternative socket or caller identity is used.
 This improves automation of a failed compatibility check; it does not repair the
 external app transport. Diagnostic tests cover payload omission, stage/code
 retention, timeout and unknown-error propagation.
+
+The overall CLI deadline also bounds startup, catalog discovery and cleanup.
+Expiry returns `state=probe_timeout` and exits nonzero, instead of escaping as an
+unstructured timeout traceback. It neither resends nor requests cancellation of
+Chat generation. This result does not identify which transport stage stalled.
+A hanging local probe test verifies deadline cleanup; a separate test preserves
+normal results and propagation of programming errors.
