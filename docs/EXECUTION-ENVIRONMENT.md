@@ -31,6 +31,11 @@ This does not install tools, activate provider accounts or grant OS permissions.
 
 `anywhere doctor` reports `executables_on_path` for the diagnostic process and
 `executables_for_new_children` for these augmented launches (`node`, `uv`, `codex`).
+`codex_selection` reports the executable selected by the adapter's actual resolver,
+including `ANYWHERE_CODEX_EXECUTABLE`. Its `source` distinguishes `explicit_override`
+from `path`. An invalid explicit override remains `unresolved`; it does not fall
+back to another Codex on PATH. `resolved` means the path passed selection checks,
+not that it is executable, compatible or authenticated (`execution_verified=false`).
 It resolves paths without executing discovered programs and does not print the
 whole environment. These are diagnostic-process observations, not a claim that a
 different running engine or remote computer has the same environment. It does
