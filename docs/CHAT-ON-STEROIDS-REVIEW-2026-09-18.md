@@ -137,3 +137,28 @@ No blanket timeout increase or automatic mutation replay is adopted. The subchat
 probe's overall deadline now returns a structured timeout rather than a traceback,
 while the submitted Chat remains untouched. Long-running generation must be
 observed again using the same submission identity.
+
+
+## Browser recovery follow-up, 2026-09-20 JST
+
+Upstream main remains `c5ab88714d3bdfa7acc5861aa1c3903e0263eaa6` at this check.
+Two new unmerged proposals were reviewed; their reported test results are not
+Anywhere test evidence and their code was not copied.
+
+- [PR #314](https://github.com/totec448-spec/chat-on-steroids/pull/314), head
+  `26053070de0b51509d55ecce51297c851cddbf59`, asks for the exact conversation's
+  page when a wake is pending, and separates live agent ownership from dormant
+  history. Applicable requirement: loss of a tab must not imply loss of the
+  conversation or authorize another submission. There is no production Anywhere
+  wake queue or browser lifecycle manager to patch; preserve this distinction
+  when implementing the subchat adapter. Do not add a parallel agent registry.
+- [PR #315](https://github.com/totec448-spec/chat-on-steroids/pull/315), head
+  `5ed455c50be95a2c181291f43450cdae2b4c61a5`, adds bounded once-per-identity
+  diagnostics for replacement-page receipts. Anywhere has no equivalent
+  continuation marker endpoint. Do not introduce that endpoint just to adopt the
+  diagnostic. Existing operation receipts remain the evidence for result recovery.
+
+Issue #311 remains unresolved at this observation. The newest comments describe
+ongoing investigation, not a proven cause or compatible model-discovery API.
+Account-specific visible menu observation must not be advertised as a stable
+provider API or a working production subchat catalog.

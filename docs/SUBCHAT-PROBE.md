@@ -198,3 +198,25 @@ unstructured timeout traceback. It neither resends nor requests cancellation of
 Chat generation. This result does not identify which transport stage stalled.
 A hanging local probe test verifies deadline cleanup; a separate test preserves
 normal results and propagation of programming errors.
+
+
+## Independent browser startup, 2026-09-20 JST
+
+A dedicated persistent Chrome profile was launched through Playwright CLI 0.1.21,
+without the Codex app socket, executor identity or a copied browser login. The
+CLI returned a running browser and a current accessibility snapshot from
+`https://chatgpt.com/`. The snapshot explicitly contained Login buttons and a
+logged-out composer. No message was submitted and no model/effort availability
+was inferred from this unauthenticated page.
+
+This proves that the independent browser control path starts in this environment.
+The next gate is a one-time interactive login into this dedicated profile, then
+fresh ordinary-Chat creation, model/effort discovery and receipt recovery. The
+user was asked to log in; authentication and subscription-backed generation are
+not yet verified. The ordinary existing Chrome profile was not modified.
+
+The existing npm cache produced EACCES during CLI resolution. A separate temporary
+npm cache allowed the probe to run; no cache ownership or global package settings
+were changed. This is a development probe prerequisite, not the intended product
+installation flow. No production dependency or advertised subchat capability was
+added on the strength of browser startup alone.
