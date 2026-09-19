@@ -1,5 +1,8 @@
 import asyncio
 import json
+import shlex
+import sys
+import uuid
 
 import httpx
 import pytest
@@ -25,6 +28,98 @@ INITIALIZE = {
         "clientInfo": {"name": "test", "version": "1"},
     },
 }
+
+
+async def test_code_write_run_edit_and_recover_from_fresh_http_client(http_agent, tmp_path):
+    """Real SDK/HTTP/files/processes; static test authentication, no Chat UI or model."""
+    _, _, _, port = http_agent
+    script = tmp_path / 'report.py'
+    output = tmp_path / 'result.json'
+    program = '''import csv, json
+from decimal import Decimal
+from pathlib import Path
+root = Path(__file__).parent
+with (root / "sales.csv").open(encoding="utf-8", newline="") as source:
+    rows = list(csv.DictReader(source))
+report = {"total": str(sum((Decimal(row["amount"]) for row in rows), Decimal(0)))}
+# EXTRA
+(root / "result.json").write_text(json.dumps(report), encoding="utf-8")
+with (root / "runs.txt").open("a", encoding="utf-8") as audit:
+    audit.write("run\\n")
+print(json.dumps(report))
+'''
+    executable = f'"{sys.executable}"' if sys.platform == 'win32' else shlex.quote(sys.executable)
+    run_ids = [uuid.uuid4().hex, uuid.uuid4().hex]
+    session_ids = []
+    read_receipt = None
+    previous_connection = None
+    async with asyncio.timeout(30):
+        for iteration in range(2):
+            async with httpx.AsyncClient(headers=HEADERS, trust_env=False) as http:
+                async with streamable_http_client(
+                    f'http://127.0.0.1:{port}/mcp', http_client=http,
+                ) as (reader, writer, connection_id):
+                    async with ClientSession(reader, writer) as client:
+                        await client.initialize()
+                        assert connection_id() != previous_connection
+                        previous_connection = connection_id()
+                        names = {item.name for item in (await client.list_tools()).tools}
+
+                        async def call(name, arguments, *, catalog=names, connection=client):
+                            assert name in catalog
+                            response = await connection.call_tool(name, arguments)
+                            assert not response.isError, response
+                            result = response.structuredContent
+                            assert result['state'] == 'completed', result
+                            return result
+
+                        if iteration == 0:
+                            await call('files_write', {'path': str(script), 'text': program})
+                            await call('files_write', {
+                                'path': str(tmp_path / 'sales.csv'),
+                                'text': 'category,amount\n書籍,1200.50\n音楽,980.00\n'
+                                        '書籍,799.50\n音楽,520.00\n',
+                            })
+                        else:
+                            recovered = await call('operations_get', {
+                                'operation_id': read_receipt['operation_id'],
+                            })
+                            assert recovered['data'] == read_receipt
+                            read = await call('files_read', {'path': str(script)})
+                            edited = await call('files_write', {
+                                'path': str(script), 'mode': 'replace',
+                                'expected_sha256': read['data']['sha256'],
+                                'text': program.replace('# EXTRA', 'report["rows"] = len(rows)'),
+                            })
+                            assert edited['data']['backup_id'] == read['data']['sha256']
+                        args = {'cwd': str(tmp_path), 'command': executable + ' report.py',
+                                'request_id': run_ids[iteration]}
+                        started = await call('terminal_start', args)
+                        # Repeating a known request must not create another process.
+                        assert await call('terminal_start', args) == started
+                        session_id = started['data']['session_id']
+                        assert session_id not in session_ids
+                        session_ids.append(session_id)
+                        cursor = 0
+                        stdout = ''
+                        while True:
+                            state = (await call('terminal_output', {
+                                'session_id': session_id, 'cursor': cursor, 'wait_ms': 100,
+                            }))['data']
+                            assert state['dropped_bytes'] == 0
+                            stdout += state['text']
+                            cursor = state['next_cursor']
+                            if state['output_eof'] and state['exit_code'] is not None:
+                                break
+                        assert state['exit_code'] == 0, stdout
+                        read_receipt = await call('files_read', {'path': str(output)})
+                        expected = {'total': '3500.00'}
+                        if iteration:
+                            expected['rows'] = 4
+                        assert json.loads(stdout) == expected
+                        assert json.loads(read_receipt['data']['text']) == expected
+                        await call('terminal_stop', {'session_id': session_id})
+    assert (tmp_path / 'runs.txt').read_text(encoding='utf-8') == 'run\nrun\n'
 
 
 @pytest.fixture
