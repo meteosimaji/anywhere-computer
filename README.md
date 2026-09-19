@@ -132,8 +132,8 @@ launchers are described in the distribution guide.
 Use the same state directory when resuming setup, diagnosing a connection or
 upgrading it. See [operations](docs/OPERATIONS.md) for arguments and service commands.
 
-Updates are manual by default. Automatic stable updates are opt-in; alpha releases
-are not applied automatically. Development builds discover an installed `gh` on PATH for stable update
+Updates are manual by default. Automatic stable updates are opt-in; alpha and beta releases
+are not applied automatically. Beta 1 and development builds discover an installed `gh` on PATH for stable update
 verification; `--verifier` can still select an explicit absolute path. Published
 alpha9 requires that explicit path. A stable release candidate is not yet available. Follow the
 [update guide](docs/UPDATING.md) rather than treating `anywhere update` as an

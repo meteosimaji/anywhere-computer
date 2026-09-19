@@ -119,3 +119,21 @@ the write had occurred. The client now classifies this unconfirmed server respon
 as `unknown`, retaining the operation ID for lookup without automatic replay.
 The regression verifies one write dispatch and successful ledger lookup after
 normal responses resume. This does not claim to reproduce CoS's browser queue.
+
+## Long-session delivery review
+
+[CoS #301](https://github.com/totec448-spec/chat-on-steroids/issues/301) reports
+large observation batches exceeding the companion's request deadline and entering
+a repeated delivery loop. Its proposed timeout increases are reporter suggestions,
+not a reproduced Anywhere fix. Anywhere has no equivalent browser journal yet.
+Its HTTP backend retains the operation ID and returns unknown after an unconfirmed
+response; cancellation of the local observer does not release the transport lock
+while the request is still running. Four targeted HTTP tests passed on recheck: a
+real delayed file mutation followed by observer cancellation and result lookup,
+and three effect-then-invalid-response cases asserting one tool dispatch.
+These do not establish large browser-history throughput or a working companion.
+
+No blanket timeout increase or automatic mutation replay is adopted. The subchat
+probe's overall deadline now returns a structured timeout rather than a traceback,
+while the submitted Chat remains untouched. Long-running generation must be
+observed again using the same submission identity.

@@ -276,3 +276,37 @@ async def test_successful_catalog_with_close_failure_reports_cleanup(monkeypatch
     result = await probe.probe(tmp_path / "server.mjs", None)
     assert result["state"] == "transport_failed"
     assert result["diagnostic"]["failure_stage"] == "cleanup"
+
+
+async def test_whole_probe_deadline_cancels_only_local_observation():
+    import asyncio
+
+    entered = False
+    cleaned = False
+
+    async def hanging_catalog():
+        nonlocal entered, cleaned
+        entered = True
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleaned = True
+
+    result = await probe.bounded_probe(hanging_catalog, .01)
+    assert entered and cleaned
+    assert result == {"state": "probe_timeout", "inference_requested": False,
+                      "send_tested": False, "ordinary_chat_creation_tested": False,
+                      "resend": False}
+
+
+async def test_whole_probe_preserves_result_and_programming_errors():
+    async def ready():
+        return {"state": "catalog_received"}
+
+    assert await probe.bounded_probe(ready, 1) == {"state": "catalog_received"}
+
+    async def broken():
+        raise TypeError("programming defect")
+
+    with pytest.raises(TypeError, match="programming defect"):
+        await probe.bounded_probe(broken, 1)
