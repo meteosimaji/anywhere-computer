@@ -110,6 +110,16 @@ The other new upstream change, PR #313, changes a pinned GVDB source mirror and
 release metadata. Anywhere does not distribute that native dependency; no mirror
 or dependency change is adopted.
 
+## HTTP 503 outcome correction
+
+Reviewing response-loss semantics exposed an Anywhere-specific defect: a bare HTTP
+503 was classified as proof of pre-dispatch rejection. A real HTTP file-write
+fixture followed by a substituted 503 response reproduced `failed` even though
+the write had occurred. The client now classifies this unconfirmed server response
+as `unknown`, retaining the operation ID for lookup without automatic replay.
+The regression verifies one write dispatch and successful ledger lookup after
+normal responses resume. This does not claim to reproduce CoS's browser queue.
+
 ## Long-session delivery review
 
 [CoS #301](https://github.com/totec448-spec/chat-on-steroids/issues/301) reports
