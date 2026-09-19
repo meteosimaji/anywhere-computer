@@ -78,8 +78,8 @@ new user/assistant message pair and cannot accept an arbitrary idle snapshot.
 
 This establishes browser creation plus Codex-app follow-up submission. It does
 not establish headless creation, fresh tool-only result recovery, or the complete
-Chat -> Anywhere -> Codex app -> subchat path. The external MCP endpoint remains
-missing in the current executor environment. The two socket-preflight tests
+Chat -> Anywhere -> Codex app -> subchat path. The external MCP endpoint was
+missing in that executor environment (see the later recheck below). The two socket-preflight tests
 exercise absent caller context and an unlinked-but-open Unix socket; they are not
 subchat end-to-end acceptance tests.
 
@@ -134,3 +134,34 @@ A further source check found `staleTime: ONE_MINUTE` on the installed Chat
 conversation query. The probe defaults to a 120-second deadline and a five-second
 read interval so the default deadline does not coincide with the nominal cache
 expiry. This is a version-specific observation, not a public timing guarantee.
+
+## Compatibility recheck on 2026-09-19
+
+The installed desktop app was version `26.915.31945`, build `9922`, with bundled
+Codex CLI `0.155.0-alpha.9.2`. Its newly provided external socket existed. The
+separate MCP probe initialized, but tool discovery ended with a closed app pipe;
+the corresponding app log recorded `dynamic_app_tools_peer_rejected` with reason
+`missing-code-signing-identity`. The selected bundled Node executable had a code
+signature, so this observation does not establish that unsigned Node caused the
+rejection. The exact peer-identity failure remains unresolved. No caller identity,
+signature check, development flag or socket-selection rule was bypassed.
+
+This failure is specific evidence about the external desktop-app-tools path,
+not proof that every Codex adapter is unavailable. A normal Anywhere Plugin
+session successfully ran `node_repl` twice, preserving a variable from 40 to 42,
+and closed with confirmed cleanup. A separate current-source test explicitly
+selected the updated bundled CLI and repeated 40 to 42 successfully. These use
+the Codex app-server tool path without requesting a model turn; they do not prove
+ordinary Chat creation or external desktop-app peer authorization.
+
+The live installed Anywhere engine reported `0.1.0b1`, while the installed skill
+package and development bundle used `0.2.0-alpha.1`. Keep engine, plugin and Codex
+versions separate in acceptance records. The new diagnostic `codex_selection`
+uses the execution resolver, including its explicit executable override, without
+launching it. Resolution alone cannot certify compatibility or authentication.
+
+Future Codex or ChatGPT updates are not covered by this one-version trial.
+Subchat must remain experimental until its actual creation, submission and fresh
+result-recovery path passes acceptance after an update. Existing independent
+file/terminal and direct MCP operations should not require a working subchat
+adapter. A rejected app connection is not a reason to replay an uncertain send.
