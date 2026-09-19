@@ -179,3 +179,37 @@ def test_reused_answer_identity_is_not_a_new_receipt():
     assert probe.matching_reply(data, 'chat', 'old', 'new request') is None
     assert probe.matching_reply(data, 'chat', None, 'new request',
                                 submitted_user_id='new') is None
+
+
+async def test_thinking_timeout_can_resume_reading_same_submission():
+    thinking = snapshot(status="active")
+    thinking["turns"][0]["status"] = "inProgress"
+    thinking["turns"][0]["items"][1]["text"] = "Unfinished draft"
+    reads = 0
+
+    async def read_thinking():
+        nonlocal reads
+        reads += 1
+        return thinking
+
+    result = await probe.wait_for_reply(
+        read_thinking, "chat", None, "new request", .02, .001,
+        submitted_user_id="new",
+    )
+    assert reads > 1
+    assert result["state"] == "reply_unconfirmed"
+    assert result["resend"] is False
+    assert "text" not in result
+    # Resume observation only. No new prompt, conversation, or stop callback exists.
+    values = iter([thinking, snapshot()])
+
+    async def read_later():
+        return next(values)
+
+    recovered = await probe.wait_for_reply(
+        read_later, "chat", None, "new request", 1, .001,
+        submitted_user_id="new",
+    )
+    assert recovered["read_attempts"] == 2
+    assert recovered["user_message_id"] == "new"
+    assert recovered["text"] == "42"

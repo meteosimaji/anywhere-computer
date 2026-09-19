@@ -165,3 +165,16 @@ Subchat must remain experimental until its actual creation, submission and fresh
 result-recovery path passes acceptance after an update. Existing independent
 file/terminal and direct MCP operations should not require a working subchat
 adapter. A rejected app connection is not a reason to replay an uncertain send.
+
+## Thinking and resumed observation
+
+The read deadline is not a generation deadline. An active/Thinking response,
+including a partial draft, stays unconfirmed. This probe has no stop, cancel-
+generation, resend, or compaction call. On a read deadline it ends only the local
+observation wait. Resume with the same Chat ID, submitted user-message ID and
+exact prompt file; do not create a replacement Chat or send the prompt again.
+The user may choose a longer bounded read interval via `--wait-seconds`, or run
+another observation interval later. No assumption is made about how long a model
+should think. A synthetic regression keeps returning an active partial draft
+through a timeout, then resumes reading the same submission and obtains its
+completed answer. This verifies collector behavior, not provider generation.
