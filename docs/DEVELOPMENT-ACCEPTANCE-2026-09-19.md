@@ -99,4 +99,26 @@ because the fixture's text-mode append translated LF to CRLF. It reported
 1,280 passed, 32 skipped and this one failure. The generated script now explicitly
 disables newline translation for its execution marker; the exact one-marker
 assertion and the real HTTP/file/subprocess/restart workflow are unchanged.
-The corrected test passed locally; Windows confirmation requires the new CI run.
+The corrected test passed locally and in Windows CI run `35450018519`; all five jobs passed before PR #51 merged.
+
+
+## Live portable update recovery, 2026-09-20 JST
+
+Installed the verified portable build from source `6147ebe` into a new runtime
+folder, preserving the existing common engine state and HTTP authorization state.
+Before switching, status showed no active operations or sessions. Upgraded and
+started the existing macOS HTTP LaunchAgent using the new executable.
+
+Both local plugin status and authenticated HTTP MCP status returned `ready`,
+instance `c463943ae1ef4eb68613ffb27a6703af` and runtime
+`a82ce393e115c5b1025a0c8777823d74357ee120f660892d27aca78d71084c53`.
+HTTP receipt lookup for `708192a3b4c5d6e7f8091a2b3c4d5e6f`, originally produced
+by the ordinary Chat above before the update, returned stdout `3501`, exit code 0,
+EOF true and zero dropped bytes. Recovery did not start a terminal or resend the
+program. Metadata reachability was checked separately from authenticated access.
+
+This establishes application/service update recovery on this Mac. It does not
+establish OS reboot, sleep, pre-login startup, Windows VM recovery or restored
+process memory. Existing user-login startup registration is not a power-on service;
+SSH requires a reachable, running host. Starting a stopped VM requires its running
+host to provide a separate start operation.
