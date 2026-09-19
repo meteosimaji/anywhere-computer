@@ -87,3 +87,7 @@ reboot, physical power-on, Windows or network-failure acceptance claim.
 Local checks: 51 targeted HTTP/capability/subchat/search/workflow tests passed;
 59 SSH/startup/shared-agent-reconnection tests passed with 3 platform-specific
 skips. Ruff passed for src/tests/scripts and mypy passed for 98 source files.
+
+The original ordinary Chat subsequently performed only status and receipt lookup,
+and independently reported the new instance ID and the same saved stdout/exit code.
+It did not create another terminal or rerun the source for this recovery check.
