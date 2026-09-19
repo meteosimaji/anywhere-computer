@@ -217,6 +217,7 @@ class Searches:
             args.whole_word,
             search.cancelled,
             args.context_lines,
+            SEARCH_OUTPUT_LIMIT - search.result_bytes,
         )
         for entry in matches:
             if not self._append_result(search, entry):
@@ -314,6 +315,7 @@ class Searches:
         whole_word: bool,
         cancelled: threading.Event,
         context_lines: int = 0,
+        byte_budget: int | None = None,
     ) -> list[JsonValue]:
         if cancelled.is_set():
             return []
@@ -321,6 +323,7 @@ class Searches:
         # and O_NONBLOCK also reject special files without blocking on a FIFO.
         text = read_bytes(path).decode("utf-8")
         matches: list[JsonValue] = []
+        remaining_bytes = SEARCH_OUTPUT_LIMIT if byte_budget is None else byte_budget
         with io.StringIO(text, newline=None) as stream:
             lines = enumerate(stream, 1)
             upcoming = deque(next(lines, None) for _ in range(context_lines + 1))
@@ -347,7 +350,10 @@ class Searches:
                             if item is not None
                         ]
                     matches.append(entry)
-                    if len(matches) >= limit:
+                    remaining_bytes -= len(json.dumps(entry, ensure_ascii=False).encode("utf-8"))
+                    # Retain one overflow row so the outer collector reports the
+                    # byte limit without losing its existing cursor semantics.
+                    if remaining_bytes < 0 or len(matches) >= limit:
                         break
                 before.append((number, line[:2000]))
                 upcoming.append(next(lines, None))
