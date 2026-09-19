@@ -91,10 +91,15 @@ ChatGPT app. The installed reader uses a cache-aware `getOrFetch`, while send's
 preflight uses explicit `refetch`. This supports delayed read visibility; it does
 not prove the exact cache expiry or notification responsible for the delay.
 
-The probe now accepts `--after-user-id`, `--expected-prompt-file`, and
-`--wait-seconds` (1–300) with `--read-thread`. These only read an already-submitted
+The probe accepts either `--after-user-id` (a baseline before submission) or
+`--user-message-id` (the observed ID of the submitted user message), plus
+`--expected-prompt-file` and `--wait-seconds` (1–300) with `--read-thread`.
+The explicit submitted ID also supports the first reply in a new Chat, which has
+no previous user message. Capture this ID from an actual submission observation;
+do not manufacture it or substitute the conversation ID. These only read an already-submitted
 prompt. They never send or resend it. The collector requires the selected Chat,
-a visible baseline turn, exactly one subsequent matching prompt, a distinct
+a visible baseline turn and exactly one subsequent matching prompt, or exactly
+one turn with the explicitly selected user-message ID. Both modes require a distinct
 answer ID, an idle thread, completed turn and untruncated text. Ambiguous,
 truncated, active, missing-baseline or stale snapshots remain unconfirmed. The
 current prototype deliberately does not accept multi-item/tool-bearing turns;
@@ -102,15 +107,23 @@ that broader contract remains unimplemented. Prompt file contents are compared
 exactly, including trailing newlines. Output contains IDs and character counts,
 not the response text. A timeout exits nonzero with `reply_unconfirmed`.
 
-Nine targeted tests cover endpoint context, the unlinked socket, old snapshots,
+Seventeen targeted tests cover endpoint context, the unlinked socket, old snapshots,
 wrong Chat/prompt/baseline, active or incomplete responses, duplicate matches,
 truncation, eventual freshness and bounded read timeout. They validate collector
-logic, not the complete external subchat connection.
+logic, not the complete external subchat connection. Initial-reply tests also
+cover a missing baseline, absent or conflicting message IDs, incomplete answers,
+duplicate turns, delayed visibility and mutually exclusive identity selectors.
 
 The matching function was also run against a fresh real `read_thread` response
 from the two-turn acceptance Chat. It selected the second user and answer IDs
 and matched the expected `B 43` text. This verifies real response compatibility;
 the separately launched MCP connection remains unverified.
+
+The explicit submitted-ID mode was separately checked against a fresh real read
+of the first `A 42` turn, with user-message ID
+`fa837d30-8eeb-45fa-83d1-6e075fe4225e`. It recovered assistant-message ID
+`10cfb9ae-c7de-4e22-be4b-8a97c5b4ff91` and the exact 28-character response,
+without requiring a preceding conversation turn or sending another prompt.
 
 A further source check found `staleTime: ONE_MINUTE` on the installed Chat
 conversation query. The probe defaults to a 120-second deadline and a five-second
