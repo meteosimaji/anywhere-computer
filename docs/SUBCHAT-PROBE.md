@@ -178,3 +178,16 @@ another observation interval later. No assumption is made about how long a model
 should think. A synthetic regression keeps returning an active partial draft
 through a timeout, then resumes reading the same submission and obtains its
 completed answer. This verifies collector behavior, not provider generation.
+
+### Repeatable transport failure results
+
+A later recheck again initialized MCP and failed during `tools/list`. The probe
+now returns `state=transport_failed`, a failure stage and content-free diagnostic
+codes, with a nonzero exit status. The live result was catalog-stage RPC `-32603`.
+It does not infer peer authentication as the cause from a closed pipe alone.
+Expected nested MCP/OS transport exceptions are classified using the existing
+plugin diagnostics helper; unexpected programming errors still propagate.
+No submission is attempted and no alternative socket or caller identity is used.
+This improves automation of a failed compatibility check; it does not repair the
+external app transport. Diagnostic tests cover payload omission, stage/code
+retention, timeout and unknown-error propagation.

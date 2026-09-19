@@ -213,3 +213,31 @@ async def test_thinking_timeout_can_resume_reading_same_submission():
     assert recovered["read_attempts"] == 3
     assert recovered["user_message_id"] == "new"
     assert recovered["text"] == "42"
+
+
+def test_transport_failure_redacts_rpc_payload_and_preserves_stage():
+    import json
+
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData
+
+    error = ExceptionGroup("private group text", [
+        McpError(ErrorData(code=-32000, message="private credential text",
+                           data={"token": "secret-token"})),
+    ])
+    result = probe.transport_failure(error, "catalog")
+    assert result["failure_stage"] == "catalog"
+    detail = result["failures"][0]
+    assert detail["rpc_code"] == -32000 and detail["data_present"] is True
+    assert detail["content_redacted"] is True
+    assert "private" not in json.dumps(result) and "secret-token" not in json.dumps(result)
+
+
+def test_transport_failure_does_not_hide_programming_errors():
+    with pytest.raises(TypeError, match="contract defect"):
+        probe.transport_failure(ExceptionGroup("group", [
+            ConnectionError("closed"), TypeError("contract defect"),
+        ]), "read")
+    assert probe.transport_failure(TimeoutError(), "initialize") == {
+        "failure_stage": "initialize", "failure_kind": "timeout",
+    }
