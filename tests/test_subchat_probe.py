@@ -150,3 +150,23 @@ def test_identity_selectors_are_exclusive():
         probe.matching_reply(snapshot(), "chat", None, "new request")
     with pytest.raises(ValueError, match="exactly one"):
         probe.matching_reply(snapshot(), "chat", "old", "new request", submitted_user_id="new")
+
+
+@pytest.mark.parametrize("state", ["missing_answer", "failed", "truncated_answer"])
+def test_duplicate_prompt_is_ambiguous_even_if_only_one_answer_is_usable(state):
+    import copy
+    data = snapshot()
+    duplicate = copy.deepcopy(data["turns"][0])
+    duplicate["id"] = duplicate["items"][0]["id"] = "second-send"
+    if state == "missing_answer":
+        duplicate["items"].pop()
+    elif state == "failed":
+        duplicate["status"] = "failed"
+        duplicate["error"] = {"message": "interrupted"}
+    else:
+        duplicate["items"][1]["truncated"] = True
+    data["turns"].insert(0, duplicate)
+    assert probe.matching_reply(data, "chat", "old", "new request") is None
+    # An actual submission ID resolves the ambiguity without replaying either send.
+    result = probe.matching_reply(data, "chat", None, "new request", submitted_user_id="new")
+    assert result["user_message_id"] == "new"

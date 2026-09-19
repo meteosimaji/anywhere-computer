@@ -45,23 +45,31 @@ def matching_reply(
             return None
         candidates = turns[:baseline]
     matches: list[dict[str, str]] = []
+    matching_submissions = 0
     for turn in candidates:
-        if not isinstance(turn, dict) or turn.get("status") != "completed" or turn.get("error"):
+        if not isinstance(turn, dict):
             continue
         items = turn.get("items")
-        if not isinstance(items, list) or len(items) != 2:
+        if not isinstance(items, list) or not items:
             continue
-        user, answer = items
-        if not isinstance(user, dict) or not isinstance(answer, dict):
-            continue
-        if user.get("type") != "userMessage" or answer.get("type") != "agentMessage":
+        user = items[0]
+        if not isinstance(user, dict) or user.get("type") != "userMessage":
             continue
         content = user.get("content")
         if not isinstance(content, list) or len(content) != 1:
             continue
         part = content[0]
         if (not isinstance(part, dict) or part.get("type") != "text"
-                or part.get("text") != prompt or part.get("truncated") or answer.get("truncated")):
+                or part.get("text") != prompt or part.get("truncated")):
+            continue
+        # Submission identity must be unique before filtering usable answers.
+        # A second send with a missing/failed answer is still a second send.
+        matching_submissions += 1
+        if turn.get("status") != "completed" or turn.get("error") or len(items) != 2:
+            continue
+        answer = items[1]
+        if (not isinstance(answer, dict) or answer.get("type") != "agentMessage"
+                or answer.get("truncated")):
             continue
         user_id, answer_id, text = user.get("id"), answer.get("id"), answer.get("text")
         if (not isinstance(user_id, str) or not user_id
@@ -71,7 +79,7 @@ def matching_reply(
         if user_id != turn.get("id") or user_id == previous_user_id:
             continue
         matches.append({"user_message_id": user_id, "answer_message_id": answer_id, "text": text})
-    return matches[0] if len(matches) == 1 else None
+    return matches[0] if matching_submissions == 1 and len(matches) == 1 else None
 
 
 async def wait_for_reply(
