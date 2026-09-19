@@ -3,7 +3,7 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 詳しい実機結果は[更新・再接続の検証記録](docs/UPDATE-VERIFICATION-2026-09-12.md)を参照してください。
 
-## 0.1.0b1 / Plugin 0.1.0-beta.1 — release candidate
+## 0.1.0b1 / Plugin 0.1.0-beta.1 — published prerelease (2026-09-14)
 
 - Common local Skills and hash-checked resource reads without Codex; persistent
   collection configuration through `anywhere skills-configure`.
@@ -18,7 +18,7 @@
   features are explicitly outside its supported scope.
   See [implementation status](docs/IMPLEMENTATION-STATUS.md).
 
-## 0.1.0a9 / Plugin 0.1.0-alpha.9 — 開発版
+## 0.1.0a9 / Plugin 0.1.0-alpha.9 — published prerelease (2026-09-13)
 
 - ChatGPTのHTTP入口に、明示的な端末指定のdevices_list / devices_tools / devices_callを追加。
   共通エンジン構成ではCodexと端末登録を共有。既存の制限付き認可は自動で拡張しない。
