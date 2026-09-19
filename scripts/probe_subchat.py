@@ -232,6 +232,7 @@ async def probe(
                         if isinstance(answer, str):
                             receipt["answer_characters"] = len(answer)
                         result["reply"] = receipt
+                stage = "cleanup"
                 return result
     except Exception as error:
         diagnostic = transport_failure(error, stage)

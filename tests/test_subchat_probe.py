@@ -241,3 +241,38 @@ def test_transport_failure_does_not_hide_programming_errors():
     assert probe.transport_failure(TimeoutError(), "initialize") == {
         "failure_stage": "initialize", "failure_kind": "timeout",
     }
+
+
+async def test_successful_catalog_with_close_failure_reports_cleanup(monkeypatch, tmp_path):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import mcp
+    import mcp.client.stdio
+
+    @asynccontextmanager
+    async def transport(_):
+        yield None, None
+
+    class Session:
+        def __init__(self, *_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            raise ConnectionError("close failed after successful catalog")
+
+        async def initialize(self):
+            pass
+
+        async def list_tools(self):
+            return SimpleNamespace(tools=[])
+
+    monkeypatch.setattr(probe, "connection_state", lambda _: "ready_to_probe")
+    monkeypatch.setattr(mcp.client.stdio, "stdio_client", transport)
+    monkeypatch.setattr(mcp, "ClientSession", Session)
+    result = await probe.probe(tmp_path / "server.mjs", None)
+    assert result["state"] == "transport_failed"
+    assert result["diagnostic"]["failure_stage"] == "cleanup"
