@@ -186,7 +186,9 @@ class HTTPBackend:
 
     @staticmethod
     def _result(response: HTTPResponse, identity: str) -> dict[str, JsonValue]:
-        if response.status in {400, 403, 404, 405, 406, 413, 415, 429, 503}:
+        # A gateway can return 503 after the upstream mutation was accepted.
+        # A bare server-error status cannot prove non-dispatch.
+        if response.status in {400, 403, 404, 405, 406, 413, 415, 429}:
             raise _HTTPRejected(f"Remote request rejected before dispatch (HTTP {response.status})")
         if response.status != 200:
             raise ConnectionError("Remote operation response was not confirmed")

@@ -402,7 +402,9 @@ async def test_cancelled_observer_does_not_release_inflight_transport_lock(http_
     assert (tmp_path / "cancelled.txt").read_text(encoding="utf-8") == "preserved"
 
 
-@pytest.mark.parametrize("fault", ["wrong-rpc-id", "wrong-operation-id", "dispatch-timeout"])
+@pytest.mark.parametrize("fault", [
+    "wrong-rpc-id", "wrong-operation-id", "dispatch-timeout", "upstream-unavailable",
+])
 async def test_unconfirmed_responses_never_become_failed_or_replayed(http_remote, tmp_path, fault):
     backend, _, _, _, calls, _ = http_remote
     await backend.catalog()
@@ -411,8 +413,8 @@ async def test_unconfirmed_responses_never_become_failed_or_replayed(http_remote
     def broken(resource, method, packet, headers):
         response = original(resource, method, packet, headers)
         if packet and packet.get("method") == "tools/call":
-            if fault == "dispatch-timeout":
-                return HTTPResponse(408, {}, None)
+            if fault in {"dispatch-timeout", "upstream-unavailable"}:
+                return HTTPResponse(408 if fault == "dispatch-timeout" else 503, {}, None)
             body = dict(response.packet)
             if fault == "wrong-rpc-id":
                 body["id"] = "different"
@@ -427,6 +429,13 @@ async def test_unconfirmed_responses_never_become_failed_or_replayed(http_remote
     assert result.state == "unknown" and result.operation_id == write.operation_id
     assert (tmp_path / "unconfirmed.txt").read_text(encoding="utf-8") == "once"
     assert len([p for p in calls if p and p.get("method") == "tools/call"]) == 1
+    backend.wire = original
+    recovered = await backend.execute(operation("operations_get", operation_id=write.operation_id))
+    assert recovered.data["state"] == "completed"
+    assert recovered.data["operation_id"] == write.operation_id
+    writes = [p for p in calls if p and p.get("method") == "tools/call"
+              and p["params"]["name"] == "files_write"]
+    assert len(writes) == 1
 
 
 async def test_server_without_operation_extension_cannot_receive_tool_calls(http_remote, tmp_path):
