@@ -40,6 +40,13 @@ Failures can leave partial files in the private output directory.
 - Removing final-buffer clamping in a temporary source copy makes that harness
   fail. The repository source was preserved during this negative test.
 
-Virtual-device routing, actual non-silent system capture, device disconnect,
+A later system-only experiment played a quiet synthetic 440 Hz WAV through
+`afplay` and captured two seconds with `microphone_device_id=none`. It returned
+96,000 frames at 48 kHz, peak 0.04883 and RMS 0.03447. Independent conversion
+with `afconvert` and Python WAV reading confirmed two seconds of stereo audio;
+positive zero crossings estimated 441.5 Hz. This confirms non-silent OS playback
+capture, not physical speaker output. Playback and recording both ended.
+
+Virtual-device routing, device disconnect,
 Windows support, and MCP/operation-ledger integration remain pending. Do not
 advertise this experiment as a shipped audio feature.
