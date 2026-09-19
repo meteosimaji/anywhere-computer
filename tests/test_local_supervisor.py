@@ -43,8 +43,34 @@ def test_local_supervisor_blocks_error_without_reprompting(tmp_path, monkeypatch
 
 async def test_local_watch_does_not_replace_or_stop_live_engine(tmp_path, monkeypatch):
     import asyncio
+    import time
 
+    from anywhere_computer import connection
     from anywhere_computer.connection import exchange, serve
+
+    # Keep the original startup deadline. Record real stages so a Windows
+    # timeout identifies unfinished work instead of inviting blind retries.
+
+    stages = {}
+    original_engine = connection.Engine
+    original_start_server = asyncio.start_server
+
+    def measured_engine(*args, **kwargs):
+        started = time.monotonic()
+        try:
+            return original_engine(*args, **kwargs)
+        finally:
+            stages["engine_init_seconds"] = time.monotonic() - started
+
+    async def measured_server(*args, **kwargs):
+        started = time.monotonic()
+        try:
+            return await original_start_server(*args, **kwargs)
+        finally:
+            stages["server_open_seconds"] = time.monotonic() - started
+
+    monkeypatch.setattr(connection, "Engine", measured_engine)
+    monkeypatch.setattr(asyncio, "start_server", measured_server)
 
     monkeypatch.setattr("anywhere_computer.connection.local_credential", lambda *a, **k: "fixture")
     # This fixture runs the watcher in a worker thread; OS signal handling is
@@ -55,9 +81,19 @@ async def test_local_watch_does_not_replace_or_stop_live_engine(tmp_path, monkey
     engine = asyncio.create_task(serve(tmp_path, credential="fixture", shutdown=engine_stop))
     watcher = None
     try:
-        async with asyncio.timeout(5):
-            while not (tmp_path / "agent.json").exists():
-                await asyncio.sleep(0.01)
+        try:
+            async with asyncio.timeout(5):
+                while not (tmp_path / "agent.json").exists():
+                    if engine.done():
+                        await engine
+                        raise AssertionError("Engine exited before publishing its endpoint")
+                    await asyncio.sleep(0.01)
+        except TimeoutError as error:
+            frames = [frame.f_code.co_name for frame in engine.get_stack()]
+            raise AssertionError(
+                f"Engine startup exceeded 5 seconds: stages={stages}, "
+                f"done={engine.done()}, stack={frames}"
+            ) from error
         before = await exchange(tmp_path, "__status", credential="fixture")
         watcher = asyncio.create_task(asyncio.to_thread(
             local_supervisor.watch_local, tmp_path, stop=watch_stop, interval=1,
