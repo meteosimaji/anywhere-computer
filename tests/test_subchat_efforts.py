@@ -11,7 +11,9 @@ spec.loader.exec_module(collector)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "dropped_key", "range_change", "lost_read", "description_change"])
+@pytest.mark.parametrize("failure", [
+    None, "dropped_key", "range_change", "lost_read", "description_change",
+])
 async def test_traversal_restores_or_reports_unconfirmed(failure):
     position = 3
     maximum = 6
