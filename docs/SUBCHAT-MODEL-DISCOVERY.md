@@ -68,3 +68,28 @@ a background adapter or an Anywhere catalog API. Some unselected menu content
 also contains generic locked-access text, so mere DOM presence must not be taken
 as a reliable per-choice availability signal. Successful selection is stronger
 UI evidence, but still does not promise a successful subsequent generation.
+
+
+## Visible-menu extractor prototype
+
+`scripts/subchat_model_menu.js` provides a read-only function for an already
+opened model menu. It extracts displayed labels, separate notices, checked state
+and explicit DOM disabled state. These are not provider IDs or quota guarantees.
+The active menu must be unique; hidden/inert model panels are excluded. Missing,
+changed or ambiguous markup returns a non-success state rather than an empty
+successful catalog. This distinction matters because the live simple picker
+retains its model rows inside an inert, aria-hidden panel.
+
+A live expanded Chrome menu produced three labels and separated the retirement
+notice from its model label without version-name matching. No model selection or
+message submission was performed. The extractor is experimental, not registered
+as a production MCP tool. It does not yet enumerate effort labels, open menus,
+manage login, cache catalogs or create subchats.
+
+The optional real-DOM test uses local HTML in headless Chrome, with arbitrary
+future model names, Japanese notices, hidden/inert panels, duplicate labels,
+multiple checked rows and changed markup. Run with the browser extra installed:
+`uv run --extra browser pytest -q tests/test_subchat_model_menu.py`.
+It skips when the optional Playwright dependency or Chrome is absent; such a skip
+is not browser acceptance. On the development Mac, this test and the subchat
+collector tests passed (28 tests, no skips).
