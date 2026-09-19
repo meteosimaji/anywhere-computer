@@ -107,12 +107,17 @@ that broader contract remains unimplemented. Prompt file contents are compared
 exactly, including trailing newlines. Output contains IDs and character counts,
 not the response text. A timeout exits nonzero with `reply_unconfirmed`.
 
-Seventeen targeted tests cover endpoint context, the unlinked socket, old snapshots,
+Twenty targeted tests cover endpoint context, the unlinked socket, old snapshots,
 wrong Chat/prompt/baseline, active or incomplete responses, duplicate matches,
 truncation, eventual freshness and bounded read timeout. They validate collector
 logic, not the complete external subchat connection. Initial-reply tests also
 cover a missing baseline, absent or conflicting message IDs, incomplete answers,
 duplicate turns, delayed visibility and mutually exclusive identity selectors.
+Baseline matching counts matching submissions before examining their answers.
+A second identical prompt remains ambiguous even if its answer is absent,
+failed or truncated. Three regressions reproduced selection of the other answer
+before this fix. An explicitly observed user-message ID can disambiguate the
+selected submission without replaying either prompt.
 
 The matching function was also run against a fresh real `read_thread` response
 from the two-turn acceptance Chat. It selected the second user and answer IDs
