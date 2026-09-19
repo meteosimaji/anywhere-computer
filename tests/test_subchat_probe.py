@@ -158,6 +158,7 @@ def test_duplicate_prompt_is_ambiguous_even_if_only_one_answer_is_usable(state):
     data = snapshot()
     duplicate = copy.deepcopy(data["turns"][0])
     duplicate["id"] = duplicate["items"][0]["id"] = "second-send"
+    duplicate["items"][1]["id"] = "second-answer"
     if state == "missing_answer":
         duplicate["items"].pop()
     elif state == "failed":
@@ -170,3 +171,11 @@ def test_duplicate_prompt_is_ambiguous_even_if_only_one_answer_is_usable(state):
     # An actual submission ID resolves the ambiguity without replaying either send.
     result = probe.matching_reply(data, "chat", None, "new request", submitted_user_id="new")
     assert result["user_message_id"] == "new"
+
+
+def test_reused_answer_identity_is_not_a_new_receipt():
+    data = snapshot()
+    data['turns'][0]['items'][1]['id'] = data['turns'][1]['items'][1]['id']
+    assert probe.matching_reply(data, 'chat', 'old', 'new request') is None
+    assert probe.matching_reply(data, 'chat', None, 'new request',
+                                submitted_user_id='new') is None

@@ -31,6 +31,21 @@ def matching_reply(
     turns = snapshot.get("turns")
     if not isinstance(turns, list):
         return None
+    # A receipt cannot identify messages in two different positions. A stale
+    # answer stitched onto a new turn must not acknowledge that submission.
+    seen_message_ids: set[str] = set()
+    for turn in turns:
+        if not isinstance(turn, dict) or not isinstance(turn.get("items"), list):
+            continue
+        for item in turn["items"]:
+            if not isinstance(item, dict):
+                continue
+            message_id = item.get("id")
+            if not isinstance(message_id, str) or not message_id:
+                continue
+            if message_id in seen_message_ids:
+                return None
+            seen_message_ids.add(message_id)
     # read_thread returns newest first. An absent baseline may mean pagination
     # or stale data; neither is evidence that a matching turn is new.
     if submitted_user_id:
