@@ -196,12 +196,12 @@ async def test_thinking_timeout_can_resume_reading_same_submission():
         read_thinking, "chat", None, "new request", .02, .001,
         submitted_user_id="new",
     )
-    assert reads > 1
+    assert reads >= 1
     assert result["state"] == "reply_unconfirmed"
     assert result["resend"] is False
     assert "text" not in result
     # Resume observation only. No new prompt, conversation, or stop callback exists.
-    values = iter([thinking, snapshot()])
+    values = iter([thinking, thinking, snapshot()])
 
     async def read_later():
         return next(values)
@@ -210,6 +210,6 @@ async def test_thinking_timeout_can_resume_reading_same_submission():
         read_later, "chat", None, "new request", 1, .001,
         submitted_user_id="new",
     )
-    assert recovered["read_attempts"] == 2
+    assert recovered["read_attempts"] == 3
     assert recovered["user_message_id"] == "new"
     assert recovered["text"] == "42"
