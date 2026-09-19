@@ -50,3 +50,21 @@ The current external Codex-app connection remains a separate unresolved transpor
 issue documented in `SUBCHAT-PROBE.md`. An owning-app read or a manually inspected
 browser menu does not establish an Anywhere model-list tool. The existing file,
 terminal and direct MCP service must continue without this optional adapter.
+
+## Live menu traversal, 2026-09-19
+
+An owned empty Chrome Chat was inspected through visible menu roles and keyboard
+navigation. Initial selection was Latest / medium. The expanded version list
+showed Latest, GPT-5.6 Sol and GPT-5.5. Each version's power control was traversed,
+with the displayed status read after each transition. All three exposed these
+five labels in order: Instant, medium, high, extra high, Pro (Japanese UI labels
+were `Instant`, `中程度`, `高`, `極高`, `Pro`). GPT-5.5 showed a retirement notice
+for October 14. These are dated account observations, never executable defaults.
+
+Selection was restored to Latest / medium and the picker was confirmed closed;
+no prompt was sent. This proves UI traversal and restoration in this environment,
+not canonical provider model IDs, quota availability, generation with all pairs,
+a background adapter or an Anywhere catalog API. Some unselected menu content
+also contains generic locked-access text, so mere DOM presence must not be taken
+as a reliable per-choice availability signal. Successful selection is stronger
+UI evidence, but still does not promise a successful subsequent generation.
