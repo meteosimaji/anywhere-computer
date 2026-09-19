@@ -93,3 +93,14 @@ multiple checked rows and changed markup. Run with the browser extra installed:
 It skips when the optional Playwright dependency or Chrome is absent; such a skip
 is not browser acceptance. On the development Mac, this test and the subchat
 collector tests passed (28 tests, no skips).
+
+
+The same prototype now includes `observeSubchatEffort(document)`. It reads the
+unique visible keyboard control's minimum, maximum, current integer position and
+its associated status description. The current UI's hidden thumb is only read
+inside that visible control. Missing descriptions, non-integer/out-of-range
+positions and hidden controls return non-success states. Values and descriptions
+are observations, not canonical API effort IDs. A live menu reported 0..4/current
+1 with a medium description; DOM tests instead use seven positions and an
+arbitrary label to prevent a fixed five-level assumption. This remains current
+position observation, not full traversal or verified restoration of settings.

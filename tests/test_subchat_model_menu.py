@@ -17,9 +17,9 @@ async def test_model_menu_visibility_and_identity() -> None:
             raise
         try:
             page = await browser.new_page()
-            async def observe(html: str) -> object:
+            async def observe(html: str, function: str = "observeSubchatModelMenu") -> object:
                 await page.set_content(html)
-                return await page.evaluate(source + "\nobserveSubchatModelMenu(document)")
+                return await page.evaluate(source + f"\n{function}(document)")
 
             rows = '''<div role="menuitemradio" aria-checked="true"><span>Future model</span></div>
               <div role="menuitemradio" aria-checked="false" aria-disabled="true">
@@ -45,5 +45,24 @@ async def test_model_menu_visibility_and_identity() -> None:
             assert await observe('<div role="menu">' + rows.replace(
                 '<span>', '<b>').replace('</span>', '</b>') + '</div>') == {
                     "state": "unsupported_menu"}
+            effort = '''<div role="menu">
+              <span role="status" id="level">新しい強度、7件中4番目</span>
+              <div data-reasoning-slider="true" aria-describedby="level">
+                <span role="slider" aria-hidden="true" aria-valuemin="0"
+                  aria-valuemax="6" aria-valuenow="3"></span></div></div>'''
+            assert await observe(effort, "observeSubchatEffort") == {
+                "state": "effort_observed", "minimum": 0, "maximum": 6, "index": 3,
+                "description": "新しい強度、7件中4番目", "disabled": False}
+            for wrong in ["", "NaN", "3.5", "7", "9007199254740992"]:
+                changed = effort.replace('aria-valuenow="3"', f'aria-valuenow="{wrong}"')
+                assert await observe(changed, "observeSubchatEffort") == {
+                    "state": "unsupported_effort_control"}
+            assert await observe(effort.replace('aria-describedby="level"', ''),
+                                 "observeSubchatEffort") == {
+                "state": "effort_description_unconfirmed"}
+            assert await observe(effort.replace('data-reasoning-slider="true"',
+                                                'data-reasoning-slider="true" inert'),
+                                 "observeSubchatEffort") == {
+                "state": "effort_control_unconfirmed"}
         finally:
             await browser.close()

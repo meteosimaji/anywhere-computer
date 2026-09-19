@@ -1,10 +1,14 @@
 /* Experimental, read-only extraction from an already opened model menu.
  * Labels are UI observations, never provider IDs or quota guarantees.
  */
-function observeSubchatModelMenu(document) {
-  const available = element => !element.closest('[hidden], [inert], [aria-hidden="true"]')
+function subchatMenuElementVisible(document, element) {
+  return !element.closest('[hidden], [inert], [aria-hidden="true"]')
     && element.getClientRects().length > 0
     && document.defaultView.getComputedStyle(element).visibility === 'visible';
+}
+
+function observeSubchatModelMenu(document) {
+  const available = element => subchatMenuElementVisible(document, element);
   const menus = Array.from(document.querySelectorAll('[role="menu"]'))
     .filter(available);
   if (menus.length !== 1) return { state: 'menu_unconfirmed' };
@@ -29,4 +33,37 @@ function observeSubchatModelMenu(document) {
       || models.filter(model => model.selected).length !== 1)
     return { state: 'ambiguous_menu' };
   return { state: 'models_observed', models };
+}
+
+
+function observeSubchatEffort(document) {
+  const menus = Array.from(document.querySelectorAll('[role="menu"]'))
+    .filter(element => subchatMenuElementVisible(document, element));
+  if (menus.length !== 1) return { state: 'menu_unconfirmed' };
+  const controls = Array.from(menus[0].querySelectorAll('[data-reasoning-slider="true"]'))
+    .filter(element => subchatMenuElementVisible(document, element));
+  if (controls.length !== 1) return { state: 'effort_control_unconfirmed' };
+  const control = controls[0];
+  // The visible keyboard control owns an aria-hidden thumb in the current UI.
+  // Only read that thumb inside the confirmed control; do not operate it.
+  const thumbs = control.querySelectorAll('[role="slider"]');
+  if (thumbs.length !== 1) return { state: 'unsupported_effort_control' };
+  const values = ['aria-valuemin', 'aria-valuemax', 'aria-valuenow'].map(
+    name => thumbs[0].getAttribute(name));
+  if (values.some(value => value === null || !/^-?\d+$/.test(value)))
+    return { state: 'unsupported_effort_control' };
+  const [minimum, maximum, index] = values.map(Number);
+  if (![minimum, maximum, index].every(Number.isSafeInteger)
+      || minimum > maximum || index < minimum || index > maximum)
+    return { state: 'unsupported_effort_control' };
+  const descriptions = (control.getAttribute('aria-describedby') || '').split(/\s+/)
+    .filter(Boolean).map(id => document.getElementById(id))
+    .filter(element => element && menus[0].contains(element)
+      && element.getAttribute('role') === 'status'
+      && subchatMenuElementVisible(document, element));
+  if (descriptions.length !== 1 || !descriptions[0].textContent.trim())
+    return { state: 'effort_description_unconfirmed' };
+  return { state: 'effort_observed', minimum, maximum, index,
+    description: descriptions[0].textContent.trim(),
+    disabled: !!control.closest('[aria-disabled="true"], [disabled]') };
 }
