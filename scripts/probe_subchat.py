@@ -134,6 +134,27 @@ def connection_state(environment: dict[str, str]) -> str:
     return "ready_to_probe"
 
 
+def transport_failure(error: Exception, stage: str) -> dict[str, object]:
+    """Classify expected transport errors without retaining peer text or data."""
+    from mcp.shared.exceptions import McpError
+
+    from anywhere_computer.plugin_diagnostics import (
+        PluginRPCError,
+        failure_diagnostic,
+    )
+
+    if isinstance(error, ExceptionGroup):
+        # Unknown failures are programming/contract errors, not transport status.
+        diagnostics = [transport_failure(child, stage) for child in error.exceptions]
+        return {"failure_stage": stage, "failure_kind": "transport_group",
+                "failures": diagnostics}
+    if isinstance(error, McpError):
+        return dict(failure_diagnostic(PluginRPCError(error.error.model_dump()), stage))
+    if isinstance(error, (OSError, TimeoutError)):
+        return dict(failure_diagnostic(error, stage))
+    raise error
+
+
 async def probe(
     server: Path, thread_id: str | None, previous_user_id: str | None = None,
     expected_prompt: str | None = None, wait_seconds: float = 120,
@@ -158,55 +179,66 @@ async def probe(
     parameters = StdioServerParameters(
         command=str(launcher), args=[str(server)], env=child_environment,
     )
-    async with stdio_client(parameters) as (reader, writer):
-        async with ClientSession(reader, writer) as session:
-            await session.initialize()
-            catalog = await session.list_tools()
-            names = {tool.name for tool in catalog.tools}
-            result: dict[str, object] = {
-                "state": "catalog_received", "inference_requested": False,
-                "conversation_tools": sorted(names & {
-                    "list_threads", "read_thread", "send_message_to_thread", "create_thread",
-                }),
-                "send_tested": False,
-                "ordinary_chat_creation_tested": False,
-                "creation_schema": next((tool.inputSchema for tool in catalog.tools
-                                         if tool.name == "create_thread"), None),
-            }
-            if thread_id is not None:
-                if "read_thread" not in names:
-                    raise RuntimeError("read_thread is absent from the live catalog")
-                response = await session.call_tool(
-                    "read_thread",
-                    {"threadId": thread_id, "turnLimit": 1, "maxOutputCharsPerItem": 100},
-                    meta={"codexThreadId": os.environ["CODEX_THREAD_ID"]},
-                )
-                # Do not print private conversation text as probe diagnostics.
-                result["read_tool_error"] = bool(response.isError)
-                result["read_content_blocks"] = len(response.content)
-                if (previous_user_id or submitted_user_id) and expected_prompt is not None:
-                    async def read() -> object:
-                        response = await session.call_tool(
-                            "read_thread",
-                            {"threadId": thread_id, "turnLimit": 10,
-                             "maxOutputCharsPerItem": 20000},
-                            meta={"codexThreadId": os.environ["CODEX_THREAD_ID"]},
-                        )
-                        if response.isError:
-                            raise RuntimeError("Chat read tool returned an error")
-                        if len(response.content) != 1 or response.content[0].type != "text":
-                            raise RuntimeError("Unexpected Chat read result shape")
-                        return json.loads(response.content[0].text)
-
-                    receipt = await wait_for_reply(
-                        read, thread_id, previous_user_id, expected_prompt, wait_seconds,
-                        submitted_user_id=submitted_user_id,
+    stage = "launch"
+    try:
+        async with stdio_client(parameters) as (reader, writer):
+            async with ClientSession(reader, writer) as session:
+                stage = "initialize"
+                await session.initialize()
+                stage = "catalog"
+                catalog = await session.list_tools()
+                names = {tool.name for tool in catalog.tools}
+                result: dict[str, object] = {
+                    "state": "catalog_received", "inference_requested": False,
+                    "conversation_tools": sorted(names & {
+                        "list_threads", "read_thread", "send_message_to_thread", "create_thread",
+                    }),
+                    "send_tested": False,
+                    "ordinary_chat_creation_tested": False,
+                    "creation_schema": next((tool.inputSchema for tool in catalog.tools
+                                             if tool.name == "create_thread"), None),
+                }
+                if thread_id is not None:
+                    stage = "read"
+                    if "read_thread" not in names:
+                        raise RuntimeError("read_thread is absent from the live catalog")
+                    response = await session.call_tool(
+                        "read_thread",
+                        {"threadId": thread_id, "turnLimit": 1, "maxOutputCharsPerItem": 100},
+                        meta={"codexThreadId": os.environ["CODEX_THREAD_ID"]},
                     )
-                    answer = receipt.pop("text", None)
-                    if isinstance(answer, str):
-                        receipt["answer_characters"] = len(answer)
-                    result["reply"] = receipt
-            return result
+                    # Do not print private conversation text as probe diagnostics.
+                    result["read_tool_error"] = bool(response.isError)
+                    result["read_content_blocks"] = len(response.content)
+                    if (previous_user_id or submitted_user_id) and expected_prompt is not None:
+                        async def read() -> object:
+                            response = await session.call_tool(
+                                "read_thread",
+                                {"threadId": thread_id, "turnLimit": 10,
+                                 "maxOutputCharsPerItem": 20000},
+                                meta={"codexThreadId": os.environ["CODEX_THREAD_ID"]},
+                            )
+                            if response.isError:
+                                raise RuntimeError("Chat read tool returned an error")
+                            if len(response.content) != 1 or response.content[0].type != "text":
+                                raise RuntimeError("Unexpected Chat read result shape")
+                            return json.loads(response.content[0].text)
+
+                        receipt = await wait_for_reply(
+                            read, thread_id, previous_user_id, expected_prompt, wait_seconds,
+                            submitted_user_id=submitted_user_id,
+                        )
+                        answer = receipt.pop("text", None)
+                        if isinstance(answer, str):
+                            receipt["answer_characters"] = len(answer)
+                        result["reply"] = receipt
+                stage = "cleanup"
+                return result
+    except Exception as error:
+        diagnostic = transport_failure(error, stage)
+        return {"state": "transport_failed", "inference_requested": False,
+                "send_tested": False, "ordinary_chat_creation_tested": False,
+                "diagnostic": diagnostic}
 
 
 def main() -> None:

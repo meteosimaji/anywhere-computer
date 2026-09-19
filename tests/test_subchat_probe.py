@@ -213,3 +213,66 @@ async def test_thinking_timeout_can_resume_reading_same_submission():
     assert recovered["read_attempts"] == 3
     assert recovered["user_message_id"] == "new"
     assert recovered["text"] == "42"
+
+
+def test_transport_failure_redacts_rpc_payload_and_preserves_stage():
+    import json
+
+    from mcp.shared.exceptions import McpError
+    from mcp.types import ErrorData
+
+    error = ExceptionGroup("private group text", [
+        McpError(ErrorData(code=-32000, message="private credential text",
+                           data={"token": "secret-token"})),
+    ])
+    result = probe.transport_failure(error, "catalog")
+    assert result["failure_stage"] == "catalog"
+    detail = result["failures"][0]
+    assert detail["rpc_code"] == -32000 and detail["data_present"] is True
+    assert detail["content_redacted"] is True
+    assert "private" not in json.dumps(result) and "secret-token" not in json.dumps(result)
+
+
+def test_transport_failure_does_not_hide_programming_errors():
+    with pytest.raises(TypeError, match="contract defect"):
+        probe.transport_failure(ExceptionGroup("group", [
+            ConnectionError("closed"), TypeError("contract defect"),
+        ]), "read")
+    assert probe.transport_failure(TimeoutError(), "initialize") == {
+        "failure_stage": "initialize", "failure_kind": "timeout",
+    }
+
+
+async def test_successful_catalog_with_close_failure_reports_cleanup(monkeypatch, tmp_path):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import mcp
+    import mcp.client.stdio
+
+    @asynccontextmanager
+    async def transport(_):
+        yield None, None
+
+    class Session:
+        def __init__(self, *_):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            raise ConnectionError("close failed after successful catalog")
+
+        async def initialize(self):
+            pass
+
+        async def list_tools(self):
+            return SimpleNamespace(tools=[])
+
+    monkeypatch.setattr(probe, "connection_state", lambda _: "ready_to_probe")
+    monkeypatch.setattr(mcp.client.stdio, "stdio_client", transport)
+    monkeypatch.setattr(mcp, "ClientSession", Session)
+    result = await probe.probe(tmp_path / "server.mjs", None)
+    assert result["state"] == "transport_failed"
+    assert result["diagnostic"]["failure_stage"] == "cleanup"
