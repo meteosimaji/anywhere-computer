@@ -1464,6 +1464,11 @@ The same review identified stale account headers after a user switches accounts
 inside a BrowserContext. New HTTP-controller submissions now checkpoint the
 observed `chatgpt-account-id` with the outgoing input identity before forwarding.
 Missing account identity or checkpoint failure aborts the intercepted request.
+Before forwarding, the generation account must also match an already established
+HTTP reader account. Queued follow-ups revalidate their persisted parent account
+at the request checkpoint, including after restart; they cannot replace it with
+the currently selected browser account. The immutable parent binding is reused
+instead of introducing a second copied expected-account field.
 The non-secret account binding is immutable and stored separately from legacy
 submission JSON; authorization tokens are never stored in the ledger.
 

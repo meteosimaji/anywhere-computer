@@ -94,6 +94,13 @@ class ChatHTTPReader:
         finally:
             await response_http.dispose()
 
+    def check_generation_account(self, account: str) -> None:
+        """A bound reader must be able to recover a request before it is forwarded."""
+        if self._access_status is not None:
+            raise SubchatAccessError(self._access_status)
+        if self._headers:
+            self._check_account(account)
+
     def _check_account(self, expected_account: str | None) -> None:
         if (expected_account is not None
                 and self._headers.get('chatgpt-account-id') != expected_account):

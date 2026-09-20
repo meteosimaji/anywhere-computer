@@ -230,6 +230,7 @@ class BrowserSubchatBackend:
                     account = await route.request.header_value('chatgpt-account-id')
                     if account is None or not account.strip() or len(account) > 256:
                         raise ValueError('Generation account identity is unavailable')
+                    self._http_reader.check_generation_account(account)
                     self._record_request(submission.operation_id, identity, account)
                 await route.continue_(post_data=outgoing)
                 accepted = True

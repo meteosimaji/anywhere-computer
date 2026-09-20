@@ -277,6 +277,11 @@ class SubchatSubmissions:
                 or len(user_message_id) > 256
                 or user_message_id in old.baseline_message_ids):
             raise ValueError('Invalid outgoing submission identity')
+        if old.after_operation_id is not None:
+            target = self.get(old.after_operation_id, owner=owner)
+            if (target.provider_account_id is not None
+                    and target.provider_account_id != provider_account_id):
+                raise ValueError('Queued request belongs to a different Chat account')
         if provider_account_id is not None and (not provider_account_id.strip()
                 or len(provider_account_id) > 256):
             raise ValueError('Invalid provider account identity')

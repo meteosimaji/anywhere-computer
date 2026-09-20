@@ -136,7 +136,7 @@ async def test_resources_reach_persisted_submission_through_public_entry(entry, 
 
 @pytest.mark.parametrize(('checkpoint', 'with_resources'), [
     ('none', True), ('saved', True), ('failed', True), ('saved', False), ('failed', False),
-    ('missing_account', False),
+    ('missing_account', False), ('changed_account', False),
 ])
 async def test_browser_dispatches_resources_without_enter_or_clipboard(
         tmp_path, monkeypatch, checkpoint, with_resources):
@@ -194,8 +194,10 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
 
             backend = BrowserSubchatBackend(context, http_read=True,
                 record_request=record if checkpoint != 'none' else None)
+            if checkpoint == 'changed_account':
+                backend._http_reader._headers = {'chatgpt-account-id': 'previous-account'}
             service = Subchats(store, backend)
-            if checkpoint in ('failed', 'missing_account'):
+            if checkpoint in ('failed', 'missing_account', 'changed_account'):
                 from anywhere_computer.subchat import SubchatOutcomeUnknown
 
                 with pytest.raises(SubchatOutcomeUnknown):
