@@ -34,3 +34,33 @@ async def test_json_commands_recover_without_repeating_send(tmp_path):
         assert backend.sends == 1
     finally:
         ledger.close()
+
+
+async def test_json_lines_continue_after_invalid_input_and_keep_unknown_identity(tmp_path):
+    from io import StringIO
+
+    from anywhere_computer.subchat_cli import process_lines
+
+    ledger = Ledger(tmp_path)
+    backend = BrowserFixture()
+    service = Subchats(SubchatSubmissions(ledger.connection), backend)
+    op = '6' * 32
+    send = {'action': 'send', 'operation_id': op, 'prompt': 'private prompt',
+            'model': 'observed model', 'effort': 'observed effort'}
+    source = StringIO('\n'.join(['invalid secret', json.dumps(send), json.dumps(send),
+                                json.dumps({'action': 'recover', 'operation_id': op})]) + '\n')
+    destination = StringIO()
+    try:
+        await process_lines(service, source, destination)
+        replies = [json.loads(line) for line in destination.getvalue().splitlines()]
+        assert len(replies) == 4
+        assert replies[0]['state'] == 'command_failed'
+        assert replies[0]['operation_id'] is None
+        assert 'secret' not in json.dumps(replies[0])
+        assert replies[1] == {'state': 'submission_unconfirmed', 'operation_id': op,
+                              'error_type': 'SubchatOutcomeUnknown', 'automatic_retry': False}
+        assert replies[2]['state'] == 'sending'
+        assert replies[3]['state'] == 'submitted'
+        assert backend.sends == 1
+    finally:
+        ledger.close()

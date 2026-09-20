@@ -3,8 +3,9 @@
 import argparse
 import asyncio
 import json
+import sys
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TextIO
 
 from pydantic import Field
 
@@ -40,6 +41,29 @@ async def dispatch(service: Subchats, command: Command) -> str:
     return result.model_dump_json()
 
 
+async def process_lines(service: Subchats, source: TextIO, destination: TextIO) -> None:
+    """Sequential request framing; errors preserve the durable operation identity."""
+    while True:
+        line = await asyncio.to_thread(source.readline)
+        if not line:
+            return
+        command = None
+        try:
+            command = Command.model_validate_json(line)
+            output = await dispatch(service, command)
+        except Exception as error:
+            # Do not print provider errors or invalid input: both can contain secrets.
+            output = json.dumps({
+                'state': ('submission_unconfirmed'
+                          if isinstance(error, SubchatOutcomeUnknown) else 'command_failed'),
+                'operation_id': command.operation_id if command is not None else None,
+                'error_type': type(error).__name__,
+                'automatic_retry': False,
+            })
+        destination.write(output + '\n')
+        destination.flush()
+
+
 async def run(profile: Path, state: Path) -> None:
     # Keep this dependency optional for all non-browser installations.
     from playwright.async_api import async_playwright
@@ -56,24 +80,7 @@ async def run(profile: Path, state: Path) -> None:
                                    BrowserSubchatBackend(context))
                 # Multiple commands share one browser. EOF is explicit shutdown;
                 # no per-request window closing and no automatic message retry.
-                while True:
-                    try:
-                        line = await asyncio.to_thread(input)
-                    except EOFError:
-                        break
-                    try:
-                        command = Command.model_validate_json(line)
-                        output = await dispatch(service, command)
-                    except Exception as error:
-                        # Provider errors can contain private page/account data.
-                        output = json.dumps({
-                            'state': ('submission_unconfirmed'
-                                      if isinstance(error, SubchatOutcomeUnknown)
-                                      else 'command_failed'),
-                            'error_type': type(error).__name__,
-                            'automatic_retry': False,
-                        })
-                    print(output, flush=True)
+                await process_lines(service, sys.stdin, sys.stdout)
             finally:
                 await context.close()
     finally:
