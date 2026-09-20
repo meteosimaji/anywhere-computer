@@ -10,6 +10,7 @@ from .mcp_server import Catalog as ToolCatalog
 from .mcp_server import Execute, MCPSession
 from .models import Contract, OperationId, Reply, Request
 from .subchat import (
+    SubchatAccessError,
     SubchatInterrupted,
     SubchatOutcomeUnknown,
     SubchatPreparationFailed,
@@ -276,6 +277,12 @@ def session(service: Subchats, *,
                     return Reply(operation_id=request.operation_id, state='completed',
                                  data=current.model_dump(mode='json'))
             raise
+        except SubchatAccessError as error:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='Check the dedicated Chat login and account access. Saved '
+                               'submissions are preserved; recover their existing IDs after '
+                               'restoring access, without sending them again.',
+                         data={'error_code': error.code, 'automatic_retry': False})
         except SubchatInterrupted:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='The provider recorded an interrupted answer. Inspect the '

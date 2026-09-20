@@ -477,6 +477,22 @@ fully browser-free or guaranteed background-only Chat creation path.
 EOF explicitly shuts down this controller and its browser, if started. This entry point is
 local-only; it is not an authenticated HTTP/MCP endpoint or a shared-work router.
 
+HTTP access diagnostics are separate from generation state. An observed 401
+returns `authentication_required`; an observed 403 returns `access_denied` (not
+proof of an expired login). CLI uses these as `state`; MCP uses `error_code`.
+Both report `automatic_retry=false`. Restore the dedicated account's login/access,
+then recover the saved operation ID instead of submitting the prompt again.
+The ledger is preserved. A timeout, 429, server failure or missing authenticated
+request is not relabeled as a login failure. A logged-out page that makes no
+observed API request may still produce a generic observation error; first-login
+onboarding is not completed by these diagnostics.
+
+Only observed authorization/account/language headers are held in process memory;
+Cookies remain in the dedicated persistent browser context. After controller
+restart, the same profile may retain login, but headers must be observed again.
+Profile persistence is not a guarantee that the remote session remains valid.
+This path does not import Codex credentials or refresh tokens independently.
+
 A `send` command requires `action`, a caller-generated 32-character lowercase
 hexadecimal `operation_id`, exact `prompt`, and observed `model` and `effort`
 labels. Optional `conversation_id` targets a follow-up. Obtain current labels

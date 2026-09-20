@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from ..subchat import SubchatAnswer, SubchatInterrupted, SubchatReceipt
+from ..subchat import SubchatAccessError, SubchatAnswer, SubchatInterrupted, SubchatReceipt
 from ..subchat_state import SubchatSubmission
 
 if TYPE_CHECKING:
@@ -120,6 +120,8 @@ async def observe_history(page: Page, submission: SubchatSubmission) -> Response
         await page.goto('https://chatgpt.com/c/' + str(submission.conversation_id),
                         wait_until='domcontentloaded')
     response = await pending.value
+    if response.status in (401, 403):
+        raise SubchatAccessError(response.status)
     if response.status != 200 or not await response.request.header_value('authorization'):
         raise ConnectionError('Authenticated conversation history was not observed')
     if response.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/json':

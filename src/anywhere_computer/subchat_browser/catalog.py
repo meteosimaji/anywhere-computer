@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from ..subchat import SubchatAccessError
 from .efforts import collect_efforts
 
 if TYPE_CHECKING:
@@ -97,6 +98,8 @@ async def observe_http_catalog(page: Page) -> Response:
     async with page.expect_response(catalog_response, timeout=15_000) as pending:
         await page.goto('https://chatgpt.com/', wait_until='domcontentloaded')
     response = await pending.value
+    if response.status in (401, 403):
+        raise SubchatAccessError(response.status)
     if response.status != 200:
         raise ConnectionError('Model catalog request did not succeed')
     # Cookie-only GET can return a reduced catalog with status 200. Require

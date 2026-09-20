@@ -5,7 +5,7 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from ..subchat import SubchatAnswer, SubchatReceipt
+from ..subchat import SubchatAccessError, SubchatAnswer, SubchatReceipt
 from ..subchat_state import SubchatSubmission
 from .catalog import observe_http_catalog, project_http_catalog
 from .history import observe_history, project_history, project_receipt
@@ -51,6 +51,7 @@ class ChatHTTPReader:
         try:
             if response_http.status in (401, 403):
                 self._headers = {}  # Next explicit read re-observes login, never generation.
+                raise SubchatAccessError(response_http.status)
             if response_http.status != 200:
                 raise ConnectionError('Chat read request did not succeed')
             if response_http.headers.get('content-type', '').split(';', 1)[0].strip() != (
