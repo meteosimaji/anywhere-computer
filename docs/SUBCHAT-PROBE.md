@@ -220,3 +220,48 @@ npm cache allowed the probe to run; no cache ownership or global package setting
 were changed. This is a development probe prerequisite, not the intended product
 installation flow. No production dependency or advertised subchat capability was
 added on the strength of browser startup alone.
+
+## DOM submission receipt and owner-read correlation, 2026-09-20 JST
+
+The dedicated browser's current transcript has no `data-message-id` attributes.
+Its `data-turn-key`, however, matched the submitted user-message ID returned by
+an independent owning-Codex `read_thread` call for the same persisted Chat.
+`subchat_submission.js` now extracts that observed identity from a unique matching
+user bubble in the explicitly selected conversation. It excludes caller-supplied
+previous IDs and rejects duplicate IDs, duplicate matching submissions, nested or
+unsupported turns, quoted assistant text, and provisional or different URLs.
+It returns neither assistant text nor a completion claim. Virtualized/missing
+rows remain unconfirmed; absence must never trigger another submission.
+
+The optional read-only CLI owns a dedicated minimized browser process:
+
+```sh
+uv run --extra browser python scripts/probe_subchat_receipt.py \
+  --profile /absolute/dedicated/profile \
+  --conversation-url https://chatgpt.com/c/PERSISTED-CONVERSATION-ID \
+  --expected-prompt-file /absolute/exact-prompt.txt
+```
+
+Use only the authorized dedicated profile with its other browser process closed.
+The URL must be the actual persisted ordinary Chat URL, not a temporary local
+route. The prompt file must match exactly, including newlines. Repeat
+`--previous-user-id` for known prior submissions when collecting a follow-up.
+A successful result is `submission_observed`, `resend=false`, and
+`completion_confirmed=false`. This reads an already selected conversation; it
+neither creates a Chat nor reconstructs a lost conversation URL. It never
+selects a model, sends, stops generation, or changes another browser's profile.
+
+In live acceptance, this CLI recovered the submitted user ID from the persisted
+single-turn test Chat after browser restart. Feeding the observed conversation
+and user IDs plus the exact prompt into `matching_reply`, with a fresh owning-app
+read, recovered the distinct assistant ID and the exact 32-character answer.
+The two paths agreed without another send. This is a composed browser/owning-app
+acceptance, not proof that the external Codex app transport is repaired. A
+standalone adapter still needs a working result-read transport and lifecycle,
+submission persistence, model selection, and uncertain-send recovery integration.
+
+The real-DOM fixture exercises the extractor against local intercepted pages;
+it uses no account or network. It skips without the optional browser dependency
+or Chrome and does not replace the authenticated live trial. The current DOM
+contract is version-sensitive and deliberately fails unconfirmed on changed
+markup; its turn key is an observation, not a documented provider API identifier.
