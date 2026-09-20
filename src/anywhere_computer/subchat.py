@@ -106,7 +106,7 @@ class Subchats:
             return submission
         try:
             baseline = await self.backend.prepare(submission)
-        except SubchatStaleTarget:
+        except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError):
             raise
         except Exception as error:
             raise SubchatPreparationFailed(str(error)) from error
