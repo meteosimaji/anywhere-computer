@@ -1482,3 +1482,11 @@ Controlled tests cover atomic rollback, restart, immutable and owner-bound
 checkpoint identity, rejection before cross-account history requests, matched
 HTTP recovery, and missing-account generation abort. Live account-switch behavior
 and workspace identity semantics remain unverified.
+
+A September 21 live read-only check used the new reader with an account binding
+seeded from the already observed session. One independent HTTP request recovered
+the exact saved answer. Changing only the expected account to a fixture value
+was rejected before any additional request. No cookies were copied, messages
+generated, browser tabs opened, or real accounts switched. This confirms live
+matched recovery plus a local mismatch guard, not new-send binding or live
+multi-account acceptance.
