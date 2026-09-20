@@ -130,36 +130,48 @@ def session(service: Subchats, *,
             raise RuntimeError('Subchat session is closed')
         current = service.store.get(operation_id, owner=None)
         task = recoveries.get(operation_id)
-        if task is None and current.state == 'queued':
+        if task is None and current.state in {'queued', 'sending', 'submitted'}:
             if len(recoveries) >= 8:
-                raise RuntimeError('Queued recovery limit reached')
+                raise RuntimeError('Recovery limit reached; collect existing observations first')
 
             async def run() -> SubchatSubmission:
                 async with browser_lock:
-                    return await service.recover(operation_id, owner=None)
+                    if current.state == 'queued':
+                        return await service.recover(operation_id, owner=None)
+                    async with asyncio.timeout(25):
+                        return await service.recover(operation_id, owner=None)
 
             task = asyncio.create_task(run())
             recoveries[operation_id] = task
 
             def completed(done: asyncio.Task[SubchatSubmission]) -> None:
-                if recoveries.get(operation_id) is done:
-                    recoveries.pop(operation_id)
                 if not done.cancelled():
-                    # A timed-out observer may no longer await this result.
-                    done.exception()
+                    # Retain late failures for the next observer, not just logs.
+                    error = done.exception()
+                    if (error is None and done.result().state in
+                            {'prepared', 'completed', 'cancelled'}
+                            and recoveries.get(operation_id) is done):
+                        recoveries.pop(operation_id)  # Result is already durable.
 
             task.add_done_callback(completed)
         if task is not None:
             # An observation timeout must not cancel preparation or release its input lock.
             try:
-                return await asyncio.shield(task)
+                result = await asyncio.shield(task)
             except asyncio.CancelledError:
                 current = service.store.get(operation_id, owner=None)
                 if not server.closed and task.cancelled() and current.state == 'cancelled':
                     return current
                 raise
-        async with browser_lock:
-            return await service.recover(operation_id, owner=None)
+            except Exception:
+                if recoveries.get(operation_id) is task:
+                    recoveries.pop(operation_id)
+                raise
+            else:
+                if recoveries.get(operation_id) is task:
+                    recoveries.pop(operation_id)
+                return result
+        return current
 
     definitions: dict[str, tuple[type[Contract], str]] = {
         'subchat_list': (SubchatList, 'List saved submission summaries without opening Chrome.'),
@@ -211,6 +223,7 @@ def session(service: Subchats, *,
                 for task in pending:
                     task.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
+                recoveries.pop(target.operation_id, None)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data=result.model_dump(mode='json'))
             if request.tool == 'subchat_message':

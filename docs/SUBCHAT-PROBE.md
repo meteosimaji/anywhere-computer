@@ -1218,3 +1218,25 @@ operations; DOM-only completion after interruption; durable interruption
 explanation; closed-browser diagnosis before a conversation ID exists. No child
 permission isolation, browser-independent authentication or native GUI support
 is claimed by this change.
+
+
+### Short waits share observations
+
+A caller's wait deadline does not cancel a sending/submitted observation. The
+session shares one recovery task per operation, using the existing eight-task
+limit and browser lock. Non-queued observations have a 25-second execution bound
+after acquiring that lock. This bounds local receipt/answer retrieval, not model
+Thinking time, and never sends a Stop request. Queue preparation retains its
+existing provider bounds and durable send reservation.
+
+Completed answers remain in the ledger. Late observation errors remain in the
+session until the next recovery/wait collects them; they are not silently dropped
+when the original caller timed out. At most eight uncollected/pending recoveries
+are retained; collect existing IDs before adding more. Session close cancels and
+joins outstanding work. This is not external MCP multiplexing or durable error
+storage across process restarts.
+
+The slow-observer regression failed on the previous implementation for answer,
+authentication-error and session-close outcomes. It now verifies three short
+waits share exactly one provider read, late results/errors remain observable,
+and closing a session cancels that read without replaying the submission.

@@ -146,3 +146,62 @@ async def test_session_joins_direct_send(tmp_path, finish):
     finally:
         await server.close()
         ledger.close()
+
+
+@pytest.mark.parametrize('outcome', ['answer', 'access_error', 'close'])
+async def test_short_wait_preserves_slow_observation_and_its_result(tmp_path, outcome):
+    from anywhere_computer.subchat import SubchatAccessError
+
+    release = asyncio.Event()
+
+    class SlowReader(Provider):
+        reads = 0
+        cancellations = 0
+
+        async def read_answer(self, submission):
+            self.reads += 1
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                self.cancellations += 1
+                raise
+            if outcome == 'access_error':
+                raise SubchatAccessError(401)
+            self.finished = True
+            return await super().read_answer(submission)
+
+    ledger = Ledger(tmp_path)
+    provider = SlowReader()
+    service = Subchats(SubchatSubmissions(ledger.connection), provider)
+    server = session(service)
+    operation = '6' * 32
+    try:
+        await service.send(operation, 'prompt', 'model', 'effort', owner=None)
+        for _ in range(3):
+            reply = await server.execute(Request(operation_id='7' * 32, tool='subchat_wait',
+                arguments={'operation_id': operation, 'wait_ms': 20}))
+            assert reply.data['state'] == 'submitted'
+            assert provider.reads == 1
+            assert provider.cancellations == 0
+        if outcome == 'close':
+            await server.close()
+            assert provider.cancellations == 1
+            assert not server.recoveries
+        else:
+            task = server.recoveries[operation]
+            release.set()
+            await asyncio.gather(task, return_exceptions=True)
+            reply = await server.execute(Request(operation_id='8' * 32, tool='subchat_recover',
+                arguments={'operation_id': operation}))
+            if outcome == 'answer':
+                assert reply.data['answer'] == '42'
+                assert reply.data['state'] == 'completed'
+            else:
+                assert reply.data['error_code'] == 'authentication_required'
+                assert service.store.get(operation, owner=None).state == 'submitted'
+            assert provider.reads == 1
+            assert not server.recoveries
+        assert provider.sends == [operation]
+    finally:
+        await server.close()
+        ledger.close()
