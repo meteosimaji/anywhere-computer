@@ -1284,3 +1284,14 @@ This adds a development submission-state value. Older controllers do not support
 reading these new records; do not share the state directory with an older binary.
 The SQLite restart/HTTP projection tests use controlled provider payloads, not a
 new live Chat stop trial.
+
+September 21 follow-up: fresh HTTP history from the existing Thinking-stop probe
+`6aafe834-c5b4-83ee-aec2-c77786d2101c` returned 200 without opening/navigating
+pages (13 pages before and after). The current projection and lifecycle persisted
+`interrupted` into an isolated SQLite ledger. Closing/reopening that ledger
+reported interruption with zero additional provider reads and no final answer.
+The captured projection retained correlation/terminal metadata and omitted
+reasoning content. This exercises current persistence with freshly retrieved real
+provider evidence; it is not a newly generated or newly stopped Chat, a complete
+controller-process restart, or browser-independent authentication. The local full
+suite on this branch passed 1480 tests with 18 skips.
