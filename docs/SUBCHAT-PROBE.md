@@ -883,7 +883,10 @@ not a browser-independent login client or a public provider API.
 
 Only the fixed HTTPS conversation-history GET is requested. Redirects and
 transport retries are disabled. A 401/403 clears the cached header and fails the
-current read; the next explicit recovery re-observes the application's login.
+current read. Later recovery polls retain that access error without requests or
+new tabs. Repair login/access explicitly and restart the adapter with the same
+profile and state directory to bootstrap a new reader; recover the original
+operation ID rather than sending again. Restarting does not itself repair access.
 Other failures do not cause a generation replay or automatic browser fallback.
 The overall read remains bounded and response objects are disposed after use.
 `--minimized` verifies OS window minimization before page work, using the existing

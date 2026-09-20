@@ -25,6 +25,7 @@ class ChatHTTPReader:
         self._context: BrowserContext | None = None
         self._headers: dict[str, str] = {}
         self._catalog_url: str | None = None
+        self._access_status: int | None = None
 
     async def _read(self, context: BrowserContext, url: str | None,
                     observe: Callable[[Page], Awaitable[Response]]) -> bytes:
@@ -32,6 +33,9 @@ class ChatHTTPReader:
             self._context = context
             self._headers = {}
             self._catalog_url = None
+            self._access_status = None
+        if self._access_status is not None:
+            raise SubchatAccessError(self._access_status)
         if not self._headers or url is None:
             page = await context.new_page()
             try:
@@ -50,7 +54,10 @@ class ChatHTTPReader:
             url, headers=self._headers, timeout=15_000, max_redirects=0, max_retries=0)
         try:
             if response_http.status in (401, 403):
-                self._headers = {}  # Next explicit read re-observes login, never generation.
+                self._headers = {}
+                # Polling must not open login tabs after access is rejected.
+                # A new reader/context explicitly starts a new login observation.
+                self._access_status = response_http.status
                 raise SubchatAccessError(response_http.status)
             if response_http.status != 200:
                 raise ConnectionError('Chat read request did not succeed')
