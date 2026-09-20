@@ -39,16 +39,23 @@ def test_packaged_runtime_matches_current_source_and_checksums():
         assert hashlib.sha256((plugin / "bundled" / name).read_bytes()).hexdigest() == digest
     wheel = plugin / config["args"][config["args"].index("--from") + 1]
     with zipfile.ZipFile(wheel) as archive:
-        sources = sorted((ROOT / "src/anywhere_computer").glob("*.py"))
+        sources = sorted((ROOT / "src/anywhere_computer").rglob("*.py"))
         assert {name for name in archive.namelist() if name.endswith(".py")} == {
-            "anywhere_computer/" + source.name for source in sources
+            source.relative_to(ROOT / "src").as_posix() for source in sources
         }
         for source in sources:
-            assert archive.read("anywhere_computer/" + source.name) == source.read_bytes(), (
+            assert archive.read(source.relative_to(ROOT / "src").as_posix()) == source.read_bytes(), (
                 "Rebuild plugin after source changes: uv run python scripts/package_plugin.py"
             )
         for asset in (ROOT / "src/anywhere_computer/web").glob("*"):
             assert archive.read("anywhere_computer/web/" + asset.name) == asset.read_bytes()
+        for asset in (ROOT / "src/anywhere_computer/subchat_browser").glob("*.js"):
+            assert archive.read(asset.relative_to(ROOT / "src").as_posix()) == asset.read_bytes()
+        entrypoints = [name for name in archive.namelist()
+                       if name.endswith(".dist-info/entry_points.txt")]
+        assert len(entrypoints) == 1
+        assert ("anywhere-subchat = anywhere_computer.subchat_cli:main"
+                in archive.read(entrypoints[0]).decode())
         metadata_files = [name for name in archive.namelist()
                           if name.endswith(".dist-info/METADATA")]
         assert len(metadata_files) == 1
