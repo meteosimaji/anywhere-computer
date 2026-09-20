@@ -134,8 +134,14 @@ async def test_resources_reach_persisted_submission_through_public_entry(entry, 
         ledger.close()
 
 
-async def test_browser_dispatches_resources_without_enter_or_clipboard(tmp_path, monkeypatch):
+@pytest.mark.parametrize(('checkpoint', 'with_resources'), [
+    ('none', True), ('saved', True), ('failed', True), ('saved', False), ('failed', False),
+])
+async def test_browser_dispatches_resources_without_enter_or_clipboard(
+        tmp_path, monkeypatch, checkpoint, with_resources):
     from playwright.async_api import Route, async_playwright
+
+    selected_resources = resources() if with_resources else None
 
     script = '''<script>
     send.onclick=async()=>{
@@ -143,8 +149,9 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(tmp_path,
       const body={action:'next',model:'observed',messages:[{id:'user',author:{role:'user'},
         content:{content_type:'text',parts:[document.querySelector('[role=textbox]').innerText]},
         metadata:{}}]};
-      const response=await fetch('/backend-api/f/conversation',
+      const post=()=>fetch('/backend-api/f/conversation',
         {method:'POST',body:JSON.stringify(body)});
+      const response=await Promise.any([post(),post()]);
       window.wire=await response.json();
     };
     </script>'''
@@ -158,6 +165,8 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(tmp_path,
             async def transport(route, *, post_data):
                 # Intercept the final network boundary, not the application's
                 # draft/Send behavior. Live service acceptance is separate.
+                if checkpoint == 'saved':
+                    assert store.get('b' * 32, owner=None).user_message_id == 'user'
                 bodies.append(json.loads(post_data))
                 await route.fulfill(content_type='application/json', body=post_data)
 
@@ -170,18 +179,36 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(tmp_path,
                     await route.fulfill(content_type='text/html', body=HTML + script)
 
             await context.route('https://chatgpt.com/**', fixture)
-            backend = BrowserSubchatBackend(context, http_read=True)
-            service = Subchats(SubchatSubmissions(ledger.connection), backend)
+            store = SubchatSubmissions(ledger.connection)
+
+            def record(operation_id, message_id):
+                if checkpoint == 'failed':
+                    raise OSError('fixture storage unavailable')
+                store.observe_request(operation_id, message_id, owner=None)
+
+            backend = BrowserSubchatBackend(context, http_read=True,
+                record_request=record if checkpoint != 'none' else None)
+            service = Subchats(store, backend)
+            if checkpoint == 'failed':
+                from anywhere_computer.subchat import SubchatOutcomeUnknown
+
+                with pytest.raises(SubchatOutcomeUnknown):
+                    await service.send('b' * 32, 'two lines\n日本語',
+                        'Future model', 'Future effort', owner=None, resources=selected_resources)
+                assert bodies == []
+                assert store.get('b' * 32, owner=None).state == 'sending'
+                return
             reply = await service.send('b' * 32, 'two lines\n日本語',
-                'Future model', 'Future effort', owner=None, resources=resources())
+                'Future model', 'Future effort', owner=None, resources=selected_resources)
             assert reply.state == 'sending'  # A POST is not a saved server receipt.
             assert len(bodies) == 1
-            assert bodies[0]['messages'][0]['metadata']['attachments'] == resources().files()
+            assert bodies[0]['messages'][0]['metadata'].get('attachments', []) == (
+                resources().files() if with_resources else [])
             assert bodies[0]['messages'][0]['content']['parts'] == [reply.wire_prompt]
             assert await backend.pages[reply.operation_id].evaluate('window.sends') == 1
             assert await backend.pages[reply.operation_id].evaluate('window.osWrites') == 0
             await service.send(reply.operation_id, reply.prompt, reply.model, reply.effort,
-                               owner=None, resources=resources())
+                               owner=None, resources=selected_resources)
             assert len(bodies) == 1  # No duplicate dispatch while receipt is unknown.
         finally:
             ledger.close()

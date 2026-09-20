@@ -26,10 +26,9 @@ def _matches_prompt(content: JsonValue, prompt: str) -> bool:
     return literal == prompt
 
 
-def add_resources(payload: str, submission: SubchatSubmission) -> str:
-    resources = submission.resources
-    if resources is None or len(payload) > 1_048_576:
-        raise ValueError('Explicit resources and a bounded request are required')
+def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, JsonValue]:
+    if len(payload) > 1_048_576:
+        raise ValueError('A bounded request is required')
     body = TypeAdapter(dict[str, JsonValue]).validate_json(payload)
     messages = body.get('messages')
     if (body.get('action') != 'next' or not isinstance(messages, list)
@@ -48,6 +47,19 @@ def add_resources(payload: str, submission: SubchatSubmission) -> str:
     if (metadata.get('attachments') or metadata.get('system_hints')
             or body.get('system_hints')):
         raise ValueError('Generation request already contains resources')
+    return body
+
+
+def add_resources(payload: str, submission: SubchatSubmission) -> str:
+    resources = submission.resources
+    if resources is None:
+        raise ValueError('Explicit resources are required')
+    body = generation_input(payload, submission)
+    messages = body['messages']
+    assert isinstance(messages, list) and isinstance(messages[0], dict)
+    message = messages[0]
+    metadata = message['metadata']
+    assert isinstance(metadata, dict)
     message['content'] = {'content_type': 'text', 'parts': [submission.wire_prompt]}
     if resources.attachments:
         metadata['attachments'] = TypeAdapter(JsonValue).validate_python(resources.files())

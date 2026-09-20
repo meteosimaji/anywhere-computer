@@ -135,8 +135,14 @@ async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool 
                         await cdp.detach()
                 return context
 
-            backend = BrowserSubchatBackend(open_browser, http_read=http_read)
-            service = Subchats(SubchatSubmissions(ledger.connection), backend)
+            store = SubchatSubmissions(ledger.connection)
+
+            def record_request(operation_id: str, message_id: str) -> None:
+                store.observe_request(operation_id, message_id, owner=None)
+
+            backend = BrowserSubchatBackend(open_browser, http_read=http_read,
+                record_request=record_request if http_read else None)
+            service = Subchats(store, backend)
             # Saved-state requests need no browser. Once needed, commands share
             # one dedicated context until EOF; no per-request restart or replay.
             if mcp:

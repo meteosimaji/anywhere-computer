@@ -1305,3 +1305,45 @@ An explicitly replaced reader or browser context permits a fresh observation.
 This does not refresh credentials, bypass an access rejection, or establish
 browser-independent authentication. Regression tests cover both statuses,
 page cleanup, repeated polls and explicit context replacement.
+
+### Outgoing input identity checkpoint
+
+The HTTP-read controller records the browser-generated input message ID in the
+existing submission row before forwarding its generation request. This keeps the
+state `sending`: a locally observed request is not proof of server acceptance.
+Storage failure aborts forwarding; uncertain sends are never replayed. The stored
+ID cannot change, and a later receipt must match it. For a known conversation,
+recovery uses that exact ID with the existing HTTP receipt and answer projections,
+without discovering message IDs from a rendered page. Authentication bootstrap
+may still require an observation page.
+
+This avoids treating HTTP messages absent from a partial DOM baseline as newly
+sent messages. On September 21, the existing audit Chat exposed four DOM input
+IDs but eight HTTP input IDs; all four DOM IDs matched, while four other HTTP
+inputs were absent from the rendered baseline. This was read-only live evidence,
+not a new generation trial. The baseline-set-difference proposal was therefore
+not adopted.
+
+New Chat creation still requires the browser to establish its conversation ID.
+An unknown conversation after a crash remains unresolved rather than triggering
+history-wide search or resend. Generation preparation, model/effort selection,
+and authentication are not made browser-independent by this checkpoint.
+
+September 21 live acceptance at source `f319869` / bundle `77e6ced` reused the
+existing dedicated browser and ordinary Chat
+`6aaff6f2-ee68-83e8-9212-fef4b9b8d44c`, with observed `GPT-5.6 Sol` and effort
+`高、5 件中 3 番目。`. Operation `f8bea83b264a414b8f71781a3bb64758`
+returned `sending` with outgoing input `40a87cde-e44e-45bc-bfb7-f9c92a00d00b`.
+A subsequent HTTP receipt/answer recovery returned `completed`, final message
+`a2d12389-e0e2-4d31-918c-57ed3d85c1ef`, and exact text
+`AC_RECEIPT_OK_20260921`. The browser was not restarted; tab count was 13 before
+and after. Initial authentication observation may transiently create a page;
+these endpoint counts do not prove that no observation page was opened.
+This is a plain-message live send and final-answer test. Resource forwarding and
+SQLite reopen remain controlled tests, not live crash or attachment acceptance.
+
+The existing browser dispatch fixture also fires two identical generation POSTs
+concurrently. With the previous post-await `dispatched.done()` guard it forwards
+two requests (three regression variants fail); the pre-await claim forwards one.
+Storage-failure variants forward none. This is controlled browser interception,
+not a claim that the live provider duplicates requests.
