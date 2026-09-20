@@ -3,18 +3,22 @@
 Used by the local stdio MCP entry. Existing-conversation sends checkpoint
 visible message identities before dispatch; see the dated acceptance records.
 """
+from __future__ import annotations
+
 import asyncio
 import re
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-
-from playwright.async_api import BrowserContext, Page
+from typing import TYPE_CHECKING
 
 from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt, SubchatStaleTarget
 from anywhere_computer.subchat_state import SubchatSubmission
 
 from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_page, picker_ready
 from .efforts import move_effort, snapshot
+
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Page
 
 INPUT = Path(__file__).with_name('subchat_input.js').read_text(encoding="utf-8")
 COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")

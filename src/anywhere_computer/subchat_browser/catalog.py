@@ -3,15 +3,19 @@
 Requires the optional browser extra and an already authorized dedicated profile.
 Do not point this at the user's normal browser profile.
 """
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
 import re
 from pathlib import Path
-
-from playwright.async_api import CDPSession, Error, Page, async_playwright
+from typing import TYPE_CHECKING
 
 from .efforts import collect_efforts
+
+if TYPE_CHECKING:
+    from playwright.async_api import CDPSession, Page
 
 SOURCE = Path(__file__).with_name("subchat_model_menu.js").read_text(encoding="utf-8")
 TRIGGER = '[data-composer-navigation-target="reasoning"]'
@@ -123,6 +127,8 @@ async def minimize_window(
 
 
 async def probe(profile: Path, headed: bool, minimized: bool = False) -> dict[str, object]:
+    from playwright.async_api import async_playwright
+
     async with async_playwright() as driver:
         context = await driver.chromium.launch_persistent_context(
             str(profile), channel="chrome", headless=not (headed or minimized),
@@ -147,6 +153,8 @@ async def probe(profile: Path, headed: bool, minimized: bool = False) -> dict[st
 
 
 def main() -> None:
+    from playwright.async_api import Error
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", type=Path, required=True)
     mode = parser.add_mutually_exclusive_group()
