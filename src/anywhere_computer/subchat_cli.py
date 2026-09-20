@@ -12,7 +12,7 @@ from pydantic import Field
 from .models import Contract
 from .state import Ledger
 from .subchat import SubchatOutcomeUnknown, Subchats
-from .subchat_state import SubchatSubmissions
+from .subchat_state import SubchatSubmissions, SubchatWorkContext
 
 
 class Command(Contract):
@@ -22,6 +22,7 @@ class Command(Contract):
     model: str | None = Field(default=None, min_length=1, max_length=256)
     effort: str | None = Field(default=None, min_length=1, max_length=256)
     conversation_id: str | None = None
+    work_context: SubchatWorkContext | None = None
 
 
 async def dispatch(service: Subchats, command: Command) -> str:
@@ -30,10 +31,12 @@ async def dispatch(service: Subchats, command: Command) -> str:
             raise ValueError('send requires prompt, model and effort')
         result = await service.send(command.operation_id, command.prompt, command.model,
                                     command.effort, owner=None,
-                                    conversation_id=command.conversation_id)
+                                    conversation_id=command.conversation_id,
+                                    work_context=command.work_context)
     else:
         if any(value is not None for value in (command.prompt, command.model,
-                                               command.effort, command.conversation_id)):
+                                               command.effort, command.conversation_id,
+                                               command.work_context)):
             raise ValueError('Recovery and status accept only an operation identity')
         result = (await service.recover(command.operation_id, owner=None)
                   if command.action == 'recover'

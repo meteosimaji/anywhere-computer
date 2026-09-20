@@ -613,3 +613,26 @@ verify `sending`, show that a fresh adapter cannot invent the unknown conversati
 and recover with the original page without a second click. Existing tests cover
 known-identity restart and final answer recovery. They do not simulate the live
 Chat service or prove recovery from every crash point.
+
+### Work provenance on submission receipts
+
+`subchat_send` and the JSON-lines `send` command accept optional `work_context`:
+
+```json
+{"task_id":"ffffffffffffffffffffffffffffffff","device_id":"local",
+ "workspace":"/example/project",
+ "inputs":[{"reference":"source.py","sha256":"0000000000000000000000000000000000000000000000000000000000000000"}]}
+```
+
+These are caller-supplied labels/references, not verified filesystem facts or an
+access grant. The controller does not open those paths, verify the hashes,
+change cwd, enable tools, or insert context into the exact prompt. Describe the
+work explicitly in the prompt; retrieve its recorded provenance via status,
+recover, or wait after reconnecting. A task ID groups work descriptively; it is
+not an authenticated child identity and does not isolate sibling Chats.
+
+Optional `parent_operation_id` must refer to an existing submission owned by the
+same transport owner. Repeating a submission ID with different context is rejected
+before backend input. Existing receipts without context continue to load. The
+local stdio endpoint still has owner=None; it does not establish per-child
+credentials or read-only isolation. Up to 32 input references are stored.

@@ -9,6 +9,7 @@ from pydantic import Field, JsonValue, TypeAdapter
 from .mcp_server import MCPSession
 from .models import Contract, OperationId, Reply, Request
 from .subchat import SubchatOutcomeUnknown, Subchats
+from .subchat_state import SubchatWorkContext
 
 
 class Send(Contract):
@@ -16,6 +17,7 @@ class Send(Contract):
     model: str = Field(min_length=1, max_length=256)
     effort: str = Field(min_length=1, max_length=256)
     conversation_id: str | None = None
+    work_context: SubchatWorkContext | None = None
 
 
 class Catalog(Contract):
@@ -41,6 +43,9 @@ INSTRUCTIONS = (
     'never scan unrelated history or resend to manufacture a receipt. '
     'This local stdio process uses the dedicated profile chosen by its operator; '
     'it does not establish shared workspace access or grant tools to the Chat.'
+    ' Optional work_context is caller-supplied provenance saved with the receipt, '
+    'not a grant or verified file snapshot. It is not automatically inserted into '
+    'the prompt: explicitly describe relevant work in the exact prompt you send.'
 )
 
 
@@ -103,7 +108,8 @@ def session(service: Subchats, *,
                 async with browser_lock:
                     result = await service.send(request.operation_id, args.prompt, args.model,
                                                 args.effort, owner=None,
-                                                conversation_id=args.conversation_id)
+                                                conversation_id=args.conversation_id,
+                                                work_context=args.work_context)
             elif request.tool in {'subchat_recover', 'subchat_status'}:
                 target = OperationId.model_validate(request.arguments)
                 if request.tool == 'subchat_status':

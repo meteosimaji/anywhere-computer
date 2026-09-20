@@ -5,7 +5,7 @@ from typing import Protocol
 from pydantic import Field
 
 from .models import Contract
-from .subchat_state import SubchatSubmission, SubchatSubmissions
+from .subchat_state import SubchatSubmission, SubchatSubmissions, SubchatWorkContext
 
 
 class SubchatReceipt(Contract):
@@ -49,9 +49,10 @@ class Subchats:
 
     async def send(self, operation_id: str, prompt: str, model: str, effort: str,
                    *, owner: str | None,
-                   conversation_id: str | None = None) -> SubchatSubmission:
+                   conversation_id: str | None = None,
+                   work_context: SubchatWorkContext | None = None) -> SubchatSubmission:
         submission = self.store.prepare(operation_id, prompt, model, effort, owner=owner,
-                                        conversation_id=conversation_id)
+                                        conversation_id=conversation_id, work_context=work_context)
         if submission.state != 'prepared':
             # A duplicate request never enters the backend again, even after restart.
             return submission

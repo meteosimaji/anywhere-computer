@@ -12,6 +12,21 @@ from pydantic import Field
 from .models import Contract
 
 
+class SubchatInputReference(Contract):
+    reference: str = Field(min_length=1, max_length=4096)
+    sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+
+
+class SubchatWorkContext(Contract):
+    """Caller-supplied provenance, not authentication or filesystem authorization."""
+
+    task_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    parent_operation_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
+    device_id: str = Field(min_length=1, max_length=128)
+    workspace: str = Field(min_length=1, max_length=4096)
+    inputs: tuple[SubchatInputReference, ...] = Field(default=(), max_length=32)
+
+
 class SubchatSubmission(Contract):
     operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     prompt: str = Field(min_length=1, max_length=100_000)
@@ -24,6 +39,7 @@ class SubchatSubmission(Contract):
     user_message_id: str | None = None
     answer_message_id: str | None = None
     answer: str | None = None
+    work_context: SubchatWorkContext | None = None
 
 
 class SubchatSubmissions:
@@ -45,13 +61,18 @@ class SubchatSubmissions:
         return SubchatSubmission.model_validate_json(row[1])
 
     def prepare(self, operation_id: str, prompt: str, model: str, effort: str,
-                *, owner: str | None, conversation_id: str | None = None) -> SubchatSubmission:
+                *, owner: str | None, conversation_id: str | None = None,
+                work_context: SubchatWorkContext | None = None) -> SubchatSubmission:
         if conversation_id is not None and not conversation_id.strip():
             raise ValueError('Conversation identity must not be empty')
+        if work_context is not None and work_context.parent_operation_id is not None:
+            if work_context.parent_operation_id == operation_id:
+                raise ValueError('A submission cannot be its own parent')
+            self.get(work_context.parent_operation_id, owner=owner)
         proposed = SubchatSubmission(operation_id=operation_id, prompt=prompt,
                                      model=model, effort=effort,
                                      requested_conversation_id=conversation_id,
-                                     conversation_id=conversation_id)
+                                     conversation_id=conversation_id, work_context=work_context)
         with self.connection:
             self.connection.execute(
                 'INSERT OR IGNORE INTO subchat_submissions VALUES (?,?,?)',
@@ -59,7 +80,8 @@ class SubchatSubmissions:
             )
         existing = self.get(operation_id, owner=owner)
         if (existing.prompt, existing.model, existing.effort,
-            existing.requested_conversation_id) != (prompt, model, effort, conversation_id):
+            existing.requested_conversation_id, existing.work_context) != (
+                prompt, model, effort, conversation_id, work_context):
             raise ValueError('Subchat submission ID was already used for different arguments')
         return existing
 
