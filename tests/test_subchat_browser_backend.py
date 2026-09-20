@@ -71,6 +71,7 @@ async def test_browser_send_pending_completion_and_database_recovery(
         try:
             context = await browser.new_context()
             prior = '''<script>
+            document.querySelector('[aria-pressed]').remove();
             document.querySelector('main').innerHTML='<div data-turn-key="old">'+
               '<div data-user-message-bubble="true">old prompt</div>'+
               '<button aria-label="Copy message">copy</button></div>';

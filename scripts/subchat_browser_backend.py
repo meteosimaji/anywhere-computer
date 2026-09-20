@@ -61,7 +61,10 @@ class BrowserSubchatBackend:
         chat = page.get_by_role('button', name='Chat', exact=True)
         editor = page.locator('[data-composer-markdown][role="textbox"]')
         stop = page.get_by_role('button', name=re.compile(r'^(停止|Stop|Stop generating)$'))
-        return (await chat.count() == 1 and await chat.get_attribute('aria-pressed') == 'true'
+        ordinary = (submission.requested_conversation_id is not None
+                    or (await chat.count() == 1
+                        and await chat.get_attribute('aria-pressed') == 'true'))
+        return (ordinary and await page.locator('form[data-chatgpt-composer]').count() == 1
                 and await editor.count() == 1 and not (await editor.inner_text()).strip()
                 and await stop.filter(visible=True).count() == 0)
 

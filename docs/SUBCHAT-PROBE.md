@@ -425,3 +425,28 @@ validated old record but matches the original stored JSON bytes, allowing additi
 model defaults without incorrectly treating an older serialization as a race.
 Real Chat follow-up acceptance and shared workspace tool access remain separate
 gates; the fixture does not prove those product requirements.
+
+### Actual plugin work and follow-up UI defect
+
+A new ordinary Chat selected GPT-5.6 Sol / medium and used the installed Anywhere
+HTTP plugin to create and execute a Python file in a dedicated temporary workspace.
+The returned result was `{"sum":16,"mean":5.333333333333333}`. The file was
+independently read and executed on the host with the same result. The Chat reported
+installed version `0.2.0a1`; that is the existing file/terminal runtime, not proof
+that the development subchat adapter is installed as a product tool.
+
+The first follow-up preparation failed before dispatch: existing conversation
+pages have no new-Chat Chat/Work toggle. Requiring that toggle on both page types
+was incorrect. The adapter now requires the toggle only for a fresh Chat; an
+existing conversation requires the exact validated `/c/` URL and ordinary Chat
+composer markup. The offline existing-conversation fixture removes that toggle
+and exercises the corrected path. Retrying the same prepared operation succeeded
+in observing a new user-message receipt, with the prior message ID persisted as
+its baseline. Completion of the requested file update is a separate observation.
+
+The follow-up then completed: the Chat read the existing file, reported using its
+SHA-256 for replacement, changed values to `[3,5,8,10]`, added `count`, and returned
+`{"sum":26,"mean":6.5,"count":4}` with exit code zero. Independent host read and
+execution confirmed that updated code and result. This is actual same-conversation
+file/terminal continuity for the selected model, not a blanket pass for all models,
+parent/subchat coordination, or simultaneous editing by multiple Chats.
