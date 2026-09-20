@@ -102,7 +102,8 @@ async def test_mcp_steer_has_no_queue_fallback_and_queue_cannot_change_target(tm
         ledger.close()
 
 
-async def test_two_dispatchers_do_not_send_same_queued_message_twice(tmp_path):
+@pytest.mark.parametrize("dispatcher_count", [2, 32])
+async def test_two_dispatchers_do_not_send_same_queued_message_twice(tmp_path, dispatcher_count):
     import asyncio
 
     ready = asyncio.Event()
@@ -110,13 +111,13 @@ async def test_two_dispatchers_do_not_send_same_queued_message_twice(tmp_path):
     class ConcurrentProvider(Provider):
         async def prepare(self, submission):
             self.prepares.append(submission.operation_id)
-            if len(self.prepares) == 2:
+            if len(self.prepares) == dispatcher_count:
                 ready.set()
             await ready.wait()
             return ('parent-user',)
 
     first = Ledger(tmp_path)
-    second = Ledger(tmp_path)
+    others = [Ledger(tmp_path) for _ in range(dispatcher_count - 1)]
     provider = ConcurrentProvider()
     provider.lose_receipt = True
     store = SubchatSubmissions(first.connection)
@@ -127,17 +128,19 @@ async def test_two_dispatchers_do_not_send_same_queued_message_twice(tmp_path):
     store.complete(parent, 'answer', '42', owner='peer')
     service = Subchats(store, provider)
     service.queue(message, parent, 'next', owner='peer')
-    other = Subchats(SubchatSubmissions(second.connection), provider)
+    services = [service, *[Subchats(SubchatSubmissions(item.connection), provider)
+                           for item in others]]
     try:
         results = await asyncio.wait_for(asyncio.gather(
-            service.recover(message, owner='peer'), other.recover(message, owner='peer'),
+            *(item.recover(message, owner='peer') for item in services),
             return_exceptions=True), timeout=5)
-        assert sum(isinstance(result, ValueError) for result in results) == 1
+        assert sum(isinstance(result, ValueError) for result in results) == dispatcher_count - 1
         assert store.get(message, owner='peer').state == 'sending'
         assert provider.sends == [message]
     finally:
         first.close()
-        second.close()
+        for item in others:
+            item.close()
 
 
 async def test_cancel_during_preparation_prevents_dispatch_and_survives_restart(tmp_path):
