@@ -224,3 +224,21 @@ without browser typing. Its read tool returned the exact new user message
 assistant answer was available. Receipt is confirmed; review completion and
 standalone Anywhere access to that app transport are not established. The
 request is not resent merely because a later status says idle.
+
+That review subsequently completed (assistant message
+`f814c699-3017-478f-87a5-80edfbffc642`). The parent inspected and independently ran
+its three isolated factory/reuse/cleanup tests; all passed. PRs 80 and 81 then
+merged after all five CI jobs passed, reaching main `8a0e9f2`.
+
+The same two ordinary Chats subsequently shared a temporary CSV workspace. A
+created and ran a Decimal-based Python summarizer; B read the same files,
+verified their hashes and independently ran it (total `21.60`). A conditionally
+appended a row; B's old-hash write was rejected, and the parent independently
+confirmed the retained updated file and total `23.00`. B recovered the rejection
+through its original HTTP connector with operation
+`c0f11c7a2d8445cf84e3f64f2d6b7a10`. The parent's local lookup returned unknown:
+HTTP grant namespaces are distinct from local operation IDs. The source and
+18 HTTP/remote tests independently confirm the scoping mechanism. This is not
+permission to bypass namespaces or to replay a failed lookup through another
+connection. It also does not establish per-subchat authorization or a product
+work-context binding; the parent supplied the exact workspace in each request.
