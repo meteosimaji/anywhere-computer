@@ -70,11 +70,14 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         destination.flush()
 
 
-async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
+async def run(
+    profile: Path, state: Path, *, mcp: bool = False, minimized: bool = True,
+) -> None:
     # Keep this dependency optional for all non-browser installations.
     from playwright.async_api import BrowserContext, Playwright, async_playwright
 
     from .subchat_browser.backend import BrowserSubchatBackend
+    from .subchat_browser.catalog import minimize_window
 
     ledger = Ledger(state)
     try:
@@ -86,8 +89,22 @@ async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
                 if driver is None:
                     driver = await resources.enter_async_context(async_playwright())
                 context = await driver.chromium.launch_persistent_context(
-                    str(profile), channel='chrome', headless=False)
+                    str(profile), channel='chrome', headless=False,
+                    args=['--start-minimized'] if minimized else [])
                 resources.push_async_callback(context.close)
+                if minimized:
+                    try:
+                        page = context.pages[0] if context.pages else await context.new_page()
+                        session = await context.new_cdp_session(page)
+                        try:
+                            window = await session.send('Browser.getWindowForTarget')
+                            if not await minimize_window(session, window['windowId']):
+                                raise ConnectionError('Browser minimization was not confirmed')
+                        finally:
+                            await session.detach()
+                    except BaseException:
+                        await context.close()
+                        raise
                 return context
 
             backend = BrowserSubchatBackend(open_browser)
@@ -116,5 +133,8 @@ def main() -> None:
     parser.add_argument('--state-dir', type=Path, required=True,
                         help='Local subchat ledger directory')
     parser.add_argument("--mcp", action="store_true", help="Serve MCP over stdio")
+    parser.add_argument('--show-browser', action='store_true',
+                        help='Allow a visible dedicated window instead of minimizing on startup')
     args = parser.parse_args()
-    asyncio.run(run(args.browser_profile.resolve(), args.state_dir.resolve(), mcp=args.mcp))
+    asyncio.run(run(args.browser_profile.resolve(), args.state_dir.resolve(),
+                    mcp=args.mcp, minimized=not args.show_browser))

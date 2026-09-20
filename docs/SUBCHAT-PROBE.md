@@ -782,3 +782,18 @@ and expected-turn behavior are verified; do not spoof executor identities,
 replace ordinary Chat with Codex inference, or silently map steer to queue/Stop.
 
 Source: https://github.com/openai/codex/blob/5c5308fc9a9ee789049d646ef11e5400384b9c6f/codex-rs/app-server/src/request_processors/turn_processor.rs#L1020
+
+### Dedicated browser startup visibility
+
+The CLI now requests a minimized dedicated Chrome window by default and checks
+its window state before giving the context to the subchat backend. If that check
+fails, it closes that context and fails before navigating or preparing a prompt;
+it does not fall back to visible interaction. `--show-browser` explicitly opts
+into the previous visible startup for login or diagnosis. Saved-state commands
+still do not launch Chrome. Once opened, the same context is reused until EOF.
+
+This is a startup visibility check, not browser-free Chat creation or an OS-wide
+focus guarantee. Chrome can appear briefly while starting, subsequent tab creation
+and user window changes may affect visibility, and full ordinary-Chat acceptance
+under minimization remains separate. Controlled tests cover both confirmation
+outcomes, cleanup, context reuse, and saved-state operation without a browser.
