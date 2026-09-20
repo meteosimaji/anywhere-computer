@@ -89,8 +89,11 @@ async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
                     from .mcp_server import serve_stdio
                     from .subchat_mcp import session
 
-                    await serve_stdio(session(service, observe_catalog=backend.catalog),
-                                      sys.stdin.buffer, sys.stdout.buffer)
+                    server = session(service, observe_catalog=backend.catalog)
+                    try:
+                        await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
+                    finally:
+                        await server.close()
                 else:
                     await process_lines(service, sys.stdin, sys.stdout)
             finally:
