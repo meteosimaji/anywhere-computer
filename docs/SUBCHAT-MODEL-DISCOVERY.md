@@ -160,3 +160,21 @@ with browser fixtures). Other unmatched UI still fails as unconfirmed; no univer
 locale or headless compatibility claim is made. This failure-path acceptance does
 not establish authenticated catalog extraction. The separate headed login profile
 was left untouched for the user's pending login.
+
+## Authenticated probe boundary, 2026-09-20 JST
+
+The user completed login in the dedicated profile. The headed standalone probe
+then failed before effort traversal with `EffortUnconfirmed`; a focused observation
+returned `effort_control_unconfirmed` after reopening the picker. Waiting for the
+control locator to become visible did not resolve the standalone failure, so that
+unproven change was removed. No prompt was sent. An authenticated headless attempt
+returned HTTP 403; its cause is not established. Do not substitute a foreground
+browser while the user is using Chrome or copy another profile's credentials.
+
+Initial effort observation previously escaped the collector and lost its fixed
+observation classification at the CLI boundary. It now returns
+`failure_stage=initial_observation`, an allowlisted observation state,
+`input_dispatched=false`, and `restored=null` (no original selection was established).
+Unknown peer text is not returned. Regression tests failed before the change and
+pass afterwards. This improves diagnosis; it does not establish a repaired live
+picker or production subchat support.

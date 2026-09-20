@@ -28,7 +28,19 @@ def snapshot(value: dict[str, object]) -> tuple[int, int, int, str]:
 
 
 async def collect_efforts(read: Read, step: Step) -> dict[str, object]:
-    original = snapshot(await read())
+    observed: dict[str, object] = {}
+    try:
+        observed = await read()
+        original = snapshot(observed)
+    except (EffortUnconfirmed, ConnectionError, TimeoutError) as error:
+        state = observed.get("state")
+        known = {"menu_unconfirmed", "effort_control_unconfirmed",
+                 "unsupported_effort_control", "effort_description_unconfirmed",
+                 "effort_observed"}
+        return {"state": "efforts_unconfirmed", "failure_stage": "initial_observation",
+                "observation_state": state if isinstance(state, str) and state in known else None,
+                "restored": None, "input_dispatched": False,
+                "error_type": type(error).__name__}
     minimum, maximum, start, initial_description = original
 
     async def move(target: int) -> tuple[int, int, int, str]:
