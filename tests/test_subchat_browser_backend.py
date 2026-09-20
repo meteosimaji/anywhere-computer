@@ -127,6 +127,36 @@ async def test_browser_send_pending_completion_and_database_recovery(
                 assert (await service.recover(operation, owner=None)).state == 'submitted'
             assert context_requests == 1
             assert not page.is_closed()
+            # A provider choice is not a final answer or permission to start Work.
+            for label, work_label in [('Chat に留まる', 'Work で続ける'),
+                                      ('Stay in Chat', 'Continue in Work')]:
+                await page.evaluate('''([label, work]) => {
+                    window.workStarts=0; window.chatChoices=0;
+                    const box=document.createElement('div'); box.id='choice';
+                    const stay=document.createElement('button'); stay.textContent=label;
+                    stay.onclick=()=>{window.chatChoices++;box.remove()};
+                    const other=document.createElement('button'); other.textContent=work;
+                    other.onclick=()=>window.workStarts++;
+                    box.append(stay,other); document.body.append(box);
+                }''', [label, work_label])
+                await page.locator('#choice button').last.evaluate('node=>node.hidden=true')
+                assert (await service.recover(operation, owner=None)).state == 'submitted'
+                assert await page.evaluate('window.chatChoices') == 0
+                await page.locator('#choice button').last.evaluate('node=>node.hidden=false')
+                await page.locator('#choice button').first.evaluate(
+                    'node=>node.parentNode.append(node.cloneNode(true))')
+                assert (await service.recover(operation, owner=None)).state == 'submitted'
+                assert await page.evaluate('window.chatChoices') == 0
+                await page.locator('#choice button').last.evaluate('node=>node.remove()')
+                await page.locator('main').evaluate('''node=>node.insertAdjacentHTML(
+                    'beforeend','<div data-turn-key="newer"></div>')''')
+                assert (await service.recover(operation, owner=None)).state == 'submitted'
+                assert await page.evaluate('window.chatChoices') == 0
+                await page.locator('[data-turn-key="newer"]').evaluate('node=>node.remove()')
+                assert (await service.recover(operation, owner=None)).state == 'submitted'
+                assert await page.evaluate('window.chatChoices') == 1
+                assert await page.evaluate('window.workStarts') == 0
+                assert await page.evaluate('window.sends') == 1
             # Recover an unfinished submission through a new adapter and SQLite
             # connection. The provider serves the already-saved history, without
             # replaying Send or manufacturing a completed ledger entry.

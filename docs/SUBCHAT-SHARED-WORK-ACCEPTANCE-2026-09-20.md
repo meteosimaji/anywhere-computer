@@ -12,6 +12,15 @@ provider-choice observation, not proof that the production subchat adapter
 detects or resolves that choice. Do not classify every missing answer as Thinking
 or silently select Work.
 
+The browser adapter now selects the visible Stay in Chat button only after
+confirming the saved user message and conversation, and only when exactly one
+Stay control and one Continue in Work control are visible. It then leaves the
+submission pending for a later answer observation. The existing offline browser
+integration reproduces the old indefinite wait and verifies Japanese/English
+choices, missing/ambiguous controls, zero Work starts and no second Send. This
+automated change has controlled-browser evidence; the earlier live continuation
+was a controller action, not a live acceptance of this new adapter code.
+
 A separate benign follow-up in the copy-review conversation explicitly selected
 the observed GPT-5.6 Sol/high option. One UI send produced a visible user receipt
 and the exact final answer `AC_TRANSPORT_PROBE_20260920`. The tab remained hidden.
