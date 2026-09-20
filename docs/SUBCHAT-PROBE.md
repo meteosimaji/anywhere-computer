@@ -1416,7 +1416,15 @@ the existing browser HTTP transport unless given a request factory.
 Live read-only trials on September 21 returned HTTP 200 and the exact existing
 conversation/final message through a standalone client, both with and without
 copied cookies. The implementation uses the no-copy option. Initial authentication
-still needs the dedicated browser; backend browser-close detection still applies.
+still needs the dedicated browser. Once this adapter has observed authorization,
+standalone history/receipt reads and an already observed catalog remain available
+after that browser closes, while the controller and its HTTP client stay alive.
+Sending and any unbootstrapped browser-dependent operation still report browser
+closure. Closing Chrome does not imply cancellation of server-side generation.
 This does not yet provide browser-free sending, persistent login or token refresh.
 401/403 remain latched until explicit controller/context replacement, and neither
 transport failures nor missing answers authorize generation replay.
+
+The browser-close behavior is covered with a real Chrome process, standalone
+HTTP client and controlled local HTTP server, including post-close 401/403 and
+rejection latching. It is not yet a live ChatGPT browser-close acceptance result.
