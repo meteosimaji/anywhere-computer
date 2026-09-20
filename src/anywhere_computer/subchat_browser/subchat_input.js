@@ -48,7 +48,8 @@ function insertObservedSubchatDraft(document, text) {
     if ((event.type === 'click' && ['送信', 'Send'].includes(label)) ||
         (event.type === 'submit' && target.matches('form[data-chatgpt-composer]')) ||
         (event.type === 'keydown' && event.key === 'Enter' && !event.shiftKey &&
-         !event.isComposing && target.closest('form[data-chatgpt-composer]')))
+         !event.isComposing && target.closest(
+           'form[data-chatgpt-composer] [data-composer-markdown][role="textbox"]')))
       guard.intervened = true;
   };
   for (const type of ['click', 'submit', 'keydown'])

@@ -37,5 +37,31 @@ async def test_literal_draft_preserves_text_and_rejects_existing_content():
             assert await editor.inner_text() == prompt
             assert await insert('a\r\nb') == {
                 'state': 'invalid_input', 'input_dispatched': False}
+            await editor.fill('')
+            await editor.click()
+            guard = await page.evaluate_handle(
+                source + '\n() => insertObservedSubchatDraft(document,"send once")')
+            try:
+                await page.evaluate('''() => {
+                    const form = document.querySelector('form');
+                    const accessory = document.createElement('button');
+                    accessory.type = 'button'; accessory.textContent = 'Tools';
+                    form.append(accessory);
+                    accessory.dispatchEvent(new KeyboardEvent('keydown',
+                        {key:'Enter', bubbles:true}));
+                    const editor = document.querySelector('[role=textbox]');
+                    for (const options of [{shiftKey:true}, {isComposing:true}])
+                        editor.dispatchEvent(new KeyboardEvent('keydown',
+                            {key:'Enter', bubbles:true, ...options}));
+                }''')
+                assert not await guard.evaluate('guard => guard.intervened')
+                await editor.press('Enter')
+                assert await guard.evaluate('guard => guard.intervened')
+                await guard.evaluate('guard => {guard.stop(); guard.intervened=false}')
+                await editor.press('Enter')
+                assert not await guard.evaluate('guard => guard.intervened')
+            finally:
+                await guard.evaluate('guard => guard.stop()')
+                await guard.dispose()
         finally:
             await browser.close()

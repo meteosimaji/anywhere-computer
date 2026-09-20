@@ -192,6 +192,15 @@ are removed after the attempt. Controlled click/Enter/submit regressions fail
 before this change and pass after it, preserving the unknown reservation until
 the independently published message receipt appears. User input is not blocked.
 
+The same ordinary Chat received a queued follow-up, with message identity
+`4cd1cbd2-288b-4f75-81d1-04c63838fbb9`, and returned a completed review of
+`b00351b2c1801a48dafd10fd4f28c208ba6aec4f`. It verified the delayed-gesture cases
+and listener cleanup but identified a non-submit accessory button's Enter as a
+false positive. The parent independently reproduced that predicate failure and
+narrowed Enter observation to the composer textbox. The regression also checks
+Shift+Enter, composing Enter, ordinary editor Enter and listener removal. This
+review and follow-up used the actual plugin; its UI-race tests remain offline.
+
 The copy reviewer demonstrated why Copy plus rendered text need not identify
 the original Markdown source uniquely. No broad unescaping, URL normalization,
 substring matching or promotion of historical uncertain sends is adopted.
