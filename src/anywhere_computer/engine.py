@@ -73,6 +73,14 @@ from .models import (
     WriteDocument,
     WriteFile,
 )
+from .native_gui import (
+    NativeApp,
+    NativeGUI,
+    NativeGUIOutcomeUnknown,
+    NativeObserve,
+    NativeSession,
+    NativeSetValue,
+)
 from .plugin_sessions import PluginSessions
 from .processes import list_processes, stop_process
 from .runtime_identity import ENGINE_API_VERSION, runtime_identity
@@ -111,6 +119,7 @@ class Engine:
         self.plugin_sessions = PluginSessions()
         self.direct_mcp_sessions = DirectMCPSessions()
         self.gui_mcp = GUIMCP(self.direct_mcp_sessions)
+        self.native_gui = NativeGUI()
         # Transport-owned identity, inherited by the durable execution task only.
         # Tool arguments cannot set this value; None is the local execution scope.
         self._plugin_owner: ContextVar[str | None] = ContextVar("plugin_owner", default=None)
@@ -144,6 +153,34 @@ class Engine:
         )
 
     def _register_tools(self) -> None:
+        async def native_windows(args: NativeApp) -> Result:
+            return await self.native_gui.windows(args, owner=self._plugin_owner.get())
+
+        async def native_observe(args: NativeObserve) -> Result:
+            return await self.native_gui.observe(args, owner=self._plugin_owner.get())
+
+        async def native_set(args: NativeSetValue) -> Result:
+            return await self.native_gui.set_value(args, owner=self._plugin_owner.get())
+
+        async def native_close(args: NativeSession) -> Result:
+            return await self.native_gui.stop(args, owner=self._plugin_owner.get())
+
+        self.register("gui_native_windows", "Open an owner-scoped native GUI session and list "
+                      "windows of an exact app bundle identifier. Requires the verified macOS "
+                      "helper and existing Accessibility permission; no browser or app activation. "
+                      "Close the session when done. Window handles belong to this session only.",
+                      NativeApp, native_windows, read_only=True, open_world=True)
+        self.register("gui_native_observe", "Observe a selected native window without focus. "
+                      "Returns a bounded AX tree and expiring references, not a screenshot.",
+                      NativeObserve, native_observe, read_only=True, open_world=True)
+        self.register("gui_native_set_value", "Set AXValue of an observed element; this is not "
+                      "keyboard typing. Invalidates all native observations. Returns exact "
+                      "readback verification, never file-save verification. Observe again and "
+                      "verify the requested effect independently. Never automatically retries.",
+                      NativeSetValue, native_set, destructive=True, open_world=True)
+        self.register("gui_native_close", "Close an owned native helper and its references. "
+                      "Does not close the target application.", NativeSession, native_close)
+
         async def audio_status(args: Empty) -> Result:
             return await inspect_audio()
 
@@ -894,6 +931,7 @@ class Engine:
         resources: dict[str, JsonValue] = {
             "terminal_sessions": terminals, "plugin_sessions": plugins,
             "direct_mcp_sessions": direct_mcp,
+            "native_gui_sessions": len(self.native_gui.entries),
             "searches": searches, "operations": operations,
         }
         return {
@@ -904,10 +942,10 @@ class Engine:
             "runtime_id": self.runtime_id,
             "uptime_seconds": time.monotonic() - self.started,
             "platform": platform.system(),
-            "active_sessions": terminals + plugins + direct_mcp,
+            "active_sessions": terminals + plugins + direct_mcp + len(self.native_gui.entries),
             "active_operations": operations,
             "active_resources": resources,
-            "update_blocked": bool(terminals or plugins or direct_mcp or searches or operations),
+            "update_blocked": any(bool(count) for count in resources.values()),
             "update_blockers": [name for name, count in resources.items() if count],
             "tools": len(self.tools),
             "transport": "authenticated-loopback",
@@ -920,6 +958,11 @@ class Engine:
                 "office": False,
                 "office_text_read": True,
                 "gui": False,
+                "gui_native_adapter": {
+                    "available": True, "provider": "macos_ax",
+                    "requires": "verified portable helper and existing Accessibility permission",
+                    "runtime_verified": False,
+                },
                 "gui_mcp_adapter": {
                     "available": True,
                     "provider": "peekaboo",
@@ -969,6 +1012,13 @@ class Engine:
                         "target before any new call; do not automatically retry",
                         "details": error.details,
                     },
+                )
+            except NativeGUIOutcomeUnknown as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state="unknown", error=str(error),
+                    data={"error_code": "native_gui_outcome_unknown", "dispatched": None,
+                          "next_action": "Recover with operations_get and inspect the target; "
+                                         "do not resend input"},
                 )
             except DirectMCPOutcomeUnknown as error:
                 reply = Reply(
@@ -1025,6 +1075,7 @@ class Engine:
             await asyncio.gather(*list(self.inflight.values()), return_exceptions=True)
         await self.plugin_sessions.close()
         await self.direct_mcp_sessions.close()
+        await self.native_gui.close()
         await self.searches.close()
         await self.sessions.close()
         self.ledger.close()

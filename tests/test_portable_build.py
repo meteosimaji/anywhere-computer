@@ -140,26 +140,30 @@ def test_manager_packaging_requires_explicit_existing_file(tmp_path):
 
 
 @pytest.mark.parametrize("platform", ["win32", "linux"])
-def test_audio_helper_rejects_unsupported_platform_before_build(tmp_path, monkeypatch, platform):
+@pytest.mark.parametrize("kind", ["audio_helper", "gui_helper"])
+def test_native_helper_rejects_unsupported_platform_before_build(
+    tmp_path, monkeypatch, platform, kind,
+):
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     (runtime / "BUILD").write_text("fixture")
     monkeypatch.setattr(portable_builder.sys, "platform", platform)
     with pytest.raises(ValueError, match="macOS only"):
         portable_builder.build_portable(
-            tmp_path, runtime, tmp_path / "output.zip", audio_helper=tmp_path / "helper",
+            tmp_path, runtime, tmp_path / "output.zip", **{kind: tmp_path / "helper"},
         )
     assert not (tmp_path / "output.zip").exists()
 
 
 @pytest.mark.parametrize("helper", [Path("relative"), Path("/missing-audio-helper")])
-def test_audio_helper_requires_explicit_executable(tmp_path, monkeypatch, helper):
+@pytest.mark.parametrize("kind", ["audio_helper", "gui_helper"])
+def test_native_helper_requires_explicit_executable(tmp_path, monkeypatch, helper, kind):
     runtime = tmp_path / "runtime"
     runtime.mkdir()
     (runtime / "BUILD").write_text("fixture")
     monkeypatch.setattr(portable_builder.sys, "platform", "darwin")
     with pytest.raises(ValueError, match="absolute executable"):
         portable_builder.build_portable(
-            tmp_path, runtime, tmp_path / "output.zip", audio_helper=helper,
+            tmp_path, runtime, tmp_path / "output.zip", **{kind: helper},
         )
     assert not (tmp_path / "output.zip").exists()

@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+MAX_TOOL_SCOPES = 128
+
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid")

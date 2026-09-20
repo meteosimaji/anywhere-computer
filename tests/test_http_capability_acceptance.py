@@ -16,6 +16,7 @@ import httpx
 import psutil
 import pytest
 from test_http_service import initialize
+from test_native_gui import helper_process as helper_process
 
 from anywhere_computer.authorization import LOCAL_ONLY_TOOLS, AuthorizationStore, pkce_s256
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
@@ -24,7 +25,9 @@ from anywhere_computer.http_mcp import HTTPMCP
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX app-server executable fixture")
-async def test_every_remote_engine_tool_in_chat_like_http_workflows(tmp_path, monkeypatch):
+async def test_every_remote_engine_tool_in_chat_like_http_workflows(
+    tmp_path, monkeypatch, helper_process,
+):
     skill = tmp_path / "skill/SKILL.md"
     skill.parent.mkdir()
     skill.write_text("Read reference.txt for the fixture.\n", encoding="utf-8")
@@ -140,6 +143,15 @@ for line in sys.stdin:
             assert audio["state"] in {"available", "unavailable", "unsupported"}
             assert audio["capture_started"] is False
             assert audio["capture_tool_available"] is False
+            native = await call("gui_native_windows", {"app": "fixture"})
+            target = {"session_id": native["session_id"], "app": "fixture", "window_id": 1}
+            snapshot = await call("gui_native_observe", target)
+            written = await call("gui_native_set_value", {
+                **target, "observation_id": snapshot["observation_id"],
+                "element_ref": "field", "value": "HTTP native fixture",
+            })
+            assert written["value_verified"] and not written["persistence_verified"]
+            await call("gui_native_close", {"session_id": native["session_id"]})
             await call("workspace_open", {"path": str(tmp_path)})
             await call("settings_get")
             await call("settings_update", {"key": "file_read_line_limit", "value": 123})

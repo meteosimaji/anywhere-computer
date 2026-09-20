@@ -134,8 +134,8 @@ interference checks; do not silently fall back to frontmost/global keyboard inpu
 
 `native/macos/AXHelper.swift` is a persistent JSON-lines helper with `windows`,
 `observe`, and `set_value` methods. It does not launch a browser, activate an app,
-request permissions, or use a model. It is development source, not yet an engine
-tool or an installed/packaged GUI capability. Developer compilation is
+request permissions, or use a model. The experimental engine adapter requires an
+explicitly packaged helper; it does not compile or download one. Developer compilation is
 `swiftc native/macos/AXHelper.swift -o /tmp/anywhere-gui`; end-user installation
 must eventually include a verified binary rather than requiring compilation.
 
@@ -170,6 +170,40 @@ in a fresh observation. Both the used observation and a second pre-mutation
 observation were rejected afterward: a mutation invalidates all snapshots in the
 helper session, not only the one supplied to that mutation.
 
-Engine ownership/ledger integration, packaged helper verification, screenshots,
-click/keyboard/scroll, Windows UIA, and concurrent user-interference acceptance
-remain open. Helper-local identities are not authenticated multi-user identities.
+The engine exposes `gui_native_windows`, `gui_native_observe`,
+`gui_native_set_value`, and `gui_native_close`. Window discovery opens a session;
+use its `session_id` with the returned window handle for observation and input,
+and close it when done. Sessions bind to the transport owner, and all native
+requests serialize through one engine lock. A mutation invalidates snapshots in
+every native session. Helper-local handles alone do not grant cross-owner access.
+These checks do not isolate separate engines or prevent other desktop programs
+from changing the screen.
+
+The adapter resolves `native/anywhere-gui` relative to the portable runtime and
+checks its executable bit and SHA-256 against the portable manifest before launch.
+Build with `scripts/build_portable.py --gui-helper /absolute/path/to/anywhere-gui`
+plus the ordinary runtime/output arguments. macOS management CI compiles and
+includes the helper; portable manifest verification covers that file. Existing
+installations without it fail before process launch, without browser fallback.
+
+Native input with a lost, invalid, or error response records an unknown operation
+outcome and retires the helper. Recover the operation ID rather than resend; a new
+session never inherits old observations. Real subprocess fixtures independently
+check owner rejection, cross-session invalidation, process cleanup, and one input
+effect after a lost reply plus repeated engine request. They do not simulate a
+successful OS GUI interaction. The live TextEdit evidence above is separate.
+
+A live source-engine run then executed all five steps (window discovery,
+observation, set-value, fresh observation and close) against the same fixture,
+using an isolated helper directory and matching manifest. Its final text was
+`Anywhere engine 検証 47 ✅\n`; all engine calls completed and the helper was reaped.
+This was an isolated manifest-backed engine run, not an installed Chat connector.
+The Chat-like authenticated HTTP acceptance also exercises the four native tools
+against a controlled subprocess, keeping transport coverage separate from GUI
+evidence. Adding the tools exposed the former 64-tool setup limit; config, login
+and local grant envelopes now share a bounded 128-tool limit. Existing grants are
+not widened and each dispatch still checks its granted tool set.
+
+Screenshots, click/keyboard/scroll, Windows UIA, signed helper distribution and
+concurrent user-interference acceptance remain open. Packaged installation/live
+MCP acceptance is separate from these source-engine and helper tests.

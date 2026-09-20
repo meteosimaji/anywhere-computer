@@ -95,14 +95,18 @@ def include_manager(app: Path, manager: Path, *, platform: str) -> None:
 def build_portable(
     root: Path, runtime: Path, output: Path, *, allow_downloads: bool = False,
     manager: Path | None = None, audio_helper: Path | None = None,
+    gui_helper: Path | None = None,
 ) -> Path:
     validate_runtime(runtime)
-    if audio_helper is not None:
+    helpers = {"audio": audio_helper, "gui": gui_helper}
+    for kind, executable in helpers.items():
+        if executable is None:
+            continue
         if sys.platform != "darwin":
-            raise ValueError("Audio helper packaging currently supports macOS only")
-        if (not audio_helper.is_absolute() or audio_helper.is_symlink()
-                or not audio_helper.is_file() or not os.access(audio_helper, os.X_OK)):
-            raise ValueError("Audio helper must be an absolute executable file")
+            raise ValueError(f"{kind} helper packaging currently supports macOS only")
+        if (not executable.is_absolute() or executable.is_symlink()
+                or not executable.is_file() or not os.access(executable, os.X_OK)):
+            raise ValueError(f"{kind} helper must be an absolute executable file")
     if output.exists():
         raise ValueError("Output already exists; choose a new archive path")
     uv = shutil.which("uv")
@@ -155,11 +159,13 @@ def build_portable(
         write_setup_launcher(app, windows=os.name == "nt")
         if manager is not None:
             include_manager(app, manager, platform=sys.platform)
-        if audio_helper is not None:
+        for kind, executable in helpers.items():
+            if executable is None:
+                continue
             native = app / "native"
-            native.mkdir()
-            helper = native / "anywhere-audio"
-            shutil.copyfile(audio_helper, helper)
+            native.mkdir(exist_ok=True)
+            helper = native / f"anywhere-{kind}"
+            shutil.copyfile(executable, helper)
             helper.chmod(0o755)
         shutil.copyfile(root / "LICENSE", app / "LICENSE")
         (app / "README.txt").write_text(
@@ -206,7 +212,10 @@ if __name__ == "__main__":
                         help="Include a native management executable built for this platform")
     parser.add_argument("--audio-helper", type=Path,
                         help="Include an explicitly built experimental macOS audio executable")
+    parser.add_argument("--gui-helper", type=Path,
+                        help="Include an explicitly built experimental macOS AX executable")
     arguments = parser.parse_args()
     print(build_portable(Path(__file__).resolve().parents[1], arguments.runtime,
                          arguments.output.absolute(), allow_downloads=arguments.allow_downloads,
-                         manager=arguments.manager, audio_helper=arguments.audio_helper))
+                         manager=arguments.manager, audio_helper=arguments.audio_helper,
+                         gui_helper=arguments.gui_helper))
