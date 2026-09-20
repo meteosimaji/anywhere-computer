@@ -20,7 +20,7 @@ class BrowserFixture:
         self.thinking = True
 
     async def prepare(self, submission):
-        pass
+        return ()
 
     async def send(self, submission):
         self.sends += 1

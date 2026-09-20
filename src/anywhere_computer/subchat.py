@@ -20,7 +20,7 @@ class SubchatAnswer(SubchatReceipt):
 
 
 class SubchatBackend(Protocol):
-    async def prepare(self, submission: SubchatSubmission) -> None:
+    async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
         """Prepare input without submitting; failure is known not to have sent."""
         ...
 
@@ -55,8 +55,9 @@ class Subchats:
         if submission.state != 'prepared':
             # A duplicate request never enters the backend again, even after restart.
             return submission
-        await self.backend.prepare(submission)
-        submission = self.store.begin_send(operation_id, owner=owner)
+        baseline = await self.backend.prepare(submission)
+        submission = self.store.begin_send(operation_id, owner=owner,
+                                           baseline_message_ids=baseline)
         try:
             receipt = await self.backend.send(submission)
             return self._accept(submission, receipt, owner)

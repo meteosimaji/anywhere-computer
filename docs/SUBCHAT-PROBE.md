@@ -408,3 +408,20 @@ The 10 related lifecycle/state/browser tests passed after this change, including
 an unavailable-model preflight with zero sends and a changed-draft rejection in
 real Chrome against the offline fixture. Existing-conversation baseline storage,
 shared work context, and pending browser restart acceptance remain outstanding.
+
+### Follow-up baseline integration
+
+The preparation contract returns the observed prior turn IDs. `begin_send`
+persists them before dispatch; recovery excludes those turns even if they contain
+the same prompt, and the store refuses to accept a prior user-message ID as the
+new receipt. Existing-conversation preparation navigates only to a validated
+ordinary Chat URL and requires an idle empty composer. Dispatch rechecks both
+exact input and the observed history before clicking Send.
+
+Browser fixture integration now covers fresh and existing conversations. Twelve
+related tests passed, including persisted baselines after SQLite reopen and an
+older JSON record without the new field. The compare-and-swap compares the
+validated old record but matches the original stored JSON bytes, allowing additive
+model defaults without incorrectly treating an older serialization as a race.
+Real Chat follow-up acceptance and shared workspace tool access remain separate
+gates; the fixture does not prove those product requirements.

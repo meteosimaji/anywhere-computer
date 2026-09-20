@@ -34,14 +34,14 @@ send.onclick=()=>{
  window.sends++;
  window.sentText=document.querySelector('[role=textbox]').innerText;
  history.pushState({},'', '/c/11111111-2222-3333-4444-555555555555');
- document.querySelector('main').innerHTML='<div data-turn-key="user">'+
+ document.querySelector('main').innerHTML+='<div data-turn-key="user">'+
  '<div data-user-message-bubble="true">rendered</div>'+
  '<button aria-label="Copy message">copy</button></div>';
- document.querySelector('[aria-label="Copy message"]').onclick=()=>
+ document.querySelector('[data-turn-key="user"] [aria-label="Copy message"]').onclick=()=>
  navigator.clipboard.writeText(window.sentText);
 };
 window.finish=()=>{
- document.querySelector('[data-turn-key]').insertAdjacentHTML('beforeend',
+ document.querySelector('[data-turn-key="user"]').insertAdjacentHTML('beforeend',
  '<div data-content-search-unit-key="unit:2:assistant">'+
  '<div data-markdown-text-style="assistant-message">rendered answer</div></div>'+
  '<div class="turn-action-controls"><button aria-label="Copy">copy</button>'+
@@ -52,7 +52,10 @@ window.finish=()=>{
 </script>'''
 
 
-async def test_browser_send_pending_completion_and_database_recovery(tmp_path, monkeypatch):
+@pytest.mark.parametrize('followup', [False, True])
+async def test_browser_send_pending_completion_and_database_recovery(
+    tmp_path, monkeypatch, followup,
+):
     playwright = pytest.importorskip('playwright.async_api')
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'scripts'))
     from subchat_browser_backend import BrowserSubchatBackend
@@ -67,14 +70,23 @@ async def test_browser_send_pending_completion_and_database_recovery(tmp_path, m
         ledger = Ledger(tmp_path)
         try:
             context = await browser.new_context()
+            prior = '''<script>
+            document.querySelector('main').innerHTML='<div data-turn-key="old">'+
+              '<div data-user-message-bubble="true">old prompt</div>'+
+              '<button aria-label="Copy message">copy</button></div>';
+            </script>'''
             await context.route('**/*', lambda route: route.fulfill(
-                content_type='text/html; charset=utf-8', body=HTML))
+                content_type='text/html; charset=utf-8',
+                body=HTML + (prior if '/c/' in route.request.url else '')))
             backend = BrowserSubchatBackend(context)
             service = Subchats(SubchatSubmissions(ledger.connection), backend)
             operation = 'b' * 32
             prompt = '日本語 🚀\n```python\nprint("<tag>")\n```'
             sent = await service.send(operation, prompt, 'Future model', 'Future effort',
-                                      owner=None)
+                                      owner=None, conversation_id=(
+                                          '11111111-2222-3333-4444-555555555555'
+                                          if followup else None))
+            assert sent.baseline_message_ids == (('old',) if followup else ())
             assert sent.state == 'submitted'
             assert sent.conversation_id == '11111111-2222-3333-4444-555555555555'
             page = context.pages[0]
@@ -91,7 +103,8 @@ async def test_browser_send_pending_completion_and_database_recovery(tmp_path, m
             service = Subchats(SubchatSubmissions(ledger.connection),
                                BrowserSubchatBackend(context))
             assert await service.send(operation, prompt, 'Future model', 'Future effort',
-                                      owner=None) == result
+                                      owner=None,
+                                      conversation_id=sent.requested_conversation_id) == result
             assert await service.recover(operation, owner=None) == result
             assert len(context.pages) == 1
             assert await page.evaluate('window.sends') == 1

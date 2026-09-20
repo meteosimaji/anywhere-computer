@@ -84,3 +84,35 @@ def test_followup_conversation_is_reserved_before_send(tmp_path):
             store.prepare(operation, 'followup', 'model', 'effort', owner='peer')
     finally:
         ledger.close()
+
+
+def test_baseline_survives_restart_and_legacy_json_can_advance(tmp_path):
+    import json
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    operation = '7' * 32
+    try:
+        store.prepare(operation, 'same prompt', 'model', 'effort', owner=None,
+                      conversation_id='conversation')
+        with ledger.connection:
+            body = json.loads(ledger.connection.execute(
+                'SELECT body FROM subchat_submissions WHERE operation_id=?',
+                (operation,)).fetchone()[0])
+            body.pop('baseline_message_ids')
+            ledger.connection.execute('UPDATE subchat_submissions SET body=? WHERE operation_id=?',
+                                      (json.dumps(body), operation))
+        with pytest.raises(ValueError, match='baseline'):
+            store.begin_send(operation, owner=None, baseline_message_ids=('old', 'old'))
+        store.begin_send(operation, owner=None, baseline_message_ids=('old',))
+    finally:
+        ledger.close()
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        assert store.get(operation, owner=None).baseline_message_ids == ('old',)
+        with pytest.raises(ValueError, match='predates'):
+            store.submitted(operation, 'conversation', 'old', owner=None)
+        assert store.submitted(operation, 'conversation', 'new', owner=None).state == 'submitted'
+    finally:
+        ledger.close()

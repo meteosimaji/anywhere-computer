@@ -1,21 +1,22 @@
 """Development adapter using an explicitly supplied dedicated browser context.
 
-Not a registered production backend. Current send support creates a fresh Chat;
-existing-conversation send is rejected until baseline recovery is integrated.
+Not a registered production backend. Existing-conversation sends checkpoint
+visible message identities before dispatch; live follow-up acceptance is pending.
 """
 import asyncio
 import re
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page
-from probe_subchat_catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, empty_chat, picker_ready
+from probe_subchat_catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, picker_ready
 
 from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt
 from anywhere_computer.subchat_state import SubchatSubmission
 
 INPUT = Path(__file__).with_name('subchat_input.js').read_text()
 COPY = Path(__file__).with_name('subchat_copy.js').read_text()
-CHAT = re.compile(r'https://chatgpt\.com/c/([0-9a-f-]{36})\Z')
+CHAT = re.compile(r'https://chatgpt\.com/c/'
+                  r'([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\Z')
 
 
 class BrowserSubchatBackend:
@@ -35,17 +36,45 @@ class BrowserSubchatBackend:
                         wait_until='domcontentloaded')
         return page
 
-    async def prepare(self, submission: SubchatSubmission) -> None:
-        if submission.requested_conversation_id is not None:
-            raise ValueError('Follow-up browser dispatch is not yet integrated')
+    def _url(self, submission: SubchatSubmission) -> str:
+        if submission.requested_conversation_id is None:
+            return 'https://chatgpt.com/'
+        url = 'https://chatgpt.com/c/' + submission.requested_conversation_id
+        if CHAT.fullmatch(url) is None:
+            raise ValueError('Invalid conversation identity')
+        return url
+
+    async def _baseline(self, page: Page) -> tuple[str, ...]:
+        if await page.locator('main').count() != 1:
+            raise ValueError('Conversation history unavailable')
+        values = await page.locator('main [data-turn-key]').evaluate_all(
+            "elements => elements.map(e => e.getAttribute('data-turn-key'))")
+        if (not isinstance(values, list) or len(values) > 10_000
+                or any(not isinstance(value, str) or not value.strip() for value in values)
+                or len(set(values)) != len(values)):
+            raise ValueError('Conversation history is ambiguous')
+        return tuple(values)
+
+    async def _ready(self, page: Page, submission: SubchatSubmission) -> bool:
+        if page.url.rstrip('/') != self._url(submission).rstrip('/'):
+            return False
+        chat = page.get_by_role('button', name='Chat', exact=True)
+        editor = page.locator('[data-composer-markdown][role="textbox"]')
+        stop = page.get_by_role('button', name=re.compile(r'^(停止|Stop|Stop generating)$'))
+        return (await chat.count() == 1 and await chat.get_attribute('aria-pressed') == 'true'
+                and await editor.count() == 1 and not (await editor.inner_text()).strip()
+                and await stop.filter(visible=True).count() == 0)
+
+    async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
+        url = self._url(submission)
         page = await self.context.new_page()
         self.pages[submission.operation_id] = page
         page.set_default_timeout(15_000)
-        response = await page.goto('https://chatgpt.com/', wait_until='domcontentloaded')
+        response = await page.goto(url, wait_until='domcontentloaded')
         if response is None or not response.ok or not await picker_ready(page):
             raise ConnectionError('Authenticated ordinary Chat is unavailable')
-        if not await empty_chat(page):
-            raise ValueError('Fresh ordinary Chat was not confirmed')
+        if not await self._ready(page, submission):
+            raise ValueError('Ordinary Chat with an idle empty composer was not confirmed')
         await page.locator(TRIGGER).click()
         observed = await page.evaluate(SOURCE + '\nobserveSubchatModelMenu(document)')
         if observed['state'] == 'model_list_not_visible':
@@ -77,24 +106,30 @@ class BrowserSubchatBackend:
         ]:
             raise ValueError('Selected model changed')
         await page.get_by_role('menu').press('Escape')
-        if not await empty_chat(page):
-            raise ValueError('Fresh Chat changed before input')
+        if not await self._ready(page, submission):
+            raise ValueError('Chat changed before input')
+        baseline = await self._baseline(page)
+        if submission.requested_conversation_id is None and baseline:
+            raise ValueError('New Chat already contains messages')
         editor = page.locator('[data-composer-markdown][role="textbox"]')
         await editor.click()
         draft = await page.evaluate(INPUT + '\ntext=>insertSubchatDraft(document,text)',
                                     submission.prompt)
         if draft.get('state') != 'draft_observed' or await editor.inner_text() != submission.prompt:
             raise ValueError('Exact draft was not confirmed')
+        return baseline
 
     async def send(self, submission: SubchatSubmission) -> SubchatReceipt:
         page = self.pages.get(submission.operation_id)
         if page is None or page.is_closed():
             raise ValueError('Prepared browser page is unavailable')
-        if page.url.rstrip('/') != 'https://chatgpt.com':
+        if page.url.rstrip('/') != self._url(submission).rstrip('/'):
             raise ValueError('Prepared conversation changed before send')
         editor = page.locator('[data-composer-markdown][role="textbox"]')
         if await editor.count() != 1 or await editor.inner_text() != submission.prompt:
             raise ValueError('Prepared draft changed before send')
+        if await self._baseline(page) != submission.baseline_message_ids:
+            raise ValueError('Conversation history changed before send')
         await page.get_by_role('button', name=re.compile(r'^(送信|Send)$')).click()
         async with asyncio.timeout(120):
             while True:
@@ -114,7 +149,7 @@ class BrowserSubchatBackend:
             raise ValueError('Browser conversation changed')
         observed = await page.evaluate(
             COPY + '\nargs=>recoverSubchatSubmission(document,...args)',
-            [match[1], submission.prompt, []])
+            [match[1], submission.prompt, list(submission.baseline_message_ids)])
         if observed.get('state') != 'submission_observed':
             return None
         return SubchatReceipt(conversation_id=match[1],
