@@ -9,7 +9,12 @@ from pydantic import Field, JsonValue, TypeAdapter
 from .mcp_server import Catalog as ToolCatalog
 from .mcp_server import Execute, MCPSession
 from .models import Contract, OperationId, Reply, Request
-from .subchat import SubchatOutcomeUnknown, Subchats, SubchatStaleTarget
+from .subchat import (
+    SubchatOutcomeUnknown,
+    SubchatPreparationFailed,
+    Subchats,
+    SubchatStaleTarget,
+)
 from .subchat_state import SubchatSubmission, SubchatWorkContext
 
 
@@ -51,6 +56,10 @@ INSTRUCTIONS = (
     'current saved state; '
     'a pending result can be waited on again without stopping generation. '
     'subchat_status reads the saved record without browser interaction. '
+    'prepared means this adapter has not dispatched; external/manual sends are not tracked. '
+    'After correcting preparation, reconcile the visible Chat before retrying the same ID. '
+    'sending means receipt unconfirmed: recover it, never click Send again. '
+    'Only submitted/completed confirm a matching message receipt; completed includes the answer. '
     'If a new Chat remains sending without a conversation_id after process loss, '
     'automatic recovery may be impossible: preserve unknown and reconcile manually; '
     'never scan unrelated history or resend to manufacture a receipt. '
@@ -245,6 +254,12 @@ def session(service: Subchats, *,
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Queue target is stale; inspect the conversation before continuing.',
                          data={'error_code': 'stale_target', 'dispatched': False})
+        except SubchatPreparationFailed:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='Adapter preparation failed before dispatch. Inspect the existing '
+                               'Chat before retrying the same exact request ID; '
+                               'for a queued message, recover its existing operation instead.',
+                         data={'error_code': 'preparation_failed', 'dispatched': False})
         except SubchatOutcomeUnknown:
             return Reply(operation_id=request.operation_id, state='unknown',
                          error='Submission unconfirmed. Use subchat_recover with this ID; '

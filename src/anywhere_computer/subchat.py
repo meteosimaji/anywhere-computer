@@ -39,6 +39,10 @@ class SubchatOutcomeUnknown(RuntimeError):
     """The send stage was entered; the caller must recover rather than resubmit."""
 
 
+class SubchatPreparationFailed(ValueError):
+    """Preparation failed before dispatch; provider details remain local."""
+
+
 class Subchats:
     def __init__(self, store: SubchatSubmissions, backend: SubchatBackend) -> None:
         self.store = store
@@ -75,7 +79,12 @@ class Subchats:
         submission = self.store.get(submission.operation_id, owner=owner)
         if submission.state not in {'prepared', 'queued'}:
             return submission
-        baseline = await self.backend.prepare(submission)
+        try:
+            baseline = await self.backend.prepare(submission)
+        except SubchatStaleTarget:
+            raise
+        except Exception as error:
+            raise SubchatPreparationFailed(str(error)) from error
         submission = self.store.begin_send(submission.operation_id, owner=owner,
                                            baseline_message_ids=baseline)
         try:

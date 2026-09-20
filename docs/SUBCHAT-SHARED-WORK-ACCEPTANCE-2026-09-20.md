@@ -121,3 +121,33 @@ only after the store accepts cancellation. It never cancels already-dispatched
 generation. Waiting observers receive the saved cancelled state. All 83 subchat
 tests and full source mypy passed; the review's ordinary read-timeout cancellation
 claim is not treated as a defect without evidence of harmful effects.
+
+Preparation failures now return `preparation_failed` with `dispatched=false`,
+separately from a send whose receipt is unknown. A regression test fails on the
+previous generic error response, verifies that preparation failure never calls
+Send, retries the same identity after correcting preparation, then loses the
+receipt and confirms that a repeated request does not send again. Provider error
+text is not returned. The live high-effort follow-up remains `prepared`; no
+receipt or completed review is claimed for that attempt.
+
+A later read of the known conversation found the high-review prompt and its
+completed answer while the controller record remained `prepared`. No controller
+Send or `begin_send` was recorded for that attempt; the actor/path that submitted
+it is not established. The copied user message also expanded bare URLs into
+Markdown links, so exact receipt matching has not been demonstrated. The earlier
+statement that this live attempt was unsent describes the local ledger only, not
+the remote conversation. Do not replay it or rewrite the ledger to claim success.
+The answer and its local reproduction artifacts can be reviewed independently.
+
+The review's cancelled-draft finding was independently reproduced with the
+current source and the supplied offline browser fixture: the cancelled operation
+retained its tab/draft, while a peer Chat still submitted. This is a cleanup issue,
+not evidence of duplicate delivery. Closing such a tab must preserve unrelated
+user edits and already-dispatched work; no unconditional tab cleanup is adopted.
+
+Upstream was rechecked at `8f76ccc790917b01ee758da6687a1cf9b576ba8a`. Open CoS
+issues [326](https://github.com/totec448-spec/chat-on-steroids/issues/326) and
+[327](https://github.com/totec448-spec/chat-on-steroids/issues/327) describe stale
+pending/waiting states. Their useful requirement is evidence-based delivery
+diagnostics and actionable recovery. Time alone is not adopted as permission to
+replay an uncertain send or stop a legitimately Thinking model.
