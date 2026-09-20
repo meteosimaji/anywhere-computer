@@ -220,9 +220,11 @@ async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(
         ledger.close()
 
 
+@pytest.mark.parametrize('independent', [False, True])
 @pytest.mark.parametrize('resource', ['history', 'catalog'])
 @pytest.mark.parametrize('expired_status', [401, 403])
-async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expired_status, resource):
+async def test_repeated_http_reads_auth_expiry_and_redirects(
+        monkeypatch, expired_status, resource, independent):
     """Real APIRequestContext transport against a controlled local HTTP server."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
@@ -285,7 +287,14 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
                             '"unrelated-header":"do-not-copy"}})</script>')
 
                 await context.route('https://chatgpt.com/**', route)
-                request = context.request
+                request = (await driver.request.new_context() if independent else context.request)
+                async def request_factory():
+                    return request
+
+                if independent:
+                    async def forbidden_browser_request(*args, **kwargs):
+                        raise AssertionError('Standalone read used browser request context')
+                    monkeypatch.setattr(context.request, 'get', forbidden_browser_request)
                 real_get = request.get
 
                 async def local_get(url, **kwargs):
@@ -294,7 +303,8 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
                     return await real_get(f'http://127.0.0.1:{server.server_port}' + path, **kwargs)
 
                 monkeypatch.setattr(request, 'get', local_get)
-                backend = BrowserSubchatBackend(context, http_read=True)
+                backend = BrowserSubchatBackend(context, http_read=True,
+                    http_request_factory=request_factory if independent else None)
                 async def read():
                     return (await backend.http_catalog() if resource == 'catalog'
                             else await backend.read_answer(submission))
@@ -328,7 +338,8 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
                     assert repeated.value.code == rejected.value.code
                 assert len(tab_gets) == 2 and len(calls) == before
                 # An explicitly restarted adapter can observe the repaired login.
-                backend = BrowserSubchatBackend(context, http_read=True)
+                backend = BrowserSubchatBackend(context, http_read=True,
+                    http_request_factory=request_factory if independent else None)
                 assert await read() == first
                 assert len(tab_gets) == 4 and len(calls) == before
                 assert await read() == first
@@ -336,6 +347,8 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
                 assert all(call == (path, True) for call in calls)
                 assert context.pages == [original] and original.url == 'about:blank'
             finally:
+                if independent and 'request' in locals():
+                    await request.dispose()
                 await browser.close()
     finally:
         server.shutdown()

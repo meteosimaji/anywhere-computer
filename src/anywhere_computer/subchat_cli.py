@@ -25,7 +25,7 @@ from .subchat_content import SubchatResources
 from .subchat_state import SubchatList, SubchatSubmissions, SubchatWorkContext
 
 if TYPE_CHECKING:
-    from playwright.async_api import BrowserContext, Playwright
+    from playwright.async_api import APIRequestContext, BrowserContext, Playwright
 
 
 class Command(Contract):
@@ -111,14 +111,25 @@ async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool 
     try:
         async with AsyncExitStack() as resources:
             driver: Playwright | None = None
+            http_client: APIRequestContext | None = None
 
-            async def open_browser() -> BrowserContext:
+            async def runtime() -> Playwright:
                 from playwright.async_api import async_playwright
 
                 nonlocal driver
                 if driver is None:
                     driver = await resources.enter_async_context(async_playwright())
-                context = await driver.chromium.launch_persistent_context(
+                return driver
+
+            async def open_http() -> APIRequestContext:
+                nonlocal http_client
+                if http_client is None:
+                    http_client = await (await runtime()).request.new_context()
+                    resources.push_async_callback(http_client.dispose)
+                return http_client
+
+            async def open_browser() -> BrowserContext:
+                context = await (await runtime()).chromium.launch_persistent_context(
                     str(profile), channel='chrome', headless=False,
                     args=['--start-minimized'] if minimized else [])
                 resources.push_async_callback(context.close)
@@ -141,6 +152,7 @@ async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool 
                 store.observe_request(operation_id, message_id, owner=None)
 
             backend = BrowserSubchatBackend(open_browser, http_read=http_read,
+                http_request_factory=open_http if http_read else None,
                 record_request=record_request if http_read else None)
             service = Subchats(store, backend)
             # Saved-state requests need no browser. Once needed, commands share
