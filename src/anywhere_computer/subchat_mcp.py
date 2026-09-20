@@ -34,6 +34,9 @@ INSTRUCTIONS = (
     'subchat_wait waits for a bounded interval and returns the current saved state; '
     'a pending result can be waited on again without stopping generation. '
     'subchat_status reads the saved record without browser interaction. '
+    'If a new Chat remains sending without a conversation_id after process loss, '
+    'automatic recovery may be impossible: preserve unknown and reconcile manually; '
+    'never scan unrelated history or resend to manufacture a receipt. '
     'This local stdio process uses the dedicated profile chosen by its operator; '
     'it does not establish shared workspace access or grant tools to the Chat.'
 )
