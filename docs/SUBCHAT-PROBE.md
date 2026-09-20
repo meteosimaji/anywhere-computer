@@ -1176,3 +1176,19 @@ These reports reinforce existing contracts rather than justify another task
 runtime. The accepted change reuses the current HTTP reader, interruption result,
 CLI/MCP mapping and queue guard. No upstream code or automatic restart watchdog
 was copied.
+
+### User closes the dedicated browser
+
+The adapter recognizes an observed context close or browser disconnect and reports
+`browser_closed` through CLI/MCP recovery. It retains the submission and does not
+launch a replacement or resend merely because a user closed the browser. Restart
+the controller with the same state directory and dedicated profile, then recover
+the original operation IDs. A known conversation can be re-observed; an unknown
+conversation ID after a pre-receipt crash still needs explicit reconciliation.
+Closing a browser does not prove that server-side generation stopped.
+
+Acceptance uses real isolated Chrome context/browser closure and the SQLite
+submission store, plus CLI/MCP error projection. It is not a live ChatGPT shutdown
+trial. Closing during an in-flight send can still yield `submission_unconfirmed`;
+the durable reservation prevents replay. Explicit provider cancellation remains
+`reply_interrupted`, separately from browser closure or a read timeout.

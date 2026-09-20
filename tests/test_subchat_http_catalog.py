@@ -22,7 +22,8 @@ async def test_http_catalog_deadline_includes_startup(monkeypatch, phase):
     monkeypatch.setattr(asyncio, 'timeout',
                         lambda seconds: original_timeout(.02 if seconds == 20 else seconds))
     backend = BrowserSubchatBackend(stalled if phase == 'browser'
-                                    else SimpleNamespace(new_page=stalled))
+                                    else SimpleNamespace(new_page=stalled, browser=None,
+                                                         on=lambda *args: None))
     task = asyncio.create_task(backend.http_catalog())
     try:
         await asyncio.wait_for(entered.wait(), 1)

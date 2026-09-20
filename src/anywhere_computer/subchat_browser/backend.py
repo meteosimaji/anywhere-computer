@@ -11,7 +11,12 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt, SubchatStaleTarget
+from anywhere_computer.subchat import (
+    SubchatAnswer,
+    SubchatBrowserClosed,
+    SubchatReceipt,
+    SubchatStaleTarget,
+)
 from anywhere_computer.subchat_state import SubchatSubmission
 
 from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_page, picker_ready
@@ -37,12 +42,22 @@ class BrowserSubchatBackend:
         self._create_context = context if callable(context) else None
         self._context_lock = asyncio.Lock()
         self.pages: dict[str, Page] = {}
+        self._closed = False
+        if self._context is not None:
+            self._context.on('close', self._browser_closed)
+
+    def _browser_closed(self, context: BrowserContext) -> None:
+        self._closed = True
 
     async def _browser(self) -> BrowserContext:
         async with self._context_lock:
             if self._context is None:
                 assert self._create_context is not None
                 self._context = await self._create_context()
+                self._context.on('close', self._browser_closed)
+            browser = self._context.browser
+            if self._closed or (browser is not None and not browser.is_connected()):
+                raise SubchatBrowserClosed('Dedicated browser disconnected; recover saved IDs')
             return self._context
 
     async def catalog(self, model: str | None = None) -> dict[str, object]:
