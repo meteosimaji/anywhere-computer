@@ -35,6 +35,10 @@ class SubchatStaleTarget(ValueError):
     """The requested predecessor is no longer the last observed conversation turn."""
 
 
+class SubchatInterrupted(ValueError):
+    """The provider recorded interruption; partial output is not a completed answer."""
+
+
 class SubchatOutcomeUnknown(RuntimeError):
     """The send stage was entered; the caller must recover rather than resubmit."""
 

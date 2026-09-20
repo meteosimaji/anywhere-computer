@@ -1,0 +1,180 @@
+"""Saved final answers must match the original input, not merely look complete."""
+import json
+
+import pytest
+
+from anywhere_computer.subchat import SubchatInterrupted
+from anywhere_computer.subchat_browser.history import project_history
+from anywhere_computer.subchat_state import SubchatSubmission
+
+
+def sample():
+    submission = SubchatSubmission(operation_id='a' * 32, prompt='日本語 work', model='dynamic',
+        effort='dynamic', state='submitted', conversation_id='00000000-0000-0000-0000-000000000001',
+        user_message_id='user')
+    binding = {'request_id': 'request', 'turn_exchange_id': 'exchange', 'working_turn_id': 'work'}
+    payload = {'conversation_id': submission.conversation_id, 'messages': [
+        {'id': 'user', 'author': {'role': 'user'},
+         'content': {'content_type': 'text', 'parts': [submission.prompt]},
+         'metadata': binding.copy(), 'status': 'finished_successfully'},
+        {'id': 'answer', 'author': {'role': 'assistant'},
+         'content': {'content_type': 'text', 'parts': ['日本語 result']},
+         'metadata': {**binding, 'is_complete': True, 'finish_details': {'type': 'stop'}},
+         'status': 'finished_successfully', 'channel': 'final', 'end_turn': True},
+    ]}
+    return submission, payload
+
+
+@pytest.mark.parametrize('case', ['complete', 'interrupted', 'thinking', 'empty', 'other_request',
+                                  'missing_binding', 'multiple_finals', 'missing_user',
+                                  'wrong_prompt', 'wrong_conversation', 'unknown_finish',
+                                  'shared_binding'])
+def test_history_completion_and_identity(case):
+    submission, payload = sample()
+    user, answer = payload['messages']
+    if case == 'interrupted':
+        # A real stopped response also retained all three success-looking fields.
+        answer['metadata']['finish_details'] = {'type': 'interrupted', 'reason': 'client_stopped'}
+    elif case == 'thinking':
+        answer['channel'] = 'analysis'
+    elif case == 'empty':
+        answer['content']['parts'] = ['']
+    elif case == 'other_request':
+        answer['metadata']['request_id'] = 'other'
+    elif case == 'missing_binding':
+        del user['metadata']['working_turn_id']
+    elif case == 'multiple_finals':
+        payload['messages'].append({**answer, 'id': 'another'})
+    elif case == 'shared_binding':
+        payload['messages'].append({**user, 'id': 'another-user'})
+    elif case == 'missing_user':
+        payload['messages'].remove(user)
+    elif case == 'wrong_prompt':
+        user['content']['parts'] = ['different']
+    elif case == 'wrong_conversation':
+        payload['conversation_id'] = 'other'
+    elif case == 'unknown_finish':
+        answer['metadata']['finish_details'] = {'type': 'future-value'}
+    if case in {'interrupted', 'wrong_prompt', 'wrong_conversation'}:
+        with pytest.raises(SubchatInterrupted if case == 'interrupted' else ValueError):
+            project_history(json.dumps(payload).encode(), submission)
+    else:
+        result = project_history(json.dumps(payload).encode(), submission)
+        if case == 'complete':
+            assert result.text == '日本語 result' and result.answer_message_id == 'answer'
+        else:
+            assert result is None
+
+
+@pytest.mark.parametrize('interrupted', [False, True])
+async def test_backend_observes_history_without_send_or_original_tab_reload(interrupted):
+    from playwright.async_api import Error, async_playwright
+
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    submission, payload = sample()
+    if interrupted:
+        payload['messages'][1]['metadata']['finish_details'] = {'type': 'interrupted'}
+    async with async_playwright() as driver:
+        try:
+            browser = await driver.chromium.launch(channel='chrome', headless=True)
+        except Error as error:
+            if 'not found' in str(error) or "doesn't exist" in str(error):
+                pytest.skip('Chrome required')
+            raise
+        try:
+            context = await browser.new_context()
+            original = await context.new_page()
+            calls = []
+            path = '/backend-api/conversations/' + submission.conversation_id
+            async def route(r):
+                calls.append((r.request.method, r.request.url))
+                if path in r.request.url:
+                    await r.fulfill(content_type='application/json', body=json.dumps(payload))
+                else:
+                    await r.fulfill(content_type='text/html', body='<script>fetch(' +
+                        json.dumps(path) + ',{headers:{Authorization:"Bearer fixture"}})</script>')
+            await context.route('https://chatgpt.com/**', route)
+            backend = BrowserSubchatBackend(context, http_read=True)
+            if interrupted:
+                with pytest.raises(SubchatInterrupted):
+                    await backend.read_answer(submission)
+            else:
+                assert (await backend.read_answer(submission)).text == '日本語 result'
+            assert calls == [('GET', 'https://chatgpt.com/c/' + submission.conversation_id),
+                             ('GET', 'https://chatgpt.com' + path)]
+            assert context.pages == [original] and original.url == 'about:blank'
+        finally:
+            await browser.close()
+
+
+async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path):
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    submission, payload = sample()
+    payload['messages'][1]['metadata']['finish_details'] = {'type': 'interrupted'}
+
+    class Reader:
+        async def read_answer(self, saved):
+            return project_history(json.dumps(payload).encode(), saved)
+
+        async def prepare(self, saved):
+            raise AssertionError('Interrupted target must not release a queued send')
+
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        store.prepare(submission.operation_id, submission.prompt, submission.model,
+                      submission.effort, owner=None)
+        store.begin_send(submission.operation_id, owner=None)
+        store.submitted(submission.operation_id, submission.conversation_id,
+                        submission.user_message_id, owner=None)
+        service = Subchats(store, Reader())
+        service.queue('b' * 32, submission.operation_id, 'follow-up', owner=None)
+        with pytest.raises(SubchatInterrupted):
+            await service.recover('b' * 32, owner=None)
+        assert store.get(submission.operation_id, owner=None).state == 'submitted'
+        assert store.get('b' * 32, owner=None).state == 'queued'
+    finally:
+        ledger.close()
+
+
+async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(tmp_path):
+    from io import StringIO
+
+    from anywhere_computer.models import Request
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_cli import process_lines
+    from anywhere_computer.subchat_mcp import session
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    class Reader:
+        async def read_answer(self, saved):
+            raise SubchatInterrupted('private provider details')
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    op = 'e' * 32
+    store.prepare(op, 'prompt', 'model', 'effort', owner=None)
+    store.begin_send(op, owner=None)
+    store.submitted(op, 'chat', 'user', owner=None)
+    service = Subchats(store, Reader())
+    server = session(service)
+    try:
+        output = StringIO()
+        await process_lines(service, StringIO(json.dumps(
+            {'action': 'recover', 'operation_id': op}) + '\n'), output)
+        cli = json.loads(output.getvalue())
+        assert cli['state'] == 'reply_interrupted' and cli['automatic_retry'] is False
+        result = await server.execute(Request(operation_id='f' * 32, tool='subchat_recover',
+                                              arguments={'operation_id': op}))
+        assert result.state == 'failed'
+        assert result.data == {'error_code': 'reply_interrupted', 'automatic_retry': False}
+        assert 'private provider details' not in output.getvalue() + result.model_dump_json()
+        assert store.get(op, owner=None).state == 'submitted'
+    finally:
+        await server.close()
+        ledger.close()

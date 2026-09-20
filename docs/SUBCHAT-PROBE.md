@@ -845,3 +845,30 @@ owned matches fail rather than opening another copy. New conversations and
 recovery in a fresh adapter can still open tabs. This reduces avoidable tab
 creation, but does not guarantee background window behavior or browser-free
 operation on every browser/OS.
+
+### Experimental saved HTTP answer recovery
+
+`anywhere-subchat --http-read --browser-profile … --state-dir … [--mcp]`
+uses the dedicated browser application's own conversation-history GET when
+recovering a submitted answer. It neither replays generation nor copies login
+credentials. The owned observation tab is closed within a bounded cleanup;
+existing submission tabs are not reloaded. This remains browser-mediated.
+
+The response must identify the exact conversation and original user message,
+match the original prompt, and provide matching request, exchange and working
+turn identities for exactly one final assistant response. Normal completion
+requires nonempty text, successful status, end-turn, completeness and an observed
+`finish_details.type=stop`. Unknown or missing evidence remains pending. An
+`interrupted` finish returns the explicit `reply_interrupted` CLI state or MCP
+error code, with automatic retry disabled. Provider exception details are not
+returned. The saved submission remains submitted, cannot be resent, and cannot release a
+queued follow-up as though it completed. No DOM fallback is used in this mode.
+Pagination without the original input, alternative finals and future schemas
+are not guessed. The default DOM path remains available without this option.
+
+Live read-only history inspection on 2026-09-20 found that a manually stopped
+response retained `finished_successfully`, `end_turn=true` and `is_complete=true`,
+but had `finish_details={type: interrupted, reason: client_stopped}`. Normal
+answers had finish type `stop`. User and assistant `turn_id` differed; their
+request/exchange/working-turn identifiers matched. This is provider observation,
+not authenticated child identity or an official API stability guarantee.

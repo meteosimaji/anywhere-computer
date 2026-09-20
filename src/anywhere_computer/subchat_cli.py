@@ -14,7 +14,7 @@ from pydantic import Field, TypeAdapter
 
 from .models import Contract, OperationId
 from .state import Ledger
-from .subchat import SubchatOutcomeUnknown, Subchats
+from .subchat import SubchatInterrupted, SubchatOutcomeUnknown, Subchats
 from .subchat_state import SubchatList, SubchatSubmissions, SubchatWorkContext
 
 if TYPE_CHECKING:
@@ -82,7 +82,8 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
             # Do not print provider errors or invalid input: both can contain secrets.
             output = json.dumps({
                 'state': ('submission_unconfirmed'
-                          if isinstance(error, SubchatOutcomeUnknown) else 'command_failed'),
+                          if isinstance(error, SubchatOutcomeUnknown) else 'reply_interrupted'
+                          if isinstance(error, SubchatInterrupted) else 'command_failed'),
                 'operation_id': (command.operation_id
                                  if isinstance(command, Command | QueueCommand) else None),
                 'error_type': type(error).__name__,
@@ -92,7 +93,7 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         destination.flush()
 
 
-async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
+async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool = False) -> None:
     from .subchat_browser.backend import BrowserSubchatBackend
 
     ledger = Ledger(state)
@@ -111,7 +112,7 @@ async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
                 resources.push_async_callback(context.close)
                 return context
 
-            backend = BrowserSubchatBackend(open_browser)
+            backend = BrowserSubchatBackend(open_browser, http_read=http_read)
             service = Subchats(SubchatSubmissions(ledger.connection), backend)
             # Saved-state requests need no browser. Once needed, commands share
             # one dedicated context until EOF; no per-request restart or replay.
@@ -138,5 +139,8 @@ def main() -> None:
     parser.add_argument('--state-dir', type=Path, required=True,
                         help='Local subchat ledger directory')
     parser.add_argument("--mcp", action="store_true", help="Serve MCP over stdio")
+    parser.add_argument('--http-read', action='store_true',
+                        help='Read saved answers through observed browser HTTP history')
     args = parser.parse_args()
-    asyncio.run(run(args.browser_profile.resolve(), args.state_dir.resolve(), mcp=args.mcp))
+    asyncio.run(run(args.browser_profile.resolve(), args.state_dir.resolve(),
+                    mcp=args.mcp, http_read=args.http_read))
