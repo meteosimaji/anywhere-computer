@@ -16,7 +16,7 @@ from .subchat_state import SubchatSubmissions, SubchatWorkContext
 
 
 class Command(Contract):
-    action: Literal['send', 'recover', 'status']
+    action: Literal['send', 'recover', 'status', 'cancel']
     operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     prompt: str | None = Field(default=None, min_length=1, max_length=100_000)
     model: str | None = Field(default=None, min_length=1, max_length=256)
@@ -37,9 +37,11 @@ async def dispatch(service: Subchats, command: Command) -> str:
         if any(value is not None for value in (command.prompt, command.model,
                                                command.effort, command.conversation_id,
                                                command.work_context)):
-            raise ValueError('Recovery and status accept only an operation identity')
+            raise ValueError('Recovery, status and cancellation accept only an operation identity')
         result = (await service.recover(command.operation_id, owner=None)
                   if command.action == 'recover'
+                  else service.store.cancel(command.operation_id, owner=None)
+                  if command.action == 'cancel'
                   else service.store.get(command.operation_id, owner=None))
     return result.model_dump_json()
 

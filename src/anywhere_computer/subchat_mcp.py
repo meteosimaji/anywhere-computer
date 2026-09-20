@@ -41,6 +41,7 @@ INSTRUCTIONS = (
     'finished answer. Poll subchat_recover with operation_id equal to that send request_id. '
     'subchat_message mode=queue persists a follow-up bound to the target operation; '
     'recover/wait on its message operation dispatches only after that target completes. '
+    'subchat_cancel cancels only a local queued/prepared input, never generation. '
     'No background dispatcher is implied. queued is local acceptance, not delivery. '
     'mode=steer is currently unsupported by this ordinary Chat adapter; it never falls '
     'back to queue or Stop. Submitted is a receipt, not proof of consumption. '
@@ -66,6 +67,7 @@ def session(service: Subchats, *,
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
     definitions: dict[str, tuple[type[Contract], str]] = {
+        'subchat_cancel': (OperationId, 'Cancel an unsent queued/prepared input; never stop Chat.'),
         'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
                             'Steer returns unsupported without sending or queueing.'),
         'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels.'),
@@ -93,6 +95,11 @@ def session(service: Subchats, *,
 
     async def execute(request: Request) -> Reply:
         try:
+            if request.tool == 'subchat_cancel':
+                target = OperationId.model_validate(request.arguments)
+                result = service.store.cancel(target.operation_id, owner=None)
+                return Reply(operation_id=request.operation_id, state='completed',
+                             data=result.model_dump(mode='json'))
             if request.tool == 'subchat_message':
                 message = Message.model_validate(request.arguments)
                 service.store.get(message.target_operation_id, owner=None)
@@ -111,10 +118,10 @@ def session(service: Subchats, *,
                 deadline = asyncio.timeout(wait.wait_ms / 1000)
                 try:
                     async with deadline:
-                        while result.state not in {'prepared', 'completed'}:
+                        while result.state not in {'prepared', 'completed', 'cancelled'}:
                             async with browser_lock:
                                 result = await service.recover(wait.operation_id, owner=None)
-                            if result.state not in {'prepared', 'completed'}:
+                            if result.state not in {'prepared', 'completed', 'cancelled'}:
                                 # Never hold the browser input lock while the model thinks.
                                 await asyncio.sleep(.5)
                 except TimeoutError:

@@ -97,7 +97,7 @@ class Subchats:
             if target.state != 'completed':
                 return submission
             return await self._dispatch(submission, owner=owner)
-        if submission.state in {'prepared', 'completed'}:
+        if submission.state in {'prepared', 'completed', 'cancelled'}:
             return submission
         if submission.state == 'sending':
             receipt = await self.backend.find_submission(submission)

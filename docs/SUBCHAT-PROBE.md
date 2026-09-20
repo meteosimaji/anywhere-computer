@@ -728,3 +728,17 @@ The external auditor reported seven isolated assertions against CoS's extracted
 receipt predicate; they are not Anywhere HTTP integration or live Chat tests.
 Live tool-boundary delivery and authenticated caller/turn correlation remain
 unverified. The existing 74 subchat tests do not establish those capabilities.
+
+### Cancel an unsent input
+
+`subchat_cancel(operation_id=...)` (or JSON-lines CLI `action: cancel`) changes
+only a local `queued` or `prepared` record to `cancelled`. Repeated cancellation
+returns that same terminal record. Recovery, wait and replay of the original
+queue request cannot revive it. Cancellation uses the same owner check and
+compare-and-swap transition as send reservation: if cancellation wins during
+preparation, Send is not called; once the record reaches `sending`, cancellation
+is rejected because dispatch may already have happened.
+
+This operation does not click Stop, cancel the parent answer, clear browser
+drafts, or undo commands. Preparation may have left a draft that requires manual
+inspection. It is deliberately separate from provider-side generation stopping.
