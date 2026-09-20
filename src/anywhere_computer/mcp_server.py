@@ -35,7 +35,10 @@ INSTRUCTIONS = (
     "lost response, inspect the operation ID rather than repeating a write. "
     "For recoverable calls, choose a 32-character lowercase hex request_id before sending, "
     "pass it as a normal tool argument, and use it with operations_get. A running reply is "
-    "an acknowledgement; poll operations_get for completion."
+    "an acknowledgement; poll operations_get for completion. Recover through the original "
+    "device and authorization grant (reconnection is allowed); local and other grants "
+    "have separate operation scopes. An unknown ID on another connection is not evidence "
+    "that the original action did not run."
 )
 
 

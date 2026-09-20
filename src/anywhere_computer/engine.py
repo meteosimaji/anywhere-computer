@@ -833,7 +833,9 @@ class Engine:
         )
         self.register(
             "operations_get",
-            "Recover the recorded outcome of an operation ID.",
+            "Recover the recorded outcome of an operation ID using the original device "
+            "and authenticated connection scope. HTTP grant IDs are isolated from local "
+            "and other grants; an unknown ID here does not prove the action never ran.",
             OperationId,
             operation,
             read_only=True,

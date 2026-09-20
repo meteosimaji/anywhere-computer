@@ -59,6 +59,10 @@ The underlying action still needs the user's authorization. Authentication and e
 must be completed through the appropriate local client; the bridge never approves them.
 After unknown execution, retain the operation ID and inspect operations_get; do not retry
 with a new ID. A read-only HTTP grant does not include this execution bridge.
+Recover through the original device and authorization grant, including after reconnecting.
+HTTP grants and the local connection have separate operation-ID scopes. An unknown ID
+from another connection is not evidence that execution never occurred; retain the original
+connection identity with the operation ID instead of replaying the action there.
 
 When multiple calls need shared state, open codex_plugin_session_open first, and pass
 its session_id and the same cwd to codex_plugin_tools and codex_plugin_call. Use
