@@ -72,3 +72,51 @@ async def test_search_read_edit_and_verify_in_persistent_terminal(tmp_path):
         assert stopped["state"] == "exited"
     finally:
         await engine.close()
+
+
+async def test_shared_file_handoff_rejects_stale_edit_and_survives_restart(tmp_path):
+    """Two request sequences share real files; no browser/model is simulated here."""
+    state = tmp_path / 'state'
+    engine = Engine(state)
+    work = tmp_path / 'shared 日本語'
+    path = work / 'main.py'
+
+    async def call(tool, **arguments):
+        reply = await engine.execute(request(tool, **arguments))
+        assert reply.state == 'completed', reply
+        return reply
+
+    try:
+        await call('directories_create', path=str(work))
+        created = await call('files_write', path=str(path), text='print(40)\n')
+        reader_b = (await call('files_read', path=str(path))).data
+        reader_a = (await call('files_read', path=str(path))).data
+        assert reader_a['sha256'] == reader_b['sha256']
+        await call('files_write', path=str(path), text='print(42)\n', mode='replace',
+                   expected_sha256=reader_a['sha256'])
+        rejected = await engine.execute(request(
+            'files_write', path=str(path), text='print(99)\n', mode='replace',
+            expected_sha256=reader_b['sha256']))
+        assert rejected.state == 'failed'
+        latest = (await call('files_read', path=str(path))).data
+        assert latest['text'] == 'print(42)\n'
+        assert latest['sha256'] != reader_b['sha256']
+        terminal = (await call('terminal_start', cwd=str(work),
+                              command=python_command(
+                                  'import runpy; runpy.run_path("main.py")'))).data
+        output = (await call('terminal_output', session_id=terminal['session_id'],
+                            cursor=0, wait_ms=3000)).data
+        async with asyncio.timeout(10):
+            while output['state'] != 'exited':
+                await asyncio.sleep(0.01)
+                output = (await call('terminal_output', session_id=terminal['session_id'],
+                                    cursor=0, wait_ms=1000)).data
+        assert output['text'].strip() == '42'
+        assert output['exit_code'] == 0
+        await engine.close()
+        engine = Engine(state)
+        assert (await call('files_read', path=str(path))).data['text'] == 'print(42)\n'
+        recovered = await call('operations_get', operation_id=created.operation_id)
+        assert recovered.data['state'] == 'completed'
+    finally:
+        await engine.close()

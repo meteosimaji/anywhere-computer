@@ -92,6 +92,15 @@ print(json.dumps(report))
                                 'text': program.replace('# EXTRA', 'report["rows"] = len(rows)'),
                             })
                             assert edited['data']['backup_id'] == read['data']['sha256']
+                            stale = await client.call_tool('files_write', {
+                                'path': str(script), 'mode': 'replace',
+                                'expected_sha256': read['data']['sha256'],
+                                'text': 'raise RuntimeError("stale writer won")\n',
+                            })
+                            assert stale.isError
+                            assert stale.structuredContent['state'] == 'failed'
+                            retained = await call('files_read', {'path': str(script)})
+                            assert retained['data']['sha256'] == edited['data']['sha256']
                         args = {'cwd': str(tmp_path), 'command': executable + ' report.py',
                                 'request_id': run_ids[iteration]}
                         started = await call('terminal_start', args)
