@@ -13,7 +13,7 @@ from playwright.async_api import CDPSession, Error, Page, async_playwright
 
 from .efforts import collect_efforts
 
-SOURCE = Path(__file__).with_name("subchat_model_menu.js").read_text()
+SOURCE = Path(__file__).with_name("subchat_model_menu.js").read_text(encoding="utf-8")
 TRIGGER = '[data-composer-navigation-target="reasoning"]'
 TOGGLE = '[data-model-picker-view-toggle="true"]:visible'
 CONTROL = '[data-reasoning-slider="true"]:visible'

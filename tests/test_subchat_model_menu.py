@@ -9,7 +9,7 @@ import pytest
 async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
     playwright = pytest.importorskip("playwright.async_api")
     source = (Path(__file__).parents[1] /
-              "src/anywhere_computer/subchat_browser/subchat_model_menu.js").read_text()
+              "src/anywhere_computer/subchat_browser/subchat_model_menu.js").read_text(encoding="utf-8")
     async with playwright.async_playwright() as driver:
         try:
             browser = await driver.chromium.launch(channel="chrome", headless=True)

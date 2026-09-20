@@ -7,7 +7,7 @@ import pytest
 async def test_literal_draft_preserves_text_and_rejects_existing_content():
     playwright = pytest.importorskip('playwright.async_api')
     source = (Path(__file__).parents[1] /
-              "src/anywhere_computer/subchat_browser/subchat_input.js").read_text()
+              "src/anywhere_computer/subchat_browser/subchat_input.js").read_text(encoding="utf-8")
     async with playwright.async_playwright() as driver:
         try:
             browser = await driver.chromium.launch(channel='chrome', headless=True)
