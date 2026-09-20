@@ -1460,9 +1460,38 @@ The existing real Chrome/APIRequestContext test covers both transport modes,
 history/catalog rejection, allowed cross-resource reads, and no requests to a
 latched denied URL. This is not a live ChatGPT permission-revocation trial.
 
-The same review identified a separate unresolved limitation: authorization is
-cached for a BrowserContext object, not independently bound to each submission's
-account. Switching accounts/workspaces inside that context can leave old headers
-in use. Exact history/input matching prevents accepting unrelated answers, but
-correct recovery after account switching is not verified or implemented. This
-change does not silently refresh or substitute another account's authorization.
+The same review identified stale account headers after a user switches accounts
+inside a BrowserContext. New HTTP-controller submissions now checkpoint the
+observed `chatgpt-account-id` with the outgoing input identity before forwarding.
+Missing account identity or checkpoint failure aborts the intercepted request.
+Before forwarding, the generation account must also match an already established
+HTTP reader account. Queued follow-ups revalidate their persisted parent account
+at the request checkpoint, including after restart; they cannot replace it with
+the currently selected browser account. The immutable parent binding is reused
+instead of introducing a second copied expected-account field.
+The non-secret account binding is immutable and stored separately from legacy
+submission JSON; authorization tokens are never stored in the ledger.
+
+Bound recovery first compares the operation's account with the observed HTTP
+account. With no cached authorization, it bootstraps via model-catalog observation
+before requesting conversation history. A mismatch rejects the history request;
+it does not replace cached credentials or switch another pending operation's
+account. A controller for the matching account is needed to recover that operation.
+This provides observed request/account consistency, not cryptographic proof of
+provider identity, automatic token renewal, or simultaneous multi-account support.
+Legacy operations without a binding retain their existing exact input/history
+checks; they do not acquire inferred account bindings. Older runtimes can read
+legacy JSON but do not enforce this new binding check.
+
+Controlled tests cover atomic rollback, restart, immutable and owner-bound
+checkpoint identity, rejection before cross-account history requests, matched
+HTTP recovery, and missing-account generation abort. Live account-switch behavior
+and workspace identity semantics remain unverified.
+
+A September 21 live read-only check used the new reader with an account binding
+seeded from the already observed session. One independent HTTP request recovered
+the exact saved answer. Changing only the expected account to a fixture value
+was rejected before any additional request. No cookies were copied, messages
+generated, browser tabs opened, or real accounts switched. This confirms live
+matched recovery plus a local mismatch guard, not new-send binding or live
+multi-account acceptance.

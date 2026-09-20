@@ -148,8 +148,9 @@ async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool 
 
             store = SubchatSubmissions(ledger.connection)
 
-            def record_request(operation_id: str, message_id: str) -> None:
-                store.observe_request(operation_id, message_id, owner=None)
+            def record_request(operation_id: str, message_id: str, account_id: str) -> None:
+                store.observe_request(operation_id, message_id, owner=None,
+                                      provider_account_id=account_id)
 
             backend = BrowserSubchatBackend(open_browser, http_read=http_read,
                 http_request_factory=open_http if http_read else None,
