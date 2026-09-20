@@ -14,10 +14,11 @@ from typing import TYPE_CHECKING
 from anywhere_computer.subchat import (
     SubchatAnswer,
     SubchatBrowserClosed,
+    SubchatPreparationFailed,
     SubchatReceipt,
     SubchatStaleTarget,
 )
-from anywhere_computer.subchat_state import SubchatSubmission
+from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmission
 
 from .catalog import (
     CONTROL,
@@ -91,7 +92,9 @@ class BrowserSubchatBackend:
 
     async def http_catalog(self) -> dict[str, object]:
         async with asyncio.timeout(20):
-            return await self._http_reader.catalog(await self._read_context(catalog=True))
+            result = await self._http_reader.catalog(await self._read_context(catalog=True))
+            result['http_selection_send_supported'] = self.http_read
+            return result
 
     async def _page(self, submission: SubchatSubmission) -> Page | None:
         if self._context is not None:
@@ -139,13 +142,18 @@ class BrowserSubchatBackend:
                 and await editor.count() == 1 and not (await editor.inner_text()).strip()
                 and await stop.filter(visible=True).count() == 0)
 
+    def validate_send_selection(self, selection: SubchatHTTPSelection | None) -> None:
+        """Check controller compatibility without opening a browser or saving a queue."""
+        if self.http_read and selection is None:
+            raise SubchatPreparationFailed('HTTP sends require an exact observed http_selection')
+        if not self.http_read and selection is not None:
+            raise SubchatPreparationFailed('HTTP selection requires the HTTP-read adapter')
+
     async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
+        self.validate_send_selection(submission.http_selection)
         if self.http_read:
-            if submission.http_selection is None:
-                raise ValueError('HTTP sends require an exact observed http_selection')
+            assert submission.http_selection is not None
             require_http_selection(await self.http_catalog(), submission.http_selection)
-        elif submission.http_selection is not None:
-            raise ValueError('HTTP selection requires the HTTP-read adapter')
         if submission.resources is not None and not self.http_read:
             raise ValueError('Resource sends require HTTP history verification')
         url = self._url(submission)

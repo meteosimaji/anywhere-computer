@@ -85,7 +85,8 @@ def test_ambiguous_or_changed_schema_is_not_a_catalog(change):
 
 
 @pytest.mark.parametrize('authenticated', [True, False])
-async def test_actual_http_catalog_request_without_picker_or_send(authenticated):
+@pytest.mark.parametrize('http_read', [True, False])
+async def test_actual_http_catalog_request_without_picker_or_send(authenticated, http_read):
     from playwright.async_api import Error, async_playwright
 
     from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
@@ -113,9 +114,11 @@ async def test_actual_http_catalog_request_without_picker_or_send(authenticated)
                         '<script>fetch("/backend-api/models",{headers:' + headers + '})</script>'))
 
             await context.route('https://chatgpt.com/**', route)
-            backend = BrowserSubchatBackend(context)
+            backend = BrowserSubchatBackend(context, http_read=http_read)
             if authenticated:
-                assert (await backend.http_catalog())['state'] == 'http_catalog_observed'
+                result = await backend.http_catalog()
+                assert result['state'] == 'http_catalog_observed'
+                assert result['http_selection_send_supported'] is http_read
             else:
                 with pytest.raises(ConnectionError, match='Authenticated'):
                     await backend.http_catalog()
@@ -195,5 +198,46 @@ async def test_cli_catalog_returns_reusable_selection_without_submission(tmp_pat
             'thinking_effort': 'future-effort'}
         assert ledger.connection.execute(
             'SELECT count(*) FROM subchat_submissions').fetchone()[0] == 0
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('entry', ['cli', 'mcp'])
+async def test_legacy_parent_cannot_create_undispatchable_http_queue(tmp_path, entry):
+    from anywhere_computer.models import Request
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import SubchatPreparationFailed, Subchats
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_cli import QueueCommand, dispatch
+    from anywhere_computer.subchat_mcp import session
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    async def forbidden():
+        pytest.fail('Invalid queue must not open a browser')
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    parent, child = 'a' * 32, 'b' * 32
+    store.prepare(parent, 'old input', 'model', 'effort', owner=None)
+    store.begin_send(parent, owner=None)
+    store.submitted(parent, 'chat', 'input', owner=None)
+    service = Subchats(store, BrowserSubchatBackend(forbidden, http_read=True))
+    try:
+        if entry == 'cli':
+            with pytest.raises(SubchatPreparationFailed, match='http_selection'):
+                await dispatch(service, QueueCommand(action='queue', operation_id=child,
+                    target_operation_id=parent, prompt='follow-up'))
+        else:
+            server = session(service)
+            try:
+                reply = await server.execute(Request(operation_id=child, tool='subchat_message',
+                    arguments={'mode': 'queue', 'target_operation_id': parent,
+                               'prompt': 'follow-up'}))
+                assert reply.state == 'failed'
+                assert reply.data['error_code'] == 'preparation_failed'
+            finally:
+                await server.close()
+        assert ledger.connection.execute(
+            'SELECT operation_id FROM subchat_submissions').fetchall() == [(parent,)]
     finally:
         ledger.close()

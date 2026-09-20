@@ -1511,7 +1511,10 @@ an available choice returned by `subchat_catalog({"source":"http"})`, or send
 `http_selection` object into `subchat_send`/CLI `send`: `version_id`, `preset_id`,
 `model_slug`, and `thinking_effort`. Null effort is explicit, not a wildcard.
 Continue supplying the observed UI `model` and `effort` labels for preparation.
-The adapter does not guess which provider ID a label means.
+The adapter does not guess which provider ID a label means. The catalog also
+reports `http_selection_send_supported`: true identifies an HTTP-read controller;
+false permits discovery only. Restart the adapter with `--http-read` before
+attempting constrained sends when this flag is false.
 
 Preparation rechecks that exact choice against the current authenticated catalog
 before opening a composer. At the generation POST boundary, its model and effort
@@ -1525,7 +1528,9 @@ The selection is an immutable send argument saved in the existing submission,
 and queued follow-ups inherit it. Reusing an operation ID with different settings
 is rejected. HTTP sends without a selection fail before browser work; saved old
 operations remain readable/recoverable. Previously queued work without a selection
-cannot be newly dispatched in HTTP mode. UI-only mode cannot accept this HTTP
+cannot be newly dispatched in HTTP mode. Creating a new queue from a legacy
+parent without the required selection is rejected before saving a child operation,
+through both CLI and MCP. UI-only mode cannot accept this HTTP
 constraint. Unconstrained legacy records retain their old JSON shape; constrained
 records contain the new field and must not be processed by an older runtime that
 does not understand it. Unlike answer evidence, this send constraint must not be

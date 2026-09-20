@@ -103,6 +103,9 @@ class Subchats:
     def queue(self, operation_id: str, target_operation_id: str, prompt: str,
               *, owner: str | None) -> SubchatSubmission:
         target = self.store.get(target_operation_id, owner=owner)
+        validate = getattr(self.backend, 'validate_send_selection', None)
+        if validate is not None:
+            validate(target.http_selection)
         return self.store.prepare(operation_id, prompt, target.model, target.effort, owner=owner,
                                   conversation_id=target.conversation_id,
                                   work_context=target.work_context,

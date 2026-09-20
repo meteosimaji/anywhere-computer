@@ -57,7 +57,9 @@ class Wait(OperationId):
 INSTRUCTIONS = (
     'Ordinary Chat subchats. Use an observed model and effort; never silently substitute. '
     'HTTP-read sends require http_selection copied exactly from an available choice in '
-    'subchat_catalog source=http. Keep its version_id, preset_id, model_slug and explicit '
+    'subchat_catalog source=http with http_selection_send_supported=true. A false flag '
+    'allows catalog inspection only; restart with --http-read before constrained sends. '
+    'Keep its version_id, preset_id, model_slug and explicit '
     'thinking_effort (including null); still provide observed UI model/effort labels. '
     'The adapter rechecks availability and rejects a different wire model or effort before '
     'forwarding. Queue follow-ups inherit the selection; never guess IDs from labels. '
@@ -339,9 +341,12 @@ def session(service: Subchats, *,
         except SubchatPreparationFailed:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Adapter preparation failed before dispatch. Check for an existing '
-                               'draft, active generation or unavailable model in the dedicated '
-                               'Chat before retrying the same exact request ID; '
-                               'for a queued message, recover its existing operation instead.',
+                               'draft, active generation, missing HTTP selection or unavailable '
+                               'model in the dedicated Chat before retrying the same exact '
+                               'request ID; '
+                               'a new queue also requires its parent selection to match this '
+                               'controller. '
+                               'For an existing queued message, recover its operation instead.',
                          data={'error_code': 'preparation_failed', 'dispatched': False})
         except SubchatOutcomeUnknown as error:
             return Reply(operation_id=request.operation_id, state='unknown',
