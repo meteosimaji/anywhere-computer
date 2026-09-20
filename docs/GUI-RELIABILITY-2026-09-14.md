@@ -89,3 +89,43 @@ complete PTY/ConPTY, document editing/preview, catalog caching, signed installat
 or sleep/restart acceptance. They do not update the installed Chat engine or its
 cached public schema. Keep those gates open until the actual target distribution
 and live clients satisfy the development directive.
+
+## Native macOS feasibility, 2026-09-21
+
+An independent Swift 6.3.3 probe used AppKit/ApplicationServices directly, without
+Chrome, Peekaboo, model inference or clipboard input. Existing Accessibility
+permission was available; no permission prompt was requested. A new synthetic
+TextEdit document `/tmp/ac-native-gui-20260921.txt` was opened with `open -g`.
+The probe required one TextEdit process, an exact unique window title, one editable
+AXTextArea in a bounded tree, and the expected current fixture value.
+
+Observations, in order:
+
+1. AXValue and AXSelectedText setters returned success and exact Japanese/emoji
+   readback. This alone did not prove persistence. The first value appeared on
+   disk later; the next value did not appear during a bounded 20-second check.
+2. The observed Save menu was named `保存…`, not `保存`. Its AXEnabled value was
+   false while the app was in the background. An initial AXPress returned success
+   despite this. Subsequent probes rejected disabled menu actions. No save dialog
+   was assumed or acted upon.
+3. After checking that the target window and field were the application's focused
+   window/element, the probe selected the synthetic content and sent Unicode
+   keyboard events directly to that process. AX readback exactly matched
+   `Anywhere native 入力経路 44\n`.
+4. A Command-S event pair sent to the same process persisted that exact UTF-8
+   content. The file SHA-256 was
+   `a17f9b99d61e07abef04a9934625c486b2c168535c835efe2a73220672540e57`.
+   The frontmost process ID remained unchanged in the mutation probes.
+
+This is live TextEdit feasibility evidence, not an integrated native provider or
+a universal background-input guarantee. The temporary probes were sequential,
+not atomic with concurrent user interaction, and do not establish PID-reuse
+protection, reference leases, stale-window rejection, screenshots, Windows UIA
+or distribution signing. The document remains available for inspection.
+
+Implementation requirements carried forward: preserve structured AX observation,
+use explicit process/window/element identity, distinguish AX set-value from input
+semantics, inspect enabled actions, and verify the resulting file independently.
+An acknowledged action or matching text view must never substitute for a save
+postcondition. Background process input needs explicit capability reporting and
+interference checks; do not silently fall back to frontmost/global keyboard input.
