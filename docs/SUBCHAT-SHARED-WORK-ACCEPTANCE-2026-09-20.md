@@ -1,5 +1,37 @@
 # Shared work acceptance, 2026-09-20
 
+## Hidden-tab transport and provider choice observation
+
+A later ordinary-Chat follow-up to the implementation reviewer appeared idle in
+the owning-app read projection while the actual page showed a choice between
+remaining in Chat and continuing in Work. Selecting Stay in Chat allowed the
+existing request to continue and finish; no new prompt was sent. The reviewer
+produced `/tmp/ac-audio-integration-review.md` and reported nine non-capturing
+audio/package tests passing. The parent read the artifact. This is a live
+provider-choice observation, not proof that the production subchat adapter
+detects or resolves that choice. Do not classify every missing answer as Thinking
+or silently select Work.
+
+A separate benign follow-up in the copy-review conversation explicitly selected
+the observed GPT-5.6 Sol/high option. One UI send produced a visible user receipt
+and the exact final answer `AC_TRANSPORT_PROBE_20260920`. The tab remained hidden.
+Network observation found POST `/backend-api/f/conversation/prepare` returning
+JSON and POST `/backend-api/f/conversation` returning HTTP 200 with
+`text/event-stream`. The send included authentication, browser preparation state
+and Sentinel verification headers. No credential values are retained here.
+The observed model identifier is evidence for that request, not a constant for
+future model selection. The isolated send observation reported no event loss;
+the earlier page-load capture was truncated and is not a complete trace.
+
+This proves browser-mediated HTTP/SSE transport, not independent browser-free
+authentication or renewal. No standalone authenticated replay or challenge
+bypass was attempted. New-conversation creation, expiry, browser termination and
+stream reconnection were not covered by this probe. Preserve the existing ledger
+and transport boundary: a hidden browser is still a browser dependency, and HTTP
+success alone is not proof of a completed answer. Saved-state CLI operations
+without Playwright have separate package-level evidence; they do not establish
+browser-free live Chat submission.
+
 ## Actual ordinary Chat trials
 
 The development browser adapter created ordinary Chat A with GPT-5.6 Sol and the
