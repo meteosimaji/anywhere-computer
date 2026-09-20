@@ -28,6 +28,13 @@ class SubchatWorkContext(Contract):
     inputs: tuple[SubchatInputReference, ...] = Field(default=(), max_length=32)
 
 
+class SubchatReportedSettings(Contract):
+    """Provider-reported answer settings, not proof of equivalence to UI labels."""
+
+    model_slug: str | None = Field(default=None, min_length=1, max_length=256)
+    thinking_effort: str | None = Field(default=None, min_length=1, max_length=256)
+
+
 class SubchatSubmission(Contract):
     operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     prompt: str = Field(min_length=1, max_length=100_000)
@@ -44,6 +51,7 @@ class SubchatSubmission(Contract):
     user_message_id: str | None = None
     answer_message_id: str | None = None
     answer: str | None = None
+    reported_settings: SubchatReportedSettings | None = None
     work_context: SubchatWorkContext | None = None
     resources: SubchatResources | None = None
 
@@ -256,15 +264,18 @@ class SubchatSubmissions:
             'user_message_id': user_message_id}), owner)
 
     def complete(self, operation_id: str, answer_message_id: str, answer: str,
-                 *, owner: str | None) -> SubchatSubmission:
+                 *, owner: str | None,
+                 reported_settings: SubchatReportedSettings | None = None) -> SubchatSubmission:
         old = self.get(operation_id, owner=owner)
         if not answer_message_id.strip() or not answer or answer_message_id == old.user_message_id:
             raise ValueError('A distinct observed answer identity and text are required')
         if old.state == 'completed':
-            if (old.answer_message_id, old.answer) != (answer_message_id, answer):
+            if (old.answer_message_id, old.answer, old.reported_settings) != (
+                    answer_message_id, answer, reported_settings):
                 raise ValueError('Completed subchat answer cannot be replaced')
             return old
         if old.state != 'submitted':
             raise ValueError('Submission identity must be observed before its answer')
         return self._replace(old, old.model_copy(update={
-            'state': 'completed', 'answer_message_id': answer_message_id, 'answer': answer}), owner)
+            'state': 'completed', 'answer_message_id': answer_message_id, 'answer': answer,
+            'reported_settings': reported_settings}), owner)

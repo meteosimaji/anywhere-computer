@@ -1368,3 +1368,20 @@ CI jobs passed; Windows ran 1462 tests with 34 skips and verified the relocated
 portable runtime. The first Windows attempt timed out in the unchanged workspace
 JavaScript fixture before the full suite; the same source and unchanged deadline
 passed on rerun. The initial timeout cause remains unresolved.
+
+### Requested versus reported settings
+
+HTTP final-answer recovery optionally returns and persists `reported_settings`
+with `model_slug` and `thinking_effort` from that exact answer's metadata. These
+are provider evidence, separate from the requested UI `model` and `effort`.
+There is no fixed model list or UI-to-provider mapping and no automatic claim
+that the requested settings were honored. Missing, malformed or oversized fields
+remain unavailable; only those two bounded strings are retained, not arbitrary
+metadata. Existing records and non-HTTP adapters default to no reported settings.
+Completed evidence is immutable with the answer and survives ledger reopening.
+
+A read-only HTTP check of the September 21 follow-up trial found
+`model_slug=gpt-5-6-thinking` and `thinking_effort=extended` on its matched final
+answer after the UI selected GPT-5.6 Sol/high. This single observation is not a
+stable translation table. No reasoning content or authentication values were
+exported during that inspection.

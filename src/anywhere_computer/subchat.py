@@ -6,7 +6,12 @@ from pydantic import Field
 
 from .models import Contract
 from .subchat_content import SubchatResources
-from .subchat_state import SubchatSubmission, SubchatSubmissions, SubchatWorkContext
+from .subchat_state import (
+    SubchatReportedSettings,
+    SubchatSubmission,
+    SubchatSubmissions,
+    SubchatWorkContext,
+)
 
 
 class SubchatReceipt(Contract):
@@ -18,6 +23,7 @@ class SubchatReceipt(Contract):
 class SubchatAnswer(SubchatReceipt):
     answer_message_id: str = Field(min_length=1)
     text: str = Field(min_length=1)
+    reported_settings: SubchatReportedSettings | None = None
 
 
 class SubchatBackend(Protocol):
@@ -151,4 +157,5 @@ class Subchats:
             # Thinking or unavailable observation: leave the submission untouched.
             return submission
         self._accept(submission, answer, owner)
-        return self.store.complete(operation_id, answer.answer_message_id, answer.text, owner=owner)
+        return self.store.complete(operation_id, answer.answer_message_id, answer.text, owner=owner,
+                                   reported_settings=answer.reported_settings)
