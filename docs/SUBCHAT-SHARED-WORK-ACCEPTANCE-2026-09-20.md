@@ -81,3 +81,30 @@ subchat server directly and nested Anywhere calls have different concurrency
 properties; the inner lock regression must not be advertised as end-to-end
 parallel scheduling. Task scheduling and authenticated workspace binding remain
 unfinished product work.
+
+## Parallel ordinary Chat work: preparation fixed, automatic recovery incomplete
+
+Two distinct ordinary Chat submissions used the live observed `GPT-5.6 Sol`
+model and medium effort. Submission preparation shared verified arrow navigation
+with model discovery after an offline regression demonstrated that an ignored
+Home key left the previous maximum effort selected. Eighty subchat tests passed.
+The same dedicated browser remained running for both submissions.
+
+The review Chat created `/tmp/ac-subchat-review-20260920/test_review.py` through
+its available tools. Its close-during-direct-send finding was independently
+reproduced locally before implementation; the session now joins direct calls and
+rejects new calls after close. The resulting 81-test subchat suite, full source
+mypy, and targeted Ruff checks passed. The other proposed regressions were not
+accepted merely because the Chat called them bugs.
+
+The ideas Chat produced a completed answer, independently visible through a
+second browser view. It recommended state/reason diagnostics, but also suggested
+retrying an unknown send under a new ID; that suggestion was rejected. No fresh
+competitor-source verification was demonstrated by this answer.
+
+Automatic recovery is not accepted yet: the review prompt was visibly saved with
+`test_review\\.py` (one literal backslash before the dot) instead of the submitted
+`test_review.py`, so exact receipt matching failed. The ideas answer was complete
+in the UI while adapter recovery still returned `submitted`. No resends, forced
+completion records, or relaxed text comparisons were used. These are live defects
+or unresolved observations, not evidence that two-tab result recovery passed.
