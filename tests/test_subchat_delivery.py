@@ -14,6 +14,7 @@ class Provider:
         self.prepares = []
         self.finished = False
         self.lose_receipt = False
+        self.user_message_id = 'parent-user'
 
     async def prepare(self, submission):
         self.prepares.append(submission.operation_id)
@@ -23,7 +24,7 @@ class Provider:
         self.sends.append(submission.operation_id)
         if self.lose_receipt:
             return None
-        return SubchatReceipt(conversation_id='chat', user_message_id='parent-user',
+        return SubchatReceipt(conversation_id='chat', user_message_id=self.user_message_id,
                               prompt=submission.prompt)
 
     async def find_submission(self, submission):
@@ -95,6 +96,7 @@ async def test_mcp_steer_has_no_queue_fallback_and_queue_cannot_change_target(tm
             arguments={'mode': 'queue', 'target_operation_id': parent, 'prompt': 'next'}))
         assert result.data['state'] == 'queued'
         other = '5' * 32
+        provider.user_message_id = 'other-user'
         await service.send(other, 'another', 'model', 'effort', owner=None)
         with pytest.raises(ValueError, match='different arguments'):
             service.queue(message, other, 'next', owner=None)

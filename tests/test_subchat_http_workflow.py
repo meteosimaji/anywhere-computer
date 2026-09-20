@@ -24,12 +24,15 @@ class Provider:
         with (Path(sys.argv[1]) / 'sends').open('a') as output: output.write('sent\\n')
         return None
     async def find_submission(self, submission):
-        return SubchatReceipt(conversation_id='fixture-chat', user_message_id='user',
+        return SubchatReceipt(conversation_id='fixture-chat',
+                              user_message_id='user-' + submission.operation_id,
                               prompt=submission.prompt)
     async def read_answer(self, submission):
         if not (Path(sys.argv[1]) / 'answer-ready').exists(): return None
-        return SubchatAnswer(conversation_id='fixture-chat', user_message_id='user',
-                              prompt=submission.prompt, answer_message_id='answer', text='42')
+        return SubchatAnswer(conversation_id='fixture-chat',
+                              user_message_id='user-' + submission.operation_id,
+                              prompt=submission.prompt,
+                              answer_message_id='answer-' + submission.operation_id, text='42')
 async def main():
     ledger = Ledger(Path(sys.argv[1]))
     try:

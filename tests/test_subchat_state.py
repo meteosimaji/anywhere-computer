@@ -116,3 +116,64 @@ def test_baseline_survives_restart_and_legacy_json_can_advance(tmp_path):
         assert store.submitted(operation, 'conversation', 'new', owner=None).state == 'submitted'
     finally:
         ledger.close()
+
+
+@pytest.mark.parametrize('owner', [None, 'peer'])
+def test_distinct_operations_cannot_claim_same_receipt_or_answer(tmp_path, owner):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    try:
+        for key in ('1', '2', '3'):
+            store.prepare(key * 32, 'same prompt', 'model', 'effort', owner=owner)
+            store.begin_send(key * 32, owner=owner)
+        store.submitted('1' * 32, 'chat', 'user', owner=owner)
+        store.complete('1' * 32, 'answer', '42', owner=owner)
+        with pytest.raises(ValueError, match='already bound'):
+            store.submitted('2' * 32, 'chat', 'user', owner=owner)
+        assert store.get('2' * 32, owner=owner).state == 'sending'
+        store.submitted('2' * 32, 'chat', 'other-user', owner=owner)
+        with pytest.raises(ValueError, match='already bound'):
+            store.complete('2' * 32, 'answer', '42', owner=owner)
+        assert store.get('2' * 32, owner=owner).state == 'submitted'
+        store.submitted('3' * 32, 'other-chat', 'user', owner=owner)
+        store.complete('3' * 32, 'answer', '42', owner=owner)
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('owner', [None, 'peer'])
+def test_receipt_claim_is_atomic_across_connections(tmp_path, owner):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    barrier = Barrier(2)
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    for operation in ('4' * 32, '5' * 32):
+        store.prepare(operation, 'same', 'model', 'effort', owner=owner)
+        store.begin_send(operation, owner=owner)
+    ledger.close()
+
+    def claim(operation):
+        local = Ledger(tmp_path)
+        try:
+            submissions = SubchatSubmissions(local.connection)
+            barrier.wait(timeout=5)
+            try:
+                submissions.submitted(operation, 'chat', 'user', owner=owner)
+                return 'submitted'
+            except ValueError as error:
+                assert 'already bound' in str(error)
+                return 'rejected'
+        finally:
+            local.close()
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        assert sorted(workers.map(claim, ['4' * 32, '5' * 32])) == ['rejected', 'submitted']
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        assert sorted(store.get(key * 32, owner=owner).state for key in ('4', '5')) == [
+            'sending', 'submitted']
+    finally:
+        ledger.close()

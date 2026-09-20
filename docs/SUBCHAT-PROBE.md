@@ -1240,3 +1240,22 @@ The slow-observer regression failed on the previous implementation for answer,
 authentication-error and session-close outcomes. It now verifies three short
 waits share exactly one provider read, late results/errors remain observable,
 and closing a session cancels that read without replaying the submission.
+
+### Receipt ownership at mutation time
+
+Within one saved owner namespace, distinct operations cannot newly claim the
+same conversation/user-message pair or conversation/answer-message pair.
+Validation and mutation run under one SQLite immediate transaction, including
+local owner=None. A rejected receipt leaves its sending reservation intact;
+a rejected answer leaves its submitted receipt intact. No provider retry occurs.
+Different conversations and different owners remain separate namespaces.
+
+This validates proposed mutations against existing records without deleting or
+rewriting history. It does not retroactively repair duplicate records written by
+older versions, or authenticate parent/child identities. Read-only inspection of
+legacy records remains available. All writers must use this updated store; an
+older concurrently running writer does not gain these checks automatically.
+
+Tests reproduce the original duplicate claim and race two real SQLite connections
+in separate threads. Exactly one receipt claim succeeds, including owner=None.
+This is storage concurrency evidence, not a live Chat misdelivery reproduction.
