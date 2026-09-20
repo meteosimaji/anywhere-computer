@@ -483,3 +483,66 @@ The packaged adapter uses browser UI and therefore still depends on the provider
 current markup and authentication. Packaging does not turn the Chat subscription
 into an official API. Shared device/workspace binding and remote MCP registration
 remain separate unfinished work.
+
+## Stdio MCP entry
+
+Add `--mcp` to the same `anywhere-subchat` invocation to use MCP framing instead
+of the JSON-lines command format. This reuses Anywhere's MCP session and stdio
+transport. A configured direct-MCP session can launch that executable with its
+explicit dedicated profile and ledger paths; callers do not pass a profile in
+individual tool requests. Do not expose this local stdio endpoint as an
+unauthenticated network service.
+
+The tools are `subchat_send`, `subchat_recover`, and `subchat_status`. Select a
+32-character lowercase hexadecimal `request_id` before sending. Recover using
+`operation_id` equal to that send ID; a recovery call's own MCP request ID is a
+different transport operation. Successful tool handling can return a pending
+submission in `data.state`; inspect it rather than assuming the Chat answer is
+finished. `unknown` after a send means recover without creating another send ID.
+Browser interactions are serialized to avoid interleaved drafts and clipboard
+interception. This endpoint still does not assign file permissions, bind shared
+workspaces, or automatically enable an Anywhere connection inside the Chat.
+
+The official MCP SDK acceptance uses a real subprocess and SQLite across process
+restarts with a deterministic provider fixture. It verifies protocol framing,
+exact input, result recovery and single dispatch; it is not evidence of live
+ChatGPT UI or platform-policy behavior.
+
+## Authenticated packaged MCP acceptance, 2026-09-20
+
+A real official-MCP-SDK client launched `anywhere-subchat --mcp` in a separate
+process against the previously authenticated dedicated profile. The prior probe
+released that profile once before this intentional handoff; ordinary personal
+Chrome was not used. Initialization and tool discovery succeeded. The process
+read an existing completed submission from the same SQLite ledger, then created
+a fresh ordinary Chat through `subchat_send` and recovered its answer through
+`subchat_recover` without a send replay or a generation-stop action.
+
+The live menu listed GPT-5.6 Sol; selecting it exposed the observed medium label
+`中程度、5 件中 2 番目。`. Those exact values were supplied by the test client,
+not defaults in the implementation. Send operation:
+`93350f1e2ed24f1a9671183db351a278`; conversation:
+`6aaf69d0-f98c-83e8-9a50-165bc919a56c`; user message:
+`b1c8a089-71b4-451b-b070-a4456b659690`.
+
+The answer reported Anywhere version 0.2.0a1, Darwin, and installed runtime
+`a82ce393e115c5b1025a0c8777823d74357ee120f660892d27aca78d71084c53`, together with
+the existing test Python file's exact contents and SHA-256
+`7250838d3ea07e80080e512c6ce2e94ddc2a2b1543155a5a773e1bb959ff0a3e`.
+An independent host hash matched. The owning app's conversation read separately
+confirmed kind `chatgpt`, completed state, the same user message, and the answer
+under provider message `8f84b661-7603-42af-b1db-b63033b48bf0`. That read did not
+include individual plugin RPC traces; the tool-use description remains the
+answer's report, supported by the independently matched file contents/hash.
+The installed runtime above is not the newly built development runtime.
+
+No file mutation or terminal execution was requested in this trial. It validates
+the new packaged MCP-to-ordinary-Chat delivery/recovery path, not all plugin
+capabilities, automatic shared-work routing, or general restart/update acceptance.
+After completion the client intentionally ended its stdio session and browser.
+
+One live catalog limitation was also observed: with the automatic `最新` model
+selected, effort discovery was unconfirmed and the combined catalog call did not
+return its already observed model list. Selecting an explicitly observed model
+with an effort control worked. Partial model availability should remain visible;
+this limitation is still open rather than being treated as no models available.
