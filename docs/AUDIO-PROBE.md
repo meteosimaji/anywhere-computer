@@ -73,3 +73,19 @@ A local build with the compiled helper was extracted into a separate Unicode
 path. Its manifest digest and binary bytes matched, and its `--check` command
 completed with `capture_started=false`. No user-PC compiler was involved in that
 relocated execution. This is packaging acceptance, not capture acceptance.
+
+## Read-only engine inspection
+
+`audio_status` inspects the optional helper under the portable interpreter's
+`../native/anywhere-audio` path. It first checks the executable against that
+installation's manifest, then invokes only `--check` and `--list-devices`.
+Each query has a ten-second deadline and a 64 KiB output limit; timed-out or
+oversized responses fail and the owned child is terminated and reaped.
+
+The tool reports `unsupported` outside macOS and `unavailable` when the helper
+is absent. A valid inspection reports permissions and named input IDs, always
+with `capture_started=false` and `capture_tool_available=false`. It neither
+requests permissions nor chooses a default input. The helper's presence is not
+proof of an audio signal or of permission to record. Capture remains a separate
+pending integration. A manifest digest checks installation consistency, not
+publisher authentication. Existing HTTP grants still determine tool access.

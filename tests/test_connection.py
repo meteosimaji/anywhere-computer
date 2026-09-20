@@ -61,7 +61,7 @@ async def test_authenticated_rpc_and_catalog(agent):
     assert status.data["state"] == "ready"
     assert status.data["remote_ready"] is False
     catalog = await exchange(directory, "__catalog", credential=credential)
-    assert len(catalog.data["tools"]) == 61
+    assert len(catalog.data["tools"]) == 62
     assert "outputSchema" in catalog.data["tools"][0]
     with pytest.raises(ConnectionError):
         await exchange(directory, "__status", credential="wrong")

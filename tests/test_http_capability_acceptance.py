@@ -136,6 +136,10 @@ for line in sys.stdin:
 
             status = await call("computer_status")
             assert status["active_sessions"] == 0
+            audio = await call("audio_status")
+            assert audio["state"] in {"available", "unavailable", "unsupported"}
+            assert audio["capture_started"] is False
+            assert audio["capture_tool_available"] is False
             await call("workspace_open", {"path": str(tmp_path)})
             await call("settings_get")
             await call("settings_update", {"key": "file_read_line_limit", "value": 123})
