@@ -874,8 +874,11 @@ operation on every browser/OS.
 `anywhere-subchat --http-read --minimized --browser-profile … --state-dir … [--mcp]`
 bootstraps from the dedicated browser application's authenticated conversation-history
 GET. It retains the observed authorization, account and language headers in
-process memory, bound to that browser context; cookies remain managed by the context. Subsequent reads
-use the context's HTTP client without opening tabs, navigating or inspecting DOM.
+process memory, bound to that authenticated session. Subsequent CLI reads use an
+independent HTTP client without copying cookies, opening tabs, navigating or
+inspecting DOM. Directly constructed adapters use the browser context's HTTP
+client unless supplied an independent request factory; see
+[Standalone read transport](#standalone-read-transport) for lifecycle and evidence.
 No credentials are written to the ledger, exported, or returned to the caller.
 The initial owned observation tab is closed with bounded cleanup; existing
 submission tabs are not reloaded. This is a browser-session-backed HTTP reader,
@@ -1182,17 +1185,22 @@ was copied.
 
 ### User closes the dedicated browser
 
-The adapter recognizes an observed context close or browser disconnect and reports
-`browser_closed` through CLI/MCP recovery. It retains the submission and does not
-launch a replacement or resend merely because a user closed the browser. Restart
-the controller with the same state directory and dedicated profile, then recover
-the original operation IDs. A known conversation can be re-observed; an unknown
+The adapter recognizes an observed context close or browser disconnect. After
+authorization bootstrap, the CLI's independent HTTP client can still recover
+known input/answer identities while that controller remains alive. An already
+observed HTTP model catalog can also be read. Other browser-dependent work reports
+`browser_closed`; this includes unbootstrapped reads and new send preparation.
+Neither path launches a replacement or resends because the browser closed.
+If browser-dependent work is needed, restart the controller with the same state
+directory and dedicated profile, then recover the original operation IDs.
+A known conversation can be re-observed; an unknown
 conversation ID after a pre-receipt crash still needs explicit reconciliation.
 Closing a browser does not prove that server-side generation stopped.
 
-Acceptance uses real isolated Chrome context/browser closure and the SQLite
-submission store, plus CLI/MCP error projection. It is not a live ChatGPT shutdown
-trial. Closing during an in-flight send can still yield `submission_unconfirmed`;
+The original closure-error acceptance uses isolated Chrome and the SQLite store,
+plus CLI/MCP error projection. Subsequent independent-client and live read-only
+recovery evidence is recorded under [Standalone read transport](#standalone-read-transport).
+Closing during an in-flight send can still yield `submission_unconfirmed`;
 the durable reservation prevents replay. Explicit provider cancellation remains
 `reply_interrupted`, separately from browser closure or a read timeout.
 
