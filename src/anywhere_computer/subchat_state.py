@@ -10,6 +10,7 @@ from typing import Literal
 from pydantic import Field
 
 from .models import Contract
+from .subchat_content import SubchatResources
 
 
 class SubchatInputReference(Contract):
@@ -44,6 +45,11 @@ class SubchatSubmission(Contract):
     answer_message_id: str | None = None
     answer: str | None = None
     work_context: SubchatWorkContext | None = None
+    resources: SubchatResources | None = None
+
+    @property
+    def wire_prompt(self) -> str:
+        return self.resources.prompt(self.prompt) if self.resources else self.prompt
 
 
 class SubchatList(Contract):
@@ -100,7 +106,8 @@ class SubchatSubmissions:
     def prepare(self, operation_id: str, prompt: str, model: str, effort: str,
                 *, owner: str | None, conversation_id: str | None = None,
                 work_context: SubchatWorkContext | None = None,
-                after_operation_id: str | None = None) -> SubchatSubmission:
+                after_operation_id: str | None = None,
+                resources: SubchatResources | None = None) -> SubchatSubmission:
         if conversation_id is not None and not conversation_id.strip():
             raise ValueError('Conversation identity must not be empty')
         if work_context is not None and work_context.parent_operation_id is not None:
@@ -121,6 +128,7 @@ class SubchatSubmissions:
                                      model=model, effort=effort,
                                      requested_conversation_id=conversation_id,
                                      conversation_id=conversation_id, work_context=work_context,
+                                     resources=resources,
                                      state='queued' if after_operation_id else 'prepared',
                                      after_operation_id=after_operation_id,
                                      expected_last_user_message_id=expected_last_user_message_id)
@@ -132,8 +140,9 @@ class SubchatSubmissions:
         existing = self.get(operation_id, owner=owner)
         if (existing.prompt, existing.model, existing.effort,
             existing.requested_conversation_id, existing.work_context,
-            existing.after_operation_id) != (
-                prompt, model, effort, conversation_id, work_context, after_operation_id):
+            existing.after_operation_id, existing.resources) != (
+                prompt, model, effort, conversation_id, work_context, after_operation_id,
+                resources):
             raise ValueError('Subchat submission ID was already used for different arguments')
         return existing
 

@@ -15,6 +15,7 @@ from pydantic import Field, TypeAdapter
 from .models import Contract, OperationId
 from .state import Ledger
 from .subchat import SubchatInterrupted, SubchatOutcomeUnknown, Subchats
+from .subchat_content import SubchatResources
 from .subchat_state import SubchatList, SubchatSubmissions, SubchatWorkContext
 
 if TYPE_CHECKING:
@@ -29,6 +30,7 @@ class Command(Contract):
     effort: str | None = Field(default=None, min_length=1, max_length=256)
     conversation_id: str | None = None
     work_context: SubchatWorkContext | None = None
+    resources: SubchatResources | None = None
 
 
 class ListCommand(SubchatList):
@@ -54,11 +56,11 @@ async def dispatch(service: Subchats, command: Command | ListCommand | QueueComm
         result = await service.send(command.operation_id, command.prompt, command.model,
                                     command.effort, owner=None,
                                     conversation_id=command.conversation_id,
-                                    work_context=command.work_context)
+                                    work_context=command.work_context, resources=command.resources)
     else:
         if any(value is not None for value in (command.prompt, command.model,
                                                command.effort, command.conversation_id,
-                                               command.work_context)):
+                                               command.work_context, command.resources)):
             raise ValueError('Recovery, status and cancellation accept only an operation identity')
         result = (await service.recover(command.operation_id, owner=None)
                   if command.action == 'recover'

@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from ..subchat import SubchatAnswer, SubchatInterrupted
+from ..subchat import SubchatAnswer, SubchatInterrupted, SubchatReceipt
 from ..subchat_state import SubchatSubmission
 
 if TYPE_CHECKING:
@@ -30,7 +30,8 @@ class HistoryPage(BaseModel):
     messages: list[HistoryMessage] = Field(max_length=1000)
 
 
-def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAnswer | None:
+def matched_input(payload: bytes, submission: SubchatSubmission
+                  ) -> tuple[HistoryPage, HistoryMessage] | None:
     if len(payload) > 4_194_304:
         raise ValueError('Conversation response is too large')
     history = HistoryPage.model_validate_json(payload)
@@ -43,8 +44,30 @@ def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAns
     if len(users) != 1:
         return None  # Pagination or a missing identity is not permission to guess.
     user = users[0]
-    if user.content != {'content_type': 'text', 'parts': [submission.prompt]}:
+    if user.content != {'content_type': 'text', 'parts': [submission.wire_prompt]}:
         raise ValueError('Saved prompt does not match')
+    if submission.resources is not None:
+        resources = submission.resources
+        if (user.metadata.get('attachments', []) != resources.files()
+                or user.metadata.get('system_hints', []) != resources.hints()):
+            raise ValueError('Saved message resources do not match')
+    return history, user
+
+
+def project_receipt(payload: bytes, submission: SubchatSubmission) -> SubchatReceipt | None:
+    matched = matched_input(payload, submission)
+    if matched is None:
+        return None
+    history, user = matched
+    return SubchatReceipt(conversation_id=history.conversation_id,
+                          user_message_id=user.id, prompt=submission.prompt)
+
+
+def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAnswer | None:
+    matched = matched_input(payload, submission)
+    if matched is None:
+        return None
+    history, user = matched
     keys = ('request_id', 'turn_exchange_id', 'working_turn_id')
     if any(not isinstance(user.metadata.get(key), str) or not user.metadata[key] for key in keys):
         return None

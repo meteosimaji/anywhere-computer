@@ -17,9 +17,10 @@ from anywhere_computer.subchat_state import SubchatSubmission
 from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_page, picker_ready
 from .efforts import move_effort, snapshot
 from .http_reader import ChatHTTPReader
+from .request_content import add_resources
 
 if TYPE_CHECKING:
-    from playwright.async_api import BrowserContext, Page
+    from playwright.async_api import BrowserContext, Page, Route
 
 INPUT = Path(__file__).with_name('subchat_input.js').read_text(encoding="utf-8")
 COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")
@@ -105,6 +106,8 @@ class BrowserSubchatBackend:
                 and await stop.filter(visible=True).count() == 0)
 
     async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
+        if submission.resources is not None and not self.http_read:
+            raise ValueError('Resource sends require HTTP history verification')
         url = self._url(submission)
         # Only reuse tabs already owned by this adapter, never discover or claim
         # arbitrary user tabs. New conversations must always start separately.
@@ -170,6 +173,42 @@ class BrowserSubchatBackend:
         return baseline
 
     async def send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
+        if submission.resources is None:
+            return await self._send(submission)
+        page = self.pages.get(submission.operation_id)
+        if page is None or page.is_closed():
+            raise ValueError('Prepared browser page is unavailable')
+        dispatched: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        pattern = re.compile(r'^https://chatgpt\.com/backend-api/f/conversation(?:\?.*)?$')
+
+        async def augment(route: Route) -> None:
+            accepted = False
+            try:
+                if dispatched.done() or route.request.method != 'POST':
+                    await route.abort()
+                    return
+                payload = route.request.post_data
+                if payload is None:
+                    raise ValueError('Missing generation payload')
+                await route.continue_(post_data=add_resources(payload, submission))
+                accepted = True
+            except Exception:
+                # Provider details can contain account information; do not expose them.
+                await route.abort()
+            finally:
+                if not dispatched.done():
+                    dispatched.set_result(accepted)
+
+        await page.route(pattern, augment)
+        try:
+            receipt = await self._send(submission)
+            if not await asyncio.wait_for(asyncio.shield(dispatched), 10):
+                raise ValueError('Generation resource request was not confirmed')
+            return receipt
+        finally:
+            await page.unroute(pattern, augment)
+
+    async def _send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
         if submission.state != 'sending':
             raise ValueError('Draft exposure requires a reserved submission')
         page = self.pages.get(submission.operation_id)
@@ -206,6 +245,9 @@ class BrowserSubchatBackend:
                              'recover without replay')
         # Release the caller's browser lock after one observation. An unavailable
         # receipt is durable 'sending', never permission to click Send again.
+        if submission.resources is not None:
+            # HTTP input verification belongs to recover, not the dispatch deadline.
+            return None
         return await self.find_submission(submission)
 
     async def find_submission(self, submission: SubchatSubmission) -> SubchatReceipt | None:
@@ -217,9 +259,18 @@ class BrowserSubchatBackend:
             return None
         if submission.conversation_id is not None and match[1] != submission.conversation_id:
             raise ValueError('Browser conversation changed')
+        if submission.resources is not None:
+            candidates = [key for key in await self._baseline(page)
+                          if key not in submission.baseline_message_ids]
+            if len(candidates) != 1:
+                return None
+            candidate = submission.model_copy(update={
+                'conversation_id': match[1], 'user_message_id': candidates[0]})
+            async with asyncio.timeout(20):
+                return await self._http_reader.receipt(await self._browser(), candidate)
         observed = await page.evaluate(
             COPY + '\nargs=>recoverSubchatSubmission(document,...args)',
-            [match[1], submission.prompt, list(submission.baseline_message_ids)])
+            [match[1], submission.wire_prompt, list(submission.baseline_message_ids)])
         if observed.get('state') != 'submission_observed':
             return None
         return SubchatReceipt(conversation_id=match[1],

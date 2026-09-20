@@ -16,6 +16,7 @@ from .subchat import (
     Subchats,
     SubchatStaleTarget,
 )
+from .subchat_content import SubchatResources
 from .subchat_state import SubchatList, SubchatSubmission, SubchatWorkContext
 
 
@@ -25,6 +26,7 @@ class Send(Contract):
     effort: str = Field(min_length=1, max_length=256)
     conversation_id: str | None = None
     work_context: SubchatWorkContext | None = None
+    resources: SubchatResources | None = None
 
 
 class Message(Contract):
@@ -71,7 +73,12 @@ INSTRUCTIONS = (
     'it does not establish shared workspace access or grant tools to the Chat.'
     ' Optional work_context is caller-supplied provenance saved with the receipt, '
     'not a grant or verified file snapshot. It is not automatically inserted into '
-    'the prompt: explicitly describe relevant work in the exact prompt you send.'
+    'the prompt: explicitly describe relevant work in the exact prompt you send. '
+    'resources accepts already-uploaded Chat file references and @ plugin URI/hint '
+    'pairs observed in this account; it does not upload local paths or grant access. '
+    'Resource sends require the HTTP-read browser adapter. A queue follow-up does '
+    'not implicitly reattach resources. Reference local files with device ID and '
+    'absolute path in the prompt and use the selected computer plugin to read them.'
 )
 
 
@@ -250,7 +257,8 @@ def session(service: Subchats, *,
                     result = await service.send(request.operation_id, args.prompt, args.model,
                                                 args.effort, owner=None,
                                                 conversation_id=args.conversation_id,
-                                                work_context=args.work_context)
+                                                work_context=args.work_context,
+                                                resources=args.resources)
             elif request.tool in {'subchat_recover', 'subchat_status'}:
                 target = OperationId.model_validate(request.arguments)
                 if request.tool == 'subchat_status':
@@ -279,7 +287,8 @@ def session(service: Subchats, *,
                          data={'error_code': 'stale_target', 'dispatched': False})
         except SubchatPreparationFailed:
             return Reply(operation_id=request.operation_id, state='failed',
-                         error='Adapter preparation failed before dispatch. Inspect the existing '
+                         error='Adapter preparation failed before dispatch. Check for an existing '
+                               'draft, active generation or unavailable model in the dedicated '
                                'Chat before retrying the same exact request ID; '
                                'for a queued message, recover its existing operation instead.',
                          data={'error_code': 'preparation_failed', 'dispatched': False})
