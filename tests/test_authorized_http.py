@@ -16,80 +16,90 @@ async def test_real_http_enforces_device_scope_and_revocation(tmp_path, monkeypa
     shared_directory = tmp_path / "shared-agent"
     stopped = asyncio.Event()
     service = None
-    if shared:
-        monkeypatch.setattr("anywhere_computer.connection.local_credential",
-                            lambda *a, **kw: "shared-agent-fixture")
-        service = asyncio.create_task(serve(
-            shared_directory, credential="shared-agent-fixture", shutdown=stopped,
-        ))
-        async with asyncio.timeout(5):
-            while not (shared_directory / "agent.json").exists():
-                if service.done():
-                    await service
-                await asyncio.sleep(0.01)
-    resource = "https://computer.example/mcp"
-    redirect = "https://client.example/callback"
-    authority = AuthorizationStore(
-        tmp_path / "auth", resource=resource, known_tools=frozenset(engine.tools)
-    )
-    authority.register_client("client", frozenset({redirect}))
-    permissions = frozenset({"computer_status", "files_read", "files_write", "operations_get"})
-    authority.enroll_device("owner", "device", permissions)
-    authority.enroll_device("owner", "other-device", permissions)
-
-    def issue(device, tools):
-        verifier = "x" * 43
-        code = authority.approve(
-            owner="owner",
-            device=device,
-            client="client",
-            redirect=redirect,
-            resource=resource,
-            tools=frozenset(tools),
-            challenge=pkce_s256(verifier),
-        )
-        return authority.exchange_code(
-            code=code,
-            verifier=verifier,
-            client="client",
-            redirect=redirect,
-            resource=resource,
-        ).value
-
-    read_token = issue("device", {"computer_status", "files_read", "operations_get"})
-    wrong_device_token = issue("other-device", permissions)
-    write_token = issue("device", permissions)
-    limited = AuthorizedDeviceMCP(
-        authority,
-        engine,
-        owner="owner",
-        device="device",
-        client="client",
-        allowed_tools=frozenset({"computer_status", "files_read", "operations_get"}),
-    )
-    assert await limited.authenticate(read_token) is not None
-    assert await limited.authenticate(write_token) is None
-    another_client = AuthorizedDeviceMCP(
-        authority, engine, owner="owner", device="device", client="other"
-    )
-    assert await another_client.authenticate(read_token) is None
-    backend = AuthorizedDeviceMCP(
-        authority, None if shared else engine,
-        agent_directory=shared_directory if shared else None, owner="owner", device="device",
-    )
-    adapter = HTTPMCP(backend.authenticate, backend.session)
-    port = await adapter.start()
-    initialize = {
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": {"name": "test", "version": "1"},
-        },
-    }
+    authority = None
+    adapter = None
     try:
+        if shared:
+            monkeypatch.setattr("anywhere_computer.connection.local_credential",
+                                lambda *a, **kw: "shared-agent-fixture")
+            service = asyncio.create_task(serve(
+                shared_directory, credential="shared-agent-fixture", shutdown=stopped,
+            ))
+            try:
+                async with asyncio.timeout(5):
+                    while not (shared_directory / "agent.json").exists():
+                        if service.done():
+                            await service
+                        await asyncio.sleep(0.01)
+            except TimeoutError as error:
+                frames = [f"{frame.f_code.co_name}:{frame.f_lineno}"
+                          for frame in service.get_stack()]
+                raise TimeoutError(
+                    f"Shared startup exceeded 5 seconds: done={service.done()}, "
+                    f"endpoint_exists={(shared_directory / 'agent.json').exists()}, stack={frames}"
+                ) from error
+        resource = "https://computer.example/mcp"
+        redirect = "https://client.example/callback"
+        authority = AuthorizationStore(
+            tmp_path / "auth", resource=resource, known_tools=frozenset(engine.tools)
+        )
+        authority.register_client("client", frozenset({redirect}))
+        permissions = frozenset({"computer_status", "files_read", "files_write", "operations_get"})
+        authority.enroll_device("owner", "device", permissions)
+        authority.enroll_device("owner", "other-device", permissions)
+
+        def issue(device, tools):
+            verifier = "x" * 43
+            code = authority.approve(
+                owner="owner",
+                device=device,
+                client="client",
+                redirect=redirect,
+                resource=resource,
+                tools=frozenset(tools),
+                challenge=pkce_s256(verifier),
+            )
+            return authority.exchange_code(
+                code=code,
+                verifier=verifier,
+                client="client",
+                redirect=redirect,
+                resource=resource,
+            ).value
+
+        read_token = issue("device", {"computer_status", "files_read", "operations_get"})
+        wrong_device_token = issue("other-device", permissions)
+        write_token = issue("device", permissions)
+        limited = AuthorizedDeviceMCP(
+            authority,
+            engine,
+            owner="owner",
+            device="device",
+            client="client",
+            allowed_tools=frozenset({"computer_status", "files_read", "operations_get"}),
+        )
+        assert await limited.authenticate(read_token) is not None
+        assert await limited.authenticate(write_token) is None
+        another_client = AuthorizedDeviceMCP(
+            authority, engine, owner="owner", device="device", client="other"
+        )
+        assert await another_client.authenticate(read_token) is None
+        backend = AuthorizedDeviceMCP(
+            authority, None if shared else engine,
+            agent_directory=shared_directory if shared else None, owner="owner", device="device",
+        )
+        adapter = HTTPMCP(backend.authenticate, backend.session)
+        port = await adapter.start()
+        initialize = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "1"},
+            },
+        }
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{port}",
             headers={
@@ -193,9 +203,40 @@ async def test_real_http_enforces_device_scope_and_revocation(tmp_path, monkeypa
             authority.revoke_device(owner="owner", device="device")
             assert (await http.post("/mcp", json=write)).status_code == 401
     finally:
-        await adapter.close()
-        authority.close()
-        await engine.close()
-        if service is not None:
-            stopped.set()
-            await asyncio.wait_for(service, 10)
+        try:
+            if adapter is not None:
+                await adapter.close()
+        finally:
+            if authority is not None:
+                authority.close()
+            try:
+                await engine.close()
+            finally:
+                if service is not None:
+                    stopped.set()
+                    await asyncio.wait_for(service, 10)
+
+
+async def test_authorized_http_startup_failure_stops_shared_service(tmp_path, monkeypatch):
+    cleaned = asyncio.Event()
+    tasks = []
+
+    async def unpublished_service(directory, *, credential, shutdown):
+        tasks.append(asyncio.current_task())
+        try:
+            await shutdown.wait()
+        finally:
+            cleaned.set()
+
+    monkeypatch.setattr(__name__ + '.serve', unpublished_service)
+    try:
+        with pytest.raises(TimeoutError):
+            await test_real_http_enforces_device_scope_and_revocation(tmp_path, monkeypatch, True)
+        assert cleaned.is_set()
+        assert tasks and all(task.done() for task in tasks)
+    finally:
+        # Keep the regression itself isolated when run against the old leak.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
