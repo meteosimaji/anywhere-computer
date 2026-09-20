@@ -45,6 +45,17 @@ async def test_copy_reads_selected_message_and_restores_clipboard():
             assert await page.evaluate(source + '''\ntext =>
                 recoverSubchatSubmission(document,"conversation",text,["user"])''', text) == {
                     'state': 'submission_unconfirmed'}
+            await page.evaluate('''text => {
+                const duplicate = document.querySelector('[data-turn-key]').cloneNode(true);
+                duplicate.setAttribute('data-turn-key', 'duplicate');
+                duplicate.querySelector('button').onclick = () =>
+                    navigator.clipboard.writeText(text);
+                document.querySelector('main').append(duplicate);
+            }''', text)
+            assert await page.evaluate(source + '''\ntext =>
+                recoverSubchatSubmission(document,"conversation",text,[])''', text) == {
+                    'state': 'submission_unconfirmed'}
+            await page.evaluate("document.querySelector('[data-turn-key=duplicate]').remove()")
             await page.evaluate('''() => {
                 const original = document.querySelector('button').onclick;
                 document.querySelector('button').onclick = () => {
