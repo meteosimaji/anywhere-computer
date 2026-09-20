@@ -8,12 +8,12 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Literal, TextIO
 
-from pydantic import Field
+from pydantic import Field, TypeAdapter
 
 from .models import Contract
 from .state import Ledger
 from .subchat import SubchatOutcomeUnknown, Subchats
-from .subchat_state import SubchatSubmissions, SubchatWorkContext
+from .subchat_state import SubchatList, SubchatSubmissions, SubchatWorkContext
 
 
 class Command(Contract):
@@ -26,7 +26,14 @@ class Command(Contract):
     work_context: SubchatWorkContext | None = None
 
 
-async def dispatch(service: Subchats, command: Command) -> str:
+class ListCommand(SubchatList):
+    action: Literal['list']
+
+
+async def dispatch(service: Subchats, command: Command | ListCommand) -> str:
+    if isinstance(command, ListCommand):
+        return service.store.list(SubchatList(limit=command.limit, before=command.before),
+                                  owner=None).model_dump_json()
     if command.action == 'send':
         if command.prompt is None or command.model is None or command.effort is None:
             raise ValueError('send requires prompt, model and effort')
@@ -53,16 +60,16 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         line = await asyncio.to_thread(source.readline)
         if not line:
             return
-        command = None
+        command: Command | ListCommand | None = None
         try:
-            command = Command.model_validate_json(line)
+            command = TypeAdapter(Command | ListCommand).validate_json(line)
             output = await dispatch(service, command)
         except Exception as error:
             # Do not print provider errors or invalid input: both can contain secrets.
             output = json.dumps({
                 'state': ('submission_unconfirmed'
                           if isinstance(error, SubchatOutcomeUnknown) else 'command_failed'),
-                'operation_id': command.operation_id if command is not None else None,
+                'operation_id': command.operation_id if isinstance(command, Command) else None,
                 'error_type': type(error).__name__,
                 'automatic_retry': False,
             })

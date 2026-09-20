@@ -89,12 +89,41 @@ async def test_saved_commands_do_not_start_chrome(tmp_path, monkeypatch):
     source = StringIO('\n'.join(json.dumps({'action': action, 'operation_id': operation})
                                for action, operation in [('status', completed),
                                                          ('recover', completed),
-                                                         ('cancel', prepared)]) + '\n')
+                                                         ('cancel', prepared)]) + '\n' +
+                      json.dumps({'action': 'list'}) + '\n')
     output = StringIO()
     monkeypatch.setattr(subchat_cli.sys, 'stdin', source)
     monkeypatch.setattr(subchat_cli.sys, 'stdout', output)
     await subchat_cli.run(tmp_path / 'unused-profile', tmp_path)
     replies = [json.loads(line) for line in output.getvalue().splitlines()]
-    assert [item['state'] for item in replies] == ['completed', 'completed', 'cancelled']
+    assert [item['state'] for item in replies[:3]] == ['completed', 'completed', 'cancelled']
+    assert {item['operation_id'] for item in replies[3]['submissions']} == {completed, prepared}
     assert replies[1]['answer'] == 'saved result'
     assert not (tmp_path / 'unused-profile').exists()
+
+
+async def test_listing_paginates_owned_records_after_reopen_without_browser(tmp_path):
+    from anywhere_computer.subchat_cli import ListCommand
+    from anywhere_computer.subchat_state import SubchatList
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    for index, owner in [(1, None), (2, 'other'), (3, None)]:
+        store.prepare(f'{index:032x}', 'private prompt', 'observed model', 'high', owner=owner)
+    ledger.close()
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        service = Subchats(store, object())
+        page = json.loads(await dispatch(service, ListCommand(action='list', limit=1)))
+        assert page['submissions'][0]['operation_id'] == f'{3:032x}'
+        assert 'prompt' not in page['submissions'][0]
+        assert 'answer' not in page['submissions'][0]
+        store.prepare('4' * 32, 'new prompt', 'model', 'high', owner=None)
+        older = store.list(SubchatList(limit=1, before=page['next_before']), owner=None)
+        assert [entry.operation_id for entry in older.submissions] == [f'{1:032x}']
+        assert older.next_before is None
+        other = store.list(SubchatList(), owner='other')
+        assert [entry.operation_id for entry in other.submissions] == [f'{2:032x}']
+    finally:
+        ledger.close()

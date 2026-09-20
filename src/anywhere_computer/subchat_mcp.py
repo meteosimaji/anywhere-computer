@@ -15,7 +15,7 @@ from .subchat import (
     Subchats,
     SubchatStaleTarget,
 )
-from .subchat_state import SubchatSubmission, SubchatWorkContext
+from .subchat_state import SubchatList, SubchatSubmission, SubchatWorkContext
 
 
 class Send(Contract):
@@ -148,6 +148,7 @@ def session(service: Subchats, *,
             return await service.recover(operation_id, owner=None)
 
     definitions: dict[str, tuple[type[Contract], str]] = {
+        'subchat_list': (SubchatList, 'List saved submission summaries without opening Chrome.'),
         'subchat_cancel': (OperationId, 'Cancel an unsent queued/prepared input; never stop Chat.'),
         'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
                             'Steer returns unsupported without sending or queueing.'),
@@ -170,12 +171,16 @@ def session(service: Subchats, *,
     async def catalog() -> list[JsonValue]:
         return [cast(JsonValue, {
             'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
-            'annotations': {'readOnlyHint': name == 'subchat_status',
+            'annotations': {'readOnlyHint': name in {'subchat_status', 'subchat_list'},
                             'destructiveHint': False, 'openWorldHint': True},
         }) for name, (schema, description) in definitions.items()]
 
     async def execute(request: Request) -> Reply:
         try:
+            if request.tool == 'subchat_list':
+                page = service.store.list(SubchatList.model_validate(request.arguments), owner=None)
+                return Reply(operation_id=request.operation_id, state='completed',
+                             data=page.model_dump(mode='json'))
             if request.tool == 'subchat_cancel':
                 target = OperationId.model_validate(request.arguments)
                 result = service.store.cancel(target.operation_id, owner=None)
