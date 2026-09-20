@@ -650,6 +650,19 @@ credentials or read-only isolation. Up to 32 input references are stored.
 use its `request_id` as the new message operation identity. `mode: queue` binds
 the follow-up to an already confirmed subchat submission and inherits its exact
 model/effort and descriptive work context. It persists immediately as `queued`.
+The JSON-lines CLI uses the same durable queue, without starting Chrome:
+
+```json
+{"action":"queue","operation_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","target_operation_id":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","prompt":"Review the result and report remaining issues."}
+```
+
+The target must already have a confirmed conversation and user message. Model,
+effort, and context are inherited; CLI queue input rejects overrides. Repeating
+the same request returns the saved record, while changing its prompt or target
+under the same operation ID fails. Use CLI `recover` on the new operation to
+progress delivery; this may open the dedicated browser. Queue registration is
+not immediate steering and does not stop generation or send in the background.
+
 Call `subchat_recover` or bounded `subchat_wait` on the new operation to progress
 it: merely creating the record does not start a background dispatcher. Once
 a recover/wait call starts queued preparation, that work survives the observer

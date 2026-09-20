@@ -91,6 +91,11 @@ async def test_saved_commands_do_not_start_chrome(tmp_path, monkeypatch):
                                                          ('recover', completed),
                                                          ('cancel', prepared)]) + '\n' +
                       json.dumps({'action': 'list'}) + '\n')
+    queued = {'action': 'queue', 'operation_id': 'c' * 32,
+              'target_operation_id': completed, 'prompt': 'Review the result'}
+    source = StringIO(source.getvalue() + '\n'.join(json.dumps(item) for item in
+                        (queued, queued, {**queued, 'prompt': 'changed'},
+                         {**queued, 'model': 'unauthorized override'})) + '\n')
     output = StringIO()
     monkeypatch.setattr(subchat_cli.sys, 'stdin', source)
     monkeypatch.setattr(subchat_cli.sys, 'stdout', output)
@@ -99,6 +104,19 @@ async def test_saved_commands_do_not_start_chrome(tmp_path, monkeypatch):
     assert [item['state'] for item in replies[:3]] == ['completed', 'completed', 'cancelled']
     assert {item['operation_id'] for item in replies[3]['submissions']} == {completed, prepared}
     assert replies[1]['answer'] == 'saved result'
+    assert replies[4] == replies[5]
+    assert replies[4]['state'] == 'queued'
+    assert replies[4]['after_operation_id'] == completed
+    assert replies[4]['model'] == 'model'
+    assert replies[6]['state'] == replies[7]['state'] == 'command_failed'
+    assert replies[6]['operation_id'] == queued['operation_id']
+    ledger = Ledger(tmp_path)
+    try:
+        saved = SubchatSubmissions(ledger.connection).get(queued['operation_id'], owner=None)
+        assert saved.state == 'queued'
+        assert saved.prompt == queued['prompt']
+    finally:
+        ledger.close()
     assert not (tmp_path / 'unused-profile').exists()
 
 
