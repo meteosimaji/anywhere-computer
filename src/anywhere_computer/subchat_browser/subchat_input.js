@@ -1,4 +1,4 @@
-// Current ordinary-Chat editor contract. This edits a draft; it never sends.
+// Current ordinary-Chat editor contract. Insertion itself never sends.
 function insertSubchatDraft(document, text) {
   if (typeof text !== 'string' || text.length === 0 || text.includes('\r')) {
     return {state: 'invalid_input', input_dispatched: false};
@@ -32,4 +32,28 @@ function insertSubchatDraft(document, text) {
     return {state: 'draft_unconfirmed', input_dispatched: true};
   }
   return {state: 'draft_observed', input_dispatched: true, submitted: false};
+}
+
+// Final comparison and click share one browser task. Do not overwrite a user
+// edit or click again after a manual send changed the conversation or composer.
+function submitSubchatDraft(document, expectedUrl, text, previousIds) {
+  if (document.location.href.replace(/\/$/, '') !== expectedUrl.replace(/\/$/, '') ||
+      document.querySelectorAll('main').length !== 1) return false;
+  const editors = document.querySelectorAll(
+    'form[data-chatgpt-composer] [data-composer-markdown][role="textbox"]');
+  if (editors.length !== 1 || editors[0].innerText !== text ||
+      !editors[0].getClientRects().length) return false;
+  const ids = [...document.querySelectorAll('main [data-turn-key]')]
+    .map(node => node.getAttribute('data-turn-key'));
+  if (JSON.stringify(ids) !== JSON.stringify(previousIds)) return false;
+  const buttons = [...document.querySelectorAll('button')]
+    .filter(button => button.getClientRects().length);
+  const label = button => button.getAttribute('aria-label') || button.textContent.trim();
+  if (buttons.some(button => ['停止', 'Stop', 'Stop generating'].includes(label(button))))
+    return false;
+  const send = buttons.filter(button => ['送信', 'Send'].includes(label(button)));
+  if (send.length !== 1 || send[0].disabled || send[0].getAttribute('aria-disabled') === 'true')
+    return false;
+  send[0].click();
+  return true;
 }

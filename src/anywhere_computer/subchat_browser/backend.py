@@ -133,29 +133,37 @@ class BrowserSubchatBackend:
             raise SubchatStaleTarget('Queue target is stale; another turn has appeared')
         if submission.requested_conversation_id is None and baseline:
             raise ValueError('New Chat already contains messages')
-        editor = page.locator('[data-composer-markdown][role="textbox"]')
-        await editor.click()
-        draft = await page.evaluate(INPUT + '\ntext=>insertSubchatDraft(document,text)',
-                                    submission.prompt)
-        if draft.get('state') != 'draft_observed' or await editor.inner_text() != submission.prompt:
-            raise ValueError('Exact draft was not confirmed')
         return baseline
 
     async def send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
+        if submission.state != 'sending':
+            raise ValueError('Draft exposure requires a reserved submission')
         page = self.pages.get(submission.operation_id)
         if page is None or page.is_closed():
             raise ValueError('Prepared browser page is unavailable')
         if page.url.rstrip('/') != self._url(submission).rstrip('/'):
             raise ValueError('Prepared conversation changed before send')
         editor = page.locator('[data-composer-markdown][role="textbox"]')
-        if await editor.count() != 1 or await editor.inner_text() != submission.prompt:
+        if await editor.count() != 1 or (await editor.inner_text()).strip():
             raise ValueError('Prepared draft changed before send')
         if await self._baseline(page) != submission.baseline_message_ids:
             raise ValueError('Conversation history changed before send')
         stop = page.get_by_role('button', name=re.compile(r'^(停止|Stop|Stop generating)$'))
         if await stop.filter(visible=True).count():
             raise ValueError('Chat started generating; do not silently queue the draft')
-        await page.get_by_role('button', name=re.compile(r'^(送信|Send)$')).click()
+        # A user can send as soon as text appears. The service has already saved
+        # the reservation and baseline, so interruption here cannot permit replay.
+        await editor.click()
+        draft = await page.evaluate(INPUT + '\ntext=>insertSubchatDraft(document,text)',
+                                    submission.prompt)
+        if draft.get('state') != 'draft_observed':
+            raise ValueError('Exact draft was not confirmed')
+        sent = await page.evaluate(INPUT + '\nargs=>submitSubchatDraft(document,...args)',
+                                  [self._url(submission), submission.prompt,
+                                   list(submission.baseline_message_ids)])
+        if not sent:
+            raise ValueError('Draft or conversation changed before dispatch; '
+                             'recover without replay')
         # Release the caller's browser lock after one observation. An unavailable
         # receipt is durable 'sending', never permission to click Send again.
         return await self.find_submission(submission)

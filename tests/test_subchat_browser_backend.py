@@ -166,7 +166,9 @@ async def test_browser_send_pending_completion_and_database_recovery(
             # Never submit a draft that changed between preparation and dispatch.
             prepared = service.store.prepare('d' * 32, prompt, 'Future model',
                                              'Future effort', owner=None)
-            await service.backend.prepare(prepared)
+            baseline = await service.backend.prepare(prepared)
+            prepared = service.store.begin_send(prepared.operation_id, owner=None,
+                                                baseline_message_ids=baseline)
             draft_page = context.pages[-1]
             await draft_page.get_by_role('textbox').fill('unrelated user draft')
             with pytest.raises(ValueError, match='draft changed'):
@@ -205,7 +207,7 @@ async def test_browser_never_converts_prepared_send_to_queue(tmp_path, changed):
             with pytest.raises(ValueError):
                 await backend.send(reserved)
             assert await page.evaluate('window.sends') == 0
-            assert await page.locator('[role=textbox]').inner_text() == 'next'
+            assert not (await page.locator('[role=textbox]').inner_text()).strip()
         finally:
             ledger.close()
             await browser.close()
@@ -240,6 +242,65 @@ async def test_browser_queue_stale_target_fails_before_draft(tmp_path):
             assert store.get('8' * 32, owner=None).state == 'queued'
             assert await context.pages[0].evaluate('window.sends') == 0
             assert not (await context.pages[0].locator('[role=textbox]').inner_text()).strip()
+        finally:
+            ledger.close()
+            await browser.close()
+
+
+@pytest.mark.parametrize('manual_action', ['send', 'edit'])
+async def test_manual_send_after_draft_is_reserved_and_never_clicked_twice(tmp_path, manual_action):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat import SubchatOutcomeUnknown
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    class InspectPreparation(BrowserSubchatBackend):
+        async def prepare(self, submission):
+            baseline = await super().prepare(submission)
+            page = self.pages[submission.operation_id]
+            # A visible draft can be manually sent; reserve its identity first.
+            assert not (await page.get_by_role('textbox').inner_text()).strip()
+            return baseline
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            manual = '''<script>
+            const editor=document.querySelector('[role=textbox]');
+            const manualSend=new MutationObserver(()=>{
+              if(!editor.innerText.trim())return;
+              manualSend.disconnect();
+              document.querySelector('#send').click();
+              editor.textContent='';
+            });
+            manualSend.observe(editor,{childList:true,subtree:true,characterData:true});
+            </script>'''
+            if manual_action == 'edit':
+                manual = manual.replace(
+                    "document.querySelector('#send').click();\n"
+                    "              editor.textContent='';",
+                    "editor.textContent='user replacement';")
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=HTML + manual))
+            service = Subchats(SubchatSubmissions(ledger.connection), InspectPreparation(context))
+            operation = '9' * 32
+            with pytest.raises(SubchatOutcomeUnknown):
+                await service.send(operation, 'manual send', 'Future model', 'Initial effort',
+                                   owner=None)
+            assert service.store.get(operation, owner=None).state == 'sending'
+            page = context.pages[0]
+            expected_sends = 1 if manual_action == 'send' else 0
+            assert await page.evaluate('window.sends') == expected_sends
+            receipt = await service.recover(operation, owner=None)
+            assert receipt.state == ('submitted' if manual_action == 'send' else 'sending')
+            if manual_action == 'send':
+                assert receipt.user_message_id == 'user'
+            else:
+                assert await page.get_by_role('textbox').inner_text() == 'user replacement'
+            await service.send(operation, 'manual send', 'Future model', 'Initial effort',
+                               owner=None)
+            assert await page.evaluate('window.sends') == expected_sends
         finally:
             ledger.close()
             await browser.close()
