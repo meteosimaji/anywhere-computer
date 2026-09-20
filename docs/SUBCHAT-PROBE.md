@@ -352,3 +352,43 @@ contents were not read or restored. The helper now captures/restores both method
 The real-browser fixture verifies zero calls to either OS-writing spy and rejects
 an answer while the Stop generating control is present. Delayed/changing UI and
 long live Thinking still require end-to-end adapter acceptance.
+
+### Anywhere-owned browser lifecycle integration (2026-09-20)
+
+The development adapter `scripts/subchat_browser_backend.py` implements the
+existing Anywhere `Subchats` backend protocol against an explicitly supplied,
+dedicated browser context. It creates an ordinary Chat, selects the requested
+model and effort from observed UI labels, submits literal text once, and recovers
+receipts and answers through the exact-message copy probes. It does not own or
+close the supplied browser context. It is not registered as a production tool.
+
+An authenticated fresh-Chat trial selected GPT-5.6 Sol and the observed medium
+effort label, obtained the requested synthetic marker, and independently checked
+the ordinary Chat through the owning client's read operation. Closing and
+reopening SQLite recovered the saved answer without another submission. This
+establishes completed-result persistence, not pending-turn browser restart
+recovery.
+
+`tests/test_subchat_browser_backend.py` exercises this adapter in real Chrome
+with all requests fulfilled by an offline DOM fixture: dynamic model/effort
+labels, literal Japanese multiline input, one send, repeated pending reads,
+answer copy, SQLite reopen, and zero writes to the clipboard spies. The fixture
+is not evidence of compatibility with future ChatGPT UI versions. Its response
+explicitly declares UTF-8; the initial missing charset reproduced mojibake in the
+fixture's JavaScript answer literal and was corrected without weakening the
+text assertion.
+
+Remaining gates include distinguishing preflight rejection from uncertain send,
+checkpointing the new conversation before receipt loss, follow-up baselines,
+pending-turn restart recovery, and product CLI/MCP integration. Answer references
+are explicitly namespaced DOM content-unit references, not provider message IDs.
+
+### Product direction: redesign for Anywhere
+
+CoS is a source of requirements and failure cases, not a required runtime or
+ownership authority. Subchat identity, operation ownership, delivery state, and
+saved results belong to Anywhere's durable store. The browser adapter remains a
+replaceable implementation of that contract. No synthetic CoS Prime identity or
+CoS worker API is required. Ordinary Chat remains distinct from Work and paid API
+backends. Requested models and effort labels come from live discovery; this
+trial's selected model is an acceptance input, not a hardcoded model catalog.
