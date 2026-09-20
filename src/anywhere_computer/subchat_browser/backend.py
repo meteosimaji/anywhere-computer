@@ -77,6 +77,8 @@ class BrowserSubchatBackend:
             return await self._http_reader.catalog(await self._browser())
 
     async def _page(self, submission: SubchatSubmission) -> Page | None:
+        if self._context is not None:
+            await self._browser()  # Diagnose a closed existing context without launching one.
         page = self.pages.get(submission.operation_id)
         if page is not None and not page.is_closed():
             return page

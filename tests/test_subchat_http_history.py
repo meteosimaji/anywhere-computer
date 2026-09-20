@@ -341,7 +341,8 @@ def test_cancelled_thinking_without_final_or_local_stop_receipt(case):
 
 
 @pytest.mark.parametrize('close_browser', [False, True])
-async def test_user_close_preserves_submission_without_relaunch(tmp_path, close_browser):
+@pytest.mark.parametrize('confirmed', [False, True])
+async def test_user_close_preserves_submission_without_relaunch(tmp_path, close_browser, confirmed):
     from playwright.async_api import async_playwright
 
     from anywhere_computer.state import Ledger
@@ -364,10 +365,11 @@ async def test_user_close_preserves_submission_without_relaunch(tmp_path, close_
         backend = BrowserSubchatBackend(factory, http_read=True)
         store = SubchatSubmissions(ledger.connection)
         store.prepare(saved.operation_id, saved.prompt, saved.model, saved.effort,
-                      owner=None, conversation_id=saved.conversation_id)
+                      owner=None, conversation_id=saved.conversation_id if confirmed else None)
         store.begin_send(saved.operation_id, owner=None)
-        store.submitted(saved.operation_id, saved.conversation_id, saved.user_message_id,
-                        owner=None)
+        if confirmed:
+            store.submitted(saved.operation_id, saved.conversation_id, saved.user_message_id,
+                            owner=None)
         before = store.get(saved.operation_id, owner=None)
         try:
             await backend._browser()
@@ -384,3 +386,17 @@ async def test_user_close_preserves_submission_without_relaunch(tmp_path, close_
         finally:
             await browser.close()
             ledger.close()
+
+
+async def test_unknown_conversation_recovery_does_not_launch_browser():
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    saved, _ = sample()
+    unknown = saved.model_copy(update={
+        'state': 'sending', 'conversation_id': None, 'user_message_id': None})
+
+    async def forbidden_factory():
+        raise AssertionError('Unknown conversation recovery must not launch Chrome')
+
+    backend = BrowserSubchatBackend(forbidden_factory, http_read=True)
+    assert await backend.find_submission(unknown) is None
