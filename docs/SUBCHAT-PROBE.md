@@ -392,3 +392,19 @@ replaceable implementation of that contract. No synthetic CoS Prime identity or
 CoS worker API is required. Ordinary Chat remains distinct from Work and paid API
 backends. Requested models and effort labels come from live discovery; this
 trial's selected model is an acceptance input, not a hardcoded model catalog.
+
+### Preparation and dispatch boundary
+
+The backend protocol now separates `prepare` (must not submit) from `send`.
+Model/effort availability and literal draft preparation happen before the store
+commits `sending`. A preparation failure leaves `prepared`, so the same immutable
+request can be retried without claiming a possible submission. Once `sending` is
+committed, exceptions/cancellation remain uncertain and never permit automatic
+resend. A compare-and-swap still permits only one caller to enter that stage.
+The browser adapter rechecks its page URL and exact draft immediately before the
+send click; it does not silently replace intervening user input.
+
+The 10 related lifecycle/state/browser tests passed after this change, including
+an unavailable-model preflight with zero sends and a changed-draft rejection in
+real Chrome against the offline fixture. Existing-conversation baseline storage,
+shared work context, and pending browser restart acceptance remain outstanding.

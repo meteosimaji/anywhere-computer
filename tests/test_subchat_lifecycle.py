@@ -19,6 +19,9 @@ class BrowserFixture:
         self.receipt = None
         self.thinking = True
 
+    async def prepare(self, submission):
+        pass
+
     async def send(self, submission):
         self.sends += 1
         self.receipt = SubchatReceipt(conversation_id='conversation',
@@ -103,5 +106,28 @@ async def test_wrong_answer_identity_does_not_complete_submission(tmp_path):
             await service.recover(operation, owner=None)
         assert service.store.get(operation, owner=None).state == 'submitted'
         assert browser.sends == 1
+    finally:
+        ledger.close()
+
+
+async def test_preflight_failure_can_retry_without_uncertain_send(tmp_path):
+    class UnavailableBrowser(BrowserFixture):
+        async def prepare(self, submission):
+            raise ValueError('Requested model unavailable')
+
+    ledger = Ledger(tmp_path)
+    browser = UnavailableBrowser()
+    operation = '9' * 32
+    service = Subchats(SubchatSubmissions(ledger.connection), browser)
+    try:
+        with pytest.raises(ValueError, match='model unavailable'):
+            await service.send(operation, 'prompt', 'model', 'effort', owner=None)
+        assert service.store.get(operation, owner=None).state == 'prepared'
+        assert browser.sends == 0
+        service.backend = BrowserFixture()
+        with pytest.raises(SubchatOutcomeUnknown):
+            await service.send(operation, 'prompt', 'model', 'effort', owner=None)
+        assert service.store.get(operation, owner=None).state == 'sending'
+        assert service.backend.sends == 1
     finally:
         ledger.close()

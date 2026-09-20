@@ -96,6 +96,22 @@ async def test_browser_send_pending_completion_and_database_recovery(tmp_path, m
             assert len(context.pages) == 1
             assert await page.evaluate('window.sends') == 1
             assert await page.evaluate('window.osWrites') == 0
+            # A missing model is rejected before the durable send boundary.
+            rejected = 'c' * 32
+            with pytest.raises(ValueError, match='Requested model'):
+                await service.send(rejected, prompt, 'Unavailable model', 'Future effort',
+                                   owner=None)
+            assert service.store.get(rejected, owner=None).state == 'prepared'
+            assert await context.pages[-1].evaluate('window.sends') == 0
+            # Never submit a draft that changed between preparation and dispatch.
+            prepared = service.store.prepare('d' * 32, prompt, 'Future model',
+                                             'Future effort', owner=None)
+            await service.backend.prepare(prepared)
+            draft_page = context.pages[-1]
+            await draft_page.get_by_role('textbox').fill('unrelated user draft')
+            with pytest.raises(ValueError, match='draft changed'):
+                await service.backend.send(prepared)
+            assert await draft_page.evaluate('window.sends') == 0
         finally:
             ledger.close()
             await browser.close()

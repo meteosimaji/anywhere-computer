@@ -35,7 +35,7 @@ class BrowserSubchatBackend:
                         wait_until='domcontentloaded')
         return page
 
-    async def send(self, submission: SubchatSubmission) -> SubchatReceipt:
+    async def prepare(self, submission: SubchatSubmission) -> None:
         if submission.requested_conversation_id is not None:
             raise ValueError('Follow-up browser dispatch is not yet integrated')
         page = await self.context.new_page()
@@ -85,6 +85,16 @@ class BrowserSubchatBackend:
                                     submission.prompt)
         if draft.get('state') != 'draft_observed' or await editor.inner_text() != submission.prompt:
             raise ValueError('Exact draft was not confirmed')
+
+    async def send(self, submission: SubchatSubmission) -> SubchatReceipt:
+        page = self.pages.get(submission.operation_id)
+        if page is None or page.is_closed():
+            raise ValueError('Prepared browser page is unavailable')
+        if page.url.rstrip('/') != 'https://chatgpt.com':
+            raise ValueError('Prepared conversation changed before send')
+        editor = page.locator('[data-composer-markdown][role="textbox"]')
+        if await editor.count() != 1 or await editor.inner_text() != submission.prompt:
+            raise ValueError('Prepared draft changed before send')
         await page.get_by_role('button', name=re.compile(r'^(送信|Send)$')).click()
         async with asyncio.timeout(120):
             while True:
