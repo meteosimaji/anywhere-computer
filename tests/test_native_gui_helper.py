@@ -60,3 +60,36 @@ async def test_persistent_requests_and_recovery_after_invalid_input(native_gui_h
         if process.returncode is None:
             process.kill()
             await process.wait()
+
+
+def test_serialized_observation_budget_in_real_swift_source(tmp_path):
+    source = Path(__file__).resolve().parents[1] / "native/macos/AXHelper.swift"
+    text = source.read_text()
+    entry = "\nrunJSONLines()\n"
+    assert text.endswith(entry)
+    # Exercise the actual serialization functions without requiring a GUI app or
+    # Accessibility permission on CI; only the executable entry point is replaced.
+    harness = text.removesuffix(entry) + r'''
+private var state = TraversalState()
+var nodes: [[String: Any]] = []
+for _ in 0..<128 {
+    var node: [String: Any] = ["element_ref": UUID().uuidString,
+        "value": String(repeating: "日本語\n\"", count: 4096),
+        "label": "field", "children": [[String: Any]]()]
+    if try reserveNodeOutput(&node, state: &state) { nodes.append(node) }
+}
+emit(["id": "bounded", "result": ["nodes": nodes, "truncated": state.truncated]])
+emit(["id": "oversized", "result": ["value": String(repeating: "x", count: 70000)]])
+'''
+    program = tmp_path / "Budget.swift"
+    program.write_text(harness)
+    executable = tmp_path / "budget"
+    subprocess.run(["swiftc", str(program), "-o", str(executable)],
+                   check=True, capture_output=True, timeout=90)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, timeout=5)
+    lines = result.stdout.splitlines(keepends=True)
+    assert len(lines) == 2 and all(len(line) <= 65536 for line in lines)
+    bounded, oversized = map(json.loads, lines)
+    assert bounded["result"]["truncated"] is True
+    assert len(bounded["result"]["nodes"]) == 128
+    assert oversized == {"id": "oversized", "error": {"code": "response_too_large"}}

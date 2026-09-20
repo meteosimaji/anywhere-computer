@@ -204,6 +204,20 @@ evidence. Adding the tools exposed the former 64-tool setup limit; config, login
 and local grant envelopes now share a bounded 128-tool limit. Existing grants are
 not widened and each dispatch still checks its granted tool set.
 
+An independently extracted portable archive passed manifest/runtime verification
+(3,151 manifest files) and invoked window discovery, 13-element TextEdit observation
+and close through its own bundled Python and verified helper, without a source-tree
+path override. No desktop write was performed in that packaged check.
+
+The ordinary Chat subchat's subsequent read-only audit identified an output-budget
+mismatch: bounded node counts could still produce more than the adapter's 64 KiB
+line limit. The parent reproduced a 70,041-byte line from the previous emitter.
+The helper now budgets serialized node bytes (including escaping), omits oversized
+labels/values with explicit truncation flags, and applies a final 64 KiB framing
+guard. A real Swift-source serialization fixture checks 128 large Unicode/control
+string nodes plus a non-tree oversized response. This is a serialization test,
+not a claim of a live 128-control application test.
+
 Screenshots, click/keyboard/scroll, Windows UIA, signed helper distribution and
 concurrent user-interference acceptance remain open. Packaged installation/live
 MCP acceptance is separate from these source-engine and helper tests.
