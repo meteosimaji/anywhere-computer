@@ -1,7 +1,6 @@
 """Read-only ordinary-Chat history projection; never replay generation requests."""
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
@@ -11,7 +10,7 @@ from ..subchat import SubchatAnswer, SubchatInterrupted
 from ..subchat_state import SubchatSubmission
 
 if TYPE_CHECKING:
-    from playwright.async_api import BrowserContext, Page, Response
+    from playwright.async_api import Page, Response
 
 
 class HistoryMessage(BaseModel):
@@ -95,47 +94,3 @@ async def observe_history(page: Page, submission: SubchatSubmission) -> Response
     if response.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/json':
         raise ValueError('Unexpected conversation response format')
     return response
-
-
-class HistoryReader:
-    """Bootstrap from the app once, then poll with its context's HTTP client.
-
-    The observed bearer stays in memory, bound to this browser context. Cookies
-    stay in Playwright's context; no credentials are exported to disk or tools.
-    Only the known history GET is allowed; redirects never forward credentials.
-    """
-
-    def __init__(self) -> None:
-        self._context: BrowserContext | None = None
-        self._authorization: str | None = None
-
-    async def read(self, context: BrowserContext,
-                   submission: SubchatSubmission) -> SubchatAnswer | None:
-        if self._context is not context:
-            self._context = context
-            self._authorization = None
-        if self._authorization is None:
-            page = await context.new_page()
-            try:
-                response = await observe_history(page, submission)
-                self._authorization = await response.request.header_value('authorization')
-                return project_history(await response.body(), submission)
-            finally:
-                await asyncio.wait_for(page.close(), timeout=5)
-        response_http = await context.request.get(
-            'https://chatgpt.com/backend-api/conversations/' + str(submission.conversation_id),
-            headers={'Authorization': self._authorization}, timeout=15_000, max_redirects=0,
-            max_retries=0)
-        try:
-            if response_http.status in (401, 403):
-                # Next explicit recovery observes the app's current login again.
-                # Do not loop, dismiss a challenge, or replay a generation.
-                self._authorization = None
-            if response_http.status != 200:
-                raise ConnectionError('Conversation history request did not succeed')
-            if response_http.headers.get('content-type', '').split(';', 1)[0].strip() != (
-                    'application/json'):
-                raise ValueError('Unexpected conversation response format')
-            return project_history(await response_http.body(), submission)
-        finally:
-            await response_http.dispose()

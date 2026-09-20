@@ -14,9 +14,9 @@ from typing import TYPE_CHECKING
 from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt, SubchatStaleTarget
 from anywhere_computer.subchat_state import SubchatSubmission
 
-from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_http_page, collect_page, picker_ready
+from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_page, picker_ready
 from .efforts import move_effort, snapshot
-from .history import HistoryReader
+from .http_reader import ChatHTTPReader
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page
@@ -31,7 +31,7 @@ class BrowserSubchatBackend:
     def __init__(self, context: BrowserContext | Callable[[], Awaitable[BrowserContext]],
                  *, http_read: bool = False) -> None:
         self.http_read = http_read
-        self._history = HistoryReader()
+        self._http_reader = ChatHTTPReader()
         self._context = None if callable(context) else context
         self._create_context = context if callable(context) else None
         self._context_lock = asyncio.Lock()
@@ -57,15 +57,8 @@ class BrowserSubchatBackend:
             await page.close()
 
     async def http_catalog(self) -> dict[str, object]:
-        page = None
-        try:
-            async with asyncio.timeout(20):
-                page = await (await self._browser()).new_page()
-                return await collect_http_page(page)
-        finally:
-            if page is not None:
-                # Leave cleanup headroom under the outer direct-MCP deadline.
-                await asyncio.wait_for(page.close(), timeout=5)
+        async with asyncio.timeout(20):
+            return await self._http_reader.catalog(await self._browser())
 
     async def _page(self, submission: SubchatSubmission) -> Page | None:
         page = self.pages.get(submission.operation_id)
@@ -239,7 +232,7 @@ class BrowserSubchatBackend:
                         'https://chatgpt.com/c/' + submission.conversation_id) is None):
                 return None
             async with asyncio.timeout(20):
-                return await self._history.read(await self._browser(), submission)
+                return await self._http_reader.history(await self._browser(), submission)
         page = await self._page(submission)
         if page is None or submission.user_message_id is None:
             return None

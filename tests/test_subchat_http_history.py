@@ -181,8 +181,9 @@ async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(
         ledger.close()
 
 
+@pytest.mark.parametrize('resource', ['history', 'catalog'])
 @pytest.mark.parametrize('expired_status', [401, 403])
-async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expired_status):
+async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expired_status, resource):
     """Real APIRequestContext transport against a controlled local HTTP server."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
@@ -194,10 +195,18 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
     submission, payload = sample()
     status, calls, tab_gets = [200], [], []
     path = '/backend-api/conversations/' + submission.conversation_id
+    if resource == 'catalog':
+        from test_subchat_http_catalog import catalog
+
+        payload = catalog()
+        path = '/backend-api/models?observed=fixture'
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
-            calls.append((self.path, self.headers.get('Authorization') == 'Bearer fixture'))
+            calls.append((self.path, self.headers.get('Authorization') == 'Bearer fixture'
+                          and self.headers.get('oai-language') == 'ja'
+                          and self.headers.get('chatgpt-account-id') == 'fixture-account'
+                          and self.headers.get('unrelated-header') is None))
             if status[0] == 0:
                 self.connection.close()
                 return
@@ -232,7 +241,9 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
                     else:
                         await r.fulfill(content_type='text/html', body='<script>fetch(' +
                             json.dumps(path) +
-                            ',{headers:{Authorization:"Bearer fixture"}})</script>')
+                            ',{headers:{Authorization:"Bearer fixture","oai-language":"ja",' +
+                            '"chatgpt-account-id":"fixture-account",' +
+                            '"unrelated-header":"do-not-copy"}})</script>')
 
                 await context.route('https://chatgpt.com/**', route)
                 request = context.request
@@ -245,30 +256,34 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
 
                 monkeypatch.setattr(request, 'get', local_get)
                 backend = BrowserSubchatBackend(context, http_read=True)
-                first = await backend.read_answer(submission)
+                async def read():
+                    return (await backend.http_catalog() if resource == 'catalog'
+                            else await backend.read_answer(submission))
+
+                first = await read()
                 for _ in range(2):
-                    assert await backend.read_answer(submission) == first
+                    assert await read() == first
                 assert tab_gets == ['GET', 'GET']  # Only the initial bootstrap navigated.
                 assert calls == [(path, True)] * 2
                 for failure in (302, 429, 500, 0):
                     status[0] = failure
                     before = len(calls)
                     with pytest.raises(Error if failure == 0 else ConnectionError):
-                        await backend.read_answer(submission)
+                        await read()
                     assert len(calls) == before + 1  # No redirects or automatic retries.
                     assert len(tab_gets) == 2
                 status[0] = 200
-                assert await backend.read_answer(submission) == first
+                assert await read() == first
                 assert len(tab_gets) == 2  # Transport recovery stays HTTP-only.
                 status[0] = expired_status
                 with pytest.raises(ConnectionError):
-                    await backend.read_answer(submission)
+                    await read()
                 assert len(tab_gets) == 2  # No automatic reauthentication/retry.
                 before = len(calls)
                 status[0] = 200
-                assert await backend.read_answer(submission) == first
+                assert await read() == first
                 assert len(tab_gets) == 4 and len(calls) == before
-                assert await backend.read_answer(submission) == first
+                assert await read() == first
                 assert len(tab_gets) == 4 and len(calls) == before + 1
                 assert all(call == (path, True) for call in calls)
                 assert context.pages == [original] and original.url == 'about:blank'

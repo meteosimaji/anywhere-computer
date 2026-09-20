@@ -87,7 +87,7 @@ def project_http_catalog(payload: bytes) -> dict[str, object]:
             'send_requires_ui_labels': True}
 
 
-async def collect_http_page(page: Page) -> dict[str, object]:
+async def observe_http_catalog(page: Page) -> Response:
     """Observe the app's own catalog GET on a dedicated page; no token copying."""
     def catalog_response(response: Response) -> bool:
         url = urlsplit(response.url)
@@ -105,7 +105,7 @@ async def collect_http_page(page: Page) -> dict[str, object]:
         raise ConnectionError('Authenticated model catalog request was not observed')
     if response.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/json':
         raise ValueError('Unexpected model catalog response format')
-    return project_http_catalog(await response.body())
+    return response
 
 
 async def empty_chat(page: Page) -> bool:
