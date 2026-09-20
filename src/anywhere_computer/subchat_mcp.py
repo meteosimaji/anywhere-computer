@@ -58,7 +58,7 @@ INSTRUCTIONS = (
     'subchat_status reads the saved record without browser interaction. '
     'prepared means not sent; preparation_failed requires correcting preparation and '
     'retrying the same exact send request ID. Sending means receipt unconfirmed, '
-    'not delivered: recover it, never click Send again. Only submitted/completed '
+    'not proof of delivery: recover it, never click Send again. Only submitted/completed '
     'confirm a matching message receipt; completed also includes the answer. '
     'If a new Chat remains sending without a conversation_id after process loss, '
     'automatic recovery may be impossible: preserve unknown and reconcile manually; '
