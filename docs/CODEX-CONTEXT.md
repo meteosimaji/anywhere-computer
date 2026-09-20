@@ -34,6 +34,14 @@ PC 上のエージェントがファイル操作やコマンドを実行する�
 概要にはtool_countと最大10件の名前、次のinspect_argumentsを返す。
 認証要求、ランタイム未準備、利用不能、未確認、呼出準備完了をavailabilityで分ける。
 ready_to_callは接続と定義の確認であり、実行成功の証明ではない（execution_verified=false）。
+一覧は取得時点の状態であり、session_idを省略した次の呼び出しは別の一時プロセスを使う。
+呼び出し時に対象サーバーがnotStarted/startingなら、同じプロセス・スレッドの
+カタログを最大30秒の期限内で再確認する。認証要求・停止・カタログ通信エラーを
+再試行せず、起動後もツール定義のdigestを検証してから一度だけ実行する。
+期限内に起動しなければruntime_not_readyとして未実行を返す。
+これは制御された起動状態遷移での回帰試験であり、実Chatで報告された拒否の
+原因を一意に証明したものではない。
+
 カタログが古い場合はcatalog_stale、定義不在はtool_not_found、認証不足は
 authentication_required、検索上限で不在を確定できない場合はcatalog_incompleteを返す。実行前の拒否にはdispatched=falseとnext_actionを付ける。
 一覧への追加引数がChatGPTに見えない場合は接続のツール定義を更新する。
