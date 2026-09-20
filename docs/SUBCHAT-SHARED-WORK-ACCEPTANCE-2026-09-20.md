@@ -206,3 +206,21 @@ the original Markdown source uniquely. No broad unescaping, URL normalization,
 substring matching or promotion of historical uncertain sends is adopted.
 Dispatch-bound serialization evidence remains a proposal requiring independent
 verification; it is not an exact-source recovery guarantee.
+
+The lazy-start CLI was additionally checked from the extracted bundled wheel in
+a temporary working directory, verifying its import path rather than relying on
+the editable checkout. The actual JSON-lines subprocess returned saved status,
+completed recovery and unsent cancellation. The actual stdio MCP subprocess,
+through the SDK client, initialized, listed tools and returned saved status and
+the completed answer. Both exited successfully without creating the supplied
+Chrome profile. These checks used an isolated seeded ledger, not a new live Chat.
+The browser dependency remains installed; the result establishes that these
+saved-state operations do not launch Chrome, not a browser-free new-Chat API.
+
+A follow-up review was also sent to ordinary conversation
+`6aaf90ef-f7ac-83ee-a0ef-0a5624be14e5` through the owning Codex app's send tool,
+without browser typing. Its read tool returned the exact new user message
+`cf4abf62-1a3e-4623-8588-d01c38cf055a`. At this observation no corresponding
+assistant answer was available. Receipt is confirmed; review completion and
+standalone Anywhere access to that app transport are not established. The
+request is not resent merely because a later status says idle.
