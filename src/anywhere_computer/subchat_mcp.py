@@ -65,17 +65,34 @@ INSTRUCTIONS = (
 class SubchatSession(MCPSession):
     def __init__(self, catalog: ToolCatalog, execute: Execute,
                  tasks: dict[str, asyncio.Task[SubchatSubmission]]) -> None:
-        super().__init__(catalog, execute, instructions=INSTRUCTIONS)
         self.recoveries = tasks
         self.closed = False
+        self.calls: set[asyncio.Task[Reply]] = set()
+
+        async def managed(request: Request) -> Reply:
+            if self.closed:
+                return Reply(operation_id=request.operation_id, state='failed',
+                             error='Subchat session is closed.')
+            async def call() -> Reply:
+                return await execute(request)
+
+            task = asyncio.create_task(call())
+            self.calls.add(task)
+            try:
+                return await task
+            finally:
+                self.calls.discard(task)
+
+        super().__init__(catalog, managed, instructions=INSTRUCTIONS)
 
     async def close(self) -> None:
         self.closed = True
-        tasks = list(self.recoveries.values())
+        tasks = [*self.recoveries.values(), *self.calls]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.recoveries.clear()
+        self.calls.clear()
 
 
 def session(service: Subchats, *,

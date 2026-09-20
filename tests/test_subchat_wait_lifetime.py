@@ -94,3 +94,35 @@ async def test_session_close_joins_pending_preparation_without_send(tmp_path):
     finally:
         await server.close()
         ledger.close()
+
+
+async def test_close_joins_direct_send_and_rejects_new_calls(tmp_path):
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+
+    class PendingPreparation(Provider):
+        async def prepare(self, submission):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    ledger = Ledger(tmp_path)
+    provider = PendingPreparation()
+    server = session(Subchats(SubchatSubmissions(ledger.connection), provider))
+    request = Request(operation_id='e' * 32, tool='subchat_send',
+                      arguments={'prompt': 'next', 'model': 'model', 'effort': 'effort'})
+    sending = asyncio.create_task(server.execute(request))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await server.close()
+        await asyncio.wait_for(asyncio.gather(sending, return_exceptions=True), 2)
+        assert cancelled.is_set()
+        assert sending.cancelled()
+        assert not provider.sends
+        assert not server.calls
+        assert (await server.execute(request)).state == 'failed'
+        assert not provider.sends
+    finally:
+        await server.close()
+        ledger.close()
