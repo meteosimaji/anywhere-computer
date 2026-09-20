@@ -797,3 +797,11 @@ focus guarantee. Chrome can appear briefly while starting, subsequent tab creati
 and user window changes may affect visibility, and full ordinary-Chat acceptance
 under minimization remains separate. Controlled tests cover both confirmation
 outcomes, cleanup, context reuse, and saved-state operation without a browser.
+
+Live local Chrome check (2026-09-20): the production CLI startup followed by
+three ordinary blank-tab creations reported `normal` for all three windows. An
+experimental CDP `Target.createTarget(background=true)` path reported
+`minimized`, then `normal`, `normal`; it was removed rather than presented as a
+fix. Neither run visited ChatGPT or sent messages. Startup minimization does not
+yet provide unobtrusive multi-tab operation. PR85 must remain unmerged pending
+a working browser integration or an explicit revision of its behavior.
