@@ -1021,3 +1021,60 @@ composer contained a leftover test draft. The exact draft was preserved locally,
 then explicitly cleared for this acceptance. The same prepared operation then
 succeeded; no unknown send was replayed. Production code still preserves drafts
 and requires inspection instead of deleting them automatically.
+
+
+### Generated URL decorations during collective review
+
+Real review prompts containing the PR URL exposed two separate serialization
+boundaries. The ordinary-Chat editor generated an inline URL icon which added a
+layout newline to `innerText`. The generation POST then serialized the URL as
+`[URL](URL)`. Neither is a user-requested paragraph or a different destination.
+The previous strict comparisons correctly stopped dispatch but prevented these
+otherwise ordinary review prompts.
+
+Draft verification now recognizes only the observed paragraph/span/line-break
+shape and generated URL wrappers with exact label/target text. It does not trim
+or collapse whitespace. The resource request guard accepts identical-label,
+identical-target Markdown URL decoration only when it reduces exactly to the
+prepared prompt; the outgoing resource envelope still contains the canonical
+prompt. Wrong labels, destinations, changed text and added newlines fail.
+Saved HTTP input and resource verification remain exact.
+
+The real DOM regression fails with the previous implementation and passes with
+the fix. The stopped draft was preserved separately; its unknown operation was
+not retried. Two subsequent HTTP resource sends were also rejected before the
+URL serialization correction; these remain unknown in the ledger rather than
+being relabeled as delivered. This is not evidence of failed model reasoning.
+
+A separate explicitly requested generation-stop acceptance observed
+`POST /backend-api/stop_conversation` with `conversation_id` and
+`exclude_async_types: []`. HTTP recovery then raised `SubchatInterrupted`.
+This is a conversation-scoped observed UI request, not a turn-scoped steer API.
+No public provider-stop API is implemented by this change.
+
+Two real GPT-5.6 Sol / high review subchats subsequently completed through the
+fixed resource API and HTTP answer recovery:
+
+- Implementation review `f7d2ca098c4a4f3a9bddeaf80e97fe18`, conversation
+  `6aafe320-2e84-83e8-9fc1-e149dca6ca94`, user
+  `2808a2a8-d819-497b-b9e8-34a03b46a43d`, marker `COLLECTIVE_REVIEW_D`.
+  It found the draft check's unconditional matching-innerText fast path could
+  skip destination validation. The parent verified the code and added real DOM
+  regressions for matching text with a different/conflicting destination, then
+  restricted that fast path to drafts without links. The child's test command
+  used an interpreter without pydantic; its claimed suite result is not counted.
+  The parent used the repository `.venv` and passed all 145 subchat tests.
+- Design review `02e71deb94e643a88b9498551388563f`, conversation
+  `6aafe323-a588-83e8-9898-3a0b44ad7d3e`, user
+  `62a76fcb-0868-4736-872f-a16a895e5f69`, marker `COLLECTIVE_REVIEW_E`.
+  It proposed bounded collection of child results using the existing ledger.
+  Its real `files_read` operation `1a0babe577284350aaeef4e8b87c7938` returned
+  the repository `subchat.py`; the parent verified that tool result in history.
+
+Both generations overlapped; their final IDs, markers and answers were recovered
+separately without resending. During the longer tool-using review, the UI exposed
+an activity turn key instead of the user-message ID. Receipt recovery stayed
+pending until the user turn became observable again after completion. This is a
+remaining observation-latency limitation, not a failed generation. Future review
+prompts should pin the input revision and exact test interpreter so concurrent
+parent fixes and environment mismatch do not make a child's report look current.

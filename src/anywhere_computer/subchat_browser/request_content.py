@@ -6,10 +6,24 @@ This is not an independent Chat HTTP client and never copies credential headers.
 from __future__ import annotations
 
 import json
+import re
 
 from pydantic import JsonValue, TypeAdapter
 
 from ..subchat_state import SubchatSubmission
+
+
+def _matches_prompt(content: JsonValue, prompt: str) -> bool:
+    if content == {'content_type': 'text', 'parts': [prompt]}:
+        return True
+    if (not isinstance(content, dict) or set(content) != {'content_type', 'parts'}
+            or content['content_type'] != 'text' or not isinstance(content['parts'], list)
+            or len(content['parts']) != 1 or not isinstance(content['parts'][0], str)):
+        return False
+    # Ordinary Chat serializes generated URL decorations as Markdown links.
+    # Only identical label/target URLs may reduce to the original literal input.
+    literal = re.sub(r'\[(https?://[^\s\[\]()]+)\]\(\1\)', r'\1', content['parts'][0])
+    return literal == prompt
 
 
 def add_resources(payload: str, submission: SubchatSubmission) -> str:
@@ -25,7 +39,7 @@ def add_resources(payload: str, submission: SubchatSubmission) -> str:
     author = message.get('author')
     metadata = message.get('metadata')
     if (not isinstance(author, dict) or author.get('role') != 'user'
-            or message.get('content') != {'content_type': 'text', 'parts': [submission.prompt]}
+            or not _matches_prompt(message.get('content'), submission.prompt)
             or not isinstance(message.get('id'), str) or not message['id']
             or not isinstance(metadata, dict)
             or body.get('conversation_id') != submission.requested_conversation_id):
