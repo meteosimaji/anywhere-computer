@@ -34,6 +34,15 @@ class SubchatWorkContext(Contract):
     inputs: tuple[SubchatInputReference, ...] = Field(default=(), max_length=32)
 
 
+class SubchatHTTPSelection(Contract):
+    """Exact observed catalog choice; null effort is an explicit value, not a wildcard."""
+
+    version_id: str = Field(min_length=1, max_length=256)
+    preset_id: int
+    model_slug: str = Field(min_length=1, max_length=256)
+    thinking_effort: str | None = Field(min_length=1, max_length=256)
+
+
 class SubchatReportedSettings(Contract):
     """Provider-reported answer settings, not proof of equivalence to UI labels."""
 
@@ -61,6 +70,7 @@ class SubchatSubmission(Contract):
     provider_account_id: str | None = Field(default=None, min_length=1, max_length=256)
     work_context: SubchatWorkContext | None = None
     resources: SubchatResources | None = None
+    http_selection: SubchatHTTPSelection | None = None
 
     @property
     def wire_prompt(self) -> str:
@@ -145,7 +155,8 @@ class SubchatSubmissions:
                 *, owner: str | None, conversation_id: str | None = None,
                 work_context: SubchatWorkContext | None = None,
                 after_operation_id: str | None = None,
-                resources: SubchatResources | None = None) -> SubchatSubmission:
+                resources: SubchatResources | None = None,
+                http_selection: SubchatHTTPSelection | None = None) -> SubchatSubmission:
         if conversation_id is not None and not conversation_id.strip():
             raise ValueError('Conversation identity must not be empty')
         if work_context is not None and work_context.parent_operation_id is not None:
@@ -161,12 +172,14 @@ class SubchatSubmissions:
                 raise ValueError('Queue target identity must be confirmed first')
             if conversation_id != target.conversation_id:
                 raise ValueError('Queue target conversation does not match')
+            if http_selection != target.http_selection:
+                raise ValueError('Queue HTTP selection does not match its target')
             expected_last_user_message_id = target.user_message_id
         proposed = SubchatSubmission(operation_id=operation_id, prompt=prompt,
                                      model=model, effort=effort,
                                      requested_conversation_id=conversation_id,
                                      conversation_id=conversation_id, work_context=work_context,
-                                     resources=resources,
+                                     resources=resources, http_selection=http_selection,
                                      state='queued' if after_operation_id else 'prepared',
                                      after_operation_id=after_operation_id,
                                      expected_last_user_message_id=expected_last_user_message_id)
@@ -174,14 +187,15 @@ class SubchatSubmissions:
             self.connection.execute(
                 'INSERT OR IGNORE INTO subchat_submissions VALUES (?,?,?)',
                 (operation_id, owner, proposed.model_dump_json(
-                    exclude={'reported_settings', 'provider_account_id'})),
+                    exclude={'reported_settings', 'provider_account_id'} |
+                    ({'http_selection'} if proposed.http_selection is None else set()))),
             )
         existing = self.get(operation_id, owner=owner)
         if (existing.prompt, existing.model, existing.effort,
             existing.requested_conversation_id, existing.work_context,
-            existing.after_operation_id, existing.resources) != (
+            existing.after_operation_id, existing.resources, existing.http_selection) != (
                 prompt, model, effort, conversation_id, work_context, after_operation_id,
-                resources):
+                resources, http_selection):
             raise ValueError('Subchat submission ID was already used for different arguments')
         return existing
 
@@ -212,7 +226,8 @@ class SubchatSubmissions:
             cursor = self.connection.execute(
                 'UPDATE subchat_submissions SET body=? '
                 'WHERE operation_id=? AND owner IS ? AND body=?',
-                (new.model_dump_json(exclude={'reported_settings', 'provider_account_id'}),
+                (new.model_dump_json(exclude={'reported_settings', 'provider_account_id'} |
+                                     ({'http_selection'} if new.http_selection is None else set())),
                  old.operation_id, owner, row[0]),
             )
             if cursor.rowcount != 1:

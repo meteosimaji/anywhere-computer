@@ -209,3 +209,35 @@ def test_answer_settings_commit_with_answer_without_changing_legacy_json(tmp_pat
         assert store.get(op, owner='parent').reported_settings == settings
     finally:
         ledger.close()
+
+
+def test_http_selection_survives_restart_and_queue_without_reassignment(tmp_path):
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_state import SubchatHTTPSelection
+
+    selected = SubchatHTTPSelection(version_id='observed', preset_id=7,
+                                    model_slug='observed-model', thinking_effort=None)
+    parent, child = 'a' * 32, 'b' * 32
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    store.prepare(parent, 'prompt', 'UI model', 'UI effort', owner=None,
+                  http_selection=selected)
+    store.begin_send(parent, owner=None)
+    store.submitted(parent, 'chat', 'input', owner=None)
+    ledger.close()
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        from test_subchat_lifecycle import BrowserFixture
+
+        queued = Subchats(store, BrowserFixture()).queue(child, parent, 'next', owner=None)
+        assert queued.http_selection == selected
+        with pytest.raises(ValueError, match='different arguments'):
+            store.prepare(parent, 'prompt', 'UI model', 'UI effort', owner=None,
+                          http_selection=selected.model_copy(update={'model_slug': 'other'}))
+        with pytest.raises(ValueError, match='Queue HTTP selection'):
+            store.prepare('c' * 32, 'next', 'UI model', 'UI effort', owner=None,
+                          conversation_id='chat', after_operation_id=parent)
+        assert store.get(parent, owner=None).state == 'submitted'
+    finally:
+        ledger.close()

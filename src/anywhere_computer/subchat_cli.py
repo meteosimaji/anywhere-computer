@@ -24,6 +24,7 @@ from .subchat import (
 from .subchat_content import SubchatResources
 from .subchat_state import (
     SubchatAccountMismatch,
+    SubchatHTTPSelection,
     SubchatList,
     SubchatSubmissions,
     SubchatWorkContext,
@@ -42,6 +43,11 @@ class Command(Contract):
     conversation_id: str | None = None
     work_context: SubchatWorkContext | None = None
     resources: SubchatResources | None = None
+    http_selection: SubchatHTTPSelection | None = None
+
+
+class CatalogCommand(Contract):
+    action: Literal['catalog']
 
 
 class ListCommand(SubchatList):
@@ -54,7 +60,13 @@ class QueueCommand(OperationId):
     prompt: str = Field(min_length=1, max_length=100_000)
 
 
-async def dispatch(service: Subchats, command: Command | ListCommand | QueueCommand) -> str:
+async def dispatch(service: Subchats,
+                   command: Command | ListCommand | QueueCommand | CatalogCommand) -> str:
+    if isinstance(command, CatalogCommand):
+        observe = getattr(service.backend, 'http_catalog', None)
+        if observe is None:
+            raise ValueError('HTTP catalog is unavailable')
+        return json.dumps(await observe(), ensure_ascii=False)
     if isinstance(command, ListCommand):
         return service.store.list(SubchatList(limit=command.limit, before=command.before),
                                   owner=None).model_dump_json()
@@ -67,11 +79,13 @@ async def dispatch(service: Subchats, command: Command | ListCommand | QueueComm
         result = await service.send(command.operation_id, command.prompt, command.model,
                                     command.effort, owner=None,
                                     conversation_id=command.conversation_id,
-                                    work_context=command.work_context, resources=command.resources)
+                                    work_context=command.work_context, resources=command.resources,
+                                    http_selection=command.http_selection)
     else:
         if any(value is not None for value in (command.prompt, command.model,
                                                command.effort, command.conversation_id,
-                                               command.work_context, command.resources)):
+                                               command.work_context, command.resources,
+                                               command.http_selection)):
             raise ValueError('Recovery, status and cancellation accept only an operation identity')
         result = (await service.recover(command.operation_id, owner=None)
                   if command.action == 'recover'
@@ -87,9 +101,10 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         line = await asyncio.to_thread(source.readline)
         if not line:
             return
-        command: Command | ListCommand | QueueCommand | None = None
+        command: Command | ListCommand | QueueCommand | CatalogCommand | None = None
         try:
-            command = TypeAdapter(Command | ListCommand | QueueCommand).validate_json(line)
+            command = TypeAdapter(
+                Command | ListCommand | QueueCommand | CatalogCommand).validate_json(line)
             output = await dispatch(service, command)
         except Exception as error:
             # Do not print provider errors or invalid input: both can contain secrets.
@@ -188,7 +203,7 @@ def main() -> None:
                         help='Local subchat ledger directory')
     parser.add_argument("--mcp", action="store_true", help="Serve MCP over stdio")
     parser.add_argument('--http-read', action='store_true',
-                        help='Read saved answers through observed browser HTTP history')
+                        help='Read HTTP history; sends require an observed HTTP catalog selection')
     parser.add_argument('--minimized', action='store_true',
                         help='Verify the dedicated Chrome window is minimized before page work')
     args = parser.parse_args()

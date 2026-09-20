@@ -43,6 +43,11 @@ def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, J
             or not isinstance(metadata, dict)
             or body.get('conversation_id') != submission.requested_conversation_id):
         raise ValueError('Generation input or conversation changed')
+    if submission.http_selection is not None:
+        selected = submission.http_selection
+        if (body.get('model') != selected.model_slug
+                or body.get('thinking_effort') != selected.thinking_effort):
+            raise ValueError('Generation model or effort changed')
     # Do not silently merge an unrelated draft's attachments or plugin selection.
     if (metadata.get('attachments') or metadata.get('system_hints')
             or body.get('system_hints')):

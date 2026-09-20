@@ -124,3 +124,76 @@ async def test_actual_http_catalog_request_without_picker_or_send(authenticated)
                                 ('GET', 'https://chatgpt.com/backend-api/models')]
         finally:
             await browser.close()
+
+
+@pytest.mark.parametrize('change', ['none', 'model', 'effort', 'disabled', 'work'])
+def test_exact_http_selection_is_revalidated(change):
+    from anywhere_computer.subchat_browser.catalog import require_http_selection
+    from anywhere_computer.subchat_state import SubchatHTTPSelection
+
+    payload = catalog()
+    selected = SubchatHTTPSelection.model_validate(project_http_catalog(
+        json.dumps(payload).encode())['versions'][0]['choices'][0]['http_selection'])
+    if change in ('model', 'effort'):
+        selected = selected.model_copy(update={
+            'model_slug' if change == 'model' else 'thinking_effort': 'different'})
+    elif change == 'disabled':
+        payload['versions'][0]['enabled'] = False
+    elif change == 'work':
+        payload['models'][0]['is_work_mode_model'] = True
+    projected = project_http_catalog(json.dumps(payload).encode())
+    if change == 'none':
+        require_http_selection(projected, selected)
+    else:
+        with pytest.raises(ValueError, match='unavailable or changed'):
+            require_http_selection(projected, selected)
+
+
+async def test_http_send_without_selection_does_not_open_browser(tmp_path):
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import SubchatPreparationFailed, Subchats
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    async def forbidden():
+        pytest.fail('Missing selection must reject before browser work')
+
+    ledger = Ledger(tmp_path)
+    try:
+        service = Subchats(SubchatSubmissions(ledger.connection),
+                           BrowserSubchatBackend(forbidden, http_read=True))
+        with pytest.raises(SubchatPreparationFailed, match='http_selection'):
+            await service.send('a' * 32, 'prompt', 'UI model', 'UI effort', owner=None)
+        saved = service.store.get('a' * 32, owner=None)
+        assert saved.state == 'prepared'
+        assert 'http_selection' not in json.loads(ledger.connection.execute(
+            'SELECT body FROM subchat_submissions').fetchone()[0])
+    finally:
+        ledger.close()
+
+
+async def test_cli_catalog_returns_reusable_selection_without_submission(tmp_path):
+    from io import StringIO
+
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_cli import process_lines
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    class Reader:
+        async def http_catalog(self):
+            return project_http_catalog(json.dumps(catalog()).encode())
+
+    ledger = Ledger(tmp_path)
+    try:
+        output = StringIO()
+        await process_lines(Subchats(SubchatSubmissions(ledger.connection), Reader()),
+                            StringIO('{"action":"catalog"}\n'), output)
+        reply = json.loads(output.getvalue())
+        assert reply['versions'][0]['choices'][0]['http_selection'] == {
+            'version_id': 'future', 'preset_id': 7, 'model_slug': 'future-chat',
+            'thinking_effort': 'future-effort'}
+        assert ledger.connection.execute(
+            'SELECT count(*) FROM subchat_submissions').fetchone()[0] == 0
+    finally:
+        ledger.close()
