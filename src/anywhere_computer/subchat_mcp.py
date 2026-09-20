@@ -19,7 +19,12 @@ from .subchat import (
     SubchatStaleTarget,
 )
 from .subchat_content import SubchatResources
-from .subchat_state import SubchatList, SubchatSubmission, SubchatWorkContext
+from .subchat_state import (
+    SubchatAccountMismatch,
+    SubchatList,
+    SubchatSubmission,
+    SubchatWorkContext,
+)
 
 
 class Send(Contract):
@@ -301,6 +306,12 @@ def session(service: Subchats, *,
                                'with the same saved state and profile, then recover existing '
                                'operation IDs. Do not resend unconfirmed submissions.',
                          data={'error_code': 'browser_closed', 'automatic_retry': False})
+        except SubchatAccountMismatch:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='The current Chat account does not match the saved operation. '
+                               'Use a controller authenticated to the original account and '
+                               'recover the same operation ID. Do not resend or reassign it.',
+                         data={'error_code': 'account_mismatch', 'automatic_retry': False})
         except SubchatAccessError as error:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Check the dedicated Chat login and account access. Saved '

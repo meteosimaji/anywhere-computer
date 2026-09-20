@@ -13,6 +13,12 @@ from .models import Contract
 from .subchat_content import SubchatResources
 
 
+class SubchatAccountMismatch(ValueError):
+    """The observed account does not match a saved operation or active reader."""
+
+    code = 'account_mismatch'
+
+
 class SubchatInputReference(Contract):
     reference: str = Field(min_length=1, max_length=4096)
     sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
@@ -281,7 +287,7 @@ class SubchatSubmissions:
             target = self.get(old.after_operation_id, owner=owner)
             if (target.provider_account_id is not None
                     and target.provider_account_id != provider_account_id):
-                raise ValueError('Queued request belongs to a different Chat account')
+                raise SubchatAccountMismatch('Queued request belongs to a different Chat account')
         if provider_account_id is not None and (not provider_account_id.strip()
                 or len(provider_account_id) > 256):
             raise ValueError('Invalid provider account identity')

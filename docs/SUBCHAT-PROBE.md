@@ -1495,3 +1495,10 @@ was rejected before any additional request. No cookies were copied, messages
 generated, browser tabs opened, or real accounts switched. This confirms live
 matched recovery plus a local mismatch guard, not new-send binding or live
 multi-account acceptance.
+
+Account mismatches reaching the CLI or MCP recovery boundary are reported as
+`account_mismatch`, with automatic retry disabled. Recovery must use the original
+account and operation ID; it must not resend or reassign the operation. Provider
+error details and account identifiers are not included in this diagnostic. A send
+whose acceptance remains unknown still reports `submission_unconfirmed`; this
+recovery diagnostic does not establish that an uncertain send was rejected.

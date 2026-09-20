@@ -22,7 +22,12 @@ from .subchat import (
     Subchats,
 )
 from .subchat_content import SubchatResources
-from .subchat_state import SubchatList, SubchatSubmissions, SubchatWorkContext
+from .subchat_state import (
+    SubchatAccountMismatch,
+    SubchatList,
+    SubchatSubmissions,
+    SubchatWorkContext,
+)
 
 if TYPE_CHECKING:
     from playwright.async_api import APIRequestContext, BrowserContext, Playwright
@@ -89,7 +94,8 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         except Exception as error:
             # Do not print provider errors or invalid input: both can contain secrets.
             output = json.dumps({
-                'state': (error.code if isinstance(error, SubchatAccessError)
+                'state': (error.code
+                          if isinstance(error, SubchatAccessError | SubchatAccountMismatch)
                           else 'browser_closed' if isinstance(error, SubchatBrowserClosed)
                           else 'submission_unconfirmed'
                           if isinstance(error, SubchatOutcomeUnknown) else 'reply_interrupted'

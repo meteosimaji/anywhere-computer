@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from ..subchat import SubchatAccessError, SubchatAnswer, SubchatReceipt
-from ..subchat_state import SubchatSubmission
+from ..subchat_state import SubchatAccountMismatch, SubchatSubmission
 from .catalog import observe_http_catalog, project_http_catalog
 from .history import observe_history, project_history, project_receipt
 
@@ -104,7 +104,7 @@ class ChatHTTPReader:
     def _check_account(self, expected_account: str | None) -> None:
         if (expected_account is not None
                 and self._headers.get('chatgpt-account-id') != expected_account):
-            raise ValueError('Saved submission belongs to a different Chat account')
+            raise SubchatAccountMismatch('Saved submission belongs to a different Chat account')
 
     async def history(self, context: BrowserContext,
                       submission: SubchatSubmission) -> SubchatAnswer | None:
