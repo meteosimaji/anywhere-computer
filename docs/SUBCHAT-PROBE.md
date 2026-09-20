@@ -305,3 +305,26 @@ changed turn identities or a changed transcript. The live multiline message was
 recovered with the same user ID as the independent owning-app read. Local tests
 also cover timeout cleanup and identity changes during the copy action. This is
 still an experimental receipt path, not the completed production subchat lifecycle.
+
+## Durable lifecycle implementation boundary
+
+`subchat_state.py` stores intermediate records in the existing ledger database.
+It persists the send stage before invoking an adapter, binds records to the
+transport owner, retains selected model/effort and exact prompt, and refuses
+changed arguments or replacement answers. A restart does not reset a possibly
+sent record to prepared. These records contain conversation content in the same
+private state directory as operation results; they are not diagnostic history.
+
+`subchat.py` composes that storage with an adapter contract for send, submission
+lookup and answer reading. A duplicate request returns its saved stage without
+calling send. An uncertain send raises a dedicated outcome-unknown error;
+Thinking/missing answer observation leaves the submitted stage intact. Recovery
+checks prompt and conversation/message identity before committing an answer.
+There is no stop-generation operation and no automatic resend scheduler.
+
+Five focused tests use real SQLite close/reopen and a deterministic effectful
+backend to cover response loss, restart, repeated Thinking reads, completion,
+cancellation, ownership and mismatched answer identity. They do not establish
+browser compatibility or CoS worker connectivity. The lifecycle is not yet
+registered in Engine/MCP: an actual adapter and outcome-unknown mapping must be
+connected and accepted before advertising a callable production subchat tool.
