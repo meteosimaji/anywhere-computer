@@ -159,3 +159,59 @@ async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
             assert await catalog.picker_ready(page) is False
         finally:
             await browser.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('states, confirmed', [
+    (['normal', 'normal', 'minimized'], True),
+    (['normal'], False),
+])
+async def test_minimization_waits_for_observation(monkeypatch, states, confirmed):
+    pytest.importorskip('playwright.async_api')
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'scripts'))
+    import probe_subchat_catalog as catalog
+
+    class Session:
+        def __init__(self):
+            self.calls = []
+            self.reads = 0
+
+        async def send(self, method, parameters):
+            self.calls.append((method, parameters))
+            if method == 'Browser.getWindowBounds':
+                state = states[min(self.reads, len(states) - 1)]
+                self.reads += 1
+                return {'bounds': {'windowState': state}}
+            return {}
+
+    session = Session()
+    result = await catalog.minimize_window(session, 17, timeout=.05, interval=.001)
+    assert result is confirmed
+    assert session.reads >= (3 if confirmed else 1)
+    assert session.calls[0] == ('Browser.setWindowBounds', {
+        'windowId': 17, 'bounds': {'windowState': 'minimized'},
+    })
+    assert all(method == 'Browser.getWindowBounds' and args == {'windowId': 17}
+               for method, args in session.calls[1:])
+
+
+@pytest.mark.asyncio
+async def test_minimization_bounds_hanging_request_and_preserves_errors(monkeypatch):
+    import asyncio
+
+    pytest.importorskip('playwright.async_api')
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'scripts'))
+    import probe_subchat_catalog as catalog
+
+    class Session:
+        async def send(self, method, parameters):
+            await asyncio.Event().wait()
+
+    assert await catalog.minimize_window(Session(), 17, timeout=.01) is False
+
+    class BrokenSession:
+        async def send(self, method, parameters):
+            raise ConnectionError('closed')
+
+    with pytest.raises(ConnectionError):
+        await catalog.minimize_window(BrokenSession(), 17)

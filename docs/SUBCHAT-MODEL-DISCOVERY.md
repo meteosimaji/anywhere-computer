@@ -196,3 +196,30 @@ its window minimized. It verifies the window state before navigating to ChatGPT;
 if not confirmed it returns `minimization_unconfirmed`. The OS may briefly display
 its startup window. It never attaches to the user's ordinary Chrome profile.
 This acceptance covers catalog inspection only, not subchat submission/recovery.
+
+## Ordinary Chat submission and recovery, 2026-09-20 JST
+
+A separate, explicitly authorized live acceptance used the dedicated minimized
+Chrome profile. The test selected the observed GPT-5.6 Sol row and the observed
+medium effort description; these are test preferences, not product defaults.
+It sent one prompt into a new ordinary Chat, observed the exact requested answer,
+waited for the Stop control to disappear and for the temporary `local-chatgpt:`
+route to change to a persisted conversation route, then reloaded and recovered
+the same answer without another submission. A subsequent separate browser process
+opened that persisted route and recovered the answer again. Work was not created.
+The user's ordinary Chrome profile was not attached to or changed.
+
+An earlier trial closed its browser while the Stop control and temporary route
+were still present. Its visible answer did not establish durable recovery and is
+not counted as a completed acceptance. The later success does not establish
+recovery during OS sleep/reboot, an interrupted send, or long-running Thinking.
+The live page returned no `data-message-id` elements; a general API must not
+substitute text equality for unambiguous submission identity. These live trials
+are experimental evidence, not a published subchat creation/recovery API.
+
+The OS can report a normal window immediately after acknowledging the minimize
+request. The catalog probe now requests minimization once and observes the same
+window for up to two seconds. It never navigates when confirmation is absent.
+Tests cover delayed confirmation, no confirmation, an unresponsive transport,
+and a connection error. The delayed-state test fails with the original single
+read and passes with the bounded observation loop.
