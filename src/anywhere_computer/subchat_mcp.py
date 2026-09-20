@@ -13,6 +13,7 @@ from .subchat import (
     SubchatAccessError,
     SubchatBrowserClosed,
     SubchatInterrupted,
+    SubchatObservedSubmission,
     SubchatOutcomeUnknown,
     SubchatPreparationFailed,
     Subchats,
@@ -56,6 +57,10 @@ class Wait(OperationId):
 
 INSTRUCTIONS = (
     'Ordinary Chat subchats. Use an observed model and effort; never silently substitute. '
+    'Recovery may include a call-scoped observation with its operation_id, source, reason '
+    'and timestamp; a queued child may report its predecessor observation. It is not saved '
+    'generation state. Missing final output does not prove Thinking, failure or permission '
+    'to resend. Status reads only the durable record. '
     'HTTP-read sends require http_selection copied exactly from an available choice in '
     'subchat_catalog source=http with http_selection_send_supported=true. A false flag '
     'allows catalog inspection only; restart with --http-read before constrained sends. '
@@ -270,7 +275,12 @@ def session(service: Subchats, *,
                 except TimeoutError:
                     if not deadline.expired():
                         raise
-                    result = service.store.get(wait.operation_id, owner=None)
+                    current = service.store.get(wait.operation_id, owner=None)
+                    if (current.state != result.state
+                            or isinstance(result, SubchatObservedSubmission)
+                            and service.store.get(result.observation.operation_id,
+                                owner=None).state != 'submitted'):
+                        result = current
                 return Reply(operation_id=request.operation_id, state='completed',
                              data=result.model_dump(mode='json'))
             if request.tool == 'subchat_catalog' and observe_catalog is not None:

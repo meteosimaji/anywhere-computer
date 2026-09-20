@@ -9,6 +9,10 @@ reproducible defect in either project's current release. Closed reports can stil
 identify a useful regression case. No CoS application or its private accounts
 were exercised in this review. No upstream source was copied or redistributed.
 
+Dated sections below record decisions at each inspected revision; they are not
+a current feature inventory. The current subchat contract and evidence are in
+[Subchat probe](SUBCHAT-PROBE.md).
+
 ## Product boundary
 
 CoS combines an Electron desktop client, browser companion, conversation/worker
@@ -454,3 +458,23 @@ This was source review, not execution of its UI or upstream acceptance suite.
   imported. The PR explicitly excludes its separate internal Chromium host;
   it does not demonstrate browser-independent ordinary Chat authentication or
   generation.
+
+
+## Pending recovery diagnostics, 2026-09-21
+
+Upstream main was rechecked at `7777e517603289696bb5febddb9bbf51cdde9aea`.
+[Issue #336](https://github.com/totec448-spec/chat-on-steroids/issues/336) reports
+hours of recovery reloads without task progress. This is the reporter's account,
+not a reproduced CoS failure or evidence of its root cause.
+
+Anywhere does not copy that reload loop. Its adjacent reproducible issue was
+that an HTTP 200 history response without the target input returned the same
+undifferentiated pending result as other unconfirmed answers. CLI and MCP tests,
+including queued-parent recovery, failed before adding call-scoped observations.
+The existing recovery response now explains missing input/correlation, ambiguous
+finals, incomplete final markers or unavailable final text. An operation identity
+and observation timestamp prevent a parent's observation being presented as its
+child's current generation state. No new ledger table, scheduler, raw reasoning
+capture or timeout-based terminal state is added. A normal Chat independently
+reviewed the design and recommended the same nonpersistent, per-call boundary;
+its review was source analysis, not execution evidence.

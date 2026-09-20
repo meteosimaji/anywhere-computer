@@ -304,3 +304,45 @@ async def test_preparation_failure_is_unsent_and_same_request_can_retry(tmp_path
     finally:
         await server.close()
         ledger.close()
+
+
+async def test_wait_drops_parent_observation_after_parent_completes(tmp_path):
+    import asyncio
+
+    from anywhere_computer.models import Request
+    from anywhere_computer.subchat import SubchatPendingObservation
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    parent, child = 'a' * 32, 'b' * 32
+    store.prepare(parent, 'input', 'model', 'effort', owner=None)
+    store.begin_send(parent, owner=None)
+    store.submitted(parent, 'chat', 'input', owner=None)
+    observed = asyncio.Event()
+
+    class Backend(BrowserFixture):
+        async def read_answer(self, submission):
+            observed.set()
+            return SubchatPendingObservation(operation_id=parent, reason='final_not_observed')
+
+    service = Subchats(store, Backend())
+    service.queue(child, parent, 'follow-up', owner=None)
+    server = session(service)
+
+    async def finish_parent():
+        await observed.wait()
+        store.complete(parent, 'answer', 'done', owner=None)
+
+    finishing = asyncio.create_task(finish_parent())
+    try:
+        reply = await server.execute(Request(operation_id='c' * 32, tool='subchat_wait',
+            arguments={'operation_id': child, 'wait_ms': 100}))
+        await finishing
+        assert store.get(parent, owner=None).state == 'completed'
+        assert reply.data['state'] == 'queued'
+        assert 'observation' not in reply.data
+    finally:
+        finishing.cancel()
+        await asyncio.gather(finishing, return_exceptions=True)
+        await server.close()
+        ledger.close()

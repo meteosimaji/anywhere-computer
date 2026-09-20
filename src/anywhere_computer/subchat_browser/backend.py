@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from anywhere_computer.subchat import (
     SubchatAnswer,
     SubchatBrowserClosed,
+    SubchatPendingObservation,
     SubchatPreparationFailed,
     SubchatReceipt,
     SubchatStaleTarget,
@@ -352,7 +353,8 @@ class BrowserSubchatBackend:
         return SubchatReceipt(conversation_id=match[1],
                               user_message_id=observed['user_message_id'], prompt=submission.prompt)
 
-    async def read_answer(self, submission: SubchatSubmission) -> SubchatAnswer | None:
+    async def read_answer(self, submission: SubchatSubmission
+                          ) -> SubchatAnswer | SubchatPendingObservation | None:
         if self.http_read:
             if (submission.conversation_id is None or submission.user_message_id is None
                     or CHAT.fullmatch(
