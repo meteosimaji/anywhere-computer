@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt, SubchatStaleTarget
 from anywhere_computer.subchat_state import SubchatSubmission
 
-from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_page, picker_ready
+from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_http_page, collect_page, picker_ready
 from .efforts import move_effort, snapshot
 
 if TYPE_CHECKING:
@@ -50,6 +50,14 @@ class BrowserSubchatBackend:
             return await collect_page(page, model)
         finally:
             # This is a separate observation tab, never a submission or user draft.
+            await page.close()
+
+    async def http_catalog(self) -> dict[str, object]:
+        page = await (await self._browser()).new_page()
+        try:
+            async with asyncio.timeout(20):
+                return await collect_http_page(page)
+        finally:
             await page.close()
 
     async def _page(self, submission: SubchatSubmission) -> Page | None:
