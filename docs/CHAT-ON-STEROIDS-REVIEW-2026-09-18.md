@@ -427,3 +427,30 @@ Local verification: `tests/test_common_skills.py` and
 escaping links, resource replacement, uncertain-send persistence, restart,
 Thinking, wrong answer identity and pre-dispatch error handling. They do not
 prove live CoS pairing, native steer or browser-independent Chat generation.
+
+## Proposed frontend/Skills feature pack review, 2026-09-21
+
+Upstream main remained `7777e517603289696bb5febddb9bbf51cdde9aea`.
+The unmerged [PR #345](https://github.com/totec448-spec/chat-on-steroids/pull/345)
+was inspected at `3b26fc112d52b349c8ef0f9b737603849deabdc5`, specifically
+`src/renderer/chat.ts`, `src/main/skills.ts` and `src/main/skill-github.ts`.
+This was source review, not execution of its UI or upstream acceptance suite.
+
+- `finishAssistantPresentation` only completes local text reveal after the
+  controlled backend turn is absent; it does not request provider Stop. Adopt
+  the same separation of presentation and execution evidence. Anywhere's HTTP
+  history projection already uses correlated provider completion/interruption
+  metadata, not visible text animation. No presentation timer or automatic Stop
+  is added to recovery.
+- `updateSkillPackage` checks GitHub origin/revision, the installed SKILL.md
+  digest and directory identity before staging and swapping a package. Useful
+  for a future managed importer, but Anywhere currently reads explicitly chosen
+  local collections and does not own their remote update lifecycle. Do not add
+  an installer or overwrite user Skills as an incidental subchat change. The
+  inspected SKILL.md digest check alone is not evidence that every attached
+  resource's local edits are protected.
+- Desktop pets, composer animation, sidebar geometry and renderer terminal-fit
+  coalescing do not apply to the quiet HTTP execution client. These are not
+  imported. The PR explicitly excludes its separate internal Chromium host;
+  it does not demonstrate browser-independent ordinary Chat authentication or
+  generation.
