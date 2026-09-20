@@ -312,6 +312,14 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                             else await backend.read_answer(submission))
 
                 first = await read()
+                legacy_submission = submission
+                if resource == 'history':
+                    submission = submission.model_copy(update={
+                        'provider_account_id': 'fixture-account'})
+                    mismatch = submission.model_copy(update={'provider_account_id': 'other'})
+                    with pytest.raises(ValueError, match='different Chat account'):
+                        await backend.read_answer(mismatch)
+                    assert calls == []  # Reject before any conversation HTTP request.
                 for _ in range(2):
                     assert await read() == first
                 assert tab_gets == ['GET', 'GET']  # Only the initial bootstrap navigated.
@@ -358,6 +366,7 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                     assert len(calls) == before  # Authentication rejection is global.
                 before = len(calls)
                 # An explicitly restarted adapter can observe the repaired login.
+                submission = legacy_submission
                 backend = BrowserSubchatBackend(context, http_read=True,
                     http_request_factory=request_factory if independent else None)
                 assert await read() == first
@@ -628,3 +637,72 @@ def test_history_url_decoration_preserves_prompt_identity(saved, accepted):
         for project in (project_receipt, project_history):
             with pytest.raises(ValueError, match='Saved prompt does not match'):
                 project(encoded, submission)
+
+
+def test_request_account_binding_is_atomic_immutable_and_survives_restart(tmp_path):
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    op = 'd' * 32
+    store.prepare(op, 'bound input', 'model', 'effort', owner='owner')
+    store.begin_send(op, owner='owner')
+    ledger.connection.execute(
+        "CREATE TRIGGER refuse_binding BEFORE INSERT ON subchat_account_bindings "
+        "BEGIN SELECT RAISE(ABORT, 'fixture binding failure'); END")
+    import sqlite3
+
+    with pytest.raises(sqlite3.IntegrityError, match='fixture binding failure'):
+        store.observe_request(op, 'input', owner='owner', provider_account_id='account-a')
+    assert store.get(op, owner='owner').user_message_id is None
+    ledger.connection.execute('DROP TRIGGER refuse_binding')
+    bound = store.observe_request(op, 'input', owner='owner', provider_account_id='account-a')
+    assert bound.provider_account_id == 'account-a'
+    for account in ('account-b', None):
+        with pytest.raises(ValueError, match='identity changed'):
+            store.observe_request(op, 'input', owner='owner', provider_account_id=account)
+    with pytest.raises(ValueError, match='Unknown'):
+        store.observe_request(op, 'input', owner='other', provider_account_id='account-a')
+    body = ledger.connection.execute(
+        'SELECT body FROM subchat_submissions WHERE operation_id=?', (op,)).fetchone()[0]
+    assert 'provider_account_id' not in body  # Legacy JSON shape remains readable.
+    ledger.close()
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        assert store.get(op, owner='owner') == bound
+        assert store.observe_request(op, 'input', owner='owner',
+                                     provider_account_id='account-a') == bound
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('bootstrap', [False, True])
+async def test_bound_account_mismatch_does_not_request_conversation(monkeypatch, bootstrap):
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+
+    saved, _ = sample()
+    saved = saved.model_copy(update={'provider_account_id': 'account-a'})
+    context = object()
+
+    async def forbidden_client():
+        raise AssertionError('Mismatched account reached HTTP transport')
+
+    reader = ChatHTTPReader(forbidden_client)
+    observations = []
+
+    async def catalog(selected_context):
+        assert selected_context is context
+        observations.append('catalog')
+        reader._context = context
+        reader._headers = {'authorization': 'fixture', 'chatgpt-account-id': 'account-b'}
+        return {}
+
+    monkeypatch.setattr(reader, 'catalog', catalog)
+    if not bootstrap:
+        await catalog(context)
+        observations.clear()
+    with pytest.raises(ValueError, match='different Chat account'):
+        await reader.history(context, saved)
+    assert observations == (['catalog'] if bootstrap else [])

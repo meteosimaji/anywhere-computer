@@ -37,7 +37,7 @@ class BrowserSubchatBackend:
     def __init__(self, context: BrowserContext | Callable[[], Awaitable[BrowserContext]],
                  *, http_read: bool = False,
                  http_request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None,
-                 record_request: Callable[[str, str], None] | None = None) -> None:
+                 record_request: Callable[[str, str, str], None] | None = None) -> None:
         self.http_read = http_read
         self._record_request = record_request
         self._http_reader = ChatHTTPReader(http_request_factory)
@@ -227,7 +227,10 @@ class BrowserSubchatBackend:
                 outgoing = (add_resources(payload, submission)
                             if submission.resources is not None else payload)
                 if self._record_request is not None:
-                    self._record_request(submission.operation_id, identity)
+                    account = await route.request.header_value('chatgpt-account-id')
+                    if account is None or not account.strip() or len(account) > 256:
+                        raise ValueError('Generation account identity is unavailable')
+                    self._record_request(submission.operation_id, identity, account)
                 await route.continue_(post_data=outgoing)
                 accepted = True
             except Exception:

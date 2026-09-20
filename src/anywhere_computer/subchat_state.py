@@ -52,6 +52,7 @@ class SubchatSubmission(Contract):
     answer_message_id: str | None = None
     answer: str | None = None
     reported_settings: SubchatReportedSettings | None = None
+    provider_account_id: str | None = Field(default=None, min_length=1, max_length=256)
     work_context: SubchatWorkContext | None = None
     resources: SubchatResources | None = None
 
@@ -84,6 +85,9 @@ class SubchatSubmissions:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
         with connection:
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_account_bindings ('
+                               'operation_id TEXT PRIMARY KEY, owner TEXT, '
+                               'user_message_id TEXT NOT NULL, account_id TEXT NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_submissions ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, body TEXT NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_answer_settings ('
@@ -98,6 +102,13 @@ class SubchatSubmissions:
         if row is None or row[0] != owner:
             raise ValueError('Unknown subchat submission')
         saved = SubchatSubmission.model_validate_json(row[1])
+        binding = self.connection.execute(
+            'SELECT account_id FROM subchat_account_bindings WHERE operation_id=? '
+            'AND owner IS ? AND user_message_id=?',
+            (operation_id, owner, saved.user_message_id),
+        ).fetchone()
+        if binding is not None:
+            saved = saved.model_copy(update={'provider_account_id': binding[0]})
         if saved.state == 'completed':
             evidence = self.connection.execute(
                 'SELECT body FROM subchat_answer_settings WHERE operation_id=? '
@@ -156,7 +167,8 @@ class SubchatSubmissions:
         with self.connection:
             self.connection.execute(
                 'INSERT OR IGNORE INTO subchat_submissions VALUES (?,?,?)',
-                (operation_id, owner, proposed.model_dump_json(exclude={'reported_settings'})),
+                (operation_id, owner, proposed.model_dump_json(
+                    exclude={'reported_settings', 'provider_account_id'})),
             )
         existing = self.get(operation_id, owner=owner)
         if (existing.prompt, existing.model, existing.effort,
@@ -194,11 +206,18 @@ class SubchatSubmissions:
             cursor = self.connection.execute(
                 'UPDATE subchat_submissions SET body=? '
                 'WHERE operation_id=? AND owner IS ? AND body=?',
-                (new.model_dump_json(exclude={'reported_settings'}),
+                (new.model_dump_json(exclude={'reported_settings', 'provider_account_id'}),
                  old.operation_id, owner, row[0]),
             )
             if cursor.rowcount != 1:
                 raise ValueError('Subchat submission changed; inspect it before continuing')
+            if new.provider_account_id != old.provider_account_id:
+                if old.provider_account_id is not None or new.user_message_id is None:
+                    raise ValueError('Provider account binding cannot be replaced')
+                self.connection.execute(
+                    'INSERT INTO subchat_account_bindings VALUES (?,?,?,?)',
+                    (new.operation_id, owner, new.user_message_id, new.provider_account_id),
+                )
             if new.reported_settings is not None:
                 # Keep the legacy submission JSON readable by older runtimes.
                 # Evidence commits atomically with its bound completed answer.
@@ -250,19 +269,25 @@ class SubchatSubmissions:
             'baseline_message_ids': baseline_message_ids}), owner)
 
     def observe_request(self, operation_id: str, user_message_id: str,
-                        *, owner: str | None) -> SubchatSubmission:
+                        *, owner: str | None, provider_account_id: str | None = None
+                        ) -> SubchatSubmission:
         """Checkpoint outgoing identity before transport; not server acceptance."""
         old = self.get(operation_id, owner=owner)
         if (old.state != 'sending' or not user_message_id.strip()
                 or len(user_message_id) > 256
                 or user_message_id in old.baseline_message_ids):
             raise ValueError('Invalid outgoing submission identity')
+        if provider_account_id is not None and (not provider_account_id.strip()
+                or len(provider_account_id) > 256):
+            raise ValueError('Invalid provider account identity')
         if old.user_message_id is not None:
-            if old.user_message_id != user_message_id:
+            if (old.user_message_id != user_message_id
+                    or old.provider_account_id != provider_account_id):
                 raise ValueError('Outgoing submission identity changed')
             return old
         return self._replace(
-            old, old.model_copy(update={'user_message_id': user_message_id}), owner)
+            old, old.model_copy(update={'user_message_id': user_message_id,
+                                        'provider_account_id': provider_account_id}), owner)
 
     def submitted(self, operation_id: str, conversation_id: str, user_message_id: str,
                   *, owner: str | None) -> SubchatSubmission:

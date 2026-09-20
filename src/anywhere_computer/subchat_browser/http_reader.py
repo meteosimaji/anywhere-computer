@@ -39,7 +39,8 @@ class ChatHTTPReader:
                      or bool(self._headers) and (not catalog or self._catalog_url is not None)))
 
     async def _read(self, context: BrowserContext, url: str | None,
-                    observe: Callable[[Page], Awaitable[Response]]) -> bytes:
+                    observe: Callable[[Page], Awaitable[Response]],
+                    expected_account: str | None = None) -> bytes:
         if self._context is not context:
             self._context = context
             self._headers = {}
@@ -61,6 +62,7 @@ class ChatHTTPReader:
                         headers[name] = value
                 # Both observers require an authenticated exact-origin GET.
                 self._headers = headers
+                self._check_account(expected_account)
                 return await response.body()
             except SubchatAccessError as error:
                 self._headers = {}
@@ -68,6 +70,7 @@ class ChatHTTPReader:
                 raise
             finally:
                 await asyncio.wait_for(page.close(), timeout=5)
+        self._check_account(expected_account)
         request = (await self._request_factory() if self._request_factory is not None
                    else context.request)
         response_http = await request.get(
@@ -91,6 +94,11 @@ class ChatHTTPReader:
         finally:
             await response_http.dispose()
 
+    def _check_account(self, expected_account: str | None) -> None:
+        if (expected_account is not None
+                and self._headers.get('chatgpt-account-id') != expected_account):
+            raise ValueError('Saved submission belongs to a different Chat account')
+
     async def history(self, context: BrowserContext,
                       submission: SubchatSubmission) -> SubchatAnswer | None:
         return project_history(await self._history_payload(context, submission), submission)
@@ -101,12 +109,19 @@ class ChatHTTPReader:
 
     async def _history_payload(self, context: BrowserContext,
                                submission: SubchatSubmission) -> bytes:
+        # Establish the account on a non-conversation read before requesting a
+        # bound operation's history. Never probe another account's conversation.
+        if (submission.provider_account_id is not None
+                and (self._context is not context or not self._headers)):
+            await self.catalog(context)
+        self._check_account(submission.provider_account_id)
+
         async def observe(page: Page) -> Response:
             return await observe_history(page, submission)
 
         return await self._read(context,
             'https://chatgpt.com/backend-api/conversations/' + str(submission.conversation_id),
-            observe)
+            observe, expected_account=submission.provider_account_id)
 
     async def catalog(self, context: BrowserContext) -> dict[str, object]:
         async def observe(page: Page) -> Response:

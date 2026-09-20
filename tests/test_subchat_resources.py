@@ -136,6 +136,7 @@ async def test_resources_reach_persisted_submission_through_public_entry(entry, 
 
 @pytest.mark.parametrize(('checkpoint', 'with_resources'), [
     ('none', True), ('saved', True), ('failed', True), ('saved', False), ('failed', False),
+    ('missing_account', False),
 ])
 async def test_browser_dispatches_resources_without_enter_or_clipboard(
         tmp_path, monkeypatch, checkpoint, with_resources):
@@ -150,11 +151,14 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
         content:{content_type:'text',parts:[document.querySelector('[role=textbox]').innerText]},
         metadata:{}}]};
       const post=()=>fetch('/backend-api/f/conversation',
-        {method:'POST',body:JSON.stringify(body)});
+        {method:'POST',headers:{'chatgpt-account-id':'fixture-account'},
+         body:JSON.stringify(body)});
       const response=await Promise.any([post(),post()]);
       window.wire=await response.json();
     };
     </script>'''
+    if checkpoint == 'missing_account':
+        script = script.replace("'chatgpt-account-id':'fixture-account'", "'unrelated':'fixture'")
     async with async_playwright() as driver:
         browser = await driver.chromium.launch(channel='chrome', headless=True)
         ledger = Ledger(tmp_path)
@@ -167,6 +171,7 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
                 # draft/Send behavior. Live service acceptance is separate.
                 if checkpoint == 'saved':
                     assert store.get('b' * 32, owner=None).user_message_id == 'user'
+                    assert store.get('b' * 32, owner=None).provider_account_id == 'fixture-account'
                 bodies.append(json.loads(post_data))
                 await route.fulfill(content_type='application/json', body=post_data)
 
@@ -181,15 +186,16 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
             await context.route('https://chatgpt.com/**', fixture)
             store = SubchatSubmissions(ledger.connection)
 
-            def record(operation_id, message_id):
+            def record(operation_id, message_id, account_id):
                 if checkpoint == 'failed':
                     raise OSError('fixture storage unavailable')
-                store.observe_request(operation_id, message_id, owner=None)
+                store.observe_request(operation_id, message_id, owner=None,
+                                      provider_account_id=account_id)
 
             backend = BrowserSubchatBackend(context, http_read=True,
                 record_request=record if checkpoint != 'none' else None)
             service = Subchats(store, backend)
-            if checkpoint == 'failed':
+            if checkpoint in ('failed', 'missing_account'):
                 from anywhere_computer.subchat import SubchatOutcomeUnknown
 
                 with pytest.raises(SubchatOutcomeUnknown):
