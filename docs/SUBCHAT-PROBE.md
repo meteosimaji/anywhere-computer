@@ -570,3 +570,22 @@ and aria-hidden ancestors; attempting to click it timed out. Catalog collection
 now re-observes the list before deciding whether a view switch is necessary.
 The regression covers remembered model-list view with an inert toggle. An
 unobserved effort control is not evidence that the model lacks effort support.
+
+### Bounded answer waiting
+
+The local MCP adapter adds `subchat_wait(operation_id, wait_ms=10000)`, bounded
+at 60 seconds. It returns a completed tool response containing the saved
+submission state; `submitted`/`sending` still mean no final answer was confirmed.
+Call again with the same submission ID when more waiting is useful. It does not
+stop generation, select another model, or resend. The browser lock covers only
+individual observations, not the intervals while a model is Thinking, so other
+subchat requests can progress. Provider errors remain failures and are not
+silently converted to normal timeout/pending results.
+
+Deterministic lifecycle/MCP tests verify pending timeout, another catalog call
+while waiting, later answer recovery, and one send only. These tests use a
+controlled provider and real SQLite; they do not establish live Chat scheduling
+or immediate steering of another active Codex turn. The existing Codex app
+message tool does not expose a queue/steer switch. A future delivery-mode feature
+must verify the owning runtime and accepted turn ID before claiming immediate
+delivery; it must not emulate steering by interrupting or resending.

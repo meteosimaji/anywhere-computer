@@ -26,7 +26,7 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
         await server.handle({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         catalog = await call('tools/list', {})
         names = {tool['name'] for tool in catalog['result']['tools']}
-        assert names == {'subchat_send', 'subchat_recover', 'subchat_status'}
+        assert names == {'subchat_send', 'subchat_recover', 'subchat_status', 'subchat_wait'}
         op = '1' * 32
         arguments = {'request_id': op, 'prompt': '日本語\nprint(42)',
                      'model': 'observed model', 'effort': 'observed effort'}
@@ -97,7 +97,7 @@ asyncio.run(main())
                     await client.initialize()
                     tools = await client.list_tools()
                     assert {tool.name for tool in tools.tools} == {
-                        'subchat_send', 'subchat_recover', 'subchat_status'}
+                        'subchat_send', 'subchat_recover', 'subchat_status', 'subchat_wait'}
                     sent = await client.call_tool('subchat_send', arguments)
                     assert not sent.isError
                     answer = await client.call_tool('subchat_recover',
@@ -134,5 +134,80 @@ async def test_catalog_preserves_partial_observation_and_cannot_send(tmp_path):
                                                 arguments={'prompt': 'do not send'}))
         assert invalid.state == 'failed'
         assert backend.sends == 0
+    finally:
+        ledger.close()
+
+
+async def test_wait_preserves_thinking_and_releases_browser_between_observations(tmp_path):
+    import asyncio
+
+    from anywhere_computer.models import Request
+
+    observed = asyncio.Event()
+
+    class ThinkingBrowser(BrowserFixture):
+        async def read_answer(self, submission):
+            observed.set()
+            return await super().read_answer(submission)
+
+    ledger = Ledger(tmp_path)
+    backend = ThinkingBrowser()
+
+    async def catalog(model):
+        return {'state': 'catalog_partial', 'submitted': False}
+
+    server = session(Subchats(SubchatSubmissions(ledger.connection), backend),
+                     observe_catalog=catalog)
+    pending = None
+    try:
+        sent = await server.execute(Request(operation_id='a' * 32, tool='subchat_send',
+            arguments={'prompt': 'work', 'model': 'model', 'effort': 'effort'}))
+        assert sent.state == 'unknown'
+        pending = asyncio.create_task(server.execute(Request(
+            operation_id='b' * 32, tool='subchat_wait',
+            arguments={'operation_id': 'a' * 32, 'wait_ms': 1000})))
+        await asyncio.wait_for(observed.wait(), 2)
+        other = await asyncio.wait_for(server.execute(Request(
+            operation_id='c' * 32, tool='subchat_catalog')), .3)
+        assert other.state == 'completed'
+        assert not pending.done()
+        timed_out = await pending
+        assert timed_out.state == 'completed'
+        assert timed_out.data['state'] == 'submitted'
+        assert backend.thinking
+        assert backend.sends == 1
+        backend.thinking = False
+        recovered = await server.execute(Request(operation_id='d' * 32, tool='subchat_wait',
+            arguments={'operation_id': 'a' * 32, 'wait_ms': 1000}))
+        assert recovered.data['answer'] == '42'
+        assert backend.sends == 1
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        ledger.close()
+
+
+async def test_wait_does_not_disguise_provider_timeout_as_normal_thinking(tmp_path):
+    from anywhere_computer.models import Request
+
+    class BrokenBrowser(BrowserFixture):
+        async def read_answer(self, submission):
+            raise TimeoutError('private provider details')
+
+    ledger = Ledger(tmp_path)
+    backend = BrokenBrowser()
+    service = Subchats(SubchatSubmissions(ledger.connection), backend)
+    server = session(service)
+    try:
+        await server.execute(Request(operation_id='a' * 32, tool='subchat_send',
+            arguments={'prompt': 'work', 'model': 'model', 'effort': 'effort'}))
+        failed = await server.execute(Request(operation_id='b' * 32, tool='subchat_wait',
+            arguments={'operation_id': 'a' * 32, 'wait_ms': 1000}))
+        assert failed.state == 'failed'
+        assert failed.data['error_type'] == 'TimeoutError'
+        assert 'private provider details' not in failed.model_dump_json()
+        assert service.store.get('a' * 32, owner=None).state == 'submitted'
+        assert backend.sends == 1
     finally:
         ledger.close()
