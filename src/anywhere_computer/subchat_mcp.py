@@ -67,7 +67,7 @@ class SubchatSession(MCPSession):
                  tasks: dict[str, asyncio.Task[SubchatSubmission]]) -> None:
         self.recoveries = tasks
         self.closed = False
-        self.calls: set[asyncio.Task[Reply]] = set()
+        self.calls: dict[asyncio.Task[Reply], Request] = {}
 
         async def managed(request: Request) -> Reply:
             if self.closed:
@@ -77,11 +77,11 @@ class SubchatSession(MCPSession):
                 return await execute(request)
 
             task = asyncio.create_task(call())
-            self.calls.add(task)
+            self.calls[task] = request
             try:
                 return await task
             finally:
-                self.calls.discard(task)
+                self.calls.pop(task, None)
 
         super().__init__(catalog, managed, instructions=INSTRUCTIONS)
 
@@ -128,7 +128,13 @@ def session(service: Subchats, *,
             task.add_done_callback(completed)
         if task is not None:
             # An observation timeout must not cancel preparation or release its input lock.
-            return await asyncio.shield(task)
+            try:
+                return await asyncio.shield(task)
+            except asyncio.CancelledError:
+                current = service.store.get(operation_id, owner=None)
+                if not server.closed and task.cancelled() and current.state == 'cancelled':
+                    return current
+                raise
         async with browser_lock:
             return await service.recover(operation_id, owner=None)
 
@@ -164,6 +170,16 @@ def session(service: Subchats, *,
             if request.tool == 'subchat_cancel':
                 target = OperationId.model_validate(request.arguments)
                 result = service.store.cancel(target.operation_id, owner=None)
+                pending: list[asyncio.Task[Reply] | asyncio.Task[SubchatSubmission]] = [
+                    task for task, call in server.calls.items()
+                           if call.tool == 'subchat_send'
+                           and call.operation_id == target.operation_id]
+                recovery = recoveries.get(target.operation_id)
+                if recovery is not None:
+                    pending.append(recovery)
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data=result.model_dump(mode='json'))
             if request.tool == 'subchat_message':
@@ -218,6 +234,13 @@ def session(service: Subchats, *,
                 raise ValueError('Unknown subchat tool')
             return Reply(operation_id=request.operation_id, state='completed',
                          data=result.model_dump(mode='json'))
+        except asyncio.CancelledError:
+            if request.tool == 'subchat_send' and not server.closed:
+                current = service.store.get(request.operation_id, owner=None)
+                if current.state == 'cancelled':
+                    return Reply(operation_id=request.operation_id, state='completed',
+                                 data=current.model_dump(mode='json'))
+            raise
         except SubchatStaleTarget:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Queue target is stale; inspect the conversation before continuing.',

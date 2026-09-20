@@ -108,3 +108,16 @@ Automatic recovery is not accepted yet: the review prompt was visibly saved with
 in the UI while adapter recovery still returned `submitted`. No resends, forced
 completion records, or relaxed text comparisons were used. These are live defects
 or unresolved observations, not evidence that two-tab result recovery passed.
+
+A later read of the known ideas conversation URL recovered the exact user text
+and completed answer through the production adapter, without resending. The
+saved operation became `completed`. This establishes recovery after reopening
+that conversation, not the cause of the original tab's stale observation.
+
+The review's queued-cancel finding was also independently reproduced: local
+preparation survived successful cancellation and retained the browser lock.
+Cancellation now joins the matching local preparation, including direct sends,
+only after the store accepts cancellation. It never cancels already-dispatched
+generation. Waiting observers receive the saved cancelled state. All 83 subchat
+tests and full source mypy passed; the review's ordinary read-timeout cancellation
+claim is not treated as a defect without evidence of harmful effects.
