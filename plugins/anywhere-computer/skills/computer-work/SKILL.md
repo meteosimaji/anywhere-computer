@@ -7,6 +7,12 @@ Check computer_status before acting. Use the reported capabilities and explicit
 absolute paths. Read before editing an existing file, then supply its SHA-256;
 if a conflict occurs, read again and reassess the intended edit.
 
+For a recoverable operation, generate a fresh request_id with a UUID generator
+(Python uuid.uuid4().hex): exactly 32 lowercase hexadecimal characters, no hyphens.
+Do not hand-count an invented ID or reuse an example. Save the ID before dispatch;
+reuse it only for the identical call. An operations_get lookup is a separate call
+with its own fresh request_id and the original ID in operation_id.
+
 Typed Peekaboo GUI operations require an explicitly selected direct MCP session and
 an exact target window. Discover window IDs using that provider's window tool with
 action=list and app; never invent them. Call gui_observe with app and window_id,
@@ -140,6 +146,15 @@ cursors. A client disconnect does not stop a process. Use terminal_stop only whe
 stopping that work is intended. On an uncertain response, keep the operation ID
 and query operations_get before considering another mutation. Never interpret a
 missing response as proof that a write did not happen.
+
+The outer completed state means the tool call completed, not that a started command
+has exited. For a one-shot command, use terminal_start and read terminal_output
+until data.state is exited, retaining output cursors and checking exit_code and
+output_eof. In a persistent shell, those fields describe the shell, not each command.
+terminal_input wait_reason=timeout means its observation deadline expired; it does
+not prove command failure or permit resending input. For commands within a shell,
+use an explicit completion marker containing that command's captured exit status,
+or inspect the intended postcondition. New output alone is not completion evidence.
 
 The local connector and authorized alpha9 HTTP gateway provide devices_list,
 devices_tools and devices_call. Check the current catalog, then list registered
