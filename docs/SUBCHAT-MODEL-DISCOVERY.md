@@ -178,3 +178,21 @@ observation classification at the CLI boundary. It now returns
 Unknown peer text is not returned. Regression tests failed before the change and
 pass afterwards. This improves diagnosis; it does not establish a repaired live
 picker or production subchat support.
+
+## Minimized authenticated acceptance
+
+After explicit user authorization to use a separate minimized window, the
+headed Chrome process in the dedicated profile returned HTTP 200. The collector
+observed three model labels and five effort positions for the selected model,
+restored its original position and description, verified unchanged model rows,
+and closed the picker without submitting a message. The actual CLI repeated this
+success, including a final run with window-state verification. These are account-
+specific observations, not hard-coded defaults. The earlier headed failure's
+cause remains unproven; these successes do not establish that a rendering race
+has been fixed or that headless navigation is supported.
+
+Use `--minimized` instead of `--headed` to request a headed dedicated process with
+its window minimized. It verifies the window state before navigating to ChatGPT;
+if not confirmed it returns `minimization_unconfirmed`. The OS may briefly display
+its startup window. It never attaches to the user's ordinary Chrome profile.
+This acceptance covers catalog inspection only, not subchat submission/recovery.
