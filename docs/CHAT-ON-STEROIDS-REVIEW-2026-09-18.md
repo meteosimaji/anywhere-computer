@@ -339,3 +339,24 @@ Controlled regression cases for both statuses fail against the old reader
 (three observations for three polls) and pass with one observation after the fix.
 This is not a reproduction or resolution of CoS #339, nor browser-independent
 login. The lifecycle contract is documented in [Subchat probe](SUBCHAT-PROBE.md).
+
+## September 21 proposed credential and hydration fixes
+
+[PR #340](https://github.com/totec448-spec/chat-on-steroids/pull/340) was read at
+`37c5f41b9ac742f4303df3c8e867f559cd08daec`, still unmerged against upstream
+`04c6a298078817cf25c197f2b8bb639f8239243c`. This is proposed upstream behavior;
+its reported tests and live results are not Anywhere acceptance evidence.
+
+| Proposed upstream fix | Anywhere decision and evidence |
+| --- | --- |
+| Serialize shared browser credential provisioning, reuse automatic pairing credentials, reject a provisioning receipt superseded by Disconnect | Do not copy this pairing mechanism into `ChatHTTPReader`. It observes provider credentials in memory and does not mint or rotate a shared companion credential. Its cache is tied to browser-context identity. This inspection does not certify unrelated enrollment paths. |
+| Wait for editable source and recorded question before freezing compaction identity | No equivalent Compact & Resume workflow is implemented here. Keep incomplete rendered history separate from authoritative input identity: the outgoing request checkpoint added in PR #117 supports known-conversation HTTP recovery. Unknown new-conversation identity after an ambiguous crash remains unresolved. |
+| Reject invalid explicit tunnel executable instead of silently choosing another binary | Already implemented by `cloudflared_executable`: only an omitted executable searches PATH. The existing `test_explicit_connector_never_searches_path` covers missing explicit executables and passed on re-run. No duplicate implementation needed. |
+| Restore bundled ripgrep precedence after login-shell profiles | No transfer based on similarity alone. Establish an Anywhere packaged search/runtime defect before changing shell PATH semantics. |
+
+The current subchat MCP session serializes send, recovery and catalog calls with
+one browser lock; context creation also has a separate lock. That prevents
+concurrent reader bootstrap within that session, not arbitrary direct backend
+calls or multiple sessions sharing one backend. Any future HTTP parallelization
+must first define authentication-cache ownership, bootstrap lifetime and context
+replacement. Removing the outer lock alone would not establish safe concurrency.
