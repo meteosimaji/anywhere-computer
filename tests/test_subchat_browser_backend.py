@@ -18,10 +18,11 @@ HTML = '''<button aria-pressed="true">Chat</button>
 <div id="models"><button role="menuitemradio" aria-checked="true"
  onclick="models.hidden=true;control.hidden=false"><span>Future model</span></button></div>
 <div id="control" data-reasoning-slider="true" tabindex="0" aria-describedby="effort" hidden
- onkeydown="thumb.setAttribute('aria-valuenow',event.key==='ArrowRight'?'1':'0');
+ onkeydown="if(!['ArrowLeft','ArrowRight'].includes(event.key))return;
+ thumb.setAttribute('aria-valuenow',event.key==='ArrowRight'?'1':'0');
  effort.textContent=event.key==='ArrowRight'?'Future effort':'Initial effort'">
 <span id="thumb" role="slider" aria-valuemin="0" aria-valuemax="1"
- aria-valuenow="0">slider</span></div><div id="effort" role="status">Initial effort</div></div>
+ aria-valuenow="1">slider</span></div><div id="effort" role="status">Future effort</div></div>
 <form data-chatgpt-composer><div data-composer-markdown role="textbox"
  contenteditable="true"><p><br></p></div></form>
 <button id="send">Send</button><main></main>
@@ -94,7 +95,7 @@ async def test_browser_send_pending_completion_and_database_recovery(
             service = Subchats(SubchatSubmissions(ledger.connection), backend)
             operation = 'b' * 32
             prompt = '日本語 🚀\n```python\nprint("<tag>")\n```'
-            sent = await service.send(operation, prompt, 'Future model', 'Future effort',
+            sent = await service.send(operation, prompt, 'Future model', 'Initial effort',
                                       owner=None, conversation_id=(
                                           '11111111-2222-3333-4444-555555555555'
                                           if followup else None))
@@ -143,7 +144,7 @@ async def test_browser_send_pending_completion_and_database_recovery(
             ledger = Ledger(tmp_path)
             service = Subchats(SubchatSubmissions(ledger.connection),
                                BrowserSubchatBackend(context))
-            assert await service.send(operation, prompt, 'Future model', 'Future effort',
+            assert await service.send(operation, prompt, 'Future model', 'Initial effort',
                                       owner=None,
                                       conversation_id=sent.requested_conversation_id) == result
             assert await service.recover(operation, owner=None) == result
@@ -190,7 +191,7 @@ async def test_browser_never_converts_prepared_send_to_queue(tmp_path, changed):
                 content_type='text/html; charset=utf-8', body=HTML))
             backend = BrowserSubchatBackend(context)
             store = SubchatSubmissions(ledger.connection)
-            draft = store.prepare('6' * 32, 'next', 'Future model', 'Future effort', owner=None)
+            draft = store.prepare('6' * 32, 'next', 'Future model', 'Initial effort', owner=None)
             baseline = await backend.prepare(draft)
             reserved = store.begin_send(draft.operation_id, owner=None,
                                          baseline_message_ids=baseline)
@@ -226,7 +227,7 @@ async def test_browser_queue_stale_target_fails_before_draft(tmp_path):
                 content_type='text/html; charset=utf-8', body=history))
             store = SubchatSubmissions(ledger.connection)
             parent = '7' * 32
-            store.prepare(parent, 'first', 'Future model', 'Future effort', owner=None,
+            store.prepare(parent, 'first', 'Future model', 'Initial effort', owner=None,
                           conversation_id='11111111-2222-3333-4444-555555555555')
             store.begin_send(parent, owner=None)
             store.submitted(parent, '11111111-2222-3333-4444-555555555555',
