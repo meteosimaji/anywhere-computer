@@ -272,3 +272,35 @@ async def test_native_owner_pipe_files_and_operation_recovery(agent, monkeypatch
     assert recovered.state == 'completed'
     assert recovered.data['operation_id'] == written.operation_id
     assert (await exchange(directory, '__status')).data['instance_id'] == status.data['instance_id']
+
+
+async def test_shutdown_transport_error_still_closes_engine_and_metadata(tmp_path, monkeypatch):
+    from anywhere_computer import connection
+
+    start = asyncio.start_server
+    close = connection.Engine.close
+    closed = []
+
+    async def start_with_close_error(*args, **kwargs):
+        server = await start(*args, **kwargs)
+        wait_closed = server.wait_closed
+
+        async def failing_wait():
+            await wait_closed()
+            raise OSError('synthetic transport cleanup failure')
+
+        monkeypatch.setattr(server, 'wait_closed', failing_wait)
+        return server
+
+    async def track_close(engine):
+        await close(engine)
+        closed.append(True)
+
+    monkeypatch.setattr(asyncio, 'start_server', start_with_close_error)
+    monkeypatch.setattr(connection.Engine, 'close', track_close)
+    shutdown = asyncio.Event()
+    shutdown.set()
+    with pytest.raises(OSError, match='synthetic transport cleanup failure'):
+        await connection.serve(tmp_path, credential='synthetic-test', shutdown=shutdown)
+    assert closed == [True]
+    assert not (tmp_path / 'agent.json').exists()
