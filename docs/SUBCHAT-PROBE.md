@@ -1341,3 +1341,9 @@ and after. Initial authentication observation may transiently create a page;
 these endpoint counts do not prove that no observation page was opened.
 This is a plain-message live send and final-answer test. Resource forwarding and
 SQLite reopen remain controlled tests, not live crash or attachment acceptance.
+
+The existing browser dispatch fixture also fires two identical generation POSTs
+concurrently. With the previous post-await `dispatched.done()` guard it forwards
+two requests (three regression variants fail); the pre-await claim forwards one.
+Storage-failure variants forward none. This is controlled browser interception,
+not a claim that the live provider duplicates requests.

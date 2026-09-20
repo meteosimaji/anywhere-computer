@@ -149,8 +149,9 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
       const body={action:'next',model:'observed',messages:[{id:'user',author:{role:'user'},
         content:{content_type:'text',parts:[document.querySelector('[role=textbox]').innerText]},
         metadata:{}}]};
-      const response=await fetch('/backend-api/f/conversation',
+      const post=()=>fetch('/backend-api/f/conversation',
         {method:'POST',body:JSON.stringify(body)});
+      const response=await Promise.any([post(),post()]);
       window.wire=await response.json();
     };
     </script>'''
