@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -14,8 +15,8 @@ from anywhere_computer.models import Request
 async def test_audio_status_without_helper_does_not_launch(
     tmp_path, monkeypatch, platform, expected,
 ):
-    monkeypatch.setattr(audio_status.sys, "platform", platform)
-    monkeypatch.setattr(audio_status.sys, "prefix", str(tmp_path / "runtime"))
+    monkeypatch.setattr(audio_status, "sys", SimpleNamespace(
+        platform=platform, prefix=str(tmp_path / "runtime")))
 
     async def forbidden(*args):
         pytest.fail("Inspection without a helper must not spawn a process")
@@ -34,8 +35,8 @@ async def test_audio_status_without_helper_does_not_launch(
 
 
 async def test_audio_manifest_and_read_only_arguments(tmp_path, monkeypatch):
-    monkeypatch.setattr(audio_status.sys, "platform", "darwin")
-    monkeypatch.setattr(audio_status.sys, "prefix", str(tmp_path / "runtime"))
+    monkeypatch.setattr(audio_status, "sys", SimpleNamespace(
+        platform="darwin", prefix=str(tmp_path / "runtime")))
     helper = tmp_path / "native/anywhere-audio"
     helper.parent.mkdir()
     helper.write_bytes(b"fixture native binary")
