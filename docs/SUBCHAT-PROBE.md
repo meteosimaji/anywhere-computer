@@ -850,8 +850,8 @@ operation on every browser/OS.
 
 `anywhere-subchat --http-read --minimized --browser-profile … --state-dir … [--mcp]`
 bootstraps from the dedicated browser application's authenticated conversation-history
-GET. It retains only the observed authorization header in process memory, bound
-to that browser context; cookies remain managed by the context. Subsequent reads
+GET. It retains the observed authorization, account and language headers in
+process memory, bound to that browser context; cookies remain managed by the context. Subsequent reads
 use the context's HTTP client without opening tabs, navigating or inspecting DOM.
 No credentials are written to the ledger, exported, or returned to the caller.
 The initial owned observation tab is closed with bounded cleanup; existing
@@ -901,3 +901,25 @@ The actual `anywhere-subchat --http-read --minimized` CLI was also run in a fres
 isolated ledger against that saved conversation. It returned `completed`, the
 exact answer text, and exit 0. The repeated-read regression fails on pre-change
 source because every recovery navigates; it passes with the HTTP reader.
+
+
+### Repeated HTTP model discovery
+
+`subchat_http_catalog` now uses the same browser-session HTTP reader as saved
+answer recovery. The first catalog request observes the application's exact
+models URL (including query parameters); later calls perform only that GET.
+Observed authorization, account selection and language headers remain in memory;
+unrelated browser headers are not copied. The result source is
+`browser_session_http`. Model IDs, display labels and thinking-effort values
+remain separate, dynamic fields; Work models remain excluded and unavailable
+choices are not silently replaced. Generation still requires the verified UI
+selection path (`send_requires_ui_labels=true`).
+
+In live tests, authorization alone preserved identities but changed Japanese
+labels to English. Preserving the observed `oai-language` produced exact catalog
+equality. The production adapter subsequently read the catalog twice and then a
+known final answer with `context.new_page` forbidden after bootstrap. All reads
+succeeded with no page-count change. This does not verify switching accounts
+mid-session. Controlled transport tests require the observed account/language
+headers, reject unrelated-header forwarding, and exercise the same fault matrix
+for both catalog and history without duplicating a second transport implementation.
