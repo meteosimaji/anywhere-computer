@@ -19,7 +19,9 @@ async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
             raise
         try:
             page = await browser.new_page()
-            page.set_default_timeout(2000)
+            # Match the production catalog adapter action budget. This test checks
+            # DOM identity/visibility, not a two-second Windows rendering SLA.
+            page.set_default_timeout(15_000)
             async def observe(html: str, function: str = "observeSubchatModelMenu") -> object:
                 await page.set_content(html)
                 return await page.evaluate(source + f"\n{function}(document)")
