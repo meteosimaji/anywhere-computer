@@ -30,6 +30,13 @@ class ChatHTTPReader:
         self._catalog_url: str | None = None
         self._access_status: int | None = None
 
+    def can_read_without_browser(self, context: BrowserContext, *, catalog: bool = False
+                                 ) -> bool:
+        """Reuse only this session's observed authorization, including its rejection latch."""
+        return (self._request_factory is not None and self._context is context
+                and (self._access_status is not None
+                     or bool(self._headers) and (not catalog or self._catalog_url is not None)))
+
     async def _read(self, context: BrowserContext, url: str | None,
                     observe: Callable[[Page], Awaitable[Response]]) -> bytes:
         if self._context is not context:

@@ -346,6 +346,20 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                 assert len(tab_gets) == 4 and len(calls) == before + 1
                 assert all(call == (path, True) for call in calls)
                 assert context.pages == [original] and original.url == 'about:blank'
+                if independent:
+                    await browser.close()
+                    assert await read() == first
+                    if resource == 'history':
+                        receipt = await backend.find_submission(submission)
+                        assert receipt.user_message_id == submission.user_message_id
+                    status[0] = expired_status
+                    with pytest.raises(SubchatAccessError):
+                        await read()
+                    before = len(calls)
+                    status[0] = 200
+                    with pytest.raises(SubchatAccessError):
+                        await read()
+                    assert len(calls) == before and len(tab_gets) == 4
             finally:
                 if independent and 'request' in locals():
                     await request.dispose()
@@ -517,6 +531,9 @@ async def test_checkpointed_request_recovers_without_rendered_history(tmp_path, 
             raise AssertionError('Receipt recovery must not create a page')
 
     class Reader:
+        def can_read_without_browser(self, context, *, catalog=False):
+            return False
+
         async def receipt(self, context, saved):
             assert saved.user_message_id == 'user'
             return project_receipt(json.dumps(payload).encode(), saved)

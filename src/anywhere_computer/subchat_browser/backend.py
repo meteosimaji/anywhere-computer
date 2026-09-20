@@ -75,9 +75,15 @@ class BrowserSubchatBackend:
             # This is a separate observation tab, never a submission or user draft.
             await page.close()
 
+    async def _read_context(self, *, catalog: bool = False) -> BrowserContext:
+        if (self._context is not None
+                and self._http_reader.can_read_without_browser(self._context, catalog=catalog)):
+            return self._context
+        return await self._browser()
+
     async def http_catalog(self) -> dict[str, object]:
         async with asyncio.timeout(20):
-            return await self._http_reader.catalog(await self._browser())
+            return await self._http_reader.catalog(await self._read_context(catalog=True))
 
     async def _page(self, submission: SubchatSubmission) -> Page | None:
         if self._context is not None:
@@ -288,7 +294,7 @@ class BrowserSubchatBackend:
             if CHAT.fullmatch('https://chatgpt.com/c/' + submission.conversation_id) is None:
                 raise ValueError('Invalid conversation identity')
             async with asyncio.timeout(20):
-                return await self._http_reader.receipt(await self._browser(), submission)
+                return await self._http_reader.receipt(await self._read_context(), submission)
         page = await self._page(submission)
         if page is None:
             return None
@@ -325,7 +331,7 @@ class BrowserSubchatBackend:
                         'https://chatgpt.com/c/' + submission.conversation_id) is None):
                 return None
             async with asyncio.timeout(20):
-                return await self._http_reader.history(await self._browser(), submission)
+                return await self._http_reader.history(await self._read_context(), submission)
         page = await self._page(submission)
         if page is None or submission.user_message_id is None:
             return None
