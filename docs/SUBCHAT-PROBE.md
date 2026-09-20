@@ -1339,8 +1339,8 @@ A subsequent HTTP receipt/answer recovery returned `completed`, final message
 `AC_RECEIPT_OK_20260921`. The browser was not restarted; tab count was 13 before
 and after. Initial authentication observation may transiently create a page;
 these endpoint counts do not prove that no observation page was opened.
-This is a plain-message live send and final-answer test. Resource forwarding and
-SQLite reopen remain controlled tests, not live crash or attachment acceptance.
+This is a plain-message live send and final-answer test. Resource forwarding and in-flight restart remain controlled tests, not live
+crash or attachment acceptance.
 
 The existing browser dispatch fixture also fires two identical generation POSTs
 concurrently. With the previous post-await `dispatched.done()` guard it forwards
@@ -1356,3 +1356,15 @@ page with no saved conversation identity remains unresolved. A controlled
 regression covers a reopened ledger with an available page handle, prohibits
 DOM evaluation and verifies the exact HTTP receipt and final projection. It
 fails against the previous DOM fallback. This is not live browser-crash recovery.
+
+The completed live result above was subsequently recovered after closing and
+reopening its isolated SQLite ledger and constructing a new controller whose
+browser factory rejects all access. Recovery and a duplicate send returned the
+same saved completed answer without browser access. This establishes completed
+result reuse, not recovery of an in-flight process crash or an OS restart.
+
+PR #117 was integrated at `0f4f973b564cb4fff5330da77f4b758703c2c122`. Its five
+CI jobs passed; Windows ran 1462 tests with 34 skips and verified the relocated
+portable runtime. The first Windows attempt timed out in the unchanged workspace
+JavaScript fixture before the full suite; the same source and unchanged deadline
+passed on rerun. The initial timeout cause remains unresolved.
