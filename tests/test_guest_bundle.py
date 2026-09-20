@@ -15,7 +15,9 @@ def test_guest_bundle_includes_runtime_assets_but_not_local_state(tmp_path, monk
     root = tmp_path / "source"
     names = ["pyproject.toml", "uv.lock", "LICENSE", "README.md", "docs/ARCHITECTURE.md",
              "src/anywhere_computer/example.py", "src/anywhere_computer/web/workspace.html",
-             "tests/test_example.py", "scripts/verify_example.py"]
+             "tests/test_example.py", "scripts/verify_example.py", "scripts/receipt.js",
+             "src/anywhere_computer/subchat_browser/backend.py",
+             "src/anywhere_computer/subchat_browser/input.js"]
     names += ["plugins/anywhere-computer/" + name for name in (
         ".codex-plugin/plugin.json", ".mcp.json", "LICENSE", "skills/computer-work/SKILL.md",
         "bundled/checksums.json", "bundled/dependencies.txt", "bundled/release.json",

@@ -9,7 +9,9 @@ from pathlib import Path
 
 def build_guest_bundle(root: Path, output: Path) -> Path:
     files = [root / name for name in ("pyproject.toml", "uv.lock", "LICENSE", "README.md")]
-    files += sorted((root / "src/anywhere_computer").glob("*.py"))
+    files += sorted((root / "src/anywhere_computer").rglob("*.py"))
+    files += sorted((root / "src/anywhere_computer").rglob("*.js"))
+    files += sorted((root / "scripts").glob("*.js"))
     files += sorted((root / "tests").glob("test_*.py"))
     files += [root / "docs/ARCHITECTURE.md"]
     files += sorted((root / "scripts").glob("*.py"))
