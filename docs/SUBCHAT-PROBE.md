@@ -993,10 +993,31 @@ model, strip attachments or silently report success.
 | Thinking / final / interruption | Pending preserved; exact final correlation; interrupted output rejected | Rich progress projection and explicit provider stop operation |
 | Queue / steer | Durable queue and local unsent cancellation; unsupported steer rejected | Verified non-interrupting delivery capability; never stop-and-send silently |
 | Built-in @ features | UI can expose search/image features | Observe each feature's own payload; do not treat it as a plugin URI |
-| Parallel / inter-chat work | Separate tabs/IDs; concurrent generation observed | Parent-mediated result handoff acceptance; direct peer messaging not implemented |
+| Parallel / inter-chat work | Separate tabs/IDs; concurrent generation observed | Direct peer messaging not implemented; parent-mediated handoff verified below |
 | Recovery | Same-ID dedupe, HTTP result recovery, no unknown-send replay | Crash before new conversation ID still needs manual reconciliation |
 
 HTTP coverage is feature-specific. An observed URL or a successful POST is not
 proof of equivalent behavior. Each increment requires matching saved input,
 actual output/tool effects and failure behavior. Unknown UI/HTTP shapes remain
 unsupported rather than being advertised as "all Chat features supported".
+
+The subsequent real parent-Chat acceptance also completed. In parent conversation
+`6aafd694-06b0-83e8-91e7-be5b4235defc`, the actual Anywhere direct-MCP tools launched
+the local subchat CLI. New child operation `29fa01bc23de456729fa01bc23de4567`
+recovered final `CHILD_FROM_CHAT_20260920` from new conversation
+`6aafde1e-9b7c-83ee-987b-c5e863d45c52`. Parent relay operation
+`13579bdf2468ace013579bdf2468ace0` delivered that result to the existing B Chat,
+which retained its own B-file identity and sum 91. A separate child operation
+`31415926535897932384626433832795` created the explicitly scoped temporary file
+`/tmp/ac-subchat-collaboration-20260920.txt`. The parent independently read its
+exact content `COLLAB_B_CREATED` and SHA-256
+`fa603b3a3e96437eb680fc90e1d0b646e03d41921fa3b6f993af1b24e4a3931f`;
+Codex then independently verified the same actual file and all three completed
+ledger records. This proves parent-mediated handoff and a shared local artifact,
+not direct peer delivery or conflict-free simultaneous editing.
+
+Earlier parent attempts failed before dispatch because the dedicated new-Chat
+composer contained a leftover test draft. The exact draft was preserved locally,
+then explicitly cleared for this acceptance. The same prepared operation then
+succeeded; no unknown send was replayed. Production code still preserves drafts
+and requires inspection instead of deleting them automatically.
