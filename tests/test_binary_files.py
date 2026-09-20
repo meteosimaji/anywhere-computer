@@ -236,7 +236,7 @@ async def test_http_binary_lost_response_is_recovered_without_reappend(
         original = engine.tools["files_write_binary"]
 
         async def held_write(arguments):
-            await release_write.wait()
+            await asyncio.wait_for(release_write.wait(), 15)
             return await original.handler(arguments)
 
         engine.tools["files_write_binary"] = replace(original, handler=held_write)
@@ -248,6 +248,23 @@ async def test_http_binary_lost_response_is_recovered_without_reappend(
             return await original_read.handler(arguments)
 
         engine.tools["files_read_binary"] = replace(original_read, handler=held_read)
+        original_get = engine.tools["operations_get"]
+
+        async def held_get(arguments):
+            await asyncio.sleep(.1)
+            return await original_get.handler(arguments)
+
+        engine.tools["operations_get"] = replace(original_get, handler=held_get)
+    async def recover(target):
+        lookup = operation("operations_get", operation_id=target)
+        async with asyncio.timeout(15):
+            result = await backend.execute(lookup)
+            while result.state == "running":
+                await asyncio.sleep(.05)
+                result = await backend.execute(lookup)
+        assert result.state == "completed", result
+        return result
+
     path = tmp_path / "http-upload.bin"
     path.write_bytes(b"prefix")
     content = bytes(range(256)) * 1024
@@ -261,9 +278,7 @@ async def test_http_binary_lost_response_is_recovered_without_reappend(
     )
     outcome = await backend.execute(request)
     assert outcome.state == "unknown" and outcome.operation_id == request.operation_id
-    recovered = await backend.execute(
-        operation("operations_get", operation_id=request.operation_id)
-    )
+    recovered = await recover(request.operation_id)
     if hold_write:
         assert recovered.data["state"] == "running"
         assert path.read_bytes() == b"prefix"
@@ -271,9 +286,7 @@ async def test_http_binary_lost_response_is_recovered_without_reappend(
     async with asyncio.timeout(15):
         while recovered.data["state"] == "running":
             await asyncio.sleep(.05)
-            recovered = await backend.execute(
-                operation("operations_get", operation_id=request.operation_id)
-            )
+            recovered = await recover(request.operation_id)
     assert recovered.data["state"] == "completed"
     assert recovered.data["data"]["sha256"] == sha256(b"prefix" + content)
     read = await backend.execute(
@@ -282,9 +295,7 @@ async def test_http_binary_lost_response_is_recovered_without_reappend(
     assert read.state in {"running", "completed"}
     async with asyncio.timeout(15):
         while True:
-            read_result = await backend.execute(
-                operation("operations_get", operation_id=read.operation_id)
-            )
+            read_result = await recover(read.operation_id)
             if read_result.data["state"] != "running":
                 break
             await asyncio.sleep(.05)
