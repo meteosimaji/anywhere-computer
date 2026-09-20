@@ -6,10 +6,11 @@ from typing import Literal, cast
 
 from pydantic import Field, JsonValue, TypeAdapter
 
-from .mcp_server import MCPSession
+from .mcp_server import Catalog as ToolCatalog
+from .mcp_server import Execute, MCPSession
 from .models import Contract, OperationId, Reply, Request
 from .subchat import SubchatOutcomeUnknown, Subchats, SubchatStaleTarget
-from .subchat_state import SubchatWorkContext
+from .subchat_state import SubchatSubmission, SubchatWorkContext
 
 
 class Send(Contract):
@@ -61,11 +62,59 @@ INSTRUCTIONS = (
 )
 
 
+class SubchatSession(MCPSession):
+    def __init__(self, catalog: ToolCatalog, execute: Execute,
+                 tasks: dict[str, asyncio.Task[SubchatSubmission]]) -> None:
+        super().__init__(catalog, execute, instructions=INSTRUCTIONS)
+        self.recoveries = tasks
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+        tasks = list(self.recoveries.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self.recoveries.clear()
+
+
 def session(service: Subchats, *,
             observe_catalog: Callable[[str | None], Awaitable[dict[str, object]]] | None = None,
-            ) -> MCPSession:
+            ) -> SubchatSession:
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
+    recoveries: dict[str, asyncio.Task[SubchatSubmission]] = {}
+
+    async def observe(operation_id: str) -> SubchatSubmission:
+        if server.closed:
+            raise RuntimeError('Subchat session is closed')
+        current = service.store.get(operation_id, owner=None)
+        task = recoveries.get(operation_id)
+        if task is None and current.state == 'queued':
+            if len(recoveries) >= 8:
+                raise RuntimeError('Queued recovery limit reached')
+
+            async def run() -> SubchatSubmission:
+                async with browser_lock:
+                    return await service.recover(operation_id, owner=None)
+
+            task = asyncio.create_task(run())
+            recoveries[operation_id] = task
+
+            def completed(done: asyncio.Task[SubchatSubmission]) -> None:
+                if recoveries.get(operation_id) is done:
+                    recoveries.pop(operation_id)
+                if not done.cancelled():
+                    # A timed-out observer may no longer await this result.
+                    done.exception()
+
+            task.add_done_callback(completed)
+        if task is not None:
+            # An observation timeout must not cancel preparation or release its input lock.
+            return await asyncio.shield(task)
+        async with browser_lock:
+            return await service.recover(operation_id, owner=None)
+
     definitions: dict[str, tuple[type[Contract], str]] = {
         'subchat_cancel': (OperationId, 'Cancel an unsent queued/prepared input; never stop Chat.'),
         'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
@@ -119,8 +168,7 @@ def session(service: Subchats, *,
                 try:
                     async with deadline:
                         while result.state not in {'prepared', 'completed', 'cancelled'}:
-                            async with browser_lock:
-                                result = await service.recover(wait.operation_id, owner=None)
+                            result = await observe(wait.operation_id)
                             if result.state not in {'prepared', 'completed', 'cancelled'}:
                                 # Never hold the browser input lock while the model thinks.
                                 await asyncio.sleep(.5)
@@ -148,8 +196,7 @@ def session(service: Subchats, *,
                 if request.tool == 'subchat_status':
                     result = service.store.get(target.operation_id, owner=None)
                 else:
-                    async with browser_lock:
-                        result = await service.recover(target.operation_id, owner=None)
+                    result = await observe(target.operation_id)
             else:
                 raise ValueError('Unknown subchat tool')
             return Reply(operation_id=request.operation_id, state='completed',
@@ -168,4 +215,5 @@ def session(service: Subchats, *,
                          error='Subchat call failed; inspect its saved status before retrying.',
                          data={'error_type': type(error).__name__})
 
-    return MCPSession(catalog, execute, instructions=INSTRUCTIONS)
+    server = SubchatSession(catalog, execute, recoveries)
+    return server

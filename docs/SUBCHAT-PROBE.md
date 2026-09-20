@@ -644,8 +644,11 @@ use its `request_id` as the new message operation identity. `mode: queue` binds
 the follow-up to an already confirmed subchat submission and inherits its exact
 model/effort and descriptive work context. It persists immediately as `queued`.
 Call `subchat_recover` or bounded `subchat_wait` on the new operation to progress
-it: no background dispatcher or delivery merely because the record exists is
-promised. The target's answer must complete before dispatch. If a newer visible
+it: merely creating the record does not start a background dispatcher. Once
+a recover/wait call starts queued preparation, that work survives the observer
+timeout in the same MCP process. Repeated observations share the same pending
+work (at most eight recoveries); closing the session cancels and joins it before
+closing browser resources. Process loss still requires reconciliation. The target's answer must complete before dispatch. If a newer visible
 turn appeared, the browser rejects the stale target before entering the draft.
 The current API permits competing queued proposals, not an implicit FIFO chain;
 a proposal is never automatically retargeted after another follow-up wins.
