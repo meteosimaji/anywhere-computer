@@ -1,6 +1,7 @@
 """A short observation budget must not abort a queued send's preparation."""
 import asyncio
 
+import pytest
 from test_subchat_delivery import Provider
 
 from anywhere_computer.models import Request
@@ -55,7 +56,8 @@ async def test_short_wait_does_not_cancel_or_repeat_queue_preparation(tmp_path):
         ledger.close()
 
 
-async def test_session_close_joins_pending_preparation_without_send(tmp_path):
+@pytest.mark.parametrize('finish', ['close', 'cancel'])
+async def test_session_joins_pending_preparation_without_send(tmp_path, finish):
     cancelled = asyncio.Event()
 
     class PendingPreparation(Provider):
@@ -83,14 +85,64 @@ async def test_session_close_joins_pending_preparation_without_send(tmp_path):
         assert result.data['state'] == 'queued'
         assert provider.prepares == [child]
         assert not cancelled.is_set()
-        await server.close()
+        if finish == 'close':
+            await server.close()
+        else:
+            result = await server.execute(Request(operation_id='f' * 32, tool='subchat_cancel',
+                                                  arguments={'operation_id': child}))
+            assert result.data['state'] == 'cancelled'
         assert cancelled.is_set()
         assert not server.recoveries
         assert provider.sends == []
         result = await server.execute(Request(operation_id='d' * 32, tool='subchat_recover',
             arguments={'operation_id': child}))
-        assert result.state == 'failed'
+        assert result.state == ('failed' if finish == 'close' else 'completed')
+        if finish == 'cancel':
+            assert result.data['state'] == 'cancelled'
         assert provider.prepares == [child]
+    finally:
+        await server.close()
+        ledger.close()
+
+
+@pytest.mark.parametrize('finish', ['close', 'cancel'])
+async def test_session_joins_direct_send(tmp_path, finish):
+    entered, cancelled = asyncio.Event(), asyncio.Event()
+
+    class PendingPreparation(Provider):
+        async def prepare(self, submission):
+            entered.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    ledger = Ledger(tmp_path)
+    provider = PendingPreparation()
+    server = session(Subchats(SubchatSubmissions(ledger.connection), provider))
+    request = Request(operation_id='e' * 32, tool='subchat_send',
+                      arguments={'prompt': 'next', 'model': 'model', 'effort': 'effort'})
+    sending = asyncio.create_task(server.execute(request))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        if finish == 'close':
+            await server.close()
+        else:
+            result = await server.execute(Request(operation_id='f' * 32, tool='subchat_cancel',
+                                                  arguments={'operation_id': request.operation_id}))
+            assert result.data['state'] == 'cancelled'
+        await asyncio.wait_for(asyncio.gather(sending, return_exceptions=True), 2)
+        assert cancelled.is_set()
+        assert sending.cancelled() == (finish == 'close')
+        if finish == 'cancel':
+            assert sending.result().data['state'] == 'cancelled'
+        assert not provider.sends
+        assert not server.calls
+        result = await server.execute(request)
+        assert result.state == ('failed' if finish == 'close' else 'completed')
+        if finish == 'cancel':
+            assert result.data['state'] == 'cancelled'
+        assert not provider.sends
     finally:
         await server.close()
         ledger.close()
