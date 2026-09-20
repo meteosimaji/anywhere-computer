@@ -4,6 +4,7 @@ import sys
 import uuid
 
 import httpx
+import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from test_http_mcp import HEADERS
@@ -39,8 +40,11 @@ asyncio.run(main())
 '''
 
 
-async def test_http_direct_mcp_subchat_receipt_and_process_restart(http_agent, tmp_path):
+@pytest.mark.parametrize('with_queue', [False, True])
+async def test_http_direct_mcp_subchat_receipt_and_process_restart(http_agent, tmp_path,
+                                                                with_queue):
     _, _, _, port = http_agent
+    queued_id = uuid.uuid4().hex
     operation = uuid.uuid4().hex
     sent_args = {'request_id': operation, 'prompt': '日本語\n42',
                  'model': 'observed model', 'effort': 'observed effort'}
@@ -53,9 +57,9 @@ async def test_http_direct_mcp_subchat_receipt_and_process_restart(http_agent, t
                     async with ClientSession(reader, writer) as client:
                         await client.initialize()
 
-                        async def call(name, args):
+                        async def call(name, args, *, expected_error=False):
                             reply = await client.call_tool(name, args)
-                            assert not reply.isError, reply
+                            assert reply.isError is expected_error, reply
                             assert reply.structuredContent['state'] == 'completed'
                             return reply.structuredContent['data']
 
@@ -88,6 +92,29 @@ async def test_http_direct_mcp_subchat_receipt_and_process_restart(http_agent, t
                                 assert pending['structured_content']['data']['state'] == 'submitted'
                                 status = await call('mcp_session_status', target)
                                 assert status['state'] == 'open'
+                                if with_queue:
+                                    refused = await call('mcp_call', {
+                                        **target, 'name': 'subchat_message', 'arguments': {
+                                            'request_id': uuid.uuid4().hex, 'mode': 'steer',
+                                            'target_operation_id': operation, 'prompt': 'now'},
+                                    }, expected_error=True)
+                                    assert refused['is_error']
+                                    assert refused['structured_content']['data'] == {
+                                        'error_code': 'unsupported', 'mode': 'steer',
+                                        'dispatched': False, 'queued': False}
+                                    queued = await call('mcp_call', {
+                                        **target, 'name': 'subchat_message', 'arguments': {
+                                            'request_id': queued_id, 'mode': 'queue',
+                                            'target_operation_id': operation, 'prompt': 'next'},
+                                    })
+                                    assert queued['structured_content']['data']['state'] == 'queued'
+                                    waiting = await call('mcp_call', {
+                                        **target, 'name': 'subchat_wait', 'arguments': {
+                                            'operation_id': queued_id, 'wait_ms': 100},
+                                    })
+                                    waiting_state = waiting['structured_content']['data']['state']
+                                    assert waiting_state == 'queued'
+                                    assert (tmp_path / 'sends').read_text().splitlines() == ['sent']
                                 (tmp_path / 'answer-ready').touch()
                             done = await call('mcp_call', {
                                 **target, 'name': 'subchat_wait',
@@ -95,8 +122,23 @@ async def test_http_direct_mcp_subchat_receipt_and_process_restart(http_agent, t
                             })
                             assert not done['is_error']
                             assert done['structured_content']['data']['answer'] == '42'
+                            if with_queue:
+                                replay = await call('mcp_call', {
+                                    **target, 'name': 'subchat_message', 'arguments': {
+                                        'request_id': queued_id, 'mode': 'queue',
+                                        'target_operation_id': operation, 'prompt': 'next'},
+                                })
+                                assert replay['structured_content']['data']['state'] == (
+                                    'queued' if iteration == 0 else 'completed')
+                                followup = await call('mcp_call', {
+                                    **target, 'name': 'subchat_wait', 'arguments': {
+                                        'operation_id': queued_id, 'wait_ms': 2000},
+                                })
+                                assert followup['structured_content']['data']['answer'] == '42'
+                                followup_data = followup['structured_content']['data']
+                                assert followup_data['after_operation_id'] == operation
                         finally:
                             closed = await call('mcp_session_close', target)
                             assert closed['cleanup_confirmed']
     # A new HTTP connection and a new child process must not send again.
-    assert (tmp_path / 'sends').read_text().splitlines() == ['sent']
+    assert (tmp_path / 'sends').read_text().splitlines() == ['sent'] * (2 if with_queue else 1)

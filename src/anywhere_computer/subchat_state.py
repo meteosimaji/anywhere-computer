@@ -32,7 +32,9 @@ class SubchatSubmission(Contract):
     prompt: str = Field(min_length=1, max_length=100_000)
     model: str = Field(min_length=1, max_length=256)
     effort: str = Field(min_length=1, max_length=256)
-    state: Literal['prepared', 'sending', 'submitted', 'completed'] = 'prepared'
+    state: Literal['queued', 'prepared', 'sending', 'submitted', 'completed'] = 'prepared'
+    after_operation_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
+    expected_last_user_message_id: str | None = None
     requested_conversation_id: str | None = None
     conversation_id: str | None = None
     baseline_message_ids: tuple[str, ...] = ()
@@ -62,17 +64,31 @@ class SubchatSubmissions:
 
     def prepare(self, operation_id: str, prompt: str, model: str, effort: str,
                 *, owner: str | None, conversation_id: str | None = None,
-                work_context: SubchatWorkContext | None = None) -> SubchatSubmission:
+                work_context: SubchatWorkContext | None = None,
+                after_operation_id: str | None = None) -> SubchatSubmission:
         if conversation_id is not None and not conversation_id.strip():
             raise ValueError('Conversation identity must not be empty')
         if work_context is not None and work_context.parent_operation_id is not None:
             if work_context.parent_operation_id == operation_id:
                 raise ValueError('A submission cannot be its own parent')
             self.get(work_context.parent_operation_id, owner=owner)
+        expected_last_user_message_id = None
+        if after_operation_id is not None:
+            if after_operation_id == operation_id:
+                raise ValueError('A message cannot wait for itself')
+            target = self.get(after_operation_id, owner=owner)
+            if target.state not in {'submitted', 'completed'} or target.user_message_id is None:
+                raise ValueError('Queue target identity must be confirmed first')
+            if conversation_id != target.conversation_id:
+                raise ValueError('Queue target conversation does not match')
+            expected_last_user_message_id = target.user_message_id
         proposed = SubchatSubmission(operation_id=operation_id, prompt=prompt,
                                      model=model, effort=effort,
                                      requested_conversation_id=conversation_id,
-                                     conversation_id=conversation_id, work_context=work_context)
+                                     conversation_id=conversation_id, work_context=work_context,
+                                     state='queued' if after_operation_id else 'prepared',
+                                     after_operation_id=after_operation_id,
+                                     expected_last_user_message_id=expected_last_user_message_id)
         with self.connection:
             self.connection.execute(
                 'INSERT OR IGNORE INTO subchat_submissions VALUES (?,?,?)',
@@ -80,8 +96,9 @@ class SubchatSubmissions:
             )
         existing = self.get(operation_id, owner=owner)
         if (existing.prompt, existing.model, existing.effort,
-            existing.requested_conversation_id, existing.work_context) != (
-                prompt, model, effort, conversation_id, work_context):
+            existing.requested_conversation_id, existing.work_context,
+            existing.after_operation_id) != (
+                prompt, model, effort, conversation_id, work_context, after_operation_id):
             raise ValueError('Subchat submission ID was already used for different arguments')
         return existing
 
@@ -107,8 +124,12 @@ class SubchatSubmissions:
                    conversation_id: str | None = None,
                    baseline_message_ids: tuple[str, ...] = ()) -> SubchatSubmission:
         old = self.get(operation_id, owner=owner)
-        if old.state != 'prepared':
+        if old.state not in {'prepared', 'queued'}:
             raise ValueError('Submission may already have been sent; recover it without resending')
+        if old.after_operation_id is not None:
+            target = self.get(old.after_operation_id, owner=owner)
+            if target.state != 'completed':
+                raise ValueError('Queue target has not completed')
         if conversation_id is not None and not conversation_id.strip():
             raise ValueError('Conversation identity must not be empty')
         if old.conversation_id is not None and conversation_id not in {None, old.conversation_id}:

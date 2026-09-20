@@ -31,6 +31,10 @@ class SubchatBackend(Protocol):
     async def read_answer(self, submission: SubchatSubmission) -> SubchatAnswer | None: ...
 
 
+class SubchatStaleTarget(ValueError):
+    """The requested predecessor is no longer the last observed conversation turn."""
+
+
 class SubchatOutcomeUnknown(RuntimeError):
     """The send stage was entered; the caller must recover rather than resubmit."""
 
@@ -56,8 +60,20 @@ class Subchats:
         if submission.state != 'prepared':
             # A duplicate request never enters the backend again, even after restart.
             return submission
+        return await self._dispatch(submission, owner=owner)
+
+    def queue(self, operation_id: str, target_operation_id: str, prompt: str,
+              *, owner: str | None) -> SubchatSubmission:
+        target = self.store.get(target_operation_id, owner=owner)
+        return self.store.prepare(operation_id, prompt, target.model, target.effort, owner=owner,
+                                  conversation_id=target.conversation_id,
+                                  work_context=target.work_context,
+                                  after_operation_id=target_operation_id)
+
+    async def _dispatch(self, submission: SubchatSubmission,
+                        *, owner: str | None) -> SubchatSubmission:
         baseline = await self.backend.prepare(submission)
-        submission = self.store.begin_send(operation_id, owner=owner,
+        submission = self.store.begin_send(submission.operation_id, owner=owner,
                                            baseline_message_ids=baseline)
         try:
             receipt = await self.backend.send(submission)
@@ -75,6 +91,12 @@ class Subchats:
 
     async def recover(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
         submission = self.store.get(operation_id, owner=owner)
+        if submission.state == 'queued':
+            assert submission.after_operation_id is not None
+            target = await self.recover(submission.after_operation_id, owner=owner)
+            if target.state != 'completed':
+                return submission
+            return await self._dispatch(submission, owner=owner)
         if submission.state in {'prepared', 'completed'}:
             return submission
         if submission.state == 'sending':

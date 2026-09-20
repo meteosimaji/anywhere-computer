@@ -174,3 +174,71 @@ async def test_browser_send_pending_completion_and_database_recovery(
         finally:
             ledger.close()
             await browser.close()
+
+
+@pytest.mark.parametrize('changed', ['generating', 'history'])
+async def test_browser_never_converts_prepared_send_to_queue(tmp_path, changed):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=HTML))
+            backend = BrowserSubchatBackend(context)
+            store = SubchatSubmissions(ledger.connection)
+            draft = store.prepare('6' * 32, 'next', 'Future model', 'Future effort', owner=None)
+            baseline = await backend.prepare(draft)
+            reserved = store.begin_send(draft.operation_id, owner=None,
+                                         baseline_message_ids=baseline)
+            page = context.pages[0]
+            if changed == 'generating':
+                await page.evaluate("document.body.insertAdjacentHTML('beforeend',"
+                                    "'<button aria-label=\"Stop\">Stop</button>')")
+            else:
+                await page.evaluate("document.querySelector('main').innerHTML="
+                                    "'<div data-turn-key=\"unexpected\"></div>'")
+            with pytest.raises(ValueError):
+                await backend.send(reserved)
+            assert await page.evaluate('window.sends') == 0
+            assert await page.locator('[role=textbox]').inner_text() == 'next'
+        finally:
+            ledger.close()
+            await browser.close()
+
+
+async def test_browser_queue_stale_target_fails_before_draft(tmp_path):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            history = HTML + '''<script>document.querySelector('main').innerHTML=
+                '<div data-turn-key="expected"></div><div data-turn-key="newer"></div>';
+                </script>'''
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=history))
+            store = SubchatSubmissions(ledger.connection)
+            parent = '7' * 32
+            store.prepare(parent, 'first', 'Future model', 'Future effort', owner=None,
+                          conversation_id='11111111-2222-3333-4444-555555555555')
+            store.begin_send(parent, owner=None)
+            store.submitted(parent, '11111111-2222-3333-4444-555555555555',
+                            'expected', owner=None)
+            store.complete(parent, 'answer', '42', owner=None)
+            service = Subchats(store, BrowserSubchatBackend(context))
+            service.queue('8' * 32, parent, 'correction', owner=None)
+            with pytest.raises(ValueError, match='stale'):
+                await service.recover('8' * 32, owner=None)
+            assert store.get('8' * 32, owner=None).state == 'queued'
+            assert await context.pages[0].evaluate('window.sends') == 0
+            assert not (await context.pages[0].locator('[role=textbox]').inner_text()).strip()
+        finally:
+            ledger.close()
+            await browser.close()

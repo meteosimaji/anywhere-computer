@@ -8,7 +8,7 @@ from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page
 
-from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt
+from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt, SubchatStaleTarget
 from anywhere_computer.subchat_state import SubchatSubmission
 
 from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_page, picker_ready
@@ -124,6 +124,9 @@ class BrowserSubchatBackend:
         if not await self._ready(page, submission):
             raise ValueError('Chat changed before input')
         baseline = await self._baseline(page)
+        if (submission.expected_last_user_message_id is not None
+                and (not baseline or baseline[-1] != submission.expected_last_user_message_id)):
+            raise SubchatStaleTarget('Queue target is stale; another turn has appeared')
         if submission.requested_conversation_id is None and baseline:
             raise ValueError('New Chat already contains messages')
         editor = page.locator('[data-composer-markdown][role="textbox"]')
@@ -145,6 +148,9 @@ class BrowserSubchatBackend:
             raise ValueError('Prepared draft changed before send')
         if await self._baseline(page) != submission.baseline_message_ids:
             raise ValueError('Conversation history changed before send')
+        stop = page.get_by_role('button', name=re.compile(r'^(停止|Stop|Stop generating)$'))
+        if await stop.filter(visible=True).count():
+            raise ValueError('Chat started generating; do not silently queue the draft')
         await page.get_by_role('button', name=re.compile(r'^(送信|Send)$')).click()
         # Release the caller's browser lock after one observation. An unavailable
         # receipt is durable 'sending', never permission to click Send again.
