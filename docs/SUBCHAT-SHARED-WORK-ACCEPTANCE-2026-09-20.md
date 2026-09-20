@@ -151,3 +151,13 @@ issues [326](https://github.com/totec448-spec/chat-on-steroids/issues/326) and
 pending/waiting states. Their useful requirement is evidence-based delivery
 diagnostics and actionable recovery. Time alone is not adopted as permission to
 replay an uncertain send or stop a legitimately Thinking model.
+
+The user subsequently reported that they may have pressed Send. The browser
+adapter now finishes model/effort/history preparation before exposing any prompt.
+The service saves `sending` and the baseline first; only then does the adapter
+insert the draft. Final draft/history/URL checks and the click run in one browser
+task. A manual send or edit leaves the reservation intact and prevents a second
+click. Controlled browser regressions reproduce the old pre-reservation failure,
+then verify manual-send receipt recovery with one click and preservation of a
+user replacement draft with zero clicks. This is not proof of the original
+operator's exact actions or live serialization recovery for the earlier prompt.
