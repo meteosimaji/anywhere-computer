@@ -1427,4 +1427,12 @@ transport failures nor missing answers authorize generation replay.
 
 The browser-close behavior is covered with a real Chrome process, standalone
 HTTP client and controlled local HTTP server, including post-close 401/403 and
-rejection latching. It is not yet a live ChatGPT browser-close acceptance result.
+rejection latching.
+
+A September 21 live read-only trial also recovered the exact saved answer and
+input receipt from ChatGPT after closing the trial adapter's real Chrome process.
+The standalone client copied no cookies. Observed authorization was seeded in
+memory from the existing authenticated session; its 14 tabs stayed unchanged.
+Thus this verifies live recovery with the adapter's browser disconnected, not
+initial login, token renewal, or absence of every Chrome process on the host.
+No generation was sent. The full local suite passed 1506 tests with 19 skips.
