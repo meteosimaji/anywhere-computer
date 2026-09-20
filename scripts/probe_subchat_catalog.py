@@ -9,7 +9,7 @@ import json
 import re
 from pathlib import Path
 
-from playwright.async_api import Error, Page, async_playwright
+from playwright.async_api import CDPSession, Error, Page, async_playwright
 from subchat_efforts import collect_efforts
 
 SOURCE = Path(__file__).with_name("subchat_model_menu.js").read_text()
@@ -84,6 +84,26 @@ async def picker_ready(page: Page) -> bool:
     return True
 
 
+async def minimize_window(
+    session: CDPSession, window_id: int, *, timeout: float = 2, interval: float = .1,
+) -> bool:
+    """Request once; wait only for OS confirmation before any page action."""
+    if timeout <= 0 or interval <= 0:
+        raise ValueError("timeout and interval must be positive")
+    try:
+        async with asyncio.timeout(timeout):
+            await session.send("Browser.setWindowBounds", {
+                "windowId": window_id, "bounds": {"windowState": "minimized"},
+            })
+            while True:
+                bounds = await session.send("Browser.getWindowBounds", {"windowId": window_id})
+                if bounds["bounds"].get("windowState") == "minimized":
+                    return True
+                await asyncio.sleep(interval)
+    except TimeoutError:
+        return False
+
+
 async def probe(profile: Path, headed: bool, minimized: bool = False) -> dict[str, object]:
     async with async_playwright() as driver:
         context = await driver.chromium.launch_persistent_context(
@@ -94,13 +114,7 @@ async def probe(profile: Path, headed: bool, minimized: bool = False) -> dict[st
             if minimized:
                 session = await context.new_cdp_session(page)
                 window = await session.send("Browser.getWindowForTarget")
-                await session.send("Browser.setWindowBounds", {
-                    "windowId": window["windowId"], "bounds": {"windowState": "minimized"},
-                })
-                bounds = await session.send("Browser.getWindowBounds", {
-                    "windowId": window["windowId"],
-                })
-                if bounds["bounds"].get("windowState") != "minimized":
+                if not await minimize_window(session, window["windowId"]):
                     return {"state": "minimization_unconfirmed", "submitted": False}
             page.set_default_timeout(10_000)
             response = await page.goto("https://chatgpt.com/", wait_until="domcontentloaded")
