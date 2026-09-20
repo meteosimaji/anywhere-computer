@@ -91,7 +91,15 @@ async def test_browser_send_pending_completion_and_database_recovery(
                         return None
                     return await super().find_submission(submission)
 
-            backend = DeferredBrowser(context)
+            context_requests = 0
+
+            async def context_factory():
+                nonlocal context_requests
+                context_requests += 1
+                return context
+
+            backend = DeferredBrowser(context_factory)
+            assert context_requests == 0
             service = Subchats(SubchatSubmissions(ledger.connection), backend)
             operation = 'b' * 32
             prompt = '日本語 🚀\n```python\nprint("<tag>")\n```'
@@ -100,6 +108,7 @@ async def test_browser_send_pending_completion_and_database_recovery(
                                           '11111111-2222-3333-4444-555555555555'
                                           if followup else None))
             assert sent.baseline_message_ids == (('old',) if followup else ())
+            assert context_requests == 1
             if deferred_receipt:
                 assert sent.state == 'sending'
                 if not followup:
@@ -116,6 +125,7 @@ async def test_browser_send_pending_completion_and_database_recovery(
             assert await page.evaluate('window.sentText') == prompt
             for _ in range(3):
                 assert (await service.recover(operation, owner=None)).state == 'submitted'
+            assert context_requests == 1
             assert not page.is_closed()
             # Recover an unfinished submission through a new adapter and SQLite
             # connection. The provider serves the already-saved history, without

@@ -260,10 +260,11 @@ def session(service: Subchats, *,
                                'Chat before retrying the same exact request ID; '
                                'for a queued message, recover its existing operation instead.',
                          data={'error_code': 'preparation_failed', 'dispatched': False})
-        except SubchatOutcomeUnknown:
+        except SubchatOutcomeUnknown as error:
             return Reply(operation_id=request.operation_id, state='unknown',
-                         error='Submission unconfirmed. Use subchat_recover with this ID; '
-                               'do not send again with a new ID.')
+                         error='Submission unconfirmed. Use subchat_recover with '
+                               'submission_operation_id; do not send again with a new ID.',
+                         data={'submission_operation_id': error.operation_id})
         except Exception as error:
             # Never expose provider error text, invalid prompt contents or account data.
             return Reply(operation_id=request.operation_id, state='failed',

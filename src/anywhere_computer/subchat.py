@@ -38,6 +38,10 @@ class SubchatStaleTarget(ValueError):
 class SubchatOutcomeUnknown(RuntimeError):
     """The send stage was entered; the caller must recover rather than resubmit."""
 
+    def __init__(self, operation_id: str) -> None:
+        super().__init__('Subchat submission is unconfirmed; recover without resending')
+        self.operation_id = operation_id
+
 
 class SubchatPreparationFailed(ValueError):
     """Preparation failed before dispatch; provider details remain local."""
@@ -96,9 +100,7 @@ class Subchats:
             return self._accept(submission, receipt, owner)
         except Exception as error:
             # Provider errors may contain account data; retain only the cause locally.
-            raise SubchatOutcomeUnknown(
-                'Subchat submission is unconfirmed; recover this operation without resending'
-            ) from error
+            raise SubchatOutcomeUnknown(submission.operation_id) from error
         # Cancellation also leaves the committed 'sending' record intact.
 
     async def recover(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:

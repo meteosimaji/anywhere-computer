@@ -48,6 +48,23 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
                                            'arguments': {**target, 'owner': 'injected'}})
         assert invalid['result']['isError'] is True
         assert 'injected' not in str(invalid)
+        # A queued send is dispatched by a different recovery request. Losing
+        # its receipt must identify the submission, not that observer request.
+        queued_id, observer_id = '3' * 32, '4' * 32
+        await call('tools/call', {'name': 'subchat_message', 'arguments': {
+            'request_id': queued_id, 'mode': 'queue', 'target_operation_id': op,
+            'prompt': 'follow-up'}})
+        lost = await call('tools/call', {'name': 'subchat_recover', 'arguments': {
+            'request_id': observer_id, 'operation_id': queued_id}})
+        reply = lost['result']['structuredContent']
+        assert reply['operation_id'] == observer_id
+        assert reply['state'] == 'unknown'
+        assert reply['data']['submission_operation_id'] == queued_id
+        assert backend.sends == 2
+        saved = await call('tools/call', {'name': 'subchat_status', 'arguments': {
+            'operation_id': reply['data']['submission_operation_id']}})
+        assert saved['result']['structuredContent']['data']['state'] == 'sending'
+        assert backend.sends == 2
     finally:
         ledger.close()
 

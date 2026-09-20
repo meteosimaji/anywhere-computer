@@ -3,7 +3,9 @@
 Used by the local stdio MCP entry. Existing-conversation sends checkpoint
 visible message identities before dispatch; see the dated acceptance records.
 """
+import asyncio
 import re
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from playwright.async_api import BrowserContext, Page
@@ -21,12 +23,21 @@ CHAT = re.compile(r'https://chatgpt\.com/c/'
 
 
 class BrowserSubchatBackend:
-    def __init__(self, context: BrowserContext) -> None:
-        self.context = context
+    def __init__(self, context: BrowserContext | Callable[[], Awaitable[BrowserContext]]) -> None:
+        self._context = None if callable(context) else context
+        self._create_context = context if callable(context) else None
+        self._context_lock = asyncio.Lock()
         self.pages: dict[str, Page] = {}
 
+    async def _browser(self) -> BrowserContext:
+        async with self._context_lock:
+            if self._context is None:
+                assert self._create_context is not None
+                self._context = await self._create_context()
+            return self._context
+
     async def catalog(self, model: str | None = None) -> dict[str, object]:
-        page = await self.context.new_page()
+        page = await (await self._browser()).new_page()
         page.set_default_timeout(15_000)
         try:
             response = await page.goto('https://chatgpt.com/', wait_until='domcontentloaded')
@@ -43,7 +54,7 @@ class BrowserSubchatBackend:
             return page
         if submission.conversation_id is None:
             return None
-        page = await self.context.new_page()
+        page = await (await self._browser()).new_page()
         self.pages[submission.operation_id] = page
         await page.goto('https://chatgpt.com/c/' + submission.conversation_id,
                         wait_until='domcontentloaded')
@@ -83,7 +94,7 @@ class BrowserSubchatBackend:
 
     async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
         url = self._url(submission)
-        page = await self.context.new_page()
+        page = await (await self._browser()).new_page()
         self.pages[submission.operation_id] = page
         page.set_default_timeout(15_000)
         response = await page.goto(url, wait_until='domcontentloaded')
