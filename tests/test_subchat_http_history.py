@@ -9,7 +9,7 @@ from anywhere_computer.subchat import (
     SubchatInterrupted,
 )
 from anywhere_computer.subchat_browser.history import project_history
-from anywhere_computer.subchat_state import SubchatSubmission
+from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatSubmission
 
 
 def sample():
@@ -171,6 +171,7 @@ async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path):
 
 @pytest.mark.parametrize('failure, code', [(SubchatInterrupted, 'reply_interrupted'),
     (SubchatBrowserClosed, 'browser_closed'),
+    (SubchatAccountMismatch, 'account_mismatch'),
     (lambda _: SubchatAccessError(401), 'authentication_required'),
     (lambda _: SubchatAccessError(403), 'access_denied')])
 async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(
