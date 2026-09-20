@@ -1,4 +1,5 @@
 """Browser adapter integration against an offline, effectful Chat DOM fixture."""
+import json
 from pathlib import Path
 
 import pytest
@@ -95,7 +96,26 @@ async def test_browser_send_pending_completion_and_database_recovery(
             for _ in range(3):
                 assert (await service.recover(operation, owner=None)).state == 'submitted'
             assert not page.is_closed()
-            await page.evaluate('window.finish()')
+            # Recover an unfinished submission through a new adapter and SQLite
+            # connection. The provider serves the already-saved history, without
+            # replaying Send or manufacturing a completed ledger entry.
+            history = await page.locator('main').evaluate('node => node.outerHTML')
+            selector = '[data-turn-key="user"] [aria-label="Copy message"]'
+            restored = (HTML + '<script>document.querySelector("main").outerHTML='
+                        + json.dumps(history) + ';window.sentText=' + json.dumps(prompt)
+                        + ';document.querySelector(' + json.dumps(selector)
+                        + ').onclick=()=>navigator.clipboard.writeText(window.sentText);</script>')
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=restored))
+            ledger.close()
+            ledger = Ledger(tmp_path)
+            service = Subchats(SubchatSubmissions(ledger.connection),
+                               BrowserSubchatBackend(context))
+            assert (await service.recover(operation, owner=None)).state == 'submitted'
+            recovered_page = context.pages[-1]
+            assert recovered_page != page
+            assert await recovered_page.evaluate('window.sends') == 0
+            await recovered_page.evaluate('window.finish()')
             result = await service.recover(operation, owner=None)
             assert result.state == 'completed'
             assert result.answer == '日本語 answer 42'
@@ -107,9 +127,14 @@ async def test_browser_send_pending_completion_and_database_recovery(
                                       owner=None,
                                       conversation_id=sent.requested_conversation_id) == result
             assert await service.recover(operation, owner=None) == result
-            assert len(context.pages) == 1
+            assert len(context.pages) == 2
             assert await page.evaluate('window.sends') == 1
             assert await page.evaluate('window.osWrites') == 0
+            assert await recovered_page.evaluate('window.osWrites') == 0
+            assert await recovered_page.evaluate('window.sends') == 0
+            await context.unroute('**/*')
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=HTML))
             # A missing model is rejected before the durable send boundary.
             rejected = 'c' * 32
             with pytest.raises(ValueError, match='Requested model'):
