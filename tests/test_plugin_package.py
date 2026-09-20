@@ -44,7 +44,8 @@ def test_packaged_runtime_matches_current_source_and_checksums():
             source.relative_to(ROOT / "src").as_posix() for source in sources
         }
         for source in sources:
-            assert archive.read(source.relative_to(ROOT / "src").as_posix()) == source.read_bytes(), (
+            member = source.relative_to(ROOT / "src").as_posix()
+            assert archive.read(member) == source.read_bytes(), (
                 "Rebuild plugin after source changes: uv run python scripts/package_plugin.py"
             )
         for asset in (ROOT / "src/anywhere_computer/web").glob("*"):
