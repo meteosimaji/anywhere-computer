@@ -2,6 +2,7 @@
 // Experimental native AX provider helper. See docs/GUI-RELIABILITY-2026-09-14.md.
 import AppKit
 import ApplicationServices
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -49,12 +50,31 @@ private struct WindowRecord {
     var lastSeenUptime: TimeInterval
 }
 
+private struct ObservedElement {
+    let element: AXUIElement
+    let valueDigest: Data?
+}
+
+private func valueDigest(_ value: CFTypeRef?) -> Data? {
+    guard let value else { return Data([0]) }
+    // Retain only a digest, not every window's potentially large text for the lease.
+    if let text = value as? String {
+        return Data([1]) + Data(SHA256.hash(data: Data(text.utf8)))
+    }
+    if let number = value as? NSNumber,
+       let encoded = try? JSONSerialization.data(withJSONObject: number,
+                                                  options: [.fragmentsAllowed]) {
+        return Data([2]) + Data(SHA256.hash(data: encoded))
+    }
+    return nil // Unsupported values remain observable but cannot be safely replaced.
+}
+
 private struct ObservationRecord {
     let id: String
     let app: String
     let windowID: Int
     let process: ProcessIdentity
-    let elements: [String: AXUIElement]
+    let elements: [String: ObservedElement]
     let expiresAtUptime: TimeInterval
 }
 
@@ -533,7 +553,7 @@ private final class AXHelper {
         _ element: AXUIElement,
         depth: Int,
         state: inout TraversalState,
-        refs: inout [String: AXUIElement],
+        refs: inout [String: ObservedElement],
         deadline: RequestDeadline
     ) throws -> [String: Any]? {
         try deadline.check()
@@ -548,13 +568,14 @@ private final class AXHelper {
         state.nodeCount += 1
 
         let ref = UUID().uuidString.lowercased()
-        refs[ref] = element
 
         let role = try stringAttribute(element, kAXRoleAttribute as CFString)
         try deadline.check()
         let label = try labelForElement(element, deadline: deadline)
         try deadline.check()
-        let value = jsonScalar(try copyOptionalAttribute(element, kAXValueAttribute as CFString))
+        let observedValue = try copyOptionalAttribute(element, kAXValueAttribute as CFString)
+        refs[ref] = ObservedElement(element: element, valueDigest: valueDigest(observedValue))
+        let value = jsonScalar(observedValue)
         try deadline.check()
         let enabled = try boolAttribute(element, kAXEnabledAttribute as CFString)
         try deadline.check()
@@ -713,7 +734,7 @@ private final class AXHelper {
         let window = try revalidateWindow(record, deadline: deadline)
 
         var state = TraversalState()
-        var refs: [String: AXUIElement] = [:]
+        var refs: [String: ObservedElement] = [:]
         guard let tree = try buildNode(
             window, depth: 0, state: &state, refs: &refs, deadline: deadline
         ) else {
@@ -774,7 +795,7 @@ private final class AXHelper {
 
         let window = try revalidateWindow(record, deadline: deadline)
         let currentElement: AXUIElement
-        switch try locateElement(root: window, target: observedElement, deadline: deadline) {
+        switch try locateElement(root: window, target: observedElement.element, deadline: deadline) {
         case .found(let element):
             currentElement = element
         case .absent:
@@ -805,6 +826,12 @@ private final class AXHelper {
         guard try valueIsSettable(currentElement) else {
             throw helperError("value_not_settable")
         }
+        let before = try copyOptionalAttribute(currentElement, kAXValueAttribute as CFString)
+        guard let expected = observedElement.valueDigest,
+              let current = valueDigest(before) else {
+            throw helperError("value_not_comparable")
+        }
+        guard expected == current else { throw helperError("value_changed") }
         // No mutation is attempted after the request budget has expired.
         try deadline.check()
 
