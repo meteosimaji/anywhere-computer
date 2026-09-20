@@ -26,7 +26,8 @@ def sample():
 
 @pytest.mark.parametrize('case', ['complete', 'interrupted', 'thinking', 'empty', 'other_request',
                                   'missing_binding', 'multiple_finals', 'missing_user',
-                                  'wrong_prompt', 'wrong_conversation', 'unknown_finish'])
+                                  'wrong_prompt', 'wrong_conversation', 'unknown_finish',
+                                  'shared_binding'])
 def test_history_completion_and_identity(case):
     submission, payload = sample()
     user, answer = payload['messages']
@@ -43,6 +44,8 @@ def test_history_completion_and_identity(case):
         del user['metadata']['working_turn_id']
     elif case == 'multiple_finals':
         payload['messages'].append({**answer, 'id': 'another'})
+    elif case == 'shared_binding':
+        payload['messages'].append({**user, 'id': 'another-user'})
     elif case == 'missing_user':
         payload['messages'].remove(user)
     elif case == 'wrong_prompt':

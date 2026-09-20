@@ -52,6 +52,11 @@ def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAns
     keys = ('request_id', 'turn_exchange_id', 'working_turn_id')
     if any(not isinstance(user.metadata.get(key), str) or not user.metadata[key] for key in keys):
         return None
+    matching_users = [message for message in history.messages
+                      if message.author.get('role') == 'user'
+                      and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
+    if len(matching_users) != 1:
+        return None  # Provider correlation must not identify multiple input messages.
     answers = [message for message in history.messages
                if message.author.get('role') == 'assistant' and message.channel == 'final'
                and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
