@@ -10,7 +10,7 @@ from probe_subchat_catalog import minimize_window
 
 from anywhere_computer.subchat_browser.backend import COPY as COPY_SOURCE
 
-SOURCE = Path(__file__).with_name('subchat_submission.js').read_text()
+SOURCE = Path(__file__).with_name('subchat_submission.js').read_text(encoding="utf-8")
 
 CONVERSATION = re.compile(
     r'https://chatgpt\.com/c/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\Z')

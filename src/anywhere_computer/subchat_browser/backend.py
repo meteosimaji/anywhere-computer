@@ -14,8 +14,8 @@ from anywhere_computer.subchat_state import SubchatSubmission
 
 from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, picker_ready
 
-INPUT = Path(__file__).with_name('subchat_input.js').read_text()
-COPY = Path(__file__).with_name('subchat_copy.js').read_text()
+INPUT = Path(__file__).with_name('subchat_input.js').read_text(encoding="utf-8")
+COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")
 CHAT = re.compile(r'https://chatgpt\.com/c/'
                   r'([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\Z')
 
