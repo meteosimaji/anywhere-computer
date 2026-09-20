@@ -1,0 +1,133 @@
+"""Real SQLite lifecycle with an effectful deterministic transport fixture."""
+import asyncio
+
+import pytest
+
+from anywhere_computer.state import Ledger
+from anywhere_computer.subchat import (
+    SubchatAnswer,
+    SubchatOutcomeUnknown,
+    SubchatReceipt,
+    Subchats,
+)
+from anywhere_computer.subchat_state import SubchatSubmissions
+
+
+class BrowserFixture:
+    def __init__(self):
+        self.sends = 0
+        self.receipt = None
+        self.thinking = True
+
+    async def prepare(self, submission):
+        return ()
+
+    async def send(self, submission):
+        self.sends += 1
+        self.receipt = SubchatReceipt(conversation_id='conversation',
+                                     user_message_id='user', prompt=submission.prompt)
+        raise ConnectionError('Response lost after submission')
+
+    async def find_submission(self, submission):
+        return self.receipt
+
+    async def read_answer(self, submission):
+        if self.thinking:
+            return None
+        return SubchatAnswer(**self.receipt.model_dump(), answer_message_id='answer', text='42')
+
+
+async def test_send_loss_restart_thinking_and_answer_do_not_resend(tmp_path):
+    browser = BrowserFixture()
+    operation = 'c' * 32
+    ledger = Ledger(tmp_path)
+    try:
+        service = Subchats(SubchatSubmissions(ledger.connection), browser)
+        with pytest.raises(SubchatOutcomeUnknown):
+            await service.send(operation, '日本語', 'dynamic model', 'dynamic effort', owner='peer')
+    finally:
+        ledger.close()
+    ledger = Ledger(tmp_path)
+    try:
+        service = Subchats(SubchatSubmissions(ledger.connection), browser)
+        duplicate = await service.send(operation, '日本語', 'dynamic model', 'dynamic effort',
+                                       owner='peer')
+        assert duplicate.state == 'sending'
+        assert browser.sends == 1
+        for _ in range(3):
+            assert (await service.recover(operation, owner='peer')).state == 'submitted'
+        browser.thinking = False
+        completed = await service.recover(operation, owner='peer')
+        assert completed.answer == '42'
+        assert completed.state == 'completed'
+        assert await service.recover(operation, owner='peer') == completed
+        assert browser.sends == 1
+    finally:
+        ledger.close()
+
+
+async def test_cancelled_sender_remains_reserved(tmp_path):
+    started = asyncio.Event()
+
+    class HangingBrowser(BrowserFixture):
+        async def send(self, submission):
+            self.sends += 1
+            started.set()
+            await asyncio.Event().wait()
+
+    ledger = Ledger(tmp_path)
+    browser = HangingBrowser()
+    service = Subchats(SubchatSubmissions(ledger.connection), browser)
+    try:
+        task = asyncio.create_task(service.send('d' * 32, 'prompt', 'model', 'effort', owner=None))
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        duplicate = await service.send('d' * 32, 'prompt', 'model', 'effort', owner=None)
+        assert duplicate.state == 'sending'
+        assert browser.sends == 1
+    finally:
+        ledger.close()
+
+
+async def test_wrong_answer_identity_does_not_complete_submission(tmp_path):
+    browser = BrowserFixture()
+    ledger = Ledger(tmp_path)
+    service = Subchats(SubchatSubmissions(ledger.connection), browser)
+    operation = 'e' * 32
+    try:
+        with pytest.raises(SubchatOutcomeUnknown):
+            await service.send(operation, 'prompt', 'model', 'effort', owner=None)
+        await service.recover(operation, owner=None)
+        browser.receipt = browser.receipt.model_copy(update={'user_message_id': 'other'})
+        browser.thinking = False
+        with pytest.raises(ValueError, match='message does not match'):
+            await service.recover(operation, owner=None)
+        assert service.store.get(operation, owner=None).state == 'submitted'
+        assert browser.sends == 1
+    finally:
+        ledger.close()
+
+
+async def test_preflight_failure_can_retry_without_uncertain_send(tmp_path):
+    class UnavailableBrowser(BrowserFixture):
+        async def prepare(self, submission):
+            raise ValueError('Requested model unavailable')
+
+    ledger = Ledger(tmp_path)
+    browser = UnavailableBrowser()
+    operation = '9' * 32
+    service = Subchats(SubchatSubmissions(ledger.connection), browser)
+    try:
+        with pytest.raises(ValueError, match='model unavailable'):
+            await service.send(operation, 'prompt', 'model', 'effort', owner=None)
+        assert service.store.get(operation, owner=None).state == 'prepared'
+        assert browser.sends == 0
+        service.backend = BrowserFixture()
+        with pytest.raises(SubchatOutcomeUnknown):
+            await service.send(operation, 'prompt', 'model', 'effort', owner=None)
+        assert service.store.get(operation, owner=None).state == 'sending'
+        assert service.backend.sends == 1
+    finally:
+        ledger.close()

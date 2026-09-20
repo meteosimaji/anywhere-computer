@@ -305,3 +305,148 @@ changed turn identities or a changed transcript. The live multiline message was
 recovered with the same user ID as the independent owning-app read. Local tests
 also cover timeout cleanup and identity changes during the copy action. This is
 still an experimental receipt path, not the completed production subchat lifecycle.
+
+## Durable lifecycle implementation boundary
+
+`subchat_state.py` stores intermediate records in the existing ledger database.
+It persists the send stage before invoking an adapter, binds records to the
+transport owner, retains selected model/effort and exact prompt, and refuses
+changed arguments or replacement answers. A restart does not reset a possibly
+sent record to prepared. These records contain conversation content in the same
+private state directory as operation results; they are not diagnostic history.
+
+`subchat.py` composes that storage with an adapter contract for send, submission
+lookup and answer reading. A duplicate request returns its saved stage without
+calling send. An uncertain send raises a dedicated outcome-unknown error;
+Thinking/missing answer observation leaves the submitted stage intact. Recovery
+checks prompt and conversation/message identity before committing an answer.
+There is no stop-generation operation and no automatic resend scheduler.
+
+Six focused tests use real SQLite close/reopen and a deterministic effectful
+backend to cover response loss, restart, repeated Thinking reads, completion,
+cancellation, ownership and mismatched answer identity. They do not establish
+browser compatibility or CoS worker connectivity. The lifecycle is not yet
+registered in Engine/MCP: an actual adapter and outcome-unknown mapping must be
+connected and accepted before advertising a callable production subchat tool.
+
+For a follow-up, the requested conversation is stored at preparation, before
+dispatch. Reusing its operation ID with a different conversation or as a new-Chat
+request is rejected. The requested identity is kept separately from the observed
+conversation created by a new-Chat send, so later receipt recovery does not change
+the original request's meaning.
+
+## Browser answer extraction
+
+The same selected-turn Copy path now reads assistant text only when exactly one
+assistant content unit and visible final-response controls are present and no
+visible stop-generation control or busy turn is observed. The gate is checked
+again after copying. It returns the DOM's `answer_reference`, explicitly not an
+invented backend message ID, and labels its evidence `visible_response_controls`.
+This UI evidence must not be described as a native provider completion event.
+
+The authenticated marker trial returned the expected answer through this path.
+During initial diagnosis, the answer Copy action used `clipboard.write` with
+plain-text and HTML items, unlike the previously tested user `writeText` path.
+That initial attempt copied the synthetic marker to the OS clipboard; its prior
+contents were not read or restored. The helper now captures/restores both methods.
+The real-browser fixture verifies zero calls to either OS-writing spy and rejects
+an answer while the Stop generating control is present. Delayed/changing UI and
+long live Thinking still require end-to-end adapter acceptance.
+
+### Anywhere-owned browser lifecycle integration (2026-09-20)
+
+The development adapter `scripts/subchat_browser_backend.py` implements the
+existing Anywhere `Subchats` backend protocol against an explicitly supplied,
+dedicated browser context. It creates an ordinary Chat, selects the requested
+model and effort from observed UI labels, submits literal text once, and recovers
+receipts and answers through the exact-message copy probes. It does not own or
+close the supplied browser context. It is not registered as a production tool.
+
+An authenticated fresh-Chat trial selected GPT-5.6 Sol and the observed medium
+effort label, obtained the requested synthetic marker, and independently checked
+the ordinary Chat through the owning client's read operation. Closing and
+reopening SQLite recovered the saved answer without another submission. This
+establishes completed-result persistence, not pending-turn browser restart
+recovery.
+
+`tests/test_subchat_browser_backend.py` exercises this adapter in real Chrome
+with all requests fulfilled by an offline DOM fixture: dynamic model/effort
+labels, literal Japanese multiline input, one send, repeated pending reads,
+answer copy, SQLite reopen, and zero writes to the clipboard spies. The fixture
+is not evidence of compatibility with future ChatGPT UI versions. Its response
+explicitly declares UTF-8; the initial missing charset reproduced mojibake in the
+fixture's JavaScript answer literal and was corrected without weakening the
+text assertion.
+
+Remaining gates include distinguishing preflight rejection from uncertain send,
+checkpointing the new conversation before receipt loss, follow-up baselines,
+pending-turn restart recovery, and product CLI/MCP integration. Answer references
+are explicitly namespaced DOM content-unit references, not provider message IDs.
+
+### Product direction: redesign for Anywhere
+
+CoS is a source of requirements and failure cases, not a required runtime or
+ownership authority. Subchat identity, operation ownership, delivery state, and
+saved results belong to Anywhere's durable store. The browser adapter remains a
+replaceable implementation of that contract. No synthetic CoS Prime identity or
+CoS worker API is required. Ordinary Chat remains distinct from Work and paid API
+backends. Requested models and effort labels come from live discovery; this
+trial's selected model is an acceptance input, not a hardcoded model catalog.
+
+### Preparation and dispatch boundary
+
+The backend protocol now separates `prepare` (must not submit) from `send`.
+Model/effort availability and literal draft preparation happen before the store
+commits `sending`. A preparation failure leaves `prepared`, so the same immutable
+request can be retried without claiming a possible submission. Once `sending` is
+committed, exceptions/cancellation remain uncertain and never permit automatic
+resend. A compare-and-swap still permits only one caller to enter that stage.
+The browser adapter rechecks its page URL and exact draft immediately before the
+send click; it does not silently replace intervening user input.
+
+The 10 related lifecycle/state/browser tests passed after this change, including
+an unavailable-model preflight with zero sends and a changed-draft rejection in
+real Chrome against the offline fixture. Existing-conversation baseline storage,
+shared work context, and pending browser restart acceptance remain outstanding.
+
+### Follow-up baseline integration
+
+The preparation contract returns the observed prior turn IDs. `begin_send`
+persists them before dispatch; recovery excludes those turns even if they contain
+the same prompt, and the store refuses to accept a prior user-message ID as the
+new receipt. Existing-conversation preparation navigates only to a validated
+ordinary Chat URL and requires an idle empty composer. Dispatch rechecks both
+exact input and the observed history before clicking Send.
+
+Browser fixture integration now covers fresh and existing conversations. Twelve
+related tests passed, including persisted baselines after SQLite reopen and an
+older JSON record without the new field. The compare-and-swap compares the
+validated old record but matches the original stored JSON bytes, allowing additive
+model defaults without incorrectly treating an older serialization as a race.
+Real Chat follow-up acceptance and shared workspace tool access remain separate
+gates; the fixture does not prove those product requirements.
+
+### Actual plugin work and follow-up UI defect
+
+A new ordinary Chat selected GPT-5.6 Sol / medium and used the installed Anywhere
+HTTP plugin to create and execute a Python file in a dedicated temporary workspace.
+The returned result was `{"sum":16,"mean":5.333333333333333}`. The file was
+independently read and executed on the host with the same result. The Chat reported
+installed version `0.2.0a1`; that is the existing file/terminal runtime, not proof
+that the development subchat adapter is installed as a product tool.
+
+The first follow-up preparation failed before dispatch: existing conversation
+pages have no new-Chat Chat/Work toggle. Requiring that toggle on both page types
+was incorrect. The adapter now requires the toggle only for a fresh Chat; an
+existing conversation requires the exact validated `/c/` URL and ordinary Chat
+composer markup. The offline existing-conversation fixture removes that toggle
+and exercises the corrected path. Retrying the same prepared operation succeeded
+in observing a new user-message receipt, with the prior message ID persisted as
+its baseline. Completion of the requested file update is a separate observation.
+
+The follow-up then completed: the Chat read the existing file, reported using its
+SHA-256 for replacement, changed values to `[3,5,8,10]`, added `count`, and returned
+`{"sum":26,"mean":6.5,"count":4}` with exit code zero. Independent host read and
+execution confirmed that updated code and result. This is actual same-conversation
+file/terminal continuity for the selected model, not a blanket pass for all models,
+parent/subchat coordination, or simultaneous editing by multiple Chats.

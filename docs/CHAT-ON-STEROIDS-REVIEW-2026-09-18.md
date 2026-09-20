@@ -215,3 +215,25 @@ submission identity and state **before** send, because the general ledger stores
 an argument digest and final result, not intermediate browser recovery data.
 An observer timeout is not a failed generation, and the generic handler exception
 path must not classify an uncertain send as a confirmed failure.
+
+## Reusing CoS workers as an optional backend
+
+At the same pinned source, `registerAgentsTool` exposes `spawn`, `message`,
+`status` and `finish`. `callerNow` resolves the caller through a conversation ID,
+request correlation, or (when configured) an unattributed request. `ownsPrime`
+uses the attached conversation; before attachment the allowed request identity
+must still equal the original owner request. Supplying `run_id` does not grant
+ownership. Do not treat MCP connectivity or reusing an arbitrary request string
+as proof of an authorized persistent external controller.
+
+[Issue 82](https://github.com/totec448-spec/chat-on-steroids/issues/82), still open
+at this check, proposes that separate external-controller boundary. Existing CoS
+workers are a credible optional backend, but the full external sequence remains
+unverified: spawn, message, result, disconnect, reconnect, message the same worker.
+No CoS installation was found in the Mac's standard application directories at
+this check; no live worker call or installed-backend success is claimed.
+
+The published release inspected is v2.1.14. Its documented setup requires the
+desktop app, workspace configuration, Core connection and companion extension.
+This is materially more than attaching an arbitrary stateless MCP server. Keep
+CoS optional so using Anywhere's file/terminal/device tools does not require it.
