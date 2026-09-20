@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from ..subchat import SubchatAnswer, SubchatInterrupted, SubchatReceipt
+from ..subchat import SubchatAccessError, SubchatAnswer, SubchatInterrupted, SubchatReceipt
 from ..subchat_state import SubchatSubmission
 
 if TYPE_CHECKING:
@@ -76,9 +76,17 @@ def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAns
                       and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
     if len(matching_users) != 1:
         return None  # Provider correlation must not identify multiple input messages.
-    answers = [message for message in history.messages
-               if message.author.get('role') == 'assistant' and message.channel == 'final'
-               and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
+    correlated = [message for message in history.messages
+                  if message.author.get('role') == 'assistant'
+                  and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
+    # Thinking can be cancelled before a final message exists. Use the provider's
+    # explicit terminal marker, never absence of an answer or app-level idle.
+    if any(message.content.get('content_type') == 'reasoning_recap'
+           and message.end_turn is True
+           and message.metadata.get('reasoning_status') == 'reasoning_cancelled'
+           for message in correlated):
+        raise SubchatInterrupted('Provider recorded cancelled reasoning; do not resend')
+    answers = [message for message in correlated if message.channel == 'final']
     if len(answers) != 1:
         return None  # Regenerated alternatives require explicit reconciliation.
     answer = answers[0]
@@ -112,6 +120,8 @@ async def observe_history(page: Page, submission: SubchatSubmission) -> Response
         await page.goto('https://chatgpt.com/c/' + str(submission.conversation_id),
                         wait_until='domcontentloaded')
     response = await pending.value
+    if response.status in (401, 403):
+        raise SubchatAccessError(response.status)
     if response.status != 200 or not await response.request.header_value('authorization'):
         raise ConnectionError('Authenticated conversation history was not observed')
     if response.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/json':

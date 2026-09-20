@@ -36,6 +36,16 @@ class SubchatStaleTarget(ValueError):
     """The requested predecessor is no longer the last observed conversation turn."""
 
 
+class SubchatAccessError(ConnectionError):
+    """Observed HTTP access failure; contains no provider body or credentials."""
+
+    def __init__(self, status: int) -> None:
+        if status not in (401, 403):
+            raise ValueError('Expected an authentication or access rejection')
+        self.code = 'authentication_required' if status == 401 else 'access_denied'
+        super().__init__(self.code)
+
+
 class SubchatInterrupted(ValueError):
     """The provider recorded interruption; partial output is not a completed answer."""
 

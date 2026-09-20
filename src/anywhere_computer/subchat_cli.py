@@ -14,7 +14,7 @@ from pydantic import Field, TypeAdapter
 
 from .models import Contract, OperationId
 from .state import Ledger
-from .subchat import SubchatInterrupted, SubchatOutcomeUnknown, Subchats
+from .subchat import SubchatAccessError, SubchatInterrupted, SubchatOutcomeUnknown, Subchats
 from .subchat_content import SubchatResources
 from .subchat_state import SubchatList, SubchatSubmissions, SubchatWorkContext
 
@@ -83,7 +83,8 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         except Exception as error:
             # Do not print provider errors or invalid input: both can contain secrets.
             output = json.dumps({
-                'state': ('submission_unconfirmed'
+                'state': (error.code if isinstance(error, SubchatAccessError)
+                          else 'submission_unconfirmed'
                           if isinstance(error, SubchatOutcomeUnknown) else 'reply_interrupted'
                           if isinstance(error, SubchatInterrupted) else 'command_failed'),
                 'operation_id': (command.operation_id

@@ -8,6 +8,13 @@ Product name: `subchat` (Japanese: サブチャット). A subchat is an ordinary
 ChatGPT Chat created for a delegated task. It is not a ChatGPT Work task.
 Historical `AC_CHAT_WORKER_...` test markers below are retained as evidence.
 
+For current use, start with the [CLI](#packaged-local-json-lines-controller),
+[MCP entry](#stdio-mcp-entry), [HTTP answer recovery](#experimental-saved-http-answer-recovery),
+[explicit resources](#explicit-send-resources-experimental), and
+[capability boundaries](#coverage-boundary-for-the-next-http-increments).
+The chronological investigations below preserve earlier failures and superseded
+assumptions; they are not separate current feature inventories.
+
 The requested subchat uses ordinary ChatGPT Chat, not a Codex task, ChatGPT
 Work task, or paid OpenAI API. Creating a new conversation and recovering its
 identity are required; appending to an existing conversation is insufficient.
@@ -469,6 +476,22 @@ First launch still uses headed Chrome and may display its window; this is not a
 fully browser-free or guaranteed background-only Chat creation path.
 EOF explicitly shuts down this controller and its browser, if started. This entry point is
 local-only; it is not an authenticated HTTP/MCP endpoint or a shared-work router.
+
+HTTP access diagnostics are separate from generation state. An observed 401
+returns `authentication_required`; an observed 403 returns `access_denied` (not
+proof of an expired login). CLI uses these as `state`; MCP uses `error_code`.
+Both report `automatic_retry=false`. Restore the dedicated account's login/access,
+then recover the saved operation ID instead of submitting the prompt again.
+The ledger is preserved. A timeout, 429, server failure or missing authenticated
+request is not relabeled as a login failure. A logged-out page that makes no
+observed API request may still produce a generic observation error; first-login
+onboarding is not completed by these diagnostics.
+
+Only observed authorization/account/language headers are held in process memory;
+Cookies remain in the dedicated persistent browser context. After controller
+restart, the same profile may retain login, but headers must be observed again.
+Profile persistence is not a guarantee that the remote session remains valid.
+This path does not import Codex credentials or refresh tokens independently.
 
 A `send` command requires `action`, a caller-generated 32-character lowercase
 hexadecimal `operation_id`, exact `prompt`, and observed `model` and `effort`
@@ -1078,3 +1101,78 @@ pending until the user turn became observable again after completion. This is a
 remaining observation-latency limitation, not a failed generation. Future review
 prompts should pin the input revision and exact test interpreter so concurrent
 parent fixes and environment mismatch do not make a child's report look current.
+
+### Codex read parity and stopping before an answer
+
+The owning Codex app's `read_thread` independently returned the two completed
+review conversations above with kind `chatgpt`, the same user IDs and final
+answer IDs (`7f812bfc-066a-4795-aa91-9e5bf9d8a111` and
+`1829ae62-3247-4f09-8e98-02c90ee7aa17`), and matching final text. This establishes
+read parity for these conversations, not universal freshness of the app's reader
+or access from an external MCP process.
+
+HTTP recovery accepts only the correlated, completed final answer. Stopping
+before such an answer exists cannot produce a completed answer to retrieve.
+Provider interruption is reported separately; a missing final remains pending or
+requires reconciliation rather than being fabricated from progress. A dedicated
+Thinking-stop attempt `b01574a65bae4628a05cf5daf03e1ece` had already completed
+before the stop precondition was checked, so it does not count as a successful
+Thinking-stop acceptance. No stop was issued against its completed answer.
+
+A subsequent extreme-effort probe (`b56ee050fb644435b9bd2e54e5efa644`,
+conversation `6aafe834-c5b4-83ee-aec2-c77786d2101c`) stopped while the public UI
+showed Thinking and no final answer. An HTTP POST to the observed stop endpoint
+returned 200; no Stop-button click was used. Fresh HTTP history contained an
+assistant `reasoning_recap` with `end_turn=true` and
+`reasoning_status=reasoning_cancelled`, matching the saved user's request,
+exchange, and working-turn IDs. No final message existed. The owning Codex MCP
+reader independently returned the same user ID
+`38b3ba0c-729e-44be-b445-be6f3f87488f`, idle/completed, and no assistant answer.
+Codex's completed turn therefore does not establish a completed answer, nor does
+idle alone establish cancellation.
+
+The original parser left this case pending. The corrected HTTP projection reports
+`SubchatInterrupted` using the explicit correlated cancellation marker, without
+requiring a local stop receipt or reading reasoning text. Fresh HTTP history from
+the stopped conversation passed this check. Controlled regressions also reject
+unrelated requests, missing identity, nonterminal recaps, unknown statuses, and
+other content types. This supports detecting provider-recorded cancellation even
+when a local stop receipt is absent; a human clicking Stop during Thinking has
+not been separately exercised in this probe. The public provider-stop command is
+still not implemented. Unknown/missing terminal evidence remains unresolved and
+must not trigger automatic resending.
+
+The supported output is final text. Visible progress summaries are a different,
+not-yet-exposed output contract; nonpublic chain-of-thought is not a supported
+retrieval feature. The Codex read parity above returned user/final messages, not
+an internal reasoning trace. Generation still uses browser-assisted preparation;
+HTTP history reads and a CLI/MCP send interface do not establish a browser-free
+independent generation client.
+
+### Upstream waiting/recovery review, 2026-09-20
+
+The latest CoS commit observed through GitHub was
+[`04c6a298`](https://github.com/totec448-spec/chat-on-steroids/commit/04c6a298078817cf25c197f2b8bb639f8239243c).
+This refresh read the current issue bodies; it is not a fresh full-code audit of
+that commit. Earlier source-audit findings remain scoped to their pinned versions.
+
+- [#327](https://github.com/totec448-spec/chat-on-steroids/issues/327) reports a
+  stale waiting state after interruption. Anywhere independently reproduced its
+  own concrete variant: cancelled Thinking without a final message was pending.
+  The correlated cancellation projection above fixes that observed variant; it
+  does not claim to fix every stale-session cause described upstream.
+- [#326](https://github.com/totec448-spec/chat-on-steroids/issues/326) reports
+  indefinitely queued follow-ups. Anywhere preserves queued work when its parent
+  is interrupted and returns `reply_interrupted` on recovery rather than sending
+  it automatically. Broader queue diagnostics and explicit reconciliation remain
+  separate work; no age-based resend or assumed delivery is introduced.
+- [#336](https://github.com/totec448-spec/chat-on-steroids/issues/336) reports hours
+  of repeated browser recovery without execution progress. Keep HTTP reads bounded
+  and distinguish transport failure, unknown generation, and provider cancellation.
+  Do not copy automatic reload/retry loops or equate recovery attempts with task
+  progress. The reporter explicitly leaves the upstream root cause unresolved.
+
+These reports reinforce existing contracts rather than justify another task
+runtime. The accepted change reuses the current HTTP reader, interruption result,
+CLI/MCP mapping and queue guard. No upstream code or automatic restart watchdog
+was copied.

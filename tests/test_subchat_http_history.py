@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from anywhere_computer.subchat import SubchatInterrupted
+from anywhere_computer.subchat import SubchatAccessError, SubchatInterrupted
 from anywhere_computer.subchat_browser.history import project_history
 from anywhere_computer.subchat_state import SubchatSubmission
 
@@ -142,7 +142,11 @@ async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path):
         ledger.close()
 
 
-async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(tmp_path):
+@pytest.mark.parametrize('failure, code', [(SubchatInterrupted, 'reply_interrupted'),
+    (lambda _: SubchatAccessError(401), 'authentication_required'),
+    (lambda _: SubchatAccessError(403), 'access_denied')])
+async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(
+        tmp_path, failure, code):
     from io import StringIO
 
     from anywhere_computer.models import Request
@@ -154,7 +158,7 @@ async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(
 
     class Reader:
         async def read_answer(self, saved):
-            raise SubchatInterrupted('private provider details')
+            raise failure('private provider details')
 
     ledger = Ledger(tmp_path)
     store = SubchatSubmissions(ledger.connection)
@@ -169,11 +173,11 @@ async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(
         await process_lines(service, StringIO(json.dumps(
             {'action': 'recover', 'operation_id': op}) + '\n'), output)
         cli = json.loads(output.getvalue())
-        assert cli['state'] == 'reply_interrupted' and cli['automatic_retry'] is False
+        assert cli['state'] == code and cli['automatic_retry'] is False
         result = await server.execute(Request(operation_id='f' * 32, tool='subchat_recover',
                                               arguments={'operation_id': op}))
         assert result.state == 'failed'
-        assert result.data == {'error_code': 'reply_interrupted', 'automatic_retry': False}
+        assert result.data == {'error_code': code, 'automatic_retry': False}
         assert 'private provider details' not in output.getvalue() + result.model_dump_json()
         assert store.get(op, owner=None).state == 'submitted'
     finally:
@@ -276,8 +280,10 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
                 assert await read() == first
                 assert len(tab_gets) == 2  # Transport recovery stays HTTP-only.
                 status[0] = expired_status
-                with pytest.raises(ConnectionError):
+                with pytest.raises(SubchatAccessError) as rejected:
                     await read()
+                assert rejected.value.code == ('authentication_required'
+                    if expired_status == 401 else 'access_denied')
                 assert len(tab_gets) == 2  # No automatic reauthentication/retry.
                 before = len(calls)
                 status[0] = 200
@@ -293,3 +299,30 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
         server.shutdown()
         server.server_close()
         worker.join()
+
+
+@pytest.mark.parametrize('case', ['cancelled', 'other_request', 'not_terminal', 'unknown',
+                                  'wrong_type', 'missing_binding'])
+def test_cancelled_thinking_without_final_or_local_stop_receipt(case):
+    submission, payload = sample()
+    user, recap = payload['messages']
+    recap['channel'] = None
+    recap['content'] = {'content_type': 'reasoning_recap'}
+    recap['metadata'].pop('finish_details')
+    recap['metadata'].pop('is_complete')
+    recap['metadata']['reasoning_status'] = 'reasoning_cancelled'
+    if case == 'other_request':
+        recap['metadata']['request_id'] = 'other'
+    elif case == 'not_terminal':
+        recap['end_turn'] = False
+    elif case == 'unknown':
+        recap['metadata']['reasoning_status'] = 'future_status'
+    elif case == 'wrong_type':
+        recap['content']['content_type'] = 'thoughts'
+    elif case == 'missing_binding':
+        del user['metadata']['request_id']
+    if case == 'cancelled':
+        with pytest.raises(SubchatInterrupted):
+            project_history(json.dumps(payload).encode(), submission)
+    else:
+        assert project_history(json.dumps(payload).encode(), submission) is None
