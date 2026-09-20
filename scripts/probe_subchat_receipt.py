@@ -9,11 +9,13 @@ from playwright.async_api import Error, async_playwright
 from probe_subchat_catalog import minimize_window
 
 SOURCE = Path(__file__).with_name('subchat_submission.js').read_text()
+COPY_SOURCE = Path(__file__).with_name('subchat_copy.js').read_text()
 CONVERSATION = re.compile(
     r'https://chatgpt\.com/c/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\Z')
 
 
-async def probe(profile: Path, url: str, prompt: str, previous_ids: list[str]) -> dict[str, object]:
+async def probe(profile: Path, url: str, prompt: str, previous_ids: list[str],
+                copy_message: bool = False) -> dict[str, object]:
     match = CONVERSATION.fullmatch(url)
     if match is None:
         raise ValueError('A persisted ordinary Chat URL is required')
@@ -34,6 +36,12 @@ async def probe(profile: Path, url: str, prompt: str, previous_ids: list[str]) -
             # Missing rows may be loading, logged out, virtualized, or changed UI.
             # None of these is evidence that the prompt was not submitted.
             await page.locator('main [data-turn-key]').first.wait_for(state='attached')
+            if copy_message:
+                copied: dict[str, object] = await page.evaluate(
+                    COPY_SOURCE + '\n(args) => recoverSubchatSubmission(document, ...args)',
+                    [match[1], prompt, previous_ids],
+                )
+                return copied
             result: dict[str, object] = await page.evaluate(
                 SOURCE + '\n(args) => observeSubchatSubmission(document, ...args)',
                 [prompt, previous_ids, match[1]],
@@ -49,6 +57,8 @@ def main() -> None:
     parser.add_argument('--conversation-url', required=True)
     parser.add_argument('--expected-prompt-file', type=Path, required=True)
     parser.add_argument('--previous-user-id', action='append', default=[])
+    parser.add_argument('--copy-message', action='store_true',
+                        help='Use message Copy actions to recover original Markdown text')
     args = parser.parse_args()
     if CONVERSATION.fullmatch(args.conversation_url) is None:
         parser.error('Use a persisted https://chatgpt.com/c/ conversation URL')
@@ -57,7 +67,7 @@ def main() -> None:
         parser.error('The expected prompt must not be empty')
     try:
         result = asyncio.run(probe(args.profile.resolve(), args.conversation_url,
-                                   prompt, args.previous_user_id))
+                                   prompt, args.previous_user_id, args.copy_message))
     except (Error, ConnectionError) as error:
         result = {'state': 'submission_unconfirmed', 'error_type': type(error).__name__}
     # Even an observed user message does not prove the assistant has finished.
