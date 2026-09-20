@@ -923,3 +923,101 @@ succeeded with no page-count change. This does not verify switching accounts
 mid-session. Controlled transport tests require the observed account/language
 headers, reject unrelated-header forwarding, and exercise the same fault matrix
 for both catalog and history without duplicating a second transport implementation.
+
+### Explicit send resources (experimental)
+
+`subchat_send` and JSON-lines `send` accept optional `resources` with
+`attachments` and `plugins` arrays. Attachments identify files already uploaded
+in the selected Chat account (`id`, optional `library_file_id`, `name`,
+`mime_type`, `size`). Plugins require the exact observed `label`, `plugin://` URI
+and `system_hint` from that account's successful @ selection. These are content
+references, not credentials, permission grants or a plugin-discovery service.
+Local file paths are not attachment IDs; this API does not upload them.
+
+The browser still selects the observed model/effort and prepares generation.
+For exactly one matching generation POST, the adapter adds attachment metadata,
+plugin hints and the mention prefix to the browser-authenticated request. It
+preserves provider preparation/authentication and uses explicit request
+continuation. It does not create an independent HTTP login or replay a prepared
+request. Unexpected payloads, conversation changes and pre-existing resource
+selections fail closed. `--http-read` is required: recover accepts a receipt only
+when the server-saved prompt, complete attachment references and plugin hints
+match, then uses the existing final-answer correlation. The resource envelope is
+persisted with the operation ID; changing it cannot reuse that ID. Queue follow-ups
+do not implicitly reattach resources. A resource mismatch remains unconfirmed,
+never a successful send or permission to retry.
+
+For shared work, include the selected device ID, absolute path and expected
+SHA-256 in the prompt/work context. The selected Anywhere plugin must actually
+read that device. Uploads are snapshots; paths refer to contents at read time.
+Use existing hash-conditioned file edits or separate worktrees for collaborators,
+not unconditional overwrites. Work context is provenance, not an OS sandbox or
+per-child authorization. See the dated shared-work acceptance for existing
+conflicting-edit tests.
+
+Live acceptance on 2026-09-20:
+
+- Two ordinary Chat tabs ran concurrently with distinct files and markers;
+  answers were recovered in reverse submission order without mixing identities.
+- A UI @ selection invoked the actual Anywhere `computer_status` tool. A separate
+  Chat read `/tmp/ac-subchat-attachments-20260920/B.txt` through `files_read`, with
+  returned content and SHA-256, proving the path alternative separately from upload.
+- The first resource interception attempt using routing fallback dispatched but
+  saved plain input without resources. Exact history verification rejected it;
+  its uncertain ledger record was retained and was not resent. The later explicit
+  request-continuation path passed on an existing conversation and on a new one.
+  Do not infer that provider preparation alone caused the initial loss.
+- New resource send `01b0cb2338b541bc9ee3331fe23b5d3b` reached ordinary conversation
+  `6aafdd3f-3e48-83e8-a5a5-0dd9922c575f`, user message
+  `9ca9ba33-eb73-4d39-9d23-7c7a13ab1ff7`, final
+  `d13d042c-5704-450f-8b5d-ff842667cbc7`. Production HTTP recovery verified its input
+  resources and returned `case_id=A_FILE_271, sum=87` with a file citation.
+- The current tests separately exercise state persistence, public CLI/MCP
+  forwarding, wrong-input/resource rejection and a real browser's draft/Send
+  behavior with a controlled network boundary. They are not live-service tests.
+
+This does not establish built-in @ feature selection, file upload by API,
+provider-side generation stopping, native steer, or peer-to-peer Chat messaging.
+Parent-mediated follow-ups are distinct from direct peer messages. UI and private
+HTTP shapes may change; unsupported shapes must not fall back to a different
+model, strip attachments or silently report success.
+
+#### Coverage boundary for the next HTTP increments
+
+| Workflow | Current implementation/evidence | Still required |
+| --- | --- | --- |
+| New Chat / follow-up | Guarded browser dispatch, durable identity, HTTP final recovery; live tested | Independent HTTP generation without browser preparation |
+| Model / effort | Dynamic HTTP catalog; UI-selected values observed in generation POST | Explicit HTTP selection with observed availability and UI-equivalence tests |
+| Existing uploaded file / @ plugin | Explicit resource envelope and saved-input verification; live tested | Dynamic plugin reference discovery and authenticated upload integration |
+| Local path / shared editing | Actual plugin file reads; existing hash-conditioned edits and shared-file acceptance | More real parent/child editing tasks; paths alone confer no authorization |
+| Thinking / final / interruption | Pending preserved; exact final correlation; interrupted output rejected | Rich progress projection and explicit provider stop operation |
+| Queue / steer | Durable queue and local unsent cancellation; unsupported steer rejected | Verified non-interrupting delivery capability; never stop-and-send silently |
+| Built-in @ features | UI can expose search/image features | Observe each feature's own payload; do not treat it as a plugin URI |
+| Parallel / inter-chat work | Separate tabs/IDs; concurrent generation observed | Direct peer messaging not implemented; parent-mediated handoff verified below |
+| Recovery | Same-ID dedupe, HTTP result recovery, no unknown-send replay | Crash before new conversation ID still needs manual reconciliation |
+
+HTTP coverage is feature-specific. An observed URL or a successful POST is not
+proof of equivalent behavior. Each increment requires matching saved input,
+actual output/tool effects and failure behavior. Unknown UI/HTTP shapes remain
+unsupported rather than being advertised as "all Chat features supported".
+
+The subsequent real parent-Chat acceptance also completed. In parent conversation
+`6aafd694-06b0-83e8-91e7-be5b4235defc`, the actual Anywhere direct-MCP tools launched
+the local subchat CLI. New child operation `29fa01bc23de456729fa01bc23de4567`
+recovered final `CHILD_FROM_CHAT_20260920` from new conversation
+`6aafde1e-9b7c-83ee-987b-c5e863d45c52`. Parent relay operation
+`13579bdf2468ace013579bdf2468ace0` delivered that result to the existing B Chat,
+which retained its own B-file identity and sum 91. A separate child operation
+`31415926535897932384626433832795` created the explicitly scoped temporary file
+`/tmp/ac-subchat-collaboration-20260920.txt`. The parent independently read its
+exact content `COLLAB_B_CREATED` and SHA-256
+`fa603b3a3e96437eb680fc90e1d0b646e03d41921fa3b6f993af1b24e4a3931f`;
+Codex then independently verified the same actual file and all three completed
+ledger records. This proves parent-mediated handoff and a shared local artifact,
+not direct peer delivery or conflict-free simultaneous editing.
+
+Earlier parent attempts failed before dispatch because the dedicated new-Chat
+composer contained a leftover test draft. The exact draft was preserved locally,
+then explicitly cleared for this acceptance. The same prepared operation then
+succeeded; no unknown send was replayed. Production code still preserves drafts
+and requires inspection instead of deleting them automatically.

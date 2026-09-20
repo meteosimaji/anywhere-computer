@@ -5,10 +5,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from ..subchat import SubchatAnswer
+from ..subchat import SubchatAnswer, SubchatReceipt
 from ..subchat_state import SubchatSubmission
 from .catalog import observe_http_catalog, project_http_catalog
-from .history import observe_history, project_history
+from .history import observe_history, project_history, project_receipt
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page, Response
@@ -62,13 +62,20 @@ class ChatHTTPReader:
 
     async def history(self, context: BrowserContext,
                       submission: SubchatSubmission) -> SubchatAnswer | None:
+        return project_history(await self._history_payload(context, submission), submission)
+
+    async def receipt(self, context: BrowserContext,
+                      submission: SubchatSubmission) -> SubchatReceipt | None:
+        return project_receipt(await self._history_payload(context, submission), submission)
+
+    async def _history_payload(self, context: BrowserContext,
+                               submission: SubchatSubmission) -> bytes:
         async def observe(page: Page) -> Response:
             return await observe_history(page, submission)
 
-        payload = await self._read(context,
+        return await self._read(context,
             'https://chatgpt.com/backend-api/conversations/' + str(submission.conversation_id),
             observe)
-        return project_history(payload, submission)
 
     async def catalog(self, context: BrowserContext) -> dict[str, object]:
         async def observe(page: Page) -> Response:
