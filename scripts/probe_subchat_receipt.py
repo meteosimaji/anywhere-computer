@@ -8,8 +8,10 @@ from pathlib import Path
 from playwright.async_api import Error, async_playwright
 from probe_subchat_catalog import minimize_window
 
-SOURCE = Path(__file__).with_name('subchat_submission.js').read_text()
-COPY_SOURCE = Path(__file__).with_name('subchat_copy.js').read_text()
+from anywhere_computer.subchat_browser.backend import COPY as COPY_SOURCE
+
+SOURCE = Path(__file__).with_name('subchat_submission.js').read_text(encoding="utf-8")
+
 CONVERSATION = re.compile(
     r'https://chatgpt\.com/c/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\Z')
 

@@ -92,3 +92,27 @@ def test_connector_rejects_unknown_protocol_without_stopping_server(tmp_path, mo
     with pytest.raises(RuntimeError, match='API'):
         ensure_agent(tmp_path, replace_idle=False)
     assert calls == ['__status']
+
+
+def test_runtime_identity_tracks_nested_code_and_browser_assets(tmp_path, monkeypatch):
+    import anywhere_computer.runtime_identity as identity
+
+    monkeypatch.setattr(identity, '__file__', str(tmp_path / 'runtime_identity.py'))
+    (tmp_path / 'runtime_identity.py').write_text('root code')
+    nested = tmp_path / 'subchat_browser'
+    nested.mkdir()
+    code = nested / 'backend.py'
+    asset = nested / 'input.js'
+    code.write_text('first')
+    asset.write_text('first')
+    original = identity.runtime_identity()
+    code.write_text('second')
+    changed_code = identity.runtime_identity()
+    assert changed_code != original
+    asset.write_text('second')
+    changed_asset = identity.runtime_identity()
+    assert changed_asset != changed_code
+    (nested / 'cache.pyc').write_bytes(b'ignored cache')
+    assert identity.runtime_identity() == changed_asset
+    asset.rename(nested / 'renamed.js')
+    assert identity.runtime_identity() != changed_asset

@@ -6,7 +6,8 @@ import pytest
 
 async def test_submission_identity_uses_persisted_chat_and_user_bubble():
     playwright = pytest.importorskip('playwright.async_api')
-    source = (Path(__file__).parents[1] / 'scripts/subchat_submission.js').read_text()
+    source = (Path(__file__).parents[1] / 'scripts/subchat_submission.js').read_text(
+        encoding='utf-8')
     conversation = '11111111-2222-3333-4444-555555555555'
     url = f'https://chatgpt.com/c/{conversation}'
     async with playwright.async_playwright() as driver:

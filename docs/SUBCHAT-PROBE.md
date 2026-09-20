@@ -450,3 +450,36 @@ SHA-256 for replacement, changed values to `[3,5,8,10]`, added `count`, and retu
 execution confirmed that updated code and result. This is actual same-conversation
 file/terminal continuity for the selected model, not a blanket pass for all models,
 parent/subchat coordination, or simultaneous editing by multiple Chats.
+
+## Packaged local JSON-lines controller
+
+Install the optional `browser` extra and Chrome. `anywhere-subchat` accepts
+`--browser-profile` (an explicitly selected, dedicated logged-in Chrome profile)
+and `--state-dir` (its local ledger directory). Do not use the ordinary personal
+Chrome profile or open the same dedicated profile in another process.
+
+The process reads one JSON object per stdin line and writes one JSON result per
+stdout line. Keep stdin open between commands: the same browser remains open.
+EOF explicitly shuts down this controller and its browser. This entry point is
+local-only; it is not an authenticated HTTP/MCP endpoint or a shared-work router.
+
+A `send` command requires `action`, a caller-generated 32-character lowercase
+hexadecimal `operation_id`, exact `prompt`, and observed `model` and `effort`
+labels. Optional `conversation_id` targets a follow-up. Obtain current labels
+using the packaged catalog probe (`python -m
+anywhere_computer.subchat_browser.catalog --profile PATH --headed`); do not
+hard-code a model or silently substitute one. Close that probe before starting
+the controller against the same profile.
+
+`recover` and `status` commands take only `action` and `operation_id`. Poll
+`recover` while the state is `sending` or `submitted`; it never stops Thinking.
+A `submission_unconfirmed` error is a recovery instruction, not permission to
+create another send ID. Repeating `send` with the original ID does not resubmit
+an already reserved operation. Provider error bodies are not printed, because
+they may contain account or page data. `command_failed` with its error type
+requires diagnosis; it is not proof that no prior operation ran.
+
+The packaged adapter uses browser UI and therefore still depends on the provider's
+current markup and authentication. Packaging does not turn the Chat subscription
+into an official API. Shared device/workspace binding and remote MCP registration
+remain separate unfinished work.

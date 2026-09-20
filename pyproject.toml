@@ -12,6 +12,7 @@ dependencies = ["pydantic>=2.11,<3", "psutil>=7,<8", "keyring>=25,<26"]
 
 [project.scripts]
 anywhere = "anywhere_computer.cli:main"
+anywhere-subchat = "anywhere_computer.subchat_cli:main"
 
 [project.optional-dependencies]
 relay = [
@@ -36,6 +37,7 @@ dev = [
     "types-psutil>=7",
     "build>=1",
     "pytest-xdist>=3.8,<4",
+    "playwright==1.58.0",
 ]
 
 [tool.pytest.ini_options]

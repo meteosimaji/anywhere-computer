@@ -12,8 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def test_isolated_subprocess_matches_the_current_worktree():
     expected = hashlib.sha256()
-    for source in sorted((ROOT / "src/anywhere_computer").glob("*.py")):
-        expected.update(source.name.encode())
+    root = ROOT / "src/anywhere_computer"
+    sources = [path for path in root.rglob("*")
+               if path.is_file() and path.suffix in {".py", ".js"}]
+    for source in sorted(sources):
+        expected.update(source.relative_to(root).as_posix().encode())
         expected.update(b"\0")
         expected.update(source.read_bytes())
         expected.update(b"\0")
