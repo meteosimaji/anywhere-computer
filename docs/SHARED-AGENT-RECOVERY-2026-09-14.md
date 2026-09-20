@@ -97,3 +97,35 @@ update, reconnection, native credentials, sleep and OS restart against the actua
 Mac/Windows distribution. This patch addresses only one retained-client recovery
 gap; it does not complete public relay, GUI/browser, PTY/ConPTY, document editing,
 catalog caching or the full beta directive.
+
+## Windows stop-response drain (September 21)
+
+PR 114's Windows CI run `35523551452` failed in
+`test_retained_client_recovers_engine_and_prior_result[False-catalog-stdio]`:
+`__stop` reached the reply reader, which observed `EOFError: Owner pipe peer closed`.
+The dispatcher sets the engine stop event before returning its reply, while pipe
+shutdown previously signalled all connection workers to stop before they drained.
+
+Normal engine shutdown now stops accepting new pipe connections separately from
+aborting admitted workers. It waits a bounded interval for those workers to send
+their replies and for clients to consume/close them, then performs transport and
+dispatch cleanup. The default explicit pipe close retains abort-and-drain behavior;
+only the engine's normal shutdown opts into connection draining. No sleep-based
+assumption of successful delivery or retry of the stop command is introduced.
+
+A Windows-native regression holds an admitted handler, starts shutdown, waits for
+admission to close, releases the handler, and requires its actual client reply.
+Local macOS tests cannot certify this native path; Windows CI remains required.
+
+The ordinary Chat review at conversation `6aaff6f2-ee68-83e8-9212-fef4b9b8d44c`,
+answer `71c02430-85b0-44f0-8af4-86d021c8f9b7`, identified skipped downstream
+cleanup when transport teardown raises. Parent verification reproduced that
+failure against the pre-fix source. Nested finally blocks now attempt pipe,
+engine and metadata cleanup while propagating exceptions (including chained
+cleanup failures), and set the stopping flag on exceptional shutdown too.
+The regression fails before the fix and passes after it.
+
+The review's proposed direct `__stop` end-to-end test already exists in
+`test_shared_agent_reconnect.py`; it is retained rather than duplicated. The
+pipe timeout is a per-phase bound, not a single total shutdown deadline. Waiting
+for existing engine work also follows the engine's existing drain contract.

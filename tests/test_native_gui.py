@@ -21,6 +21,9 @@ for line in sys.stdin:
     elif method == 'observe':
         result = {'observation_id': 'fixture-observation', 'tree': {}}
     else:
+        if mode == 'changed':
+            print(json.dumps({'id': req['id'], 'error': {'code': 'value_changed'}}), flush=True)
+            continue
         counter.write_text(counter.read_text() + 'write\n' if counter.exists() else 'write\n')
         if mode == 'lost':
             sys.exit(0)
@@ -74,8 +77,9 @@ async def test_owner_binding_and_cross_session_snapshot_invalidation(helper_proc
     assert all(p.returncode is not None for p in helper_process[2])
 
 
-async def test_lost_native_reply_is_durable_unknown_and_not_replayed(tmp_path, helper_process):
-    helper_process[0][0] = "lost"
+@pytest.mark.parametrize("mode,expected", [("lost", "unknown"), ("changed", "failed")])
+async def test_native_outcome_is_durable_and_not_replayed(tmp_path, helper_process, mode, expected):
+    helper_process[0][0] = mode
     engine = Engine(tmp_path / "state")
     try:
         opened = await engine.execute(Request(operation_id="1" * 32, tool="gui_native_windows",
@@ -91,9 +95,13 @@ async def test_lost_native_reply_is_durable_unknown_and_not_replayed(tmp_path, h
         })
         first = await engine.execute(request, peer="one")
         second = await engine.execute(request, peer="one")
-        assert first == second and first.state == "unknown"
-        assert first.data["error_code"] == "native_gui_outcome_unknown"
-        assert helper_process[1].read_text() == "write\n"
+        assert first == second and first.state == expected
+        if mode == "lost":
+            assert first.data["error_code"] == "native_gui_outcome_unknown"
+            assert helper_process[1].read_text() == "write\n"
+        else:
+            assert "input was not attempted" in first.error
+            assert not helper_process[1].exists()
         assert not engine.native_gui.entries
     finally:
         await engine.close()

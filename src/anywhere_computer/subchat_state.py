@@ -34,7 +34,7 @@ class SubchatSubmission(Contract):
     model: str = Field(min_length=1, max_length=256)
     effort: str = Field(min_length=1, max_length=256)
     state: Literal[
-        'queued', 'prepared', 'sending', 'submitted', 'completed', 'cancelled'
+        'queued', 'prepared', 'sending', 'submitted', 'completed', 'cancelled', 'interrupted'
     ] = 'prepared'
     after_operation_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
     expected_last_user_message_id: str | None = None
@@ -187,6 +187,15 @@ class SubchatSubmissions:
         if old.state not in {'queued', 'prepared'}:
             raise ValueError('Submission may already be dispatched; cancellation is unavailable')
         return self._replace(old, old.model_copy(update={'state': 'cancelled'}), owner)
+
+    def interrupt(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
+        """Persist an explicitly observed provider interruption, not a timeout."""
+        old = self.get(operation_id, owner=owner)
+        if old.state == 'interrupted':
+            return old
+        if old.state != 'submitted':
+            raise ValueError('Only a confirmed submission can be marked interrupted')
+        return self._replace(old, old.model_copy(update={'state': 'interrupted'}), owner)
 
     def begin_send(self, operation_id: str, *, owner: str | None,
                    conversation_id: str | None = None,

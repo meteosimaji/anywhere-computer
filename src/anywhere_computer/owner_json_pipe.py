@@ -685,6 +685,7 @@ class OwnerJsonPipeServer:
             r"\\.\pipe\anywhere-owner-json-" + secrets.token_hex(24)
         )
         self._stopped = threading.Event()
+        self._closing = threading.Event()
         self._handles: set[int] = set()
         self._handles_lock = threading.Lock()
         self._thread: threading.Thread | None = None
@@ -721,7 +722,7 @@ class OwnerJsonPipeServer:
         return self.endpoint
 
     def _create_instance(self, *, first: bool) -> int:
-        if self._stopped.is_set():
+        if self._closing.is_set():
             raise OwnerPipeCleanupError("Owner pipe server is stopping")
         handle = _WINDOWS.create_server_pipe(
             self._pipe_name,
@@ -748,18 +749,18 @@ class OwnerJsonPipeServer:
             0x0001, False, threading.get_native_id()
         )
         try:
-            while current is not None and not self._stopped.is_set():
+            while current is not None and not self._closing.is_set():
                 next_handle: int | None = None
                 capacity_acquired = False
                 try:
-                    while not self._stopped.is_set():
+                    while not self._closing.is_set():
                         if self._capacity.acquire(timeout=0.05):
                             capacity_acquired = True
                             break
                     if not capacity_acquired:
                         break
                     _WINDOWS.connect_server(current)
-                    if self._stopped.is_set():
+                    if self._closing.is_set():
                         break
                     next_handle = self._create_instance(first=False)
                     worker = threading.Thread(
@@ -775,12 +776,13 @@ class OwnerJsonPipeServer:
                 except (EOFError, OSError, OwnerPipeError, concurrent.futures.CancelledError):
                     if capacity_acquired:
                         self._capacity.release()
-                    if self._stopped.is_set():
+                    if self._closing.is_set():
                         break
                 except BaseException as error:
                     if capacity_acquired:
                         self._capacity.release()
                     self._fatal = error
+                    self._closing.set()
                     self._stopped.set()
                     break
                 finally:
@@ -862,14 +864,20 @@ class OwnerJsonPipeServer:
         # closed.  This avoids the reply-loss race without an unbounded FlushFileBuffers call.
         _WINDOWS.wait_for_disconnect(handle, self._request_timeout)
 
-    def _stop_transport(self, timeout: float) -> None:
-        self._stopped.set()
+    def _stop_accepting(self, timeout: float) -> None:
+        self._closing.set()
         if self._thread_handle:
             _WINDOWS.kernel.CancelSynchronousIo(self._thread_handle)
         if self._thread is not None:
             self._thread.join(timeout)
             if self._thread.is_alive():
                 raise OwnerPipeCleanupError("Owner pipe worker did not stop")
+        _WINDOWS.close(self._thread_handle)
+        self._thread_handle = None
+
+    def _stop_transport(self, timeout: float) -> None:
+        self._stop_accepting(timeout)
+        self._stopped.set()
         with self._connections_lock:
             thread_handles = tuple(self._connection_thread_handles.values())
         for thread_handle in thread_handles:
@@ -885,8 +893,6 @@ class OwnerJsonPipeServer:
                 raise OwnerPipeCleanupError("Owner pipe connection workers did not stop")
             for worker in workers:
                 worker.join(min(remaining, 0.05))
-        _WINDOWS.close(self._thread_handle)
-        self._thread_handle = None
 
     def _pending_dispatches(self) -> tuple[concurrent.futures.Future[bytes], ...]:
         with self._dispatches_lock:
@@ -922,7 +928,14 @@ class OwnerJsonPipeServer:
         if self._fatal is not None:
             raise OwnerPipeCleanupError("Owner pipe worker failed") from self._fatal
 
-    async def aclose(self, timeout: float = 3.0) -> None:
+    async def aclose(self, timeout: float = 3.0, *, drain_connections: bool = False) -> None:
+        if drain_connections:
+            # Stop admission while admitted clients consume their replies. Do not
+            # signal _stopped until those workers finish or the drain budget expires.
+            await asyncio.to_thread(self._stop_accepting, timeout)
+            deadline = time.monotonic() + timeout
+            while self.active_connection_count and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
         await asyncio.to_thread(self._stop_transport, timeout)
         deadline = time.monotonic() + timeout
         while self._pending_dispatches():

@@ -126,6 +126,8 @@ class Subchats:
 
     async def recover(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
         submission = self.store.get(operation_id, owner=owner)
+        if submission.state == 'interrupted':
+            raise SubchatInterrupted('Provider interruption is saved; do not resend')
         if submission.state == 'queued':
             assert submission.after_operation_id is not None
             target = await self.recover(submission.after_operation_id, owner=owner)
@@ -139,7 +141,11 @@ class Subchats:
             if receipt is None:
                 return submission
             submission = self._accept(submission, receipt, owner)
-        answer = await self.backend.read_answer(submission)
+        try:
+            answer = await self.backend.read_answer(submission)
+        except SubchatInterrupted:
+            self.store.interrupt(operation_id, owner=owner)
+            raise
         if answer is None:
             # Thinking or unavailable observation: leave the submission untouched.
             return submission

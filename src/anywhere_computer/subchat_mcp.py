@@ -129,6 +129,8 @@ def session(service: Subchats, *,
         if server.closed:
             raise RuntimeError('Subchat session is closed')
         current = service.store.get(operation_id, owner=None)
+        if current.state == 'interrupted':
+            raise SubchatInterrupted('Provider interruption is saved; do not resend')
         task = recoveries.get(operation_id)
         if task is None and current.state in {'queued', 'sending', 'submitted'}:
             if len(recoveries) >= 8:
@@ -149,7 +151,7 @@ def session(service: Subchats, *,
                     # Retain late failures for the next observer, not just logs.
                     error = done.exception()
                     if (error is None and done.result().state in
-                            {'prepared', 'completed', 'cancelled'}
+                            {'prepared', 'completed', 'cancelled', 'interrupted'}
                             and recoveries.get(operation_id) is done):
                         recoveries.pop(operation_id)  # Result is already durable.
 
@@ -244,9 +246,11 @@ def session(service: Subchats, *,
                 deadline = asyncio.timeout(wait.wait_ms / 1000)
                 try:
                     async with deadline:
-                        while result.state not in {'prepared', 'completed', 'cancelled'}:
+                        while result.state not in {
+                                'prepared', 'completed', 'cancelled', 'interrupted'}:
                             result = await observe(wait.operation_id)
-                            if result.state not in {'prepared', 'completed', 'cancelled'}:
+                            if result.state not in {
+                                    'prepared', 'completed', 'cancelled', 'interrupted'}:
                                 # Never hold the browser input lock while the model thinks.
                                 await asyncio.sleep(.5)
                 except TimeoutError:

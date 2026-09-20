@@ -259,14 +259,21 @@ async def serve(
             async with server:
                 await stop.wait()
         finally:
-            server.close()
-            await server.wait_closed()
-            if connections:
-                await asyncio.gather(*list(connections), return_exceptions=True)
-            if pipe_server is not None:
-                await pipe_server.aclose(timeout=70)
-            await engine.close()
-            (directory / "agent.json").unlink(missing_ok=True)
+            stop.set()  # Also reject late dispatch after an exceptional shutdown.
+            try:
+                server.close()
+                await server.wait_closed()
+                if connections:
+                    await asyncio.gather(*list(connections), return_exceptions=True)
+            finally:
+                try:
+                    if pipe_server is not None:
+                        await pipe_server.aclose(timeout=70, drain_connections=True)
+                finally:
+                    try:
+                        await engine.close()
+                    finally:
+                        (directory / "agent.json").unlink(missing_ok=True)
 
 
 def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, JsonValue]:

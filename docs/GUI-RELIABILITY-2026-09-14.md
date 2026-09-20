@@ -218,6 +218,25 @@ guard. A real Swift-source serialization fixture checks 128 large Unicode/contro
 string nodes plus a non-tree oversized response. This is a serialization test,
 not a claim of a live 128-control application test.
 
+### Concurrent value changes
+
+Two independent helper processes reproduced a lost-update case on the synthetic
+TextEdit fixture: helper A observed text, helper B changed it, and A's old
+observation previously overwrote B's change. Window/element identity alone did
+not protect the content. The helper now retains a typed SHA-256 value digest per
+observation and compares it immediately before AXValue assignment. An explicit
+`value_changed` refusal means no input was attempted; the engine records failure,
+not an ambiguous post-dispatch outcome. Other uncertain input failures retain the
+unknown classification and are not replayed.
+
+The fixed live test preserved `Anywhere external intervention 48\n` and rejected
+the stale replacement. Digest storage avoids retaining every observed field's
+full text for the lease. Unsupported non-scalar values remain observable but
+cannot be replaced through this guarded setter. This is optimistic concurrency:
+AX does not provide atomic compare-and-set, so changes during the final check/set
+gap, changes that return to the same value, and edits outside the target field
+are not proven absent. No global user-input monitoring guarantee is claimed.
+
 Screenshots, click/keyboard/scroll, Windows UIA, signed helper distribution and
 concurrent user-interference acceptance remain open. Packaged installation/live
 MCP acceptance is separate from these source-engine and helper tests.

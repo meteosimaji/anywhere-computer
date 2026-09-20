@@ -123,6 +123,24 @@ class OwnerJsonPipeNativeTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(len(self.calls), calls_before)
 
+    async def test_shutdown_drains_admitted_reply_before_closing_pipe(self) -> None:
+        request = asyncio.create_task(self.request("slow", timeout=2))
+        await asyncio.wait_for(self.slow_started.wait(), timeout=1)
+        closing = asyncio.create_task(self.server.aclose(timeout=2, drain_connections=True))
+        try:
+            # Hold the handler until shutdown has stopped new connection admission.
+            async with asyncio.timeout(1):
+                while not self.server._closing.is_set():
+                    await asyncio.sleep(.01)
+            self.assertFalse(self.server._stopped.is_set())
+            self.slow_release.set()
+            self.assertEqual((await request)["action"], "slow")
+            await closing
+            self.assertEqual(self.server.active_connection_count, 0)
+        finally:
+            self.slow_release.set()
+            await asyncio.gather(request, closing, return_exceptions=True)
+
     async def test_client_timeout_does_not_cancel_started_dispatch(self) -> None:
         task = asyncio.create_task(self.request("slow", timeout=0.05))
         await asyncio.wait_for(self.slow_started.wait(), timeout=1)
