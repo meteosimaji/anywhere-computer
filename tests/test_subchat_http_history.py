@@ -116,7 +116,7 @@ async def test_backend_observes_history_without_send_or_original_tab_reload(inte
 async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path):
     from anywhere_computer.state import Ledger
     from anywhere_computer.subchat import Subchats
-    from anywhere_computer.subchat_state import SubchatSubmissions
+    from anywhere_computer.subchat_state import SubchatList, SubchatSubmissions
 
     submission, payload = sample()
     payload['messages'][1]['metadata']['finish_details'] = {'type': 'interrupted'}
@@ -140,7 +140,30 @@ async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path):
         service.queue('b' * 32, submission.operation_id, 'follow-up', owner=None)
         with pytest.raises(SubchatInterrupted):
             await service.recover('b' * 32, owner=None)
-        assert store.get(submission.operation_id, owner=None).state == 'submitted'
+        assert store.get(submission.operation_id, owner=None).state == 'interrupted'
+        assert store.get('b' * 32, owner=None).state == 'queued'
+    finally:
+        ledger.close()
+
+
+    class UnavailableReader:
+        async def read_answer(self, saved):
+            raise AssertionError('Saved interruption must not reopen a browser or poll')
+
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        service = Subchats(store, UnavailableReader())
+        saved = store.get(submission.operation_id, owner=None)
+        assert saved.state == 'interrupted' and saved.answer is None
+        assert store.list(SubchatList(), owner=None).submissions[-1].state == 'interrupted'
+        with pytest.raises(SubchatInterrupted):
+            await service.recover(submission.operation_id, owner=None)
+        with pytest.raises(SubchatInterrupted):
+            await service.recover('b' * 32, owner=None)
+        duplicate = await service.send(submission.operation_id, submission.prompt,
+                                       submission.model, submission.effort, owner=None)
+        assert duplicate == saved
         assert store.get('b' * 32, owner=None).state == 'queued'
     finally:
         ledger.close()
@@ -184,7 +207,14 @@ async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(
         assert result.state == 'failed'
         assert result.data == {'error_code': code, 'automatic_retry': False}
         assert 'private provider details' not in output.getvalue() + result.model_dump_json()
-        assert store.get(op, owner=None).state == 'submitted'
+        assert store.get(op, owner=None).state == (
+            'interrupted' if code == 'reply_interrupted' else 'submitted')
+        if code == 'reply_interrupted':
+            waited = await server.execute(Request(operation_id='a' * 32, tool='subchat_wait',
+                arguments={'operation_id': op, 'wait_ms': 1000}))
+            assert waited.state == 'completed'
+            assert waited.data['state'] == 'interrupted'
+            assert waited.data['answer'] is None
     finally:
         await server.close()
         ledger.close()

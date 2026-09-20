@@ -1267,3 +1267,20 @@ still returns an unconfirmed observation without launching Chrome, searching
 history or resending. Isolated real-Chrome tests cover context/browser closure
 both before and after receipt identity; the pre-identity cases failed before
 this correction. This does not solve manual reconciliation after pre-ID crashes.
+
+
+### Saved provider interruption
+
+An explicitly correlated provider interruption is now persisted as `interrupted`.
+Status/list and bounded wait can distinguish it from a submitted answer still
+waiting for observation. Recover reports `reply_interrupted` without reopening a
+browser after controller restart. The original prompt, conversation and user
+message identity remain unchanged; partial output is not promoted to an answer.
+Timeout, unavailable history, authentication rejection and browser closure do
+not set this state. Queued follow-ups stay queued and require reconciliation or
+explicit cancellation; interruption does not authorize automatic send or resend.
+
+This adds a development submission-state value. Older controllers do not support
+reading these new records; do not share the state directory with an older binary.
+The SQLite restart/HTTP projection tests use controlled provider payloads, not a
+new live Chat stop trial.
