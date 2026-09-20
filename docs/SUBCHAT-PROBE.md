@@ -1379,6 +1379,9 @@ that the requested settings were honored. Missing, malformed or oversized fields
 remain unavailable; only those two bounded strings are retained, not arbitrary
 metadata. Existing records and non-HTTP adapters default to no reported settings.
 Completed evidence is immutable with the answer and survives ledger reopening.
+It is stored in a separate table in the same SQLite transaction, bound to the
+operation, owner and answer ID. The original submission JSON is unchanged, so
+older runtimes can still read the answer while ignoring the additional table.
 
 A read-only HTTP check of the September 21 follow-up trial found
 `model_slug=gpt-5-6-thinking` and `thinking_effort=extended` on its matched final

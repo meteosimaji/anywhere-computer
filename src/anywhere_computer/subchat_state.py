@@ -86,6 +86,9 @@ class SubchatSubmissions:
         with connection:
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_submissions ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, body TEXT NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_answer_settings ('
+                               'operation_id TEXT PRIMARY KEY, owner TEXT, '
+                               'answer_message_id TEXT NOT NULL, body TEXT NOT NULL)')
 
     def get(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
         row = self.connection.execute(
@@ -94,7 +97,17 @@ class SubchatSubmissions:
         ).fetchone()
         if row is None or row[0] != owner:
             raise ValueError('Unknown subchat submission')
-        return SubchatSubmission.model_validate_json(row[1])
+        saved = SubchatSubmission.model_validate_json(row[1])
+        if saved.state == 'completed':
+            evidence = self.connection.execute(
+                'SELECT body FROM subchat_answer_settings WHERE operation_id=? '
+                'AND owner IS ? AND answer_message_id=?',
+                (operation_id, owner, saved.answer_message_id),
+            ).fetchone()
+            if evidence is not None:
+                saved = saved.model_copy(update={
+                    'reported_settings': SubchatReportedSettings.model_validate_json(evidence[0])})
+        return saved
 
     def list(self, request: SubchatList, *, owner: str | None) -> SubchatPage:
         rows = self.connection.execute(
@@ -143,7 +156,7 @@ class SubchatSubmissions:
         with self.connection:
             self.connection.execute(
                 'INSERT OR IGNORE INTO subchat_submissions VALUES (?,?,?)',
-                (operation_id, owner, proposed.model_dump_json()),
+                (operation_id, owner, proposed.model_dump_json(exclude={'reported_settings'})),
             )
         existing = self.get(operation_id, owner=owner)
         if (existing.prompt, existing.model, existing.effort,
@@ -176,15 +189,24 @@ class SubchatSubmissions:
                 'SELECT body FROM subchat_submissions WHERE operation_id=? AND owner IS ?',
                 (old.operation_id, owner),
             ).fetchone()
-            if row is None or SubchatSubmission.model_validate_json(row[0]) != old:
+            if row is None or self.get(old.operation_id, owner=owner) != old:
                 raise ValueError('Subchat submission changed; inspect it before continuing')
             cursor = self.connection.execute(
                 'UPDATE subchat_submissions SET body=? '
                 'WHERE operation_id=? AND owner IS ? AND body=?',
-                (new.model_dump_json(), old.operation_id, owner, row[0]),
+                (new.model_dump_json(exclude={'reported_settings'}),
+                 old.operation_id, owner, row[0]),
             )
             if cursor.rowcount != 1:
                 raise ValueError('Subchat submission changed; inspect it before continuing')
+            if new.reported_settings is not None:
+                # Keep the legacy submission JSON readable by older runtimes.
+                # Evidence commits atomically with its bound completed answer.
+                self.connection.execute(
+                    'INSERT INTO subchat_answer_settings VALUES (?,?,?,?)',
+                    (new.operation_id, owner, new.answer_message_id,
+                     new.reported_settings.model_dump_json()),
+                )
         return new
 
     def cancel(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
