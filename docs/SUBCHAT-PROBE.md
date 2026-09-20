@@ -805,3 +805,13 @@ experimental CDP `Target.createTarget(background=true)` path reported
 fix. Neither run visited ChatGPT or sent messages. Startup minimization does not
 yet provide unobtrusive multi-tab operation. PR85 must remain unmerged pending
 a working browser integration or an explicit revision of its behavior.
+
+A follow-up blank-page phase probe separated startup, target creation, navigation
+and delayed observation. After a one-second startup wait the window was still
+minimized. After `Target.createTarget(background=true)`, it initially reported
+minimized but became normal within the subsequent 0.5-second observation,
+before calling `page.goto`. The window ID was unchanged. This narrows the
+observed trigger to target creation/its delayed effects in this Chrome environment;
+it does not establish a universal Chrome cause or a successful fix. Rechecking
+only immediately after creation would miss this behavior. No Chat navigation or
+message submission occurred in these probes.
