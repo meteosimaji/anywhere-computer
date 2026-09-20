@@ -264,7 +264,7 @@ async def serve(
             if connections:
                 await asyncio.gather(*list(connections), return_exceptions=True)
             if pipe_server is not None:
-                await pipe_server.aclose(timeout=70)
+                await pipe_server.aclose(timeout=70, drain_connections=True)
             await engine.close()
             (directory / "agent.json").unlink(missing_ok=True)
 
