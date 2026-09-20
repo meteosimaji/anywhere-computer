@@ -161,3 +161,14 @@ click. Controlled browser regressions reproduce the old pre-reservation failure,
 then verify manual-send receipt recovery with one click and preservation of a
 user replacement draft with zero clicks. This is not proof of the original
 operator's exact actions or live serialization recovery for the earlier prompt.
+
+The new ordinary high-effort review completed through the adapter's own
+`subchat_recover`, including the exact prompt receipt and answer identity:
+conversation `6aaf8dd8-f038-83e8-be31-5195d4b83a39`, user message
+`e8e541eb-0033-44ab-9c22-80239065714c`. It produced a separate reproduction under
+`/tmp/ac-subchat-manual-review`. Independently rerunning that test against its
+pinned old wheel confirmed two sends; the companion no-draft-before-reservation
+regression passes against the current source. These are controlled browser tests,
+not a claim that every manual click race or historical serialization mismatch
+is resolved. The old-payload review also identified the existing pre-identity
+process-loss limitation; no timeout-based replay or extra runtime was adopted.
