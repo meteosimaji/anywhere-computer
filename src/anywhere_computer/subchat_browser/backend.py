@@ -154,13 +154,19 @@ class BrowserSubchatBackend:
         # A user can send as soon as text appears. The service has already saved
         # the reservation and baseline, so interruption here cannot permit replay.
         await editor.click()
-        draft = await page.evaluate(INPUT + '\ntext=>insertSubchatDraft(document,text)',
-                                    submission.prompt)
-        if draft.get('state') != 'draft_observed':
-            raise ValueError('Exact draft was not confirmed')
-        sent = await page.evaluate(INPUT + '\nargs=>submitSubchatDraft(document,...args)',
-                                  [self._url(submission), submission.prompt,
-                                   list(submission.baseline_message_ids)])
+        guard = await page.evaluate_handle(
+            INPUT + '\ntext=>insertObservedSubchatDraft(document,text)', submission.prompt)
+        try:
+            sent = await guard.evaluate(
+                INPUT + '\n(guard,args)=>guard.draft.state === "draft_observed" && '
+                '!guard.intervened && submitSubchatDraft(document,...args)',
+                [self._url(submission), submission.prompt, list(submission.baseline_message_ids)])
+        finally:
+            try:
+                if not page.is_closed():
+                    await guard.evaluate('guard=>guard.stop()')
+            finally:
+                await guard.dispose()
         if not sent:
             raise ValueError('Draft or conversation changed before dispatch; '
                              'recover without replay')

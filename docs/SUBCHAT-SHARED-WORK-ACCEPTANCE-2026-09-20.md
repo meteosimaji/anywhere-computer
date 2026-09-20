@@ -156,8 +156,8 @@ The user subsequently reported that they may have pressed Send. The browser
 adapter now finishes model/effort/history preparation before exposing any prompt.
 The service saves `sending` and the baseline first; only then does the adapter
 insert the draft. Final draft/history/URL checks and the click run in one browser
-task. A manual send or edit leaves the reservation intact and prevents a second
-click. Controlled browser regressions reproduce the old pre-reservation failure,
+task. An observed DOM change after manual send or edit leaves the reservation
+intact and prevents a second click. Controlled browser regressions reproduce the old pre-reservation failure,
 then verify manual-send receipt recovery with one click and preservation of a
 user replacement draft with zero clicks. This is not proof of the original
 operator's exact actions or live serialization recovery for the earlier prompt.
@@ -172,3 +172,37 @@ regression passes against the current source. These are controlled browser tests
 not a claim that every manual click race or historical serialization mismatch
 is resolved. The old-payload review also identified the existing pre-identity
 process-loss limitation; no timeout-based replay or extra runtime was adopted.
+
+Two further ordinary Chats used the installed Anywhere direct-MCP path with
+GPT-5.6 Sol at its observed high-effort setting. Both receipts and final answers
+were recovered through `subchat_recover`: conversations
+`6aaf90ef-f7ac-83ee-a0ef-0a5624be14e5` (implementation review) and
+`6aaf9138-20f4-83ee-b3f6-2a7b42bad9fe` (copy evidence). Their reported runtime
+`0.2.0a1`, instance `c463943ae1ef4eb68613ffb27a6703af`, matches the parent's
+status observation. The installed engine routed to the development subchat
+entry; this is not evidence of a globally updated installed wheel.
+
+The implementation reviewer produced a delayed-DOM manual-send fixture. The
+parent read and independently ran it: two click effects were reproduced against
+the merged source. It does not prove a live ChatGPT double submission. The
+adapter now observes Send clicks, composer submit events and non-composing Enter
+before exposing the draft. An intervening gesture prevents the automatic click,
+even with unchanged DOM; it does not establish successful delivery. Listeners
+are removed after the attempt. Controlled click/Enter/submit regressions fail
+before this change and pass after it, preserving the unknown reservation until
+the independently published message receipt appears. User input is not blocked.
+
+The same ordinary Chat received a queued follow-up, with message identity
+`4cd1cbd2-288b-4f75-81d1-04c63838fbb9`, and returned a completed review of
+`b00351b2c1801a48dafd10fd4f28c208ba6aec4f`. It verified the delayed-gesture cases
+and listener cleanup but identified a non-submit accessory button's Enter as a
+false positive. The parent independently reproduced that predicate failure and
+narrowed Enter observation to the composer textbox. The regression also checks
+Shift+Enter, composing Enter, ordinary editor Enter and listener removal. This
+review and follow-up used the actual plugin; its UI-race tests remain offline.
+
+The copy reviewer demonstrated why Copy plus rendered text need not identify
+the original Markdown source uniquely. No broad unescaping, URL normalization,
+substring matching or promotion of historical uncertain sends is adopted.
+Dispatch-bound serialization evidence remains a proposal requiring independent
+verification; it is not an exact-source recovery guarantee.

@@ -198,11 +198,30 @@ acceptance evidence; issue 311's affected-account retest is a separate boundary.
 | Cold model-picker hydration and bounded request/socket identity are handled separately. | Preserve bounded readiness and dynamic visible model discovery. Do not implement a broad cache/history walker or infer a model from the effort-only composer label. |
 | Recovery ownership is checked again after asynchronous work. | The copy-text receipt rechecks target identity and transcript membership after its awaited action. Duplicate original prompts must remain ambiguous unless the caller supplies prior submission identities. |
 
-The message Copy action provides original text even when visible Markdown is
-lossy. Anywhere's experimental receipt path captures that action in the dedicated
-page, restores the original clipboard method, compares the exact original prompt,
-and never treats inability to recover it as permission to resend. This is not a
+The message Copy action can preserve details lost by visible Markdown, but is
+not an original-source oracle: live observations also show escaped dots and
+bare URLs expanded into Markdown links. Anywhere captures that action in the
+dedicated page, restores the original clipboard method, compares it to the exact
+submitted prompt, and never treats a mismatch as permission to resend. This is not a
 stable ChatGPT API or evidence that Codex's external socket has been repaired.
+
+## September 20 follow-up decisions
+
+Upstream main was rechecked at `8f76ccc790917b01ee758da6687a1cf9b576ba8a`.
+The following are issue reports, not reproduced Anywhere defects:
+
+| Evidence | Decision and boundary |
+| --- | --- |
+| [#329](https://github.com/totec448-spec/chat-on-steroids/issues/329): read tools remain available while write/exec access disappears | Adopt capability-specific acceptance rather than equating `ready` with all tools working. The two ordinary Chat reviews independently used file reads and terminal execution and returned the installed runtime identity. This proves those paths at that time, not future connector availability. Do not silently widen permissions, substitute another connector or treat read access as write/exec proof. Automatic reattachment remains unimplemented and requires evidence from the actual connector. |
+| [#330](https://github.com/totec448-spec/chat-on-steroids/issues/330): compaction leaves active work requiring manual continuation | Preserve operation/submission IDs and distinguish live work from observation timeout. Reuse saved subchat records and explicit recovery; do not replay an uncertain send. Anywhere does not own the ChatGPT model's context compaction, so transparent model continuation is not claimed. No separate compaction engine is added in this change. |
+
+The copy-evidence subchat's artifact was read and independently rerun alongside
+the repository's Copy/submission tests: 15 tests passed. Its collision example
+is a controlled serializer model, not a measurement of ChatGPT's internal
+storage. A matcher that permits selected serialization rewrites is therefore not
+adopted as proof of exact source or as permission to accept historical unknown
+sends. The already-discovered mismatch remains an open recovery limitation;
+silently broadening equality would hide it rather than resolve it.
 
 ## Subchat integration constraint
 

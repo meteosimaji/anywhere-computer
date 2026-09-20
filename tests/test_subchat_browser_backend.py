@@ -247,7 +247,8 @@ async def test_browser_queue_stale_target_fails_before_draft(tmp_path):
             await browser.close()
 
 
-@pytest.mark.parametrize('manual_action', ['send', 'edit'])
+@pytest.mark.parametrize('manual_action', ['send', 'edit', 'delayed_click', 'delayed_enter',
+                                         'delayed_submit'])
 async def test_manual_send_after_draft_is_reserved_and_never_clicked_twice(tmp_path, manual_action):
     playwright = pytest.importorskip('playwright.async_api')
     from anywhere_computer.subchat import SubchatOutcomeUnknown
@@ -281,6 +282,34 @@ async def test_manual_send_after_draft_is_reserved_and_never_clicked_twice(tmp_p
                     "document.querySelector('#send').click();\n"
                     "              editor.textContent='';",
                     "editor.textContent='user replacement';")
+            elif manual_action.startswith('delayed_'):
+                # The send has an effect immediately, but no DOM acknowledgement yet.
+                manual = manual.replace("editor.textContent='';", '')
+                delayed = '''<script>
+                send.onclick=()=>{
+                  window.sends++;
+                  window.sentText=document.querySelector('[role=textbox]').innerText;
+                };
+                const form=document.querySelector('form');
+                form.onsubmit=event=>{event.preventDefault();window.sends++};
+                form.onkeydown=event=>{if(event.key==='Enter')window.sends++};
+                window.publishManual=()=>{
+                  history.pushState({},'', '/c/11111111-2222-3333-4444-555555555555');
+                  document.querySelector('main').innerHTML='<div data-turn-key="user">'+
+                    '<div data-user-message-bubble="true">manual send</div>'+
+                    '<button aria-label="Copy message">copy</button></div>';
+                  document.querySelector('[aria-label="Copy message"]').onclick=()=>
+                    navigator.clipboard.writeText('manual send');
+                };
+                </script>'''
+                if manual_action == 'delayed_enter':
+                    manual = manual.replace("document.querySelector('#send').click();",
+                                            "editor.dispatchEvent(new KeyboardEvent('keydown',"
+                                            "{key:'Enter',bubbles:true}));")
+                elif manual_action == 'delayed_submit':
+                    manual = manual.replace("document.querySelector('#send').click();",
+                                            "editor.closest('form').requestSubmit();")
+                manual = delayed + manual
             await context.route('**/*', lambda route: route.fulfill(
                 content_type='text/html; charset=utf-8', body=HTML + manual))
             service = Subchats(SubchatSubmissions(ledger.connection), InspectPreparation(context))
@@ -290,11 +319,14 @@ async def test_manual_send_after_draft_is_reserved_and_never_clicked_twice(tmp_p
                                    owner=None)
             assert service.store.get(operation, owner=None).state == 'sending'
             page = context.pages[0]
-            expected_sends = 1 if manual_action == 'send' else 0
+            expected_sends = 0 if manual_action == 'edit' else 1
             assert await page.evaluate('window.sends') == expected_sends
+            if manual_action.startswith('delayed_'):
+                assert (await service.recover(operation, owner=None)).state == 'sending'
+                await page.evaluate('window.publishManual()')
             receipt = await service.recover(operation, owner=None)
-            assert receipt.state == ('submitted' if manual_action == 'send' else 'sending')
-            if manual_action == 'send':
+            assert receipt.state == ('sending' if manual_action == 'edit' else 'submitted')
+            if manual_action != 'edit':
                 assert receipt.user_message_id == 'user'
             else:
                 assert await page.get_by_role('textbox').inner_text() == 'user replacement'
