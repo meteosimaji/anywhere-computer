@@ -1,6 +1,8 @@
 # ChatGPT subchat transport investigation
 
-Status: experimental investigation, not an available subchat feature.
+Status: historical transport investigation plus experimental subchat development.
+The browser/stdio prototype exists; individual capability and live-acceptance
+claims below have separate scopes. This is not a stable desktop-steering API.
 
 Product name: `subchat` (Japanese: サブチャット). A subchat is an ordinary
 ChatGPT Chat created for a delegated task. It is not a ChatGPT Work task.
@@ -745,3 +747,33 @@ is rejected because dispatch may already have happened.
 This operation does not click Stop, cancel the parent answer, clear browser
 drafts, or undo commands. Preparation may have left a draft that requires manual
 inspection. It is deliberately separate from provider-side generation stopping.
+
+
+### Codex message route recheck (2026-09-20)
+
+The owning app exposes `send_message_to_thread(threadId, prompt, hostId?, model?,
+thinking?)`. The observed schema has no delivery mode or expected-turn argument;
+a successful call must not be advertised as verified immediate steering. The
+read-only external probe of installed codex-app-tools 0.1.4 reached catalog
+discovery but failed with RPC -32603. No send or inference was requested. The
+redacted failure does not identify the root cause; previous endpoint/caller
+failures are historical evidence, not a diagnosis of this new result. The probe
+now includes the live send schema when discovery succeeds, without guessing
+capabilities from version numbers.
+
+Official Codex source pinned at
+`5c5308fc9a9ee789049d646ef11e5400384b9c6f` implements `turn/steer` in
+`codex-rs/app-server/src/request_processors/turn_processor.rs`. It requires an
+expected active turn ID and rejects no-active-turn, mismatch, and non-steerable
+review/compact turns. Its `tests/suite/v2/turn_steer.rs` checks a matching client
+message notification after acceptance. These upstream tests were read, not run
+here. This API targets Codex runtime turns, not ordinary ChatGPT conversations.
+
+Anywhere's current codex_context adapter reads context; codex_plugins opens an
+ephemeral tool context. Neither is a verified transport to an existing desktop
+task's active turn. Starting a separate app-server is not evidence of access to
+that turn. Keep desktop steering unavailable until the owning-runtime connection
+and expected-turn behavior are verified; do not spoof executor identities,
+replace ordinary Chat with Codex inference, or silently map steer to queue/Stop.
+
+Source: https://github.com/openai/codex/blob/5c5308fc9a9ee789049d646ef11e5400384b9c6f/codex-rs/app-server/src/request_processors/turn_processor.rs#L1020

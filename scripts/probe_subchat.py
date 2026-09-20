@@ -195,6 +195,9 @@ async def probe(
                     }),
                     "send_tested": False,
                     "ordinary_chat_creation_tested": False,
+                    "send_schema": next((tool.inputSchema for tool in catalog.tools
+                                         if tool.name == "send_message_to_thread"), None),
+                    "steer_tested": False,
                     "creation_schema": next((tool.inputSchema for tool in catalog.tools
                                              if tool.name == "create_thread"), None),
                 }
