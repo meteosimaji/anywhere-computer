@@ -62,3 +62,22 @@ process. The test now also attempts a stale hash edit through `tools/call` and
 verifies failure, preservation of the winning file, and successful execution of
 that file. Authentication in this fixture is static; OAuth/grant checks have
 separate tests. This does not reproduce ChatGPT's model or platform policy.
+
+## Nested subchat transport acceptance
+
+`test_http_direct_mcp_subchat_receipt_and_process_restart` exercises actual SDK
+requests through HTTP -> Anywhere engine -> direct stdio MCP -> subchat SQLite.
+It discovers the child tools, sends a Unicode prompt, receives `sending`, waits
+for the recorded answer, closes the child, opens another HTTP connection and
+child process, and repeats the same submission ID. The provider's persistent
+send counter remains one. Only the browser/model provider is deterministic;
+this is not an authenticated ChatGPT service or OAuth acceptance test.
+
+The direct-MCP session currently serializes complete calls. Consequently a
+`subchat_wait` invoked through that same session occupies its call slot until
+return, even though the inner subchat browser lock is released between polls.
+Use short bounded waits/recover calls on this route. Parallel SDK requests to the
+subchat server directly and nested Anywhere calls have different concurrency
+properties; the inner lock regression must not be advertised as end-to-end
+parallel scheduling. Task scheduling and authenticated workspace binding remain
+unfinished product work.
