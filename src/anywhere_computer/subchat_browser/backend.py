@@ -214,6 +214,18 @@ class BrowserSubchatBackend:
                                    [submission.conversation_id, submission.user_message_id])
         if user.get('state') != 'user_text_observed' or user['text'] != submission.prompt:
             return None
+        # The provider can pause an accepted ordinary-Chat request at a Work
+        # handoff choice. Keep this request in Chat; never resend or select Work.
+        stay = page.get_by_role('button', name=re.compile(
+            r'^(Chat\s*に留まる|Stay in Chat)(?:\s|$)')).filter(visible=True)
+        work = page.get_by_role('button', name=re.compile(
+            r'^(Work\s*で続ける|Continue in Work)$')).filter(visible=True)
+        if (await stay.count() == 1 and await work.count() == 1
+                and await stay.is_enabled()
+                and (await self._baseline(page))[-1:] == (submission.user_message_id,)
+                and page.url == 'https://chatgpt.com/c/' + str(submission.conversation_id)):
+            await stay.click()
+            return None  # Observe completion on a later poll, not from the click.
         answer = await page.evaluate(COPY + '\nargs=>copySubchatMessageText(document,...args)',
                                      [submission.conversation_id, submission.user_message_id,
                                       'assistant'])
