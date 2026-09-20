@@ -17,6 +17,7 @@ from pathlib import Path
 def matching_reply(
     snapshot: object, thread_id: str, previous_user_id: str | None, prompt: str,
     *, submitted_user_id: str | None = None,
+    interrupted_user_ids: frozenset[str] = frozenset(),
 ) -> dict[str, str] | None:
     """Match an acknowledged user ID or a new turn after a known baseline."""
     if bool(previous_user_id) == bool(submitted_user_id):
@@ -64,6 +65,10 @@ def matching_reply(
     for turn in candidates:
         if not isinstance(turn, dict):
             continue
+        if isinstance(turn.get("id"), str) and turn["id"] in interrupted_user_ids:
+            # App projections may call a stopped turn completed. Local evidence
+            # wins; never promote its partial text to a successful answer.
+            return None
         items = turn.get("items")
         if not isinstance(items, list) or not items:
             continue
@@ -101,21 +106,38 @@ async def wait_for_reply(
     read: Callable[[], Awaitable[object]], thread_id: str, previous_user_id: str | None,
     prompt: str, timeout: float, interval: float = 5,
     *, submitted_user_id: str | None = None,
+    interrupted_user_ids: frozenset[str] = frozenset(),
 ) -> dict[str, object]:
     if timeout <= 0 or interval <= 0:
         raise ValueError("timeout and interval must be positive")
+    if bool(previous_user_id) == bool(submitted_user_id):
+        raise ValueError("provide exactly one baseline or submitted user ID")
+    if submitted_user_id and submitted_user_id in interrupted_user_ids:
+        return {"state": "reply_interrupted", "read_attempts": 0, "resend": False}
     attempts = 0
+    failures = 0
     try:
         async with asyncio.timeout(timeout):
             while True:
                 attempts += 1
-                reply = matching_reply(await read(), thread_id, previous_user_id, prompt,
-                                       submitted_user_id=submitted_user_id)
+                try:
+                    observed = await read()
+                except ConnectionError:
+                    # Retry only this read, not submission. RPC/auth/contract
+                    # errors propagate rather than masquerading as Thinking.
+                    failures += 1
+                    await asyncio.sleep(interval)
+                    continue
+                reply = matching_reply(observed, thread_id, previous_user_id, prompt,
+                                       submitted_user_id=submitted_user_id,
+                                       interrupted_user_ids=interrupted_user_ids)
                 if reply is not None:
-                    return {"state": "reply_observed", "read_attempts": attempts, **reply}
+                    return {"state": "reply_observed", "read_attempts": attempts, **reply,
+                            **({"connection_failures": failures} if failures else {})}
                 await asyncio.sleep(interval)
     except TimeoutError:
-        return {"state": "reply_unconfirmed", "read_attempts": attempts, "resend": False}
+        return {"state": "reply_unconfirmed", "read_attempts": attempts, "resend": False,
+                **({"connection_failures": failures} if failures else {})}
 
 
 def connection_state(environment: dict[str, str]) -> str:
