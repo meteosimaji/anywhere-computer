@@ -636,3 +636,37 @@ same transport owner. Repeating a submission ID with different context is reject
 before backend input. Existing receipts without context continue to load. The
 local stdio endpoint still has owner=None; it does not establish per-child
 credentials or read-only isolation. Up to 32 input references are stored.
+
+### Explicit queued follow-ups (development)
+
+`subchat_message` accepts `mode`, `target_operation_id`, and the exact `prompt`;
+use its `request_id` as the new message operation identity. `mode: queue` binds
+the follow-up to an already confirmed subchat submission and inherits its exact
+model/effort and descriptive work context. It persists immediately as `queued`.
+Call `subchat_recover` or bounded `subchat_wait` on the new operation to progress
+it: no background dispatcher or delivery merely because the record exists is
+promised. The target's answer must complete before dispatch. If a newer visible
+turn appeared, the browser rejects the stale target before entering the draft.
+The current API permits competing queued proposals, not an implicit FIFO chain;
+a proposal is never automatically retargeted after another follow-up wins.
+
+`queued` means local acceptance, `sending` means reserved/possibly sent,
+`submitted` means the external message was observed, and `completed` means an
+answer was observed. Receipt is not an independent consumption acknowledgement.
+Unknown sends stay reserved across restart and are never automatically replayed.
+Same-ID changes to target/prompt are rejected. Two dispatchers cannot claim the
+same saved message for sending twice. Browser draft preparation can still need
+manual reconciliation after a pre-dispatch interruption.
+
+`mode: steer` currently returns `error_code: unsupported`, `dispatched: false`,
+and `queued: false`. No ordinary Chat immediate-steering transport has been
+verified. This explicit rejection is not completion of the requested live steer
+feature, and does not imply that the Codex desktop message tool can steer its
+active turn. Queue is never substituted for steer; Stop is never used.
+The browser also checks for generation immediately before ordinary Send, so a
+prepared idle submission does not knowingly become a provider-side queued input.
+UI checks cannot supply a server-side atomic expected-turn guarantee.
+
+These are local stdio controls and inherit the existing operator connection.
+They do not establish a child principal, revoke a connector grant, or provide
+read-only isolation. Remote delegated-child authorization remains separate work.

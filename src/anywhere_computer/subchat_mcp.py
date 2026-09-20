@@ -2,13 +2,13 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import cast
+from typing import Literal, cast
 
 from pydantic import Field, JsonValue, TypeAdapter
 
 from .mcp_server import MCPSession
 from .models import Contract, OperationId, Reply, Request
-from .subchat import SubchatOutcomeUnknown, Subchats
+from .subchat import SubchatOutcomeUnknown, Subchats, SubchatStaleTarget
 from .subchat_state import SubchatWorkContext
 
 
@@ -18,6 +18,12 @@ class Send(Contract):
     effort: str = Field(min_length=1, max_length=256)
     conversation_id: str | None = None
     work_context: SubchatWorkContext | None = None
+
+
+class Message(Contract):
+    mode: Literal['queue', 'steer']
+    target_operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    prompt: str = Field(min_length=1, max_length=100_000)
 
 
 class Catalog(Contract):
@@ -33,6 +39,11 @@ INSTRUCTIONS = (
     'Ordinary Chat subchats. Use an observed model and effort; never silently substitute. '
     'Choose request_id before subchat_send. Its response is a submission receipt, not a '
     'finished answer. Poll subchat_recover with operation_id equal to that send request_id. '
+    'subchat_message mode=queue persists a follow-up bound to the target operation; '
+    'recover/wait on its message operation dispatches only after that target completes. '
+    'No background dispatcher is implied. queued is local acceptance, not delivery. '
+    'mode=steer is currently unsupported by this ordinary Chat adapter; it never falls '
+    'back to queue or Stop. Submitted is a receipt, not proof of consumption. '
     'Thinking is pending, not failure. Never repeat an uncertain send with a new ID. '
     'subchat_wait defaults to one second, allows at most ten seconds, and returns the '
     'current saved state; '
@@ -55,8 +66,11 @@ def session(service: Subchats, *,
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
     definitions: dict[str, tuple[type[Contract], str]] = {
+        'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
+                            'Steer returns unsupported without sending or queueing.'),
         'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels.'),
-        'subchat_recover': (OperationId, 'Recover a submission and answer; never resend.'),
+        'subchat_recover': (OperationId, 'Recover receipt/answer or progress a queued follow-up; '
+                            'never replay an uncertain send.'),
         'subchat_status': (OperationId, 'Read the saved submission without browser interaction.'),
         'subchat_wait': (Wait, 'Wait for an answer without stopping generation or resending. '
                          'Other subchats can progress between observations. Timeout returns '
@@ -79,6 +93,18 @@ def session(service: Subchats, *,
 
     async def execute(request: Request) -> Reply:
         try:
+            if request.tool == 'subchat_message':
+                message = Message.model_validate(request.arguments)
+                service.store.get(message.target_operation_id, owner=None)
+                if message.mode == 'steer':
+                    return Reply(operation_id=request.operation_id, state='failed',
+                                 error='Immediate steer is not supported by this adapter.',
+                                 data={'error_code': 'unsupported', 'mode': 'steer',
+                                       'dispatched': False, 'queued': False})
+                result = service.queue(request.operation_id, message.target_operation_id,
+                                       message.prompt, owner=None)
+                return Reply(operation_id=request.operation_id, state='completed',
+                             data=result.model_dump(mode='json'))
             if request.tool == 'subchat_wait':
                 wait = Wait.model_validate(request.arguments)
                 result = service.store.get(wait.operation_id, owner=None)
@@ -121,6 +147,10 @@ def session(service: Subchats, *,
                 raise ValueError('Unknown subchat tool')
             return Reply(operation_id=request.operation_id, state='completed',
                          data=result.model_dump(mode='json'))
+        except SubchatStaleTarget:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='Queue target is stale; inspect the conversation before continuing.',
+                         data={'error_code': 'stale_target', 'dispatched': False})
         except SubchatOutcomeUnknown:
             return Reply(operation_id=request.operation_id, state='unknown',
                          error='Submission unconfirmed. Use subchat_recover with this ID; '
