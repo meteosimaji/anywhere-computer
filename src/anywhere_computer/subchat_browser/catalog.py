@@ -28,7 +28,7 @@ async def empty_chat(page: Page) -> bool:
             and await editors.count() == 1 and not (await editors.inner_text()).strip())
 
 
-async def collect_page(page: Page) -> dict[str, object]:
+async def collect_page(page: Page, model: str | None = None) -> dict[str, object]:
     if not await empty_chat(page):
         return {"state": "empty_chat_unconfirmed"}
     trigger = page.locator(TRIGGER)
@@ -42,10 +42,26 @@ async def collect_page(page: Page) -> dict[str, object]:
             models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
         if models.get("state") != "models_observed":
             return {"state": "models_unconfirmed"}
-        # Return to the simple view by closing and reopening the picker. The
-        # observed implementation opens that view without selecting another model.
-        await page.get_by_role("menu").press("Escape")
-        await trigger.click()
+        if model is not None:
+            choices = [item for item in models['models']
+                       if item['label'] == model and not item['disabled']]
+            if len(choices) != 1:
+                return {'state': 'requested_model_unavailable', 'models': models['models'],
+                        'submitted': False}
+            await page.get_by_role('menuitemradio', name=model, exact=True).click()
+            await page.locator(TOGGLE).click()
+            models = await page.evaluate(SOURCE + '\nobserveSubchatModelMenu(document)')
+            if [item['label'] for item in models.get('models', [])
+                    if item['selected']] != [model]:
+                return {'state': 'model_selection_unconfirmed', 'submitted': False}
+            # Selecting the verified row opens its effort view. No label table
+            # or assumed number of effort choices is involved.
+            await page.get_by_role('menuitemradio', name=model, exact=True).click()
+        else:
+            # Some UI versions remember the model-list view on reopening.
+            # In that case return the verified models as a partial catalog.
+            await page.get_by_role("menu").press("Escape")
+            await trigger.click()
 
         async def read() -> dict[str, object]:
             if not await empty_chat(page):

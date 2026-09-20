@@ -115,7 +115,8 @@ async def test_catalog_preserves_partial_observation_and_cannot_send(tmp_path):
                 'efforts_for_selected_model': {'state': 'efforts_unconfirmed'},
                 'submitted': False}
 
-    async def observe():
+    async def observe(model):
+        assert model in {None, 'dynamic model'}
         return expected
 
     try:
@@ -126,6 +127,9 @@ async def test_catalog_preserves_partial_observation_and_cannot_send(tmp_path):
         reply = await server.execute(Request(operation_id='3' * 32, tool='subchat_catalog'))
         assert reply.state == 'completed'
         assert reply.data == expected
+        selected = await server.execute(Request(operation_id='5' * 32, tool='subchat_catalog',
+                                                 arguments={'model': 'dynamic model'}))
+        assert selected.data == expected
         invalid = await server.execute(Request(operation_id='4' * 32, tool='subchat_catalog',
                                                 arguments={'prompt': 'do not send'}))
         assert invalid.state == 'failed'
