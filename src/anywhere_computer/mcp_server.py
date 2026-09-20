@@ -114,7 +114,9 @@ def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
 class MCPSession:
     """Transport-independent MCP session with negotiated, packaged UI resources."""
 
-    def __init__(self, catalog: Catalog, execute: Execute) -> None:
+    def __init__(self, catalog: Catalog, execute: Execute, *,
+                 instructions: str = INSTRUCTIONS) -> None:
+        self.instructions = instructions
         self.catalog = catalog
         self.execute = execute
         self.initialized = False
@@ -163,7 +165,7 @@ class MCPSession:
                     "experimental": {OPERATION_CAPABILITY: {"operationId": True}},
                 },
                 "serverInfo": {"name": "anywhere-computer", "version": __version__},
-                "instructions": INSTRUCTIONS,
+                "instructions": self.instructions,
             }
             if self.ui_enabled:
                 capabilities = cast(dict[str, JsonValue], result["capabilities"])

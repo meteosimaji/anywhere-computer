@@ -64,7 +64,7 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         destination.flush()
 
 
-async def run(profile: Path, state: Path) -> None:
+async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
     # Keep this dependency optional for all non-browser installations.
     from playwright.async_api import async_playwright
 
@@ -80,7 +80,13 @@ async def run(profile: Path, state: Path) -> None:
                                    BrowserSubchatBackend(context))
                 # Multiple commands share one browser. EOF is explicit shutdown;
                 # no per-request window closing and no automatic message retry.
-                await process_lines(service, sys.stdin, sys.stdout)
+                if mcp:
+                    from .mcp_server import serve_stdio
+                    from .subchat_mcp import session
+
+                    await serve_stdio(session(service), sys.stdin.buffer, sys.stdout.buffer)
+                else:
+                    await process_lines(service, sys.stdin, sys.stdout)
             finally:
                 await context.close()
     finally:
@@ -93,5 +99,6 @@ def main() -> None:
                         help='Dedicated logged-in Chrome profile, never your normal profile')
     parser.add_argument('--state-dir', type=Path, required=True,
                         help='Local subchat ledger directory')
+    parser.add_argument("--mcp", action="store_true", help="Serve MCP over stdio")
     args = parser.parse_args()
-    asyncio.run(run(args.browser_profile.resolve(), args.state_dir.resolve()))
+    asyncio.run(run(args.browser_profile.resolve(), args.state_dir.resolve(), mcp=args.mcp))

@@ -483,3 +483,27 @@ The packaged adapter uses browser UI and therefore still depends on the provider
 current markup and authentication. Packaging does not turn the Chat subscription
 into an official API. Shared device/workspace binding and remote MCP registration
 remain separate unfinished work.
+
+## Stdio MCP entry
+
+Add `--mcp` to the same `anywhere-subchat` invocation to use MCP framing instead
+of the JSON-lines command format. This reuses Anywhere's MCP session and stdio
+transport. A configured direct-MCP session can launch that executable with its
+explicit dedicated profile and ledger paths; callers do not pass a profile in
+individual tool requests. Do not expose this local stdio endpoint as an
+unauthenticated network service.
+
+The tools are `subchat_send`, `subchat_recover`, and `subchat_status`. Select a
+32-character lowercase hexadecimal `request_id` before sending. Recover using
+`operation_id` equal to that send ID; a recovery call's own MCP request ID is a
+different transport operation. Successful tool handling can return a pending
+submission in `data.state`; inspect it rather than assuming the Chat answer is
+finished. `unknown` after a send means recover without creating another send ID.
+Browser interactions are serialized to avoid interleaved drafts and clipboard
+interception. This endpoint still does not assign file permissions, bind shared
+workspaces, or automatically enable an Anywhere connection inside the Chat.
+
+The official MCP SDK acceptance uses a real subprocess and SQLite across process
+restarts with a deterministic provider fixture. It verifies protocol framing,
+exact input, result recovery and single dispatch; it is not evidence of live
+ChatGPT UI or platform-policy behavior.
