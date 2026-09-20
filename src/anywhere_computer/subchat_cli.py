@@ -91,7 +91,6 @@ async def run(
                 context = await driver.chromium.launch_persistent_context(
                     str(profile), channel='chrome', headless=False,
                     args=['--start-minimized'] if minimized else [])
-                resources.push_async_callback(context.close)
                 if minimized:
                     try:
                         page = context.pages[0] if context.pages else await context.new_page()
@@ -105,6 +104,7 @@ async def run(
                     except BaseException:
                         await context.close()
                         raise
+                resources.push_async_callback(context.close)
                 return context
 
             backend = BrowserSubchatBackend(open_browser)

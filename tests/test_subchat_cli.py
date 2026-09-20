@@ -164,3 +164,4 @@ async def test_browser_start_requires_minimization_before_dispatch(
     assert events[:3] == ['launch', 'minimize', 'detach']
     assert ('dispatch' in events) is confirmed
     assert events[-1] == 'close'
+    assert events.count('close') == 1
