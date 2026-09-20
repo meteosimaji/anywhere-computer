@@ -594,7 +594,10 @@ dedicated browser; it is not a browser-free client or a guarantee that the OS
 will never activate a window. It does not copy credentials, change the picker
 default or silently fall back to UI interactions. Transport model IDs are not
 accepted as UI labels by the current `subchat_send`; its exact model/effort
-verification remains unchanged. A 20-second bound covers HTTP collection.
+verification remains unchanged. A 20-second bound covers lazy browser startup,
+observation-tab creation and HTTP collection, followed by at most five seconds
+to close that owned tab. Startup timeout releases the factory lock; it does not
+claim that an independently launched browser process has exited.
 Controlled real-browser tests cover authenticated and cookie-only responses,
 zero send/picker operations and preservation of unrelated tabs. Live catalog
 GET evidence is recorded separately in the dated shared-work acceptance file.

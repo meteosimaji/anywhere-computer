@@ -53,12 +53,15 @@ class BrowserSubchatBackend:
             await page.close()
 
     async def http_catalog(self) -> dict[str, object]:
-        page = await (await self._browser()).new_page()
+        page = None
         try:
             async with asyncio.timeout(20):
+                page = await (await self._browser()).new_page()
                 return await collect_http_page(page)
         finally:
-            await page.close()
+            if page is not None:
+                # Leave cleanup headroom under the outer direct-MCP deadline.
+                await asyncio.wait_for(page.close(), timeout=5)
 
     async def _page(self, submission: SubchatSubmission) -> Page | None:
         page = self.pages.get(submission.operation_id)
