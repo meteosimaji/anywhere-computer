@@ -103,7 +103,7 @@ retrying an unknown send under a new ID; that suggestion was rejected. No fresh
 competitor-source verification was demonstrated by this answer.
 
 Automatic recovery is not accepted yet: the review prompt was visibly saved with
-`test_review\\.py` (one literal backslash before the dot) instead of the submitted
+`test_review\.py` (one literal backslash before the dot) instead of the submitted
 `test_review.py`, so exact receipt matching failed. The ideas answer was complete
 in the UI while adapter recovery still returned `submitted`. No resends, forced
 completion records, or relaxed text comparisons were used. These are live defects
