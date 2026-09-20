@@ -573,8 +573,10 @@ unobserved effort control is not evidence that the model lacks effort support.
 
 ### Bounded answer waiting
 
-The local MCP adapter adds `subchat_wait(operation_id, wait_ms=10000)`, bounded
-at 60 seconds. It returns a completed tool response containing the saved
+The local MCP adapter adds `subchat_wait(operation_id, wait_ms=1000)`, bounded
+at 10 seconds to leave headroom under direct MCP's 30-second read deadline.
+Longer requests are rejected before browser observation, not silently clamped.
+It returns a completed tool response containing the saved
 submission state; `submitted`/`sending` still mean no final answer was confirmed.
 Call again with the same submission ID when more waiting is useful. It does not
 stop generation, select another model, or resend. The browser lock covers only
@@ -589,3 +591,25 @@ or immediate steering of another active Codex turn. The existing Codex app
 message tool does not expose a queue/steer switch. A future delivery-mode feature
 must verify the owning runtime and accepted turn ID before claiming immediate
 delivery; it must not emulate steering by interrupting or resending.
+
+### Receipt waiting and the pre-identity recovery limit
+
+Review from the ordinary Chat `競合調査と実装検討` identified a distinct bottleneck:
+submission held the browser lock while waiting up to 120 seconds for a receipt,
+not for generation completion. The browser adapter now clicks Send once and
+observes once. No receipt yet returns durable `sending`; callers use recover/wait
+without another send. Input and individual observations remain serialized.
+
+If a new conversation's process disappears after click but before its conversation
+ID is persisted, a fresh adapter has neither its page nor a URL to reopen.
+`Sending` with no conversation ID therefore remains unresolved. Duplicate sends
+are still prevented, but automatic receipt recovery is not guaranteed. Preserve
+this state for manual reconciliation; do not enumerate unrelated history or
+send again. This differs from reopening a known `submitted` conversation while
+its answer is still Thinking, which has a saved identity to recover.
+
+Real DOM fixture tests defer the first receipt observation after an actual click,
+verify `sending`, show that a fresh adapter cannot invent the unknown conversation,
+and recover with the original page without a second click. Existing tests cover
+known-identity restart and final answer recovery. They do not simulate the live
+Chat service or prove recovery from every crash point.

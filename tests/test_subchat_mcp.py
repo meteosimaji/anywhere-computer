@@ -211,3 +211,28 @@ async def test_wait_does_not_disguise_provider_timeout_as_normal_thinking(tmp_pa
         assert backend.sends == 1
     finally:
         ledger.close()
+
+
+async def test_wait_rejects_transport_exceeding_budget_before_observation(tmp_path):
+    from anywhere_computer.models import Request
+
+    class NoObservation(BrowserFixture):
+        async def find_submission(self, submission):
+            raise AssertionError('invalid wait reached browser')
+
+    ledger = Ledger(tmp_path)
+    backend = NoObservation()
+    server = session(Subchats(SubchatSubmissions(ledger.connection), backend))
+    try:
+        tools = await server.catalog()
+        schema = next(tool for tool in tools if tool['name'] == 'subchat_wait')['inputSchema']
+        assert schema['properties']['wait_ms']['maximum'] == 10_000
+        assert schema['properties']['wait_ms']['default'] == 1000
+        for duration in (10_001, 30_000, 60_000):
+            reply = await server.execute(Request(operation_id='e' * 32, tool='subchat_wait',
+                arguments={'operation_id': 'a' * 32, 'wait_ms': duration}))
+            assert reply.state == 'failed'
+            assert reply.data['error_type'] == 'ValidationError'
+        assert backend.sends == 0
+    finally:
+        ledger.close()

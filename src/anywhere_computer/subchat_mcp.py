@@ -23,7 +23,8 @@ class Catalog(Contract):
 
 
 class Wait(OperationId):
-    wait_ms: int = Field(default=10_000, ge=0, le=60_000)
+    # Leave ample transport/cleanup headroom under direct MCP's 30-second deadline.
+    wait_ms: int = Field(default=1000, ge=0, le=10_000)
 
 
 INSTRUCTIONS = (
@@ -31,9 +32,13 @@ INSTRUCTIONS = (
     'Choose request_id before subchat_send. Its response is a submission receipt, not a '
     'finished answer. Poll subchat_recover with operation_id equal to that send request_id. '
     'Thinking is pending, not failure. Never repeat an uncertain send with a new ID. '
-    'subchat_wait waits for a bounded interval and returns the current saved state; '
+    'subchat_wait defaults to one second, allows at most ten seconds, and returns the '
+    'current saved state; '
     'a pending result can be waited on again without stopping generation. '
     'subchat_status reads the saved record without browser interaction. '
+    'If a new Chat remains sending without a conversation_id after process loss, '
+    'automatic recovery may be impossible: preserve unknown and reconcile manually; '
+    'never scan unrelated history or resend to manufacture a receipt. '
     'This local stdio process uses the dedicated profile chosen by its operator; '
     'it does not establish shared workspace access or grant tools to the Chat.'
 )

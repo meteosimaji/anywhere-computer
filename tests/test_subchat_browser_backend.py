@@ -54,8 +54,9 @@ window.finish=()=>{
 
 
 @pytest.mark.parametrize('followup', [False, True])
+@pytest.mark.parametrize('deferred_receipt', [False, True])
 async def test_browser_send_pending_completion_and_database_recovery(
-    tmp_path, monkeypatch, followup,
+    tmp_path, monkeypatch, followup, deferred_receipt,
 ):
     playwright = pytest.importorskip('playwright.async_api')
     monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / 'scripts'))
@@ -80,7 +81,16 @@ async def test_browser_send_pending_completion_and_database_recovery(
             await context.route('**/*', lambda route: route.fulfill(
                 content_type='text/html; charset=utf-8',
                 body=HTML + (prior if '/c/' in route.request.url else '')))
-            backend = BrowserSubchatBackend(context)
+            class DeferredBrowser(BrowserSubchatBackend):
+                first_observation = deferred_receipt
+
+                async def find_submission(self, submission):
+                    if self.first_observation:
+                        self.first_observation = False
+                        return None
+                    return await super().find_submission(submission)
+
+            backend = DeferredBrowser(context)
             service = Subchats(SubchatSubmissions(ledger.connection), backend)
             operation = 'b' * 32
             prompt = '日本語 🚀\n```python\nprint("<tag>")\n```'
@@ -89,6 +99,16 @@ async def test_browser_send_pending_completion_and_database_recovery(
                                           '11111111-2222-3333-4444-555555555555'
                                           if followup else None))
             assert sent.baseline_message_ids == (('old',) if followup else ())
+            if deferred_receipt:
+                assert sent.state == 'sending'
+                if not followup:
+                    # After losing the in-memory page before identity is saved,
+                    # a new adapter cannot invent the new conversation URL.
+                    fresh = Subchats(SubchatSubmissions(ledger.connection),
+                                     BrowserSubchatBackend(context))
+                    assert (await fresh.recover(operation, owner=None)).state == 'sending'
+                    assert len(context.pages) == 1
+                sent = await service.recover(operation, owner=None)
             assert sent.state == 'submitted'
             assert sent.conversation_id == '11111111-2222-3333-4444-555555555555'
             page = context.pages[0]

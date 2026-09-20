@@ -3,7 +3,6 @@
 Used by the local stdio MCP entry. Existing-conversation sends checkpoint
 visible message identities before dispatch; see the dated acceptance records.
 """
-import asyncio
 import re
 from pathlib import Path
 
@@ -135,7 +134,7 @@ class BrowserSubchatBackend:
             raise ValueError('Exact draft was not confirmed')
         return baseline
 
-    async def send(self, submission: SubchatSubmission) -> SubchatReceipt:
+    async def send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
         page = self.pages.get(submission.operation_id)
         if page is None or page.is_closed():
             raise ValueError('Prepared browser page is unavailable')
@@ -147,12 +146,9 @@ class BrowserSubchatBackend:
         if await self._baseline(page) != submission.baseline_message_ids:
             raise ValueError('Conversation history changed before send')
         await page.get_by_role('button', name=re.compile(r'^(送信|Send)$')).click()
-        async with asyncio.timeout(120):
-            while True:
-                receipt = await self.find_submission(submission)
-                if receipt is not None:
-                    return receipt
-                await asyncio.sleep(1)
+        # Release the caller's browser lock after one observation. An unavailable
+        # receipt is durable 'sending', never permission to click Send again.
+        return await self.find_submission(submission)
 
     async def find_submission(self, submission: SubchatSubmission) -> SubchatReceipt | None:
         page = await self._page(submission)

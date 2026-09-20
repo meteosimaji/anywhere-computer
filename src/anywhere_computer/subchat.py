@@ -24,7 +24,7 @@ class SubchatBackend(Protocol):
         """Prepare input without submitting; failure is known not to have sent."""
         ...
 
-    async def send(self, submission: SubchatSubmission) -> SubchatReceipt: ...
+    async def send(self, submission: SubchatSubmission) -> SubchatReceipt | None: ...
 
     async def find_submission(self, submission: SubchatSubmission) -> SubchatReceipt | None: ...
 
@@ -60,6 +60,10 @@ class Subchats:
                                            baseline_message_ids=baseline)
         try:
             receipt = await self.backend.send(submission)
+            if receipt is None:
+                # Dispatch happened, but receipt observation is not yet available.
+                # Keep the durable reservation; recover/wait may observe it later.
+                return submission
             return self._accept(submission, receipt, owner)
         except Exception as error:
             # Provider errors may contain account data; retain only the cause locally.
