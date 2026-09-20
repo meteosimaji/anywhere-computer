@@ -44,11 +44,19 @@ async def test_chat_http_routes_and_recovers_without_cross_grant_access(
             service = asyncio.create_task(serve(
                 shared_directory, credential="routing-fixture-credential", shutdown=stopped,
             ))
-            async with asyncio.timeout(5):
-                while not (shared_directory / "agent.json").exists():
-                    if service.done():
-                        await service
-                    await asyncio.sleep(0.01)
+            try:
+                async with asyncio.timeout(5):
+                    while not (shared_directory / "agent.json").exists():
+                        if service.done():
+                            await service
+                        await asyncio.sleep(0.01)
+            except TimeoutError as error:
+                frames = [f"{frame.f_code.co_name}:{frame.f_lineno}"
+                          for frame in service.get_stack()]
+                raise TimeoutError(
+                    f"Shared startup exceeded 5 seconds: done={service.done()}, "
+                    f"endpoint_exists={(shared_directory / 'agent.json').exists()}, stack={frames}"
+                ) from error
             local_instance = (await exchange(shared_directory, "__status")).data["instance_id"]
         registry = tmp_path / "devices"
         devices = DeviceStore(registry)
