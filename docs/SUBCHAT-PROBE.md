@@ -782,3 +782,17 @@ and expected-turn behavior are verified; do not spoof executor identities,
 replace ordinary Chat with Codex inference, or silently map steer to queue/Stop.
 
 Source: https://github.com/openai/codex/blob/5c5308fc9a9ee789049d646ef11e5400384b9c6f/codex-rs/app-server/src/request_processors/turn_processor.rs#L1020
+
+### Saved submission inventory
+
+`subchat_list` and the JSON-lines CLI command `{"action":"list","limit":20}`
+read saved submission summaries without browser interaction. They return operation
+IDs, saved state, model/effort and confirmed conversation IDs; prompts, answers and
+potentially large work-context references are omitted. Use status/recover on the
+selected ID for details. This is saved state, not a fresh provider observation.
+
+Results are newest-created first. Supply the returned `next_before` as `before`
+to retrieve older records; `null` marks the end. The limit is 1–100. Pagination
+filters the authenticated store owner before selecting records. The local stdio
+adapter retains owner=None and does not create child-specific authorization.
+The existing ledger is reused; no browser or second task database is introduced.

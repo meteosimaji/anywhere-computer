@@ -46,6 +46,24 @@ class SubchatSubmission(Contract):
     work_context: SubchatWorkContext | None = None
 
 
+class SubchatList(Contract):
+    limit: int = Field(default=20, ge=1, le=100)
+    before: int | None = Field(default=None, ge=1)
+
+
+class SubchatSummary(Contract):
+    operation_id: str
+    state: str
+    model: str
+    effort: str
+    conversation_id: str | None
+
+
+class SubchatPage(Contract):
+    submissions: list[SubchatSummary]
+    next_before: int | None
+
+
 class SubchatSubmissions:
     """Uses the ledger's connection; does not own or close it."""
 
@@ -63,6 +81,21 @@ class SubchatSubmissions:
         if row is None or row[0] != owner:
             raise ValueError('Unknown subchat submission')
         return SubchatSubmission.model_validate_json(row[1])
+
+    def list(self, request: SubchatList, *, owner: str | None) -> SubchatPage:
+        rows = self.connection.execute(
+            'SELECT rowid, body FROM subchat_submissions WHERE owner IS ? '
+            'AND (? IS NULL OR rowid < ?) ORDER BY rowid DESC LIMIT ?',
+            (owner, request.before, request.before, request.limit + 1),
+        ).fetchall()
+        summaries = []
+        for row in rows[:request.limit]:
+            item = SubchatSubmission.model_validate_json(row[1])
+            summaries.append(SubchatSummary.model_validate(item.model_dump(include={
+                'operation_id', 'state', 'model', 'effort', 'conversation_id',
+            })))
+        return SubchatPage(submissions=summaries, next_before=(
+            rows[request.limit - 1][0] if len(rows) > request.limit else None))
 
     def prepare(self, operation_id: str, prompt: str, model: str, effort: str,
                 *, owner: str | None, conversation_id: str | None = None,
