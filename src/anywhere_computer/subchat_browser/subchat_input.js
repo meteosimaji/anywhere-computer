@@ -34,6 +34,35 @@ function insertSubchatDraft(document, text) {
   return {state: 'draft_observed', input_dispatched: true, submitted: false};
 }
 
+// Watch dispatch gestures before exposing text. A provider may acknowledge a
+// manual send asynchronously, leaving all final DOM checks unchanged meanwhile.
+// This records uncertainty; it never suppresses or claims a successful user send.
+function insertObservedSubchatDraft(document, text) {
+  const controller = new AbortController();
+  const guard = {intervened: false, stop: () => controller.abort()};
+  const observe = event => {
+    const target = event.target;
+    if (!(target instanceof Element)) return;
+    const button = target.closest('button');
+    const label = button && (button.getAttribute('aria-label') || button.textContent.trim());
+    if ((event.type === 'click' && ['送信', 'Send'].includes(label)) ||
+        (event.type === 'submit' && target.matches('form[data-chatgpt-composer]')) ||
+        (event.type === 'keydown' && event.key === 'Enter' && !event.shiftKey &&
+         !event.isComposing && target.closest('form[data-chatgpt-composer]')))
+      guard.intervened = true;
+  };
+  for (const type of ['click', 'submit', 'keydown'])
+    document.defaultView.addEventListener(type, observe,
+                                         {capture: true, signal: controller.signal});
+  try {
+    guard.draft = insertSubchatDraft(document, text);
+    return guard;
+  } catch (error) {
+    guard.stop();
+    throw error;
+  }
+}
+
 // Final comparison and click share one browser task. Do not overwrite a user
 // edit or click again after a manual send changed the conversation or composer.
 function submitSubchatDraft(document, expectedUrl, text, previousIds) {

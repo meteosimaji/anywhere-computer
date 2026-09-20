@@ -14,10 +14,16 @@ plugin. See the dated development and practical acceptance records for deployed
 runtime identities and the limits of their evidence.
 
 The durable submission lifecycle is in `src/anywhere_computer/subchat.py` and
-`subchat_state.py`; the browser adapter remains under `scripts/`. PR 61 merged
+`subchat_state.py`; the browser adapter is now `src/anywhere_computer/subchat_browser/`. PR 61 merged
 these components at `90ef7a352011925980ced6c713c98085f01e71f7` after all five CI
 jobs passed, including Windows.
-It is not a registered production subchat MCP service. Model/effort discovery,
+The `anywhere-subchat --mcp` entry now exposes the lifecycle via local stdio MCP.
+Two parallel ordinary Chats have used the installed Anywhere direct-MCP route
+to that development entry and returned independently identified final answers.
+PRs 77–79 merged after all five CI jobs passed; 36 targeted tests passed against
+their combined main state `5b85afef6f9bdbb5c8a48e101d8c305dfe67fbd0`.
+The installed engine's version is still `0.2.0a1`; this does not establish that
+its bundled subchat source has been updated. Model/effort discovery,
 ordinary Chat messages and independently correlated replies have live evidence;
 the external Codex app transport is not repaired by those successful owning-app
 calls. Dynamic menu discovery must not silently select a replacement model.
@@ -78,8 +84,11 @@ another standalone probe.
 ## Shared work is a subchat acceptance requirement (2026-09-20)
 
 The current `SubchatSubmission` stores prompt/model/effort and message/result
-identity. It does not bind a device, workspace, or shared job. Thus a successful
-message exchange is not evidence that subchats can collaborate on real files.
+identity and an optional persisted work context (device/workspace/task provenance).
+That context does not authorize or enforce routing. Actual ordinary Chat reviews
+have read the specified repository and run isolated local regression artifacts;
+this proves bounded shared work, not child-specific authorization or safe arbitrary
+concurrent edits.
 Production integration must bind the parent and subchats to the same explicitly
 selected device and workspace, using the existing device router and file/terminal
 APIs rather than copying project directories or inventing a second filesystem.
