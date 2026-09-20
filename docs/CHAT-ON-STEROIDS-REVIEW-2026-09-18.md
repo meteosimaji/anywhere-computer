@@ -162,3 +162,21 @@ Issue #311 remains unresolved at this observation. The newest comments describe
 ongoing investigation, not a proven cause or compatible model-discovery API.
 Account-specific visible menu observation must not be advertised as a stable
 provider API or a working production subchat catalog.
+
+## Consolidated recovery proposal reviewed, 2026-09-20 JST
+
+[CoS PR #316](https://github.com/totec448-spec/chat-on-steroids/pull/316), inspected
+at `647f23ec1fc09da246c9e8953fe2a00f18e546b4`, consolidates the earlier recovery
+proposals. Its `askForTheTabToWakeIn` rechecks lifecycle, cancellation, current
+ownership and delivery evidence after an asynchronous session read. A pending
+wake requests the exact conversation's tab; dormant history does not establish
+current worker ownership. The journal path gets its own 60-second budget,
+including 413 split retries, rather than changing all request deadlines.
+
+Applicable subchat requirements are to revalidate ownership after awaited work,
+recover the same conversation without resubmitting, and preserve unacknowledged
+results. Anywhere does not currently have that browser wake/journal queue, so no
+queue, global timeout increase or companion-specific endpoint is added. Existing
+operation-ledger recovery remains the execution service's mechanism. This is a
+source review of an unmerged proposal at the stated revision; upstream test claims
+are not Anywhere acceptance evidence. No upstream code was copied.
