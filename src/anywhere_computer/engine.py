@@ -13,6 +13,7 @@ from typing import TypeVar, cast
 from pydantic import JsonValue
 
 from . import __version__, codex_context, codex_plugins, skills_context
+from .audio_status import inspect_audio
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
@@ -143,6 +144,16 @@ class Engine:
         )
 
     def _register_tools(self) -> None:
+        async def audio_status(args: Empty) -> Result:
+            return await inspect_audio()
+
+        self.register(
+            "audio_status", "Inspect the optional macOS audio helper, existing permissions "
+            "and input devices. Does not record, request permission or select an input. "
+            "Device names do not prove virtual routing or a present audio signal.",
+            Empty, audio_status, read_only=True,
+        )
+
         async def gui_observe(args: GUIObserve) -> Result:
             return await self.gui_mcp.observe(args, owner=self._plugin_owner.get())
 
