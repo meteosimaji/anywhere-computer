@@ -1195,3 +1195,26 @@ submission store, plus CLI/MCP error projection. It is not a live ChatGPT shutdo
 trial. Closing during an in-flight send can still yield `submission_unconfirmed`;
 the durable reservation prevents replay. Explicit provider cancellation remains
 `reply_interrupted`, separately from browser closure or a read timeout.
+
+
+### Ordinary Chat audit follow-up (2026-09-21)
+
+The parent recovered final reports from two ordinary Chat conversations:
+- Product review: https://chatgpt.com/c/6aaff6f2-ee68-83e8-9212-fef4b9b8d44c
+  (GPT-5.6 Sol, high; recovered with the saved operation/user/answer identity).
+- Implementation audit: https://chatgpt.com/c/6aaff62a-99a0-83e8-88a1-d02b0fd918e4
+  (observed generation model gpt-6-pro; final report read through Codex).
+
+These are review inputs, not automatic proof of their technical claims. The
+parent independently reproduced loss of typed browser/access errors during
+preparation: three regression cases failed before the fix. Preparation now
+preserves those actionable error types while keeping the record prepared and
+sending nothing. The same errors during send still yield outcome-unknown,
+retain the sending reservation and never permit automatic replay.
+
+Outstanding audit candidates require separate reproduction and changes: short
+wait calls cancelling slower observations; external receipt ownership across
+operations; DOM-only completion after interruption; durable interruption
+explanation; closed-browser diagnosis before a conversation ID exists. No child
+permission isolation, browser-independent authentication or native GUI support
+is claimed by this change.

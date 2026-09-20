@@ -131,3 +131,38 @@ async def test_preflight_failure_can_retry_without_uncertain_send(tmp_path):
         assert service.backend.sends == 1
     finally:
         ledger.close()
+
+
+@pytest.mark.parametrize('failure', ['closed', 'authentication', 'access'])
+@pytest.mark.parametrize('phase', ['prepare', 'send'])
+async def test_access_diagnostics_preserved_only_before_dispatch(tmp_path, failure, phase):
+    from anywhere_computer.subchat import SubchatAccessError, SubchatBrowserClosed
+
+    error = (SubchatBrowserClosed('closed') if failure == 'closed'
+             else SubchatAccessError(401 if failure == 'authentication' else 403))
+
+    class FailingBrowser(BrowserFixture):
+        async def prepare(self, submission):
+            if phase == 'prepare':
+                raise error
+            return ()
+
+        async def send(self, submission):
+            self.sends += 1
+            raise error
+
+    ledger = Ledger(tmp_path)
+    browser = FailingBrowser()
+    service = Subchats(SubchatSubmissions(ledger.connection), browser)
+    try:
+        expected = type(error) if phase == 'prepare' else SubchatOutcomeUnknown
+        with pytest.raises(expected):
+            await service.send('8' * 32, 'prompt', 'model', 'effort', owner=None)
+        assert service.store.get('8' * 32, owner=None).state == (
+            'prepared' if phase == 'prepare' else 'sending')
+        assert browser.sends == (0 if phase == 'prepare' else 1)
+        if phase == 'send':
+            await service.send('8' * 32, 'prompt', 'model', 'effort', owner=None)
+            assert browser.sends == 1
+    finally:
+        ledger.close()
