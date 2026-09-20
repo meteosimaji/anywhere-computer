@@ -129,3 +129,47 @@ semantics, inspect enabled actions, and verify the resulting file independently.
 An acknowledged action or matching text view must never substitute for a save
 postcondition. Background process input needs explicit capability reporting and
 interference checks; do not silently fall back to frontmost/global keyboard input.
+
+### Experimental AX helper and independent review
+
+`native/macos/AXHelper.swift` is a persistent JSON-lines helper with `windows`,
+`observe`, and `set_value` methods. It does not launch a browser, activate an app,
+request permissions, or use a model. It is development source, not yet an engine
+tool or an installed/packaged GUI capability. Developer compilation is
+`swiftc native/macos/AXHelper.swift -o /tmp/anywhere-gui`; end-user installation
+must eventually include a verified binary rather than requiring compilation.
+
+Requests contain `id`, `method`, and an exact app bundle identifier. `windows`
+returns helper-local handles, not CGWindowIDs. `observe` requires `window_id` and
+returns an expiring observation and opaque element references. `set_value` also
+requires that observation, element reference and value. The helper consumes the
+observation before attempting the mutation and rechecks process launch identity,
+window membership, element membership and AXValue writability. It rejects an
+explicitly disabled element. Unsupported/missing AXEnabled is returned as unknown,
+not as enabled; other enabled-attribute failures still reject the write. Optional
+label failures retain attribute/status diagnostics without discarding a usable
+tree. This exception does not apply to identity or write-capability validation.
+
+The parent independently found and reproduced two problems in the ordinary Chat
+subchat's initial implementation: short pipe input waited for EOF, and TextEdit's
+AXDescription failure aborted observation. The revised POSIX reader responds
+without closing stdin; a real subprocess regression covers invalid/oversized
+requests and continued use of the same process. A three-second monotonic request
+budget is checked during AX traversal and immediately before mutation; individual
+AX calls also have a timeout. This is not an atomic transaction with the target app.
+
+Live parent verification found one synthetic TextEdit window, observed 13 elements
+without truncation, set its text to `Anywhere native 検証 45 ✅\n`, and independently
+observed that exact value afterward. Reusing the consumed observation returned
+`observation_unavailable`. The text field advertised AXValue writability but no
+AXEnabled attribute; the response preserved that unknown state. Persistence was
+not tested in this helper run and `persistence_verified` remained false.
+
+Final-source verification then wrote `Anywhere native 検証 46 ✅\n` and read it back
+in a fresh observation. Both the used observation and a second pre-mutation
+observation were rejected afterward: a mutation invalidates all snapshots in the
+helper session, not only the one supplied to that mutation.
+
+Engine ownership/ledger integration, packaged helper verification, screenshots,
+click/keyboard/scroll, Windows UIA, and concurrent user-interference acceptance
+remain open. Helper-local identities are not authenticated multi-user identities.
