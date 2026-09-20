@@ -42,6 +42,7 @@ class SubchatAccessError(ConnectionError):
     def __init__(self, status: int) -> None:
         if status not in (401, 403):
             raise ValueError('Expected an authentication or access rejection')
+        self.status = status
         self.code = 'authentication_required' if status == 401 else 'access_denied'
         super().__init__(self.code)
 

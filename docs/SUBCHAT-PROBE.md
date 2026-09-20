@@ -1295,3 +1295,13 @@ reasoning content. This exercises current persistence with freshly retrieved rea
 provider evidence; it is not a newly generated or newly stopped Chat, a complete
 controller-process restart, or browser-independent authentication. The local full
 suite on this branch passed 1480 tests with 18 skips.
+
+### Initial HTTP access rejection
+
+The HTTP reader now retains a 401/403 observed during its initial browser login
+observation, just as it retains a rejection during subsequent HTTP reads.
+Repeated polling returns the same access error without creating another page.
+An explicitly replaced reader or browser context permits a fresh observation.
+This does not refresh credentials, bypass an access rejection, or establish
+browser-independent authentication. Regression tests cover both statuses,
+page cleanup, repeated polls and explicit context replacement.

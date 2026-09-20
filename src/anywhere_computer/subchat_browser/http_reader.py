@@ -48,6 +48,10 @@ class ChatHTTPReader:
                 # Both observers require an authenticated exact-origin GET.
                 self._headers = headers
                 return await response.body()
+            except SubchatAccessError as error:
+                self._headers = {}
+                self._access_status = error.status
+                raise
             finally:
                 await asyncio.wait_for(page.close(), timeout=5)
         response_http = await context.request.get(

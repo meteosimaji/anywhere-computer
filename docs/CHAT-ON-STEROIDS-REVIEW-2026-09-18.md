@@ -319,3 +319,23 @@ upstream-reported test counts are not Anywhere acceptance evidence.
 These decisions add no alternate execution scheduler, credential-import path or
 upstream code dependency. Browser-independent PC control and ordinary Chat
 transport remain separate acceptance tracks.
+
+## September 21 initial browser authorization review
+
+Upstream main remains `04c6a298078817cf25c197f2b8bb639f8239243c`.
+[Issue 339](https://github.com/totec448-spec/chat-on-steroids/issues/339)
+reports a listening local bridge with no authorized companion connection on
+Windows 11. Its root cause is not established by the report, and it does not
+prove an Anywhere bridge defect. Keep process/listener availability separate
+from authenticated provider access; do not add a competing bridge or loosen
+permissions on this evidence alone.
+
+The relevant Anywhere lifecycle inspection found a concrete adjacent defect:
+an initial HTTP authentication observation rejected with 401/403 was not latched,
+although subsequent HTTP access rejection was. Repeated polling could therefore
+create and close another observation page each time. The reader now retains both
+initial and subsequent access rejection until explicit reader/context replacement.
+Controlled regression cases for both statuses fail against the old reader
+(three observations for three polls) and pass with one observation after the fix.
+This is not a reproduction or resolution of CoS #339, nor browser-independent
+login. The lifecycle contract is documented in [Subchat probe](SUBCHAT-PROBE.md).
