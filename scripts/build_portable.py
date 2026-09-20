@@ -94,9 +94,15 @@ def include_manager(app: Path, manager: Path, *, platform: str) -> None:
 
 def build_portable(
     root: Path, runtime: Path, output: Path, *, allow_downloads: bool = False,
-    manager: Path | None = None,
+    manager: Path | None = None, audio_helper: Path | None = None,
 ) -> Path:
     validate_runtime(runtime)
+    if audio_helper is not None:
+        if sys.platform != "darwin":
+            raise ValueError("Audio helper packaging currently supports macOS only")
+        if (not audio_helper.is_absolute() or audio_helper.is_symlink()
+                or not audio_helper.is_file() or not os.access(audio_helper, os.X_OK)):
+            raise ValueError("Audio helper must be an absolute executable file")
     if output.exists():
         raise ValueError("Output already exists; choose a new archive path")
     uv = shutil.which("uv")
@@ -149,6 +155,12 @@ def build_portable(
         write_setup_launcher(app, windows=os.name == "nt")
         if manager is not None:
             include_manager(app, manager, platform=sys.platform)
+        if audio_helper is not None:
+            native = app / "native"
+            native.mkdir()
+            helper = native / "anywhere-audio"
+            shutil.copyfile(audio_helper, helper)
+            helper.chmod(0o755)
         shutil.copyfile(root / "LICENSE", app / "LICENSE")
         (app / "README.txt").write_text(
             "Anywhere Computer portable\n"
@@ -192,7 +204,9 @@ if __name__ == "__main__":
                         help="Allow hash-pinned dependency downloads on the build machine")
     parser.add_argument("--manager", type=Path,
                         help="Include a native management executable built for this platform")
+    parser.add_argument("--audio-helper", type=Path,
+                        help="Include an explicitly built experimental macOS audio executable")
     arguments = parser.parse_args()
     print(build_portable(Path(__file__).resolve().parents[1], arguments.runtime,
                          arguments.output.absolute(), allow_downloads=arguments.allow_downloads,
-                         manager=arguments.manager))
+                         manager=arguments.manager, audio_helper=arguments.audio_helper))

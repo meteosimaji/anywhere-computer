@@ -50,3 +50,26 @@ capture, not physical speaker output. Playback and recording both ended.
 Virtual-device routing, device disconnect,
 Windows support, and MCP/operation-ledger integration remain pending. Do not
 advertise this experiment as a shipped audio feature.
+
+## Optional portable packaging
+
+On the macOS build machine, compile the reviewed helper for the target architecture:
+
+```sh
+swiftc -parse-as-library scripts/probe_audio_capture.swift -o /tmp/anywhere-audio
+python scripts/build_portable.py --runtime /absolute/standalone-python \
+  --output /absolute/new-portable.zip --audio-helper /tmp/anywhere-audio
+```
+
+The helper is optional and is copied to `native/anywhere-audio` inside the portable
+directory. Its bytes are included in the existing `manifest.json` file hashes.
+The build rejects non-macOS hosts, relative paths, symlinks and non-executable
+files. The builder must supply a trusted binary for the target architecture;
+file validation is not code-signature or architecture verification. This option
+does not request permissions, record audio or enable an engine/MCP audio tool.
+Native signing, permission onboarding and engine integration remain pending.
+
+A local build with the compiled helper was extracted into a separate Unicode
+path. Its manifest digest and binary bytes matched, and its `--check` command
+completed with `capture_started=false`. No user-PC compiler was involved in that
+relocated execution. This is packaging acceptance, not capture acceptance.
