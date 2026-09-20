@@ -160,3 +160,39 @@ with browser fixtures). Other unmatched UI still fails as unconfirmed; no univer
 locale or headless compatibility claim is made. This failure-path acceptance does
 not establish authenticated catalog extraction. The separate headed login profile
 was left untouched for the user's pending login.
+
+## Authenticated probe boundary, 2026-09-20 JST
+
+The user completed login in the dedicated profile. The headed standalone probe
+then failed before effort traversal with `EffortUnconfirmed`; a focused observation
+returned `effort_control_unconfirmed` after reopening the picker. Waiting for the
+control locator to become visible did not resolve the standalone failure, so that
+unproven change was removed. No prompt was sent. An authenticated headless attempt
+returned HTTP 403; its cause is not established. Do not substitute a foreground
+browser while the user is using Chrome or copy another profile's credentials.
+
+Initial effort observation previously escaped the collector and lost its fixed
+observation classification at the CLI boundary. It now returns
+`failure_stage=initial_observation`, an allowlisted observation state,
+`input_dispatched=false`, and `restored=null` (no original selection was established).
+Unknown peer text is not returned. Regression tests failed before the change and
+pass afterwards. This improves diagnosis; it does not establish a repaired live
+picker or production subchat support.
+
+## Minimized authenticated acceptance
+
+After explicit user authorization to use a separate minimized window, the
+headed Chrome process in the dedicated profile returned HTTP 200. The collector
+observed three model labels and five effort positions for the selected model,
+restored its original position and description, verified unchanged model rows,
+and closed the picker without submitting a message. The actual CLI repeated this
+success, including a final run with window-state verification. These are account-
+specific observations, not hard-coded defaults. The earlier headed failure's
+cause remains unproven; these successes do not establish that a rendering race
+has been fixed or that headless navigation is supported.
+
+Use `--minimized` instead of `--headed` to request a headed dedicated process with
+its window minimized. It verifies the window state before navigating to ChatGPT;
+if not confirmed it returns `minimization_unconfirmed`. The OS may briefly display
+its startup window. It never attaches to the user's ordinary Chrome profile.
+This acceptance covers catalog inspection only, not subchat submission/recovery.

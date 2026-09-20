@@ -52,3 +52,44 @@ async def test_traversal_restores_or_reports_unconfirmed(failure):
         assert "private" not in str(result)
         assert result["restored"] is (failure not in {"range_change", "description_change"})
         assert position == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", [
+    "effort_control_unconfirmed", "effort_description_unconfirmed", "unsupported_effort_control",
+])
+async def test_initial_observation_failure_returns_without_keyboard_input(state):
+    commands = []
+
+    async def read():
+        return {"state": state}
+
+    async def step(key):
+        commands.append(key)
+
+    result = await collector.collect_efforts(read, step)
+    assert result == {
+        "state": "efforts_unconfirmed", "failure_stage": "initial_observation",
+        "observation_state": state, "restored": None, "input_dispatched": False,
+        "error_type": "EffortUnconfirmed",
+    }
+    assert commands == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["unknown_state", "transport"])
+async def test_initial_failure_does_not_expose_peer_text(failure):
+    async def read():
+        if failure == "transport":
+            raise ConnectionError("private peer body")
+        return {"state": "private peer body"}
+
+    async def step(key):
+        pytest.fail("initial observation failure must not dispatch input")
+
+    result = await collector.collect_efforts(read, step)
+    assert result["failure_stage"] == "initial_observation"
+    assert result["observation_state"] is None
+    assert result["input_dispatched"] is False
+    assert result["restored"] is None
+    assert "private" not in str(result)

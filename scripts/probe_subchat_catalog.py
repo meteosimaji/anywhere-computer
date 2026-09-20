@@ -84,12 +84,24 @@ async def picker_ready(page: Page) -> bool:
     return True
 
 
-async def probe(profile: Path, headed: bool) -> dict[str, object]:
+async def probe(profile: Path, headed: bool, minimized: bool = False) -> dict[str, object]:
     async with async_playwright() as driver:
         context = await driver.chromium.launch_persistent_context(
-            str(profile), channel="chrome", headless=not headed)
+            str(profile), channel="chrome", headless=not (headed or minimized),
+            args=["--start-minimized"] if minimized else [])
         try:
-            page = await context.new_page()
+            page = context.pages[0] if minimized and context.pages else await context.new_page()
+            if minimized:
+                session = await context.new_cdp_session(page)
+                window = await session.send("Browser.getWindowForTarget")
+                await session.send("Browser.setWindowBounds", {
+                    "windowId": window["windowId"], "bounds": {"windowState": "minimized"},
+                })
+                bounds = await session.send("Browser.getWindowBounds", {
+                    "windowId": window["windowId"],
+                })
+                if bounds["bounds"].get("windowState") != "minimized":
+                    return {"state": "minimization_unconfirmed", "submitted": False}
             page.set_default_timeout(10_000)
             response = await page.goto("https://chatgpt.com/", wait_until="domcontentloaded")
             if response is None or not response.ok:
@@ -105,10 +117,13 @@ async def probe(profile: Path, headed: bool) -> dict[str, object]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", type=Path, required=True)
-    parser.add_argument("--headed", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--headed", action="store_true")
+    mode.add_argument("--minimized", action="store_true",
+                      help="Use a dedicated visible-browser process with its window minimized")
     args = parser.parse_args()
     try:
-        result = asyncio.run(probe(args.profile.resolve(), args.headed))
+        result = asyncio.run(probe(args.profile.resolve(), args.headed, args.minimized))
     except (Error, ConnectionError, ValueError) as error:
         result = {"state": "probe_unconfirmed", "error_type": type(error).__name__,
                   "submitted": False}
