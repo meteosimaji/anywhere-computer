@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from ..subchat import SubchatAccessError, SubchatAnswer, SubchatInterrupted, SubchatReceipt
 from ..subchat_state import SubchatReportedSettings, SubchatSubmission
+from .request_content import matches_prompt
 
 if TYPE_CHECKING:
     from playwright.async_api import Page, Response
@@ -44,7 +45,7 @@ def matched_input(payload: bytes, submission: SubchatSubmission
     if len(users) != 1:
         return None  # Pagination or a missing identity is not permission to guess.
     user = users[0]
-    if user.content != {'content_type': 'text', 'parts': [submission.wire_prompt]}:
+    if not matches_prompt(user.content, submission.wire_prompt):
         raise ValueError('Saved prompt does not match')
     if submission.resources is not None:
         resources = submission.resources

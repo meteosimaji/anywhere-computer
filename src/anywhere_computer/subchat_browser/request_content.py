@@ -13,7 +13,7 @@ from pydantic import JsonValue, TypeAdapter
 from ..subchat_state import SubchatSubmission
 
 
-def _matches_prompt(content: JsonValue, prompt: str) -> bool:
+def matches_prompt(content: JsonValue, prompt: str) -> bool:
     if content == {'content_type': 'text', 'parts': [prompt]}:
         return True
     if (not isinstance(content, dict) or set(content) != {'content_type', 'parts'}
@@ -38,7 +38,7 @@ def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, J
     author = message.get('author')
     metadata = message.get('metadata')
     if (not isinstance(author, dict) or author.get('role') != 'user'
-            or not _matches_prompt(message.get('content'), submission.prompt)
+            or not matches_prompt(message.get('content'), submission.prompt)
             or not isinstance(message.get('id'), str) or not message['id']
             or not isinstance(metadata, dict)
             or body.get('conversation_id') != submission.requested_conversation_id):

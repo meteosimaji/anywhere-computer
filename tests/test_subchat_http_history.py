@@ -554,3 +554,26 @@ def test_reported_settings_are_optional_bounded_and_not_ui_mapping(metadata, exp
     assert answer is not None
     assert (answer.reported_settings.model_dump() if answer.reported_settings else None) == expected
     assert 'must-not-be-exported' not in answer.model_dump_json()
+
+
+@pytest.mark.parametrize(('saved', 'accepted'), [
+    ('Review [https://example.com/pr/1](https://example.com/pr/1)', True),
+    ('Review https://example.com/pr/1', True),
+    ('Review [https://example.com/pr/1](https://other.example/pr/1)', False),
+    ('Review [different](https://example.com/pr/1)', False),
+    ('Review [https://example.com/pr/1](https://example.com/pr/1) extra', False),
+])
+def test_history_url_decoration_preserves_prompt_identity(saved, accepted):
+    from anywhere_computer.subchat_browser.history import project_receipt
+
+    submission, payload = sample()
+    submission = submission.model_copy(update={'prompt': 'Review https://example.com/pr/1'})
+    payload['messages'][0]['content']['parts'] = [saved]
+    encoded = json.dumps(payload).encode()
+    if accepted:
+        assert project_receipt(encoded, submission).user_message_id == submission.user_message_id
+        assert project_history(encoded, submission).text == '日本語 result'
+    else:
+        for project in (project_receipt, project_history):
+            with pytest.raises(ValueError, match='Saved prompt does not match'):
+                project(encoded, submission)

@@ -1388,3 +1388,17 @@ A read-only HTTP check of the September 21 follow-up trial found
 answer after the UI selected GPT-5.6 Sol/high. This single observation is not a
 stable translation table. No reasoning content or authentication values were
 exported during that inspection.
+
+### Saved URL decoration and HTTP recovery
+
+The request validator and saved-history projector share the same bounded text
+comparison: a Markdown link whose label and target are the identical HTTP(S) URL
+may reduce to the literal requested URL. All remaining text must match exactly.
+Different labels, different targets, and added text remain rejected; conversation,
+input, resource, and response-correlation checks are unchanged.
+
+A live ordinary-Chat audit on 2026-09-21 exposed the previous asymmetry: the
+request accepted the decorated GitHub URL, but HTTP recovery rejected it. After
+sharing the existing comparison, the same input and final answer were recovered
+without resending or editing the ledger. This proves that recovery case, not a
+browser-independent authentication or generation path.
