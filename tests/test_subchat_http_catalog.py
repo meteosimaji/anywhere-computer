@@ -1,9 +1,38 @@
 """HTTP catalog identities are dynamic, authenticated and distinct from UI labels."""
+import asyncio
 import json
+from types import SimpleNamespace
 
 import pytest
 
 from anywhere_computer.subchat_browser.catalog import project_http_catalog
+
+
+@pytest.mark.parametrize('phase', ['browser', 'page'])
+async def test_http_catalog_deadline_includes_startup(monkeypatch, phase):
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    entered = asyncio.Event()
+
+    async def stalled():
+        entered.set()
+        await asyncio.Event().wait()
+
+    original_timeout = asyncio.timeout
+    monkeypatch.setattr(asyncio, 'timeout',
+                        lambda seconds: original_timeout(.02 if seconds == 20 else seconds))
+    backend = BrowserSubchatBackend(stalled if phase == 'browser'
+                                    else SimpleNamespace(new_page=stalled))
+    task = asyncio.create_task(backend.http_catalog())
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        done, _ = await asyncio.wait({task}, timeout=1)
+        assert task in done, 'Startup escaped the catalog deadline'
+        assert isinstance(task.exception(), TimeoutError)
+        assert not backend._context_lock.locked()
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 def catalog():
