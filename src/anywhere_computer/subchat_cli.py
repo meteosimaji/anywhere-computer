@@ -119,7 +119,8 @@ async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
                 from .mcp_server import serve_stdio
                 from .subchat_mcp import session
 
-                server = session(service, observe_catalog=backend.catalog)
+                server = session(service, observe_catalog=backend.catalog,
+                                 observe_http_catalog=backend.http_catalog)
                 try:
                     await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
                 finally:

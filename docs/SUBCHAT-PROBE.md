@@ -578,6 +578,27 @@ now re-observes the list before deciding whether a view switch is necessary.
 The regression covers remembered model-list view with an inert toggle. An
 unobserved effort control is not evidence that the model lacks effort support.
 
+### HTTP catalog observation
+
+`subchat_catalog({"source":"http"})` is an opt-in alternative to the default
+UI catalog. Omit `model`: this observes the browser app's own authenticated
+`/backend-api/models` response without selecting a model or moving an effort
+slider. It returns version groups with separate model IDs, display generations,
+efforts and availability. Work presets are excluded; duplicate identities,
+unknown model references and changed/missing required schema are rejected.
+An HTTP 200 without an observed Authorization header is insufficient because a
+cookie-only request returned a reduced catalog in the live trial.
+
+This path still opens and closes its own observation tab in the configured
+dedicated browser; it is not a browser-free client or a guarantee that the OS
+will never activate a window. It does not copy credentials, change the picker
+default or silently fall back to UI interactions. Transport model IDs are not
+accepted as UI labels by the current `subchat_send`; its exact model/effort
+verification remains unchanged. A 20-second bound covers HTTP collection.
+Controlled real-browser tests cover authenticated and cookie-only responses,
+zero send/picker operations and preservation of unrelated tabs. Live catalog
+GET evidence is recorded separately in the dated shared-work acceptance file.
+
 ### Bounded answer waiting
 
 The local MCP adapter adds `subchat_wait(operation_id, wait_ms=1000)`, bounded

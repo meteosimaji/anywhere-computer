@@ -45,7 +45,11 @@ async def test_exited_shell_child_blocks_update_and_is_stopped(tmp_path, ignore_
                 # wait_output can complete without yielding after EOF. Keep the deadline live.
                 await asyncio.sleep(0.01)
         parent_pid, child_pid = json.loads(page["text"])
-        parent = psutil.Process(parent_pid) if psutil.pid_exists(parent_pid) else None
+        try:
+            parent = psutil.Process(parent_pid)
+        except psutil.NoSuchProcess:
+            # The fixture parent intentionally exits; it may disappear during lookup.
+            parent = None
         descendant = psutil.Process(child_pid)
         if parent:
             await asyncio.to_thread(parent.wait, timeout=5)

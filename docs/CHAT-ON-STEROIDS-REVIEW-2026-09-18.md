@@ -163,6 +163,25 @@ ongoing investigation, not a proven cause or compatible model-discovery API.
 Account-specific visible menu observation must not be advertised as a stable
 provider API or a working production subchat catalog.
 
+The later September 20 recheck still found main at `8f76ccc790917b01ee758da6687a1cf9b576ba8a`.
+Issue [311's retest](https://github.com/totec448-spec/chat-on-steroids/issues/311#issuecomment-5745989607)
+reports caller-identity errors after the discovery changes; another reporter
+observed success after resetting configuration. These reports do not establish a
+single root cause. Anywhere's selected response is dynamic authenticated HTTP
+catalog observation (PR 93), with model generation and effort preserved as
+separate fields, Work excluded, a bounded observation window and no silent model
+fallback. This supplements the UI adapter rather than claiming a stable official
+Chat API. Live catalog and generation-request evidence is in
+`SUBCHAT-SHARED-WORK-ACCEPTANCE-2026-09-20.md`.
+
+Issue [279's newer report](https://github.com/totec448-spec/chat-on-steroids/issues/279#issuecomment-5748625410)
+describes healthy page delivery but no recorded Core calls. The subsequent
+Plus/Pro comparison is an account anecdote, not a demonstrated plan restriction.
+Keep the existing distinction between client tool discovery and server dispatch;
+do not recommend an account upgrade, restart a healthy engine, or replay an
+uncertain operation on that evidence alone. No additional orchestration layer or
+authentication workaround is adopted from these reports.
+
 ## Consolidated recovery proposal reviewed, 2026-09-20 JST
 
 [CoS PR #316](https://github.com/totec448-spec/chat-on-steroids/pull/316), inspected

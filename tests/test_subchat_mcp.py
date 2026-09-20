@@ -140,9 +140,12 @@ async def test_catalog_preserves_partial_observation_and_cannot_send(tmp_path):
         assert model in {None, 'dynamic model'}
         return expected
 
+    async def observe_http():
+        return {'state': 'http_catalog_observed', 'versions': [], 'submitted': False}
+
     try:
         server = session(Subchats(SubchatSubmissions(ledger.connection), backend),
-                         observe_catalog=observe)
+                         observe_catalog=observe, observe_http_catalog=observe_http)
         tools = await server.catalog()
         assert 'subchat_catalog' in [item['name'] for item in tools]
         reply = await server.execute(Request(operation_id='3' * 32, tool='subchat_catalog'))
@@ -154,6 +157,12 @@ async def test_catalog_preserves_partial_observation_and_cannot_send(tmp_path):
         invalid = await server.execute(Request(operation_id='4' * 32, tool='subchat_catalog',
                                                 arguments={'prompt': 'do not send'}))
         assert invalid.state == 'failed'
+        http = await server.execute(Request(operation_id='6' * 32, tool='subchat_catalog',
+                                             arguments={'source': 'http'}))
+        assert http.data['state'] == 'http_catalog_observed'
+        invalid_http = await server.execute(Request(operation_id='7' * 32, tool='subchat_catalog',
+            arguments={'source': 'http', 'model': 'dynamic model'}))
+        assert invalid_http.state == 'failed'
         assert backend.sends == 0
     finally:
         ledger.close()

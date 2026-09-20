@@ -11,16 +11,101 @@ import json
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from .efforts import collect_efforts
 
 if TYPE_CHECKING:
-    from playwright.async_api import CDPSession, Page
+    from playwright.async_api import CDPSession, Page, Response
 
 SOURCE = Path(__file__).with_name("subchat_model_menu.js").read_text(encoding="utf-8")
 TRIGGER = '[data-composer-navigation-target="reasoning"]'
 TOGGLE = '[data-model-picker-view-toggle="true"]:visible'
 CONTROL = '[data-reasoning-slider="true"]:visible'
+
+
+class HTTPModel(BaseModel):
+    model_config = ConfigDict(strict=True)
+    slug: str = Field(min_length=1, max_length=256)
+    title: str = Field(min_length=1, max_length=256)
+    is_work_mode_model: bool
+
+
+class HTTPPreset(BaseModel):
+    model_config = ConfigDict(strict=True)
+    id: int
+    title: str = Field(min_length=1, max_length=256)
+    model_slug: str = Field(min_length=1, max_length=256)
+    preset_type: str = Field(min_length=1, max_length=64)
+    selected_display_version: str = Field(min_length=1, max_length=256)
+    thinking_effort: str | None = Field(default=None, min_length=1, max_length=256)
+
+
+class HTTPVersion(BaseModel):
+    model_config = ConfigDict(strict=True)
+    id: str = Field(min_length=1, max_length=256)
+    display_text: str = Field(min_length=1, max_length=256)
+    enabled: bool
+    intelligence_presets: list[HTTPPreset] = Field(max_length=128)
+
+
+class HTTPCatalog(BaseModel):
+    model_config = ConfigDict(strict=True)
+    models: list[HTTPModel] = Field(min_length=1, max_length=512)
+    versions: list[HTTPVersion] = Field(min_length=1, max_length=32)
+
+
+def project_http_catalog(payload: bytes) -> dict[str, object]:
+    """Project the observed schema; never invent IDs, aliases or availability."""
+    if len(payload) > 1_048_576:
+        raise ValueError('Model catalog is too large')
+    catalog = HTTPCatalog.model_validate_json(payload)
+    models = {model.slug: model for model in catalog.models}
+    if (len(models) != len(catalog.models)
+            or len({version.id for version in catalog.versions}) != len(catalog.versions)):
+        raise ValueError('Ambiguous model catalog identity')
+    versions: list[dict[str, object]] = []
+    for version in catalog.versions:
+        if len({preset.id for preset in version.intelligence_presets}) != len(
+                version.intelligence_presets):
+            raise ValueError('Ambiguous model preset identity')
+        choices: list[dict[str, object]] = []
+        for preset in version.intelligence_presets:
+            model = models.get(preset.model_slug)
+            if model is None:
+                raise ValueError('Preset references an unknown model')
+            if model.is_work_mode_model:
+                continue
+            choices.append({**preset.model_dump(), 'model_title': model.title,
+                            'available': version.enabled and preset.preset_type == 'available'})
+        versions.append({'id': version.id, 'label': version.display_text,
+                         'enabled': version.enabled, 'choices': choices})
+    return {'state': 'http_catalog_observed', 'versions': versions, 'submitted': False,
+            'source': 'browser_observed_http', 'generation_http_verified': False,
+            'send_requires_ui_labels': True}
+
+
+async def collect_http_page(page: Page) -> dict[str, object]:
+    """Observe the app's own catalog GET on a dedicated page; no token copying."""
+    def catalog_response(response: Response) -> bool:
+        url = urlsplit(response.url)
+        return (url.scheme == 'https' and url.netloc == 'chatgpt.com'
+                and url.path == '/backend-api/models' and response.request.method == 'GET')
+
+    async with page.expect_response(catalog_response, timeout=15_000) as pending:
+        await page.goto('https://chatgpt.com/', wait_until='domcontentloaded')
+    response = await pending.value
+    if response.status != 200:
+        raise ConnectionError('Model catalog request did not succeed')
+    # Cookie-only GET can return a reduced catalog with status 200. Require
+    # evidence of the app's authenticated request, without retaining its value.
+    if not await response.request.header_value('authorization'):
+        raise ConnectionError('Authenticated model catalog request was not observed')
+    if response.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/json':
+        raise ValueError('Unexpected model catalog response format')
+    return project_http_catalog(await response.body())
 
 
 async def empty_chat(page: Page) -> bool:

@@ -34,6 +34,7 @@ class Message(Contract):
 
 class Catalog(Contract):
     model: str | None = Field(default=None, min_length=1, max_length=256)
+    source: Literal['ui', 'http'] = 'ui'
 
 
 class Wait(OperationId):
@@ -106,6 +107,7 @@ class SubchatSession(MCPSession):
 
 def session(service: Subchats, *,
             observe_catalog: Callable[[str | None], Awaitable[dict[str, object]]] | None = None,
+            observe_http_catalog: Callable[[], Awaitable[dict[str, object]]] | None = None,
             ) -> SubchatSession:
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
@@ -166,7 +168,10 @@ def session(service: Subchats, *,
             Catalog, 'Observe model labels and effort without sending. Optionally select an '
             'exact observed model in the dedicated empty tab to discover its effort choices; '
             'this can change the dedicated profile default. '
-            'A partial catalog preserves known models; never infer missing effort choices.')
+            'A partial catalog preserves known models; never infer missing effort choices. '
+            'source=http observes the dedicated browser app catalog without picker interaction; '
+            'model must be omitted. Returned transport IDs are not UI labels for subchat_send. '
+            'This still requires the dedicated browser, not independent HTTP login.')
 
     async def catalog() -> list[JsonValue]:
         return [cast(JsonValue, {
@@ -228,7 +233,12 @@ def session(service: Subchats, *,
             if request.tool == 'subchat_catalog' and observe_catalog is not None:
                 args_catalog = Catalog.model_validate(request.arguments)
                 async with browser_lock:
-                    observed = await observe_catalog(args_catalog.model)
+                    if args_catalog.source == 'http':
+                        if args_catalog.model is not None or observe_http_catalog is None:
+                            raise ValueError('HTTP catalog requires support and no model selection')
+                        observed = await observe_http_catalog()
+                    else:
+                        observed = await observe_catalog(args_catalog.model)
                 data = TypeAdapter(dict[str, JsonValue]).validate_python(observed)
                 return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_send':
