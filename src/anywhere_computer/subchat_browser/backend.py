@@ -296,6 +296,10 @@ class BrowserSubchatBackend:
             return None
         if submission.conversation_id is not None and match[1] != submission.conversation_id:
             raise ValueError('Browser conversation changed')
+        if self.http_read and submission.user_message_id is not None:
+            candidate = submission.model_copy(update={'conversation_id': match[1]})
+            async with asyncio.timeout(20):
+                return await self._http_reader.receipt(await self._browser(), candidate)
         if submission.resources is not None:
             candidates = [key for key in await self._baseline(page)
                           if key not in submission.baseline_message_ids]

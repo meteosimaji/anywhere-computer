@@ -1348,6 +1348,15 @@ two requests (three regression variants fail); the pre-await claim forwards one.
 Storage-failure variants forward none. This is controlled browser interception,
 not a claim that the live provider duplicates requests.
 
+For a newly created Chat whose original page has reached a valid conversation
+URL, the HTTP-read backend also reuses the checkpointed outgoing input ID for
+receipt verification. It does not rediscover that input from rendered history.
+This still requires the original page to reveal the conversation URL; a lost
+page with no saved conversation identity remains unresolved. A controlled
+regression covers a reopened ledger with an available page handle, prohibits
+DOM evaluation and verifies the exact HTTP receipt and final projection. It
+fails against the previous DOM fallback. This is not live browser-crash recovery.
+
 The completed live result above was subsequently recovered after closing and
 reopening its isolated SQLite ledger and constructing a new controller whose
 browser factory rejects all access. Recovery and a duplicate send returned the
