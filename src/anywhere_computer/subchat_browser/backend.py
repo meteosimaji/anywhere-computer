@@ -25,7 +25,7 @@ from .http_reader import ChatHTTPReader
 from .request_content import add_resources, generation_input
 
 if TYPE_CHECKING:
-    from playwright.async_api import BrowserContext, Page, Route
+    from playwright.async_api import APIRequestContext, BrowserContext, Page, Route
 
 INPUT = Path(__file__).with_name('subchat_input.js').read_text(encoding="utf-8")
 COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")
@@ -36,10 +36,11 @@ CHAT = re.compile(r'https://chatgpt\.com/c/'
 class BrowserSubchatBackend:
     def __init__(self, context: BrowserContext | Callable[[], Awaitable[BrowserContext]],
                  *, http_read: bool = False,
+                 http_request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None,
                  record_request: Callable[[str, str], None] | None = None) -> None:
         self.http_read = http_read
         self._record_request = record_request
-        self._http_reader = ChatHTTPReader()
+        self._http_reader = ChatHTTPReader(http_request_factory)
         self._context = None if callable(context) else context
         self._create_context = context if callable(context) else None
         self._context_lock = asyncio.Lock()

@@ -155,3 +155,49 @@ async def test_listing_paginates_owned_records_after_reopen_without_browser(tmp_
         assert [entry.operation_id for entry in other.submissions] == [f'{2:032x}']
     finally:
         ledger.close()
+
+
+@pytest.mark.parametrize('fail', [False, True])
+async def test_standalone_http_client_lifetime_without_browser(tmp_path, monkeypatch, fail):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+
+    import playwright.async_api
+
+    from anywhere_computer import subchat_cli
+
+    events = []
+
+    class Client:
+        async def dispose(self):
+            events.append('dispose')
+
+    async def new_context(**kwargs):
+        assert kwargs == {}  # No browser cookies, storage or credential persistence.
+        events.append('create')
+        return Client()
+
+    @asynccontextmanager
+    async def runtime():
+        events.append('runtime')
+        try:
+            # Deliberately has no chromium: creating an HTTP client must not launch it.
+            yield SimpleNamespace(request=SimpleNamespace(new_context=new_context))
+        finally:
+            events.append('runtime_closed')
+
+    async def commands(service, source, destination):
+        factory = service.backend._http_reader._request_factory
+        first = await factory()
+        assert await factory() is first
+        if fail:
+            raise RuntimeError('fixture command failure')
+
+    monkeypatch.setattr(playwright.async_api, 'async_playwright', runtime)
+    monkeypatch.setattr(subchat_cli, 'process_lines', commands)
+    if fail:
+        with pytest.raises(RuntimeError, match='fixture command failure'):
+            await subchat_cli.run(tmp_path / 'unused-profile', tmp_path, http_read=True)
+    else:
+        await subchat_cli.run(tmp_path / 'unused-profile', tmp_path, http_read=True)
+    assert events == ['runtime', 'create', 'dispose', 'runtime_closed']

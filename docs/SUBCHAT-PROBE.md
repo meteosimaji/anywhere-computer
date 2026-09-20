@@ -1402,3 +1402,21 @@ request accepted the decorated GitHub URL, but HTTP recovery rejected it. After
 sharing the existing comparison, the same input and final answer were recovered
 without resending or editing the ledger. This proves that recovery case, not a
 browser-independent authentication or generation path.
+
+### Standalone read transport
+
+The CLI HTTP-read mode lazily owns one standalone Playwright API request context.
+After the dedicated browser observes the provider's authenticated history/catalog
+request, subsequent GETs use this client with the same in-memory allowlisted
+headers, without copying browser cookies or local storage. The CLI disposes it
+before closing the Playwright runtime on normal exit or error. Saved-state-only
+commands do not start that runtime. Directly constructed browser adapters retain
+the existing browser HTTP transport unless given a request factory.
+
+Live read-only trials on September 21 returned HTTP 200 and the exact existing
+conversation/final message through a standalone client, both with and without
+copied cookies. The implementation uses the no-copy option. Initial authentication
+still needs the dedicated browser; backend browser-close detection still applies.
+This does not yet provide browser-free sending, persistent login or token refresh.
+401/403 remain latched until explicit controller/context replacement, and neither
+transport failures nor missing answers authorize generation replay.

@@ -11,17 +11,20 @@ from .catalog import observe_http_catalog, project_http_catalog
 from .history import observe_history, project_history, project_receipt
 
 if TYPE_CHECKING:
-    from playwright.async_api import BrowserContext, Page, Response
+    from playwright.async_api import APIRequestContext, BrowserContext, Page, Response
 
 
 class ChatHTTPReader:
     """Keep observed auth/account/language in memory; never export credentials.
 
     Only history and the observed model-catalog URL are requested. Cookies stay
-    with the browser context. No generation, redirects or automatic retries.
+    with the browser context; an injected standalone client receives no copied cookies.
+    Its owner manages disposal. No generation, redirects or automatic retries.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None
+                 ) -> None:
+        self._request_factory = request_factory
         self._context: BrowserContext | None = None
         self._headers: dict[str, str] = {}
         self._catalog_url: str | None = None
@@ -54,7 +57,9 @@ class ChatHTTPReader:
                 raise
             finally:
                 await asyncio.wait_for(page.close(), timeout=5)
-        response_http = await context.request.get(
+        request = (await self._request_factory() if self._request_factory is not None
+                   else context.request)
+        response_http = await request.get(
             url, headers=self._headers, timeout=15_000, max_redirects=0, max_retries=0)
         try:
             if response_http.status in (401, 403):
