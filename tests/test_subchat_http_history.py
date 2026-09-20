@@ -471,7 +471,8 @@ async def test_bootstrap_access_rejection_does_not_reopen_tabs(status):
     assert len(observations) == 2 and replacement.pages[0].closed
 
 
-async def test_checkpointed_request_recovers_after_restart_without_page(tmp_path):
+@pytest.mark.parametrize("new_chat", [False, True])
+async def test_checkpointed_request_recovers_without_rendered_history(tmp_path, new_chat):
     from anywhere_computer.state import Ledger
     from anywhere_computer.subchat import Subchats
     from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
@@ -483,7 +484,7 @@ async def test_checkpointed_request_recovers_after_restart_without_page(tmp_path
     store = SubchatSubmissions(ledger.connection)
     op = submission.operation_id
     store.prepare(op, submission.prompt, submission.model, submission.effort, owner=None,
-                  conversation_id=submission.conversation_id)
+                  conversation_id=None if new_chat else submission.conversation_id)
     store.begin_send(op, owner=None)
     assert store.observe_request(op, 'user', owner=None).state == 'sending'
     with pytest.raises(ValueError, match='identity changed'):
@@ -511,6 +512,17 @@ async def test_checkpointed_request_recovers_after_restart_without_page(tmp_path
     try:
         backend = BrowserSubchatBackend(Context(), http_read=True)
         backend._http_reader = Reader()
+        if new_chat:
+            class Page:
+                url = 'https://chatgpt.com/c/' + submission.conversation_id
+
+                def is_closed(self):
+                    return False
+
+                async def evaluate(self, *_):
+                    raise AssertionError('Checkpointed input must not use rendered history')
+
+            backend.pages[op] = Page()
         service = Subchats(SubchatSubmissions(ledger.connection), backend)
         result = await service.recover(op, owner=None)
         assert result.state == 'completed' and result.answer == '日本語 result'
