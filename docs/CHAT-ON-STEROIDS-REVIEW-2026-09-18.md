@@ -180,3 +180,38 @@ queue, global timeout increase or companion-specific endpoint is added. Existing
 operation-ledger recovery remains the execution service's mechanism. This is a
 source review of an unmerged proposal at the stated revision; upstream test claims
 are not Anywhere acceptance evidence. No upstream code was copied.
+
+## Alternate-shell implementation review, 2026-09-20 JST
+
+The next pinned main is
+[`8f76ccc790917b01ee758da6687a1cf9b576ba8a`](https://github.com/totec448-spec/chat-on-steroids/tree/8f76ccc790917b01ee758da6687a1cf9b576ba8a).
+This supersedes the earlier observations of PRs 316, 319, 321 and 322 as pending.
+Reviewed `extension/chatgpt-dom.js`, the follow-up input changes and the two
+alternate-shell worklogs. Upstream synthetic browser/CI counts are not our live
+acceptance evidence; issue 311's affected-account retest is a separate boundary.
+
+| Implementation evidence | Adoption decision |
+| --- | --- |
+| A native literal-paste mark preserves Markdown punctuation and hard breaks in the alternate editor. | Adopt the observed editor contract in a separately implemented, guarded draft helper. Anywhere live acceptance independently verified the saved message text; ordinary fill and line-by-line input reproduced formatting changes. |
+| Shell layout turn keys and stamped message identity are distinguished. | Do not generalize a layout key into a documented provider message ID. Our specific live user IDs agree with owning-app reads; production recovery still needs explicit conversation/submission identity and changed-markup failure handling. |
+| Follow-up running hints use the latest exchange; old exchanges may remain in progress. | Do not stop a new generation or declare completion from an old row. Keep completion tied to the selected submission, not global transcript ordering or text stability. |
+| Cold model-picker hydration and bounded request/socket identity are handled separately. | Preserve bounded readiness and dynamic visible model discovery. Do not implement a broad cache/history walker or infer a model from the effort-only composer label. |
+| Recovery ownership is checked again after asynchronous work. | The copy-text receipt rechecks target identity and transcript membership after its awaited action. Duplicate original prompts must remain ambiguous unless the caller supplies prior submission identities. |
+
+The message Copy action provides original text even when visible Markdown is
+lossy. Anywhere's experimental receipt path captures that action in the dedicated
+page, restores the original clipboard method, compares the exact original prompt,
+and never treats inability to recover it as permission to resend. This is not a
+stable ChatGPT API or evidence that Codex's external socket has been repaired.
+
+## Subchat integration constraint
+
+`Engine.execute` already claims an operation before invoking its handler, preserves
+inflight work when the five-second observer expires, and returns saved outcomes
+for repeated IDs. Its ledger marks unfinished work unknown after engine restart.
+Reuse this behavior for submission; do not add a second retry scheduler. A
+subchat-specific durable record still needs the peer, conversation, selected model,
+submission identity and state **before** send, because the general ledger stores
+an argument digest and final result, not intermediate browser recovery data.
+An observer timeout is not a failed generation, and the generic handler exception
+path must not classify an uncertain send as a confirmed failure.

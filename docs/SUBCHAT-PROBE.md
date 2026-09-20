@@ -265,3 +265,43 @@ it uses no account or network. It skips without the optional browser dependency
 or Chrome and does not replace the authenticated live trial. The current DOM
 contract is version-sensitive and deliberately fails unconfirmed on changed
 markup; its turn key is an observation, not a documented provider API identifier.
+
+## Multiline serialization trial, 2026-09-20 JST
+
+The dedicated authenticated ordinary Chat accepted a single test containing
+Japanese, emoji, a Windows path, fenced Python, Markdown punctuation and line
+breaks with GPT-5.6 Sol / medium explicitly observed before submission. Native
+HTML editing with text nodes, hard breaks and the editor's literal-paste mark
+preserved the exact submitted text. An independent owning-app read returned the
+original text and a completed answer `AC_SUBCHAT_LITERAL_20260920_01`; no resend
+was needed. The browser remained open after this trial.
+
+In contrast, whole-text fill/insert produced separate paragraphs and extra blank
+lines in `innerText`; line-by-line Shift+Enter triggered code-block formatting.
+Those preliminary trials stopped before sending. The experimental
+`subchat_input.js` implements the successful native-edit shape with empty-editor,
+focus and selection checks. It does not send, select a model, or claim that a
+draft observation establishes saved-message serialization. A local real-browser
+test covers literal markup, internal empty lines and rejection of an existing
+draft. Authenticated trial evidence is separate from that fixture.
+
+The transcript renders the submitted Markdown: its visible `innerText` omits
+fences even though the independent saved message retains them. Consequently the
+current exact-visible-bubble receipt extractor does **not** establish submission
+identity for this multiline case. Production integration must resolve this
+without stripping punctuation or accepting a merely similar user message.
+
+Follow-up: `subchat_copy.js` uses the selected user message's Copy action to
+obtain its original text. The clipboard write is captured within the dedicated
+page and restored in `finally`; the successful live trial did not replace the
+OS clipboard. The experimental receipt CLI exposes this as `--copy-message`.
+Unlike the default DOM-only mode, this clicks a UI action. It never sends or
+regenerates a message. Copy behavior is UI-version-sensitive; a changed or delayed
+implementation needs revalidation, not a claim of a stable clipboard-free API.
+
+Recovery compares exact original text for every candidate outside the supplied
+baseline, bounds candidate count, and rejects missing copies, ambiguous matches,
+changed turn identities or a changed transcript. The live multiline message was
+recovered with the same user ID as the independent owning-app read. Local tests
+also cover timeout cleanup and identity changes during the copy action. This is
+still an experimental receipt path, not the completed production subchat lifecycle.
