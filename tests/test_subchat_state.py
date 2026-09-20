@@ -1,4 +1,7 @@
 """Durable submission stages, independent of browser/account availability."""
+import json
+import sqlite3
+
 import pytest
 
 from anywhere_computer.state import Ledger
@@ -175,5 +178,34 @@ def test_receipt_claim_is_atomic_across_connections(tmp_path, owner):
         store = SubchatSubmissions(ledger.connection)
         assert sorted(store.get(key * 32, owner=owner).state for key in ('4', '5')) == [
             'sending', 'submitted']
+    finally:
+        ledger.close()
+
+
+def test_answer_settings_commit_with_answer_without_changing_legacy_json(tmp_path):
+    from anywhere_computer.subchat_state import SubchatReportedSettings
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    op = 'f' * 32
+    settings = SubchatReportedSettings(model_slug='future-model')
+    try:
+        store.prepare(op, 'question', 'dynamic', 'dynamic', owner='parent')
+        store.begin_send(op, owner='parent')
+        store.submitted(op, 'conversation', 'input', owner='parent')
+        ledger.connection.execute(
+            "CREATE TRIGGER reject_settings BEFORE INSERT ON subchat_answer_settings "
+            "BEGIN SELECT RAISE(ABORT, 'fixture failure'); END")
+        with pytest.raises(sqlite3.IntegrityError, match='fixture failure'):
+            store.complete(op, 'answer', 'result', owner='parent', reported_settings=settings)
+        assert store.get(op, owner='parent').state == 'submitted'
+        ledger.connection.execute('DROP TRIGGER reject_settings')
+        store.complete(op, 'answer', 'result', owner='parent', reported_settings=settings)
+        raw = ledger.connection.execute(
+            'SELECT body FROM subchat_submissions WHERE operation_id=?', (op,)).fetchone()[0]
+        assert 'reported_settings' not in json.loads(raw)
+        with pytest.raises(ValueError, match='Unknown'):
+            store.get(op, owner='child')
+        assert store.get(op, owner='parent').reported_settings == settings
     finally:
         ledger.close()

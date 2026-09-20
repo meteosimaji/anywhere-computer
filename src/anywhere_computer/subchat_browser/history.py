@@ -7,7 +7,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from ..subchat import SubchatAccessError, SubchatAnswer, SubchatInterrupted, SubchatReceipt
-from ..subchat_state import SubchatSubmission
+from ..subchat_state import SubchatReportedSettings, SubchatSubmission
 
 if TYPE_CHECKING:
     from playwright.async_api import Page, Response
@@ -102,9 +102,14 @@ def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAns
             or len(parts) != 1 or not isinstance(parts[0], str) or not parts[0]):
         return None
     assert submission.conversation_id is not None and submission.user_message_id is not None
+    # Optional evidence: retain only bounded provider settings, never arbitrary metadata.
+    settings = {key: value for key in ('model_slug', 'thinking_effort')
+                if isinstance(value := answer.metadata.get(key), str)
+                and value.strip() and len(value) <= 256}
+    reported = SubchatReportedSettings.model_validate(settings) if settings else None
     return SubchatAnswer(conversation_id=submission.conversation_id,
                          user_message_id=submission.user_message_id, prompt=submission.prompt,
-                         answer_message_id=answer.id, text=parts[0])
+                         answer_message_id=answer.id, text=parts[0], reported_settings=reported)
 
 
 async def observe_history(page: Page, submission: SubchatSubmission) -> Response:

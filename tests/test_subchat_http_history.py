@@ -480,6 +480,8 @@ async def test_checkpointed_request_recovers_without_rendered_history(tmp_path, 
     from anywhere_computer.subchat_state import SubchatSubmissions
 
     submission, payload = sample()
+    payload["messages"][1]["metadata"].update(
+        model_slug="future-model", thinking_effort="future-effort")
     ledger = Ledger(tmp_path)
     store = SubchatSubmissions(ledger.connection)
     op = submission.operation_id
@@ -526,5 +528,29 @@ async def test_checkpointed_request_recovers_without_rendered_history(tmp_path, 
         service = Subchats(SubchatSubmissions(ledger.connection), backend)
         result = await service.recover(op, owner=None)
         assert result.state == 'completed' and result.answer == '日本語 result'
+        assert result.reported_settings.model_slug == 'future-model'
+        assert result.model == submission.model and result.effort == submission.effort
+        ledger.close()
+        ledger = Ledger(tmp_path)
+        restored = SubchatSubmissions(ledger.connection)
+        assert restored.get(op, owner=None).reported_settings == result.reported_settings
+        with pytest.raises(ValueError, match='cannot be replaced'):
+            restored.complete(op, result.answer_message_id, result.answer, owner=None)
     finally:
         ledger.close()
+
+@pytest.mark.parametrize('metadata, expected', [
+    ({'model_slug': 'future-model', 'thinking_effort': 'future-effort'},
+     {'model_slug': 'future-model', 'thinking_effort': 'future-effort'}),
+    ({'model_slug': 'future-model', 'thinking_effort': {'unexpected': True}},
+     {'model_slug': 'future-model', 'thinking_effort': None}),
+    ({'model_slug': 'x' * 257, 'thinking_effort': ' '}, None),
+    ({'authorization': 'must-not-be-exported'}, None),
+])
+def test_reported_settings_are_optional_bounded_and_not_ui_mapping(metadata, expected):
+    submission, payload = sample()
+    payload['messages'][1]['metadata'].update(metadata)
+    answer = project_history(json.dumps(payload).encode(), submission)
+    assert answer is not None
+    assert (answer.reported_settings.model_dump() if answer.reported_settings else None) == expected
+    assert 'must-not-be-exported' not in answer.model_dump_json()
