@@ -809,3 +809,7 @@ to retrieve older records; `null` marks the end. The limit is 1–100. Paginatio
 filters the authenticated store owner before selecting records. The local stdio
 adapter retains owner=None and does not create child-specific authorization.
 The existing ledger is reused; no browser or second task database is introduced.
+Saved list/status, local queue/cancel, and recovery of already terminal records
+also work without the optional Playwright dependency installed. The browser
+extra is loaded only when an operation actually requests browser access; this
+does not make live Chat send/recovery browser-free.

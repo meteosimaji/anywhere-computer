@@ -1,12 +1,14 @@
 """Local JSON-lines subchat controller with one explicitly selected browser profile."""
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
 import sys
 from contextlib import AsyncExitStack
 from pathlib import Path
-from typing import Literal, TextIO
+from typing import TYPE_CHECKING, Literal, TextIO
 
 from pydantic import Field, TypeAdapter
 
@@ -14,6 +16,9 @@ from .models import Contract, OperationId
 from .state import Ledger
 from .subchat import SubchatOutcomeUnknown, Subchats
 from .subchat_state import SubchatList, SubchatSubmissions, SubchatWorkContext
+
+if TYPE_CHECKING:
+    from playwright.async_api import BrowserContext, Playwright
 
 
 class Command(Contract):
@@ -88,9 +93,6 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
 
 
 async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
-    # Keep this dependency optional for all non-browser installations.
-    from playwright.async_api import BrowserContext, Playwright, async_playwright
-
     from .subchat_browser.backend import BrowserSubchatBackend
 
     ledger = Ledger(state)
@@ -99,6 +101,8 @@ async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
             driver: Playwright | None = None
 
             async def open_browser() -> BrowserContext:
+                from playwright.async_api import async_playwright
+
                 nonlocal driver
                 if driver is None:
                     driver = await resources.enter_async_context(async_playwright())

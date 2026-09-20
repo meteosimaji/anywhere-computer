@@ -99,6 +99,16 @@ async def test_saved_commands_do_not_start_chrome(tmp_path, monkeypatch):
     output = StringIO()
     monkeypatch.setattr(subchat_cli.sys, 'stdin', source)
     monkeypatch.setattr(subchat_cli.sys, 'stdout', output)
+    import builtins
+
+    original_import = builtins.__import__
+
+    def no_browser_dependency(name, *args, **kwargs):
+        if name == 'playwright' or name.startswith('playwright.'):
+            raise ModuleNotFoundError('Browser extra is not installed')
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', no_browser_dependency)
     await subchat_cli.run(tmp_path / 'unused-profile', tmp_path)
     replies = [json.loads(line) for line in output.getvalue().splitlines()]
     assert [item['state'] for item in replies[:3]] == ['completed', 'completed', 'cancelled']
