@@ -1,0 +1,64 @@
+# Shared work acceptance, 2026-09-20
+
+## Actual ordinary Chat trials
+
+The development browser adapter created ordinary Chat A with GPT-5.6 Sol and the
+observed medium effort label. Through the installed Anywhere HTTP plugin, that
+Chat created Python code in a dedicated temporary directory and reported a zero
+exit code with sum 16 and mean 5.333333333333333. A same-conversation follow-up
+read and hash-conditionally updated that file; its new output was sum 26, mean 6.5,
+count 4. Independent host reads and executions confirmed both versions/results.
+
+Fresh ordinary Chat B discovered the same installed runtime and read the same
+file. Its reported current values and SHA-256 matched the host file. It attributed terminal startup rejection to ChatGPT's safety checks. This is
+the model's report, not an independently established root cause; its execution
+and output retrieval did not pass. No alternative execution path was dispatched
+by the controller to override this rejection. This difference is not evidence
+that changing command spelling or selecting another model repairs authorization.
+
+A direct installed-plugin status read separately confirmed ready, version
+0.2.0a1, runtime ID a82ce393e115c5b1025a0c8777823d74357ee120f660892d27aca78d71084c53,
+and zero active sessions. The installed file/terminal runtime is distinct from
+the development subchat adapter under test.
+
+## Deterministic engine acceptance
+
+`test_shared_file_handoff_rejects_stale_edit_and_survives_restart` sends two
+independent sequences of real engine requests against one temporary workspace:
+
+1. Create code and read it from both sequences.
+2. Update through one sequence and reject the other's stale hash replacement.
+3. Verify the winning content remains, then execute that file and collect 42 with
+   exit code zero.
+4. Close/reopen the engine and recover both the file and a recorded operation.
+
+This uses the actual file, terminal, and ledger implementations without a model.
+It does not simulate browser identity, HTTP authentication, or model approval.
+Arbitrary shell writes and external editors do not acquire the file API's hash
+precondition merely by sharing a directory.
+
+## Outstanding product work
+
+The controller supplied the same path explicitly in the two prompts. There is
+still no persistent shared-work object that binds parent and child Chats to an
+authorized device/workspace or verifies each Chat's tool connection. That product
+integration, two-Chat editing acceptance, stale-edit rejection through actual
+Chats, unavailable-device behavior, and broader model/effort coverage remain open.
+CoS requirements inform this design; CoS runtime ownership is not a dependency.
+
+## Acceptance policy and HTTP reproduction
+
+Per the user's clarified acceptance criterion, deterministic reproduction through
+the MCP/HTTP tool boundary is the functional gate. Live Chat trials supplement
+that gate with observations about discoverability, UI changes, and usability.
+A model-reported platform rejection alone does not establish a plugin defect.
+
+The existing `test_code_write_run_edit_and_recover_from_fresh_http_client` uses
+the actual MCP SDK and loopback HTTP server, real files, and real subprocesses.
+It opens a fresh client, discovers tools, creates Python/CSV inputs, executes the
+code, reconnects with a new MCP session, recovers a prior operation, updates the
+code, and executes again. Reusing a terminal request ID must not create a second
+process. The test now also attempts a stale hash edit through `tools/call` and
+verifies failure, preservation of the winning file, and successful execution of
+that file. Authentication in this fixture is static; OAuth/grant checks have
+separate tests. This does not reproduce ChatGPT's model or platform policy.
