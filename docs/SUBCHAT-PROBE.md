@@ -670,3 +670,61 @@ UI checks cannot supply a server-side atomic expected-turn guarantee.
 These are local stdio controls and inherit the existing operator connection.
 They do not establish a child principal, revoke a connector grant, or provide
 read-only isolation. Remote delegated-child authorization remains separate work.
+
+### Tool-boundary delivery: source audit and acceptance gate
+
+The CoS source audit is pinned to `8f76ccc790917b01ee758da6687a1cf9b576ba8a`
+(package 2.1.14), not a claim about a future release. The supplied audit memo
+has SHA-256 `d11bbe37b765b83d1da04d9bef8734a61507eae662e029fd0019d0e66d7af148`.
+The reviewed paths are:
+
+- `src/main/session/input.ts`, `enqueueInput` and `offerToolInput`: save input,
+  bind explicit tool delivery to a turn, then select input for an eligible reply.
+- `src/main/mcp/kernel.ts`, `dispatchTracked`: append input to `ToolResult.content`
+  and, for core structured results, `supplemental_context`.
+- `input.ts`, `toolInputReceipt`: a later invocation start in the same mapped
+  session/conversation is treated as receipt. This is inferred receipt, not an
+  explicit acknowledgement of the input body or proof that the model consumed it.
+- `extension/content.js`, `acceptDesktopInput`: a separate conditional direct-turn
+  path stops generation and sends a new user message. Do not adopt this as a
+  transparent replacement for non-interrupting delivery.
+
+These are distinct capabilities: `queue_after_turn`, `message_at_tool_boundary`,
+`native_steer`, and `interrupt_then_send`. They must not silently substitute for
+one another. Only queued follow-ups are currently implemented here; tool-boundary
+message delivery remains an acceptance-gated design, not an advertised capability.
+
+CoS correlates an inbound HTTP request header with companion-observed conversation
+metadata. That mechanism is provider/companion-specific, not standard MCP child
+identity. Anywhere's current authenticated grant does not distinguish multiple
+ordinary Chats sharing that grant. Neither a client-supplied task/conversation ID
+nor an MCP session ID alone establishes this binding. Do not add an unconditional
+response-appending hook while that ambiguity remains. A dedicated restricted
+connection is another possible design, but has not been qualified with ordinary
+Chat here.
+
+A future delivery record must retain the exact target, payload digest and observed
+transport evidence. `awaiting_tool_boundary`, `offered`, response-written evidence,
+and explicit receipt must be distinct; a later unrelated tool call cannot prove
+consumption. Tool-free Thinking remains waiting, and an ended/mismatched target
+must fail without next-turn delivery. An ambiguous write after a crash must not
+trigger blind re-offer. Original tool data stays unchanged; text and structured
+supplemental projections share a stable message identity and are not two sends.
+Result recovery must not attach the same message to a new unrelated invocation.
+
+Required integration cases before enabling this capability:
+
+| Case | Required evidence |
+| --- | --- |
+| Missing binding or same-account different Chat | No supplemental message returned |
+| Turn changes immediately before projection | Stale target; no fallback |
+| Permission revoked during tool execution | Delivery reauthorized before projection |
+| Response still pending while another call starts | No inferred consumption |
+| Crash after offer/write; result recovery | Ambiguous outcome preserved, no blind replay |
+| Text-only and structured-only clients | Same identity and content, original result preserved |
+| Target ends without another tool | Undeliverable for that target, not sent next turn |
+
+The external auditor reported seven isolated assertions against CoS's extracted
+receipt predicate; they are not Anywhere HTTP integration or live Chat tests.
+Live tool-boundary delivery and authenticated caller/turn correlation remain
+unverified. The existing 74 subchat tests do not establish those capabilities.
