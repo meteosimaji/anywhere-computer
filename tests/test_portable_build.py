@@ -137,3 +137,29 @@ def test_manager_packaging_requires_explicit_existing_file(tmp_path):
     native.write_bytes(b"native fixture")
     with pytest.raises(ValueError, match="supports"):
         portable_builder.include_manager(tmp_path, native, platform="linux")
+
+
+@pytest.mark.parametrize("platform", ["win32", "linux"])
+def test_audio_helper_rejects_unsupported_platform_before_build(tmp_path, monkeypatch, platform):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "BUILD").write_text("fixture")
+    monkeypatch.setattr(portable_builder.sys, "platform", platform)
+    with pytest.raises(ValueError, match="macOS only"):
+        portable_builder.build_portable(
+            tmp_path, runtime, tmp_path / "output.zip", audio_helper=tmp_path / "helper",
+        )
+    assert not (tmp_path / "output.zip").exists()
+
+
+@pytest.mark.parametrize("helper", [Path("relative"), Path("/missing-audio-helper")])
+def test_audio_helper_requires_explicit_executable(tmp_path, monkeypatch, helper):
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "BUILD").write_text("fixture")
+    monkeypatch.setattr(portable_builder.sys, "platform", "darwin")
+    with pytest.raises(ValueError, match="absolute executable"):
+        portable_builder.build_portable(
+            tmp_path, runtime, tmp_path / "output.zip", audio_helper=helper,
+        )
+    assert not (tmp_path / "output.zip").exists()
