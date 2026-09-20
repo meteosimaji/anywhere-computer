@@ -38,6 +38,37 @@ async def test_copy_reads_selected_message_and_restores_clipboard():
                                     'user_message_id': 'user', 'text': text}
             assert await page.evaluate('window.osWrites') == 0
             assert await page.evaluate('navigator.clipboard.writeText === window.originalWrite')
+            await page.evaluate('''() => {
+                document.querySelector('[data-turn-key]').insertAdjacentHTML('beforeend',
+                    '<div data-content-search-unit-key="unit:2:assistant">' +
+                    '<div data-markdown-text-style="assistant-message">answer</div></div>' +
+                    '<div class="turn-action-controls"><button aria-label="Copy">copy</button>' +
+                    '<button aria-label="Regenerate response">regenerate</button></div>');
+                window.originalRichWrite = async () => { window.osWrites++; };
+                Object.defineProperty(navigator.clipboard, 'write',
+                    {configurable: true, value: window.originalRichWrite});
+                document.querySelector('[aria-label="Copy"]').onclick = () =>
+                    navigator.clipboard.write([new ClipboardItem({
+                        'text/plain': new Blob(['```answer```'], {type:'text/plain'})})]);
+            }''')
+            async def answer():
+                return await page.evaluate(source + '''\n() =>
+                    copySubchatMessageText(document,"conversation","user","assistant")''')
+            assert (await answer())['text'] == '```answer```'
+            assert await page.evaluate('window.osWrites') == 0
+            assert await page.evaluate('navigator.clipboard.write === window.originalRichWrite')
+            await page.evaluate('''() => {
+                const stop = document.createElement('button');
+                stop.setAttribute('aria-label', 'Stop generating');
+                stop.textContent = 'stop'; document.body.append(stop);
+            }''')
+            assert await answer() == {'state': 'message_unconfirmed'}
+            await page.evaluate("document.querySelector('[aria-label=\"Stop generating\"]')"
+                                ".remove()")
+            await page.evaluate('''() => {
+                document.querySelector('.turn-action-controls').remove();
+                document.querySelector('[data-content-search-unit-key]').remove();
+            }''')
             recovered = await page.evaluate(source + '''\ntext =>
                 recoverSubchatSubmission(document,"conversation",text,[])''', text)
             assert recovered == {'state': 'submission_observed',

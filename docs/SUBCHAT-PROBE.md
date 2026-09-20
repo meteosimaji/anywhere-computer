@@ -334,3 +334,21 @@ dispatch. Reusing its operation ID with a different conversation or as a new-Cha
 request is rejected. The requested identity is kept separately from the observed
 conversation created by a new-Chat send, so later receipt recovery does not change
 the original request's meaning.
+
+## Browser answer extraction
+
+The same selected-turn Copy path now reads assistant text only when exactly one
+assistant content unit and visible final-response controls are present and no
+visible stop-generation control or busy turn is observed. The gate is checked
+again after copying. It returns the DOM's `answer_reference`, explicitly not an
+invented backend message ID, and labels its evidence `visible_response_controls`.
+This UI evidence must not be described as a native provider completion event.
+
+The authenticated marker trial returned the expected answer through this path.
+During initial diagnosis, the answer Copy action used `clipboard.write` with
+plain-text and HTML items, unlike the previously tested user `writeText` path.
+That initial attempt copied the synthetic marker to the OS clipboard; its prior
+contents were not read or restored. The helper now captures/restores both methods.
+The real-browser fixture verifies zero calls to either OS-writing spy and rejects
+an answer while the Stop generating control is present. Delayed/changing UI and
+long live Thinking still require end-to-end adapter acceptance.
