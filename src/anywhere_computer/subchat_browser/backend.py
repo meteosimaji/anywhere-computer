@@ -98,11 +98,22 @@ class BrowserSubchatBackend:
 
     async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
         url = self._url(submission)
-        page = await (await self._browser()).new_page()
+        # Only reuse tabs already owned by this adapter, never discover or claim
+        # arbitrary user tabs. New conversations must always start separately.
+        candidates = list(dict.fromkeys(
+            page for page in self.pages.values()
+            if submission.requested_conversation_id is not None
+            and not page.is_closed() and page.url == url))
+        if len(candidates) > 1:
+            raise ValueError('Multiple owned tabs match the requested conversation')
+        page = candidates[0] if candidates else await (await self._browser()).new_page()
         self.pages[submission.operation_id] = page
         page.set_default_timeout(15_000)
-        response = await page.goto(url, wait_until='domcontentloaded')
-        if response is None or not response.ok or not await picker_ready(page):
+        if not candidates:
+            response = await page.goto(url, wait_until='domcontentloaded')
+            if response is None or not response.ok:
+                raise ConnectionError('Authenticated ordinary Chat is unavailable')
+        if not await picker_ready(page):
             raise ConnectionError('Authenticated ordinary Chat is unavailable')
         if not await self._ready(page, submission):
             raise ValueError('Ordinary Chat with an idle empty composer was not confirmed')

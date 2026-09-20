@@ -180,6 +180,30 @@ async def test_browser_send_pending_completion_and_database_recovery(
             result = await service.recover(operation, owner=None)
             assert result.state == 'completed'
             assert result.answer == '日本語 answer 42'
+            follow = service.store.prepare('7' * 32, 'next', 'Future model',
+                                           'Initial effort', owner=None,
+                                           conversation_id=result.conversation_id)
+            await recovered_page.evaluate('window.reuseMarker=42')
+            assert await service.backend.prepare(follow) == (
+                ('old', 'user') if followup else ('user',))
+            assert service.backend.pages[follow.operation_id] is recovered_page
+            assert await recovered_page.evaluate('window.reuseMarker') == 42
+            assert len(context.pages) == 2
+            await recovered_page.locator('[role=textbox]').fill('user draft')
+            with pytest.raises(ValueError, match='idle empty composer'):
+                await service.backend.prepare(follow)
+            assert await recovered_page.locator('[role=textbox]').inner_text() == 'user draft'
+            assert len(context.pages) == 2
+            await recovered_page.locator('[role=textbox]').fill('')
+            await recovered_page.evaluate('''() => {
+                const button=document.createElement('button');
+                button.id='generating'; button.setAttribute('aria-label','Stop');
+                document.body.append(button);
+            }''')
+            with pytest.raises(ValueError, match='idle empty composer'):
+                await service.backend.prepare(follow)
+            assert len(context.pages) == 2
+            await recovered_page.locator('#generating').evaluate('node=>node.remove()')
             ledger.close()
             ledger = Ledger(tmp_path)
             service = Subchats(SubchatSubmissions(ledger.connection),

@@ -813,3 +813,11 @@ Saved list/status, local queue/cancel, and recovery of already terminal records
 also work without the optional Playwright dependency installed. The browser
 extra is loaded only when an operation actually requests browser access; this
 does not make live Chat send/recovery browser-free.
+
+Follow-up preparation reuses a unique, open conversation tab already owned by
+the same adapter without reloading it. It does not discover or claim arbitrary
+user tabs. A draft or active generation still prevents preparation; ambiguous
+owned matches fail rather than opening another copy. New conversations and
+recovery in a fresh adapter can still open tabs. This reduces avoidable tab
+creation, but does not guarantee background window behavior or browser-free
+operation on every browser/OS.
