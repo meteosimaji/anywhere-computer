@@ -13,7 +13,10 @@ This is source integration, not deployment of these commits to every installed
 plugin. See the dated development and practical acceptance records for deployed
 runtime identities and the limits of their evidence.
 
-The subchat code is still under `scripts/`, with local browser and receipt tests.
+The durable submission lifecycle is in `src/anywhere_computer/subchat.py` and
+`subchat_state.py`; the browser adapter remains under `scripts/`. PR 61 merged
+these components at `90ef7a352011925980ced6c713c98085f01e71f7` after all five CI
+jobs passed, including Windows.
 It is not a registered production subchat MCP service. Model/effort discovery,
 ordinary Chat messages and independently correlated replies have live evidence;
 the external Codex app transport is not repaired by those successful owning-app
@@ -49,8 +52,10 @@ calls. Dynamic menu discovery must not silently select a replacement model.
 The authenticated Chat editor converts a multiline `fill` or `insert_text` into
 separate paragraph nodes; `innerText` then contains additional blank lines.
 Typing lines with Shift+Enter also triggered code-block formatting. These probes
-stopped before sending. Exact saved-message serialization remains unverified;
-whitespace normalization would hide the requirement rather than satisfy it.
+stopped before sending. The literal input adapter now preserves line breaks and exact saved-message
+serialization in the offline browser fixture. Live ordinary Chat creation and
+a same-conversation file-edit follow-up also succeeded. These results resolve
+the earlier input probe defect; whitespace normalization is not used to hide it.
 
 Development probes previously closed their dedicated Chrome context in `finally`
 after each observation. This caused visible repeated window closure, not evidence
@@ -95,4 +100,9 @@ B reads that actual file and runs it, A changes it, B observes the new contents,
 and a stale hash edit is rejected without losing A's change. Recover the work
 context after reconnect and verify an unavailable/different device is not
 silently substituted. Report actual tool calls and file/run results separately
-from conversational claims. This remains unimplemented acceptance work.
+from conversational claims. The real engine and MCP/HTTP file handoff tests now cover conflicts and result
+recovery; the controller supplied the path explicitly in live Chat trials.
+Persistent product work-context binding remains unimplemented. Per the clarified
+acceptance policy, deterministic real MCP/HTTP tests are the functional gate;
+live Chat trials supplement them. A model-reported rejection is not an established
+root cause or, on its own, proof of a plugin defect.
