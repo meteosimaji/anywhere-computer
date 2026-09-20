@@ -546,3 +546,27 @@ selected, effort discovery was unconfirmed and the combined catalog call did not
 return its already observed model list. Selecting an explicitly observed model
 with an effort control worked. Partial model availability should remain visible;
 this limitation is still open rather than being treated as no models available.
+
+## Model catalog through MCP
+
+The configured browser-backed stdio entry now also exposes `subchat_catalog`
+with empty arguments. It observes current model labels and the selected model's
+effort choices without submitting a message. A `catalog_partial` result retains
+the verified `models` list and reports `efforts_for_selected_model` as unconfirmed.
+It does not mean that no models exist, or that arbitrary effort values are valid.
+The model selection is rechecked before returning either a full or partial
+catalog, and the picker is closed afterward. Do not infer that every model
+supports the same effort options. Selecting a model without a verified effort
+control for sending remains unsupported by the present sender.
+
+This resolves the model-list loss described in the authenticated acceptance
+record above. The regression removes the selected model's effort control in a
+real Chrome DOM fixture: the previous implementation returned no model list;
+the corrected implementation preserves it and reports partial availability.
+
+Live debugging also confirmed that reopening the picker can preserve the model
+list view. In that state, the effort-view toggle matched `:visible` but had inert
+and aria-hidden ancestors; attempting to click it timed out. Catalog collection
+now re-observes the list before deciding whether a view switch is necessary.
+The regression covers remembered model-list view with an inert toggle. An
+unobserved effort control is not evidence that the model lacks effort support.

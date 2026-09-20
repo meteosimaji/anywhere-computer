@@ -1,12 +1,13 @@
 """Local stdio adapter, reusable through Anywhere's existing direct-MCP sessions."""
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from typing import cast
 
-from pydantic import Field, JsonValue
+from pydantic import Field, JsonValue, TypeAdapter
 
 from .mcp_server import MCPSession
-from .models import Contract, OperationId, Reply, Request
+from .models import Contract, Empty, OperationId, Reply, Request
 from .subchat import SubchatOutcomeUnknown, Subchats
 
 
@@ -28,7 +29,9 @@ INSTRUCTIONS = (
 )
 
 
-def session(service: Subchats) -> MCPSession:
+def session(service: Subchats, *,
+            observe_catalog: Callable[[], Awaitable[dict[str, object]]] | None = None,
+            ) -> MCPSession:
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
     definitions: dict[str, tuple[type[Contract], str]] = {
@@ -36,6 +39,11 @@ def session(service: Subchats) -> MCPSession:
         'subchat_recover': (OperationId, 'Recover a submission and answer; never resend.'),
         'subchat_status': (OperationId, 'Read the saved submission without browser interaction.'),
     }
+
+    if observe_catalog is not None:
+        definitions['subchat_catalog'] = (
+            Empty, 'Observe model labels and effort for the selected model without sending. '
+            'A partial catalog preserves known models; never infer missing effort choices.')
 
     async def catalog() -> list[JsonValue]:
         return [cast(JsonValue, {
@@ -46,6 +54,12 @@ def session(service: Subchats) -> MCPSession:
 
     async def execute(request: Request) -> Reply:
         try:
+            if request.tool == 'subchat_catalog' and observe_catalog is not None:
+                Empty.model_validate(request.arguments)
+                async with browser_lock:
+                    observed = await observe_catalog()
+                data = TypeAdapter(dict[str, JsonValue]).validate_python(observed)
+                return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_send':
                 args = Send.model_validate(request.arguments)
                 async with browser_lock:

@@ -1,6 +1,6 @@
 """Ordinary Chat adapter using an explicitly supplied dedicated browser context.
 
-Not registered as an HTTP/MCP backend. Existing-conversation sends checkpoint
+Used by the local stdio MCP entry. Existing-conversation sends checkpoint
 visible message identities before dispatch; see the dated acceptance records.
 """
 import asyncio
@@ -12,7 +12,7 @@ from playwright.async_api import BrowserContext, Page
 from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt
 from anywhere_computer.subchat_state import SubchatSubmission
 
-from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, picker_ready
+from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_page, picker_ready
 
 INPUT = Path(__file__).with_name('subchat_input.js').read_text(encoding="utf-8")
 COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")
@@ -24,6 +24,18 @@ class BrowserSubchatBackend:
     def __init__(self, context: BrowserContext) -> None:
         self.context = context
         self.pages: dict[str, Page] = {}
+
+    async def catalog(self) -> dict[str, object]:
+        page = await self.context.new_page()
+        page.set_default_timeout(15_000)
+        try:
+            response = await page.goto('https://chatgpt.com/', wait_until='domcontentloaded')
+            if response is None or not response.ok or not await picker_ready(page):
+                return {'state': 'catalog_unavailable', 'submitted': False}
+            return await collect_page(page)
+        finally:
+            # This is a separate observation tab, never a submission or user draft.
+            await page.close()
 
     async def _page(self, submission: SubchatSubmission) -> Page | None:
         page = self.pages.get(submission.operation_id)
