@@ -222,8 +222,25 @@ async def test_concurrent_binary_appends_accept_only_one_hash(binary_engine, tmp
     [frozenset({"files_read_binary", "files_write_binary", "operations_get"})],
     indirect=True,
 )
-async def test_http_binary_lost_response_is_recovered_without_reappend(http_remote, tmp_path):
-    backend, _, _, _, calls, faults = http_remote
+@pytest.mark.parametrize("hold_write", [False, True])
+async def test_http_binary_lost_response_is_recovered_without_reappend(
+    http_remote, tmp_path, monkeypatch, hold_write,
+):
+    backend, _, _, engine, calls, faults = http_remote
+    release_write = asyncio.Event()
+    if hold_write:
+        from dataclasses import replace
+
+        import anywhere_computer.engine as engine_module
+
+        original = engine.tools["files_write_binary"]
+
+        async def held_write(arguments):
+            await release_write.wait()
+            return await original.handler(arguments)
+
+        engine.tools["files_write_binary"] = replace(original, handler=held_write)
+        monkeypatch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", .05)
     path = tmp_path / "http-upload.bin"
     path.write_bytes(b"prefix")
     content = bytes(range(256)) * 1024
@@ -240,6 +257,16 @@ async def test_http_binary_lost_response_is_recovered_without_reappend(http_remo
     recovered = await backend.execute(
         operation("operations_get", operation_id=request.operation_id)
     )
+    if hold_write:
+        assert recovered.data["state"] == "running"
+        assert path.read_bytes() == b"prefix"
+        release_write.set()
+    async with asyncio.timeout(15):
+        while recovered.data["state"] == "running":
+            await asyncio.sleep(.05)
+            recovered = await backend.execute(
+                operation("operations_get", operation_id=request.operation_id)
+            )
     assert recovered.data["state"] == "completed"
     assert recovered.data["data"]["sha256"] == sha256(b"prefix" + content)
     read = await backend.execute(
