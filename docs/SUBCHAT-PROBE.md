@@ -8,6 +8,13 @@ Product name: `subchat` (Japanese: サブチャット). A subchat is an ordinary
 ChatGPT Chat created for a delegated task. It is not a ChatGPT Work task.
 Historical `AC_CHAT_WORKER_...` test markers below are retained as evidence.
 
+For current use, start with the [CLI](#packaged-local-json-lines-controller),
+[MCP entry](#stdio-mcp-entry), [HTTP answer recovery](#experimental-saved-http-answer-recovery),
+[explicit resources](#explicit-send-resources-experimental), and
+[capability boundaries](#coverage-boundary-for-the-next-http-increments).
+The chronological investigations below preserve earlier failures and superseded
+assumptions; they are not separate current feature inventories.
+
 The requested subchat uses ordinary ChatGPT Chat, not a Codex task, ChatGPT
 Work task, or paid OpenAI API. Creating a new conversation and recovering its
 identity are required; appending to an existing conversation is insufficient.
@@ -1078,3 +1085,32 @@ pending until the user turn became observable again after completion. This is a
 remaining observation-latency limitation, not a failed generation. Future review
 prompts should pin the input revision and exact test interpreter so concurrent
 parent fixes and environment mismatch do not make a child's report look current.
+
+### Codex read parity and stopping before an answer
+
+The owning Codex app's `read_thread` independently returned the two completed
+review conversations above with kind `chatgpt`, the same user IDs and final
+answer IDs (`7f812bfc-066a-4795-aa91-9e5bf9d8a111` and
+`1829ae62-3247-4f09-8e98-02c90ee7aa17`), and matching final text. This establishes
+read parity for these conversations, not universal freshness of the app's reader
+or access from an external MCP process.
+
+HTTP recovery accepts only the correlated, completed final answer. Stopping
+before such an answer exists cannot produce a completed answer to retrieve.
+Provider interruption is reported separately; a missing final remains pending or
+requires reconciliation rather than being fabricated from progress. A dedicated
+Thinking-stop attempt `b01574a65bae4628a05cf5daf03e1ece` had already completed
+before the stop precondition was checked, so it does not count as a successful
+Thinking-stop acceptance. No stop was issued against its completed answer.
+
+Current `project_history` recognizes interruption from a correlated final message's
+`finish_details.type`. If the provider stores no final message at all, that parser
+cannot yet distinguish stopped Thinking from pending generation. A separate
+observed terminal-state contract is needed before promising that distinction.
+
+The supported output is final text. Visible progress summaries are a different,
+not-yet-exposed output contract; nonpublic chain-of-thought is not a supported
+retrieval feature. The Codex read parity above returned user/final messages, not
+an internal reasoning trace. Generation still uses browser-assisted preparation;
+HTTP history reads and a CLI/MCP send interface do not establish a browser-free
+independent generation client.

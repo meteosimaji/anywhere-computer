@@ -89,6 +89,8 @@ jobs:
       - run: uv sync --locked --managed-python --python 3.12
       - name: Record selected runtime
         run: uv run python -c "import sys; print(sys.executable); print(sys.base_prefix)"
+      - name: Check generated README references and local links
+        run: uv run python scripts/update_readme.py --check
       - run: uv run ruff check src tests scripts
       - run: uv run mypy
       - run: openssl version
