@@ -1579,7 +1579,8 @@ A queued child's recovery may return its predecessor's observation. Its explicit
 `observation.operation_id` identifies that predecessor; the outer submission ID
 still identifies the queued child. Wait returns the most recent completed
 observation within that wait, with its timestamp, unless the saved lifecycle
-state advanced in the meantime. It does not claim an in-flight read completed.
+state of either the outer submission or the observed predecessor advanced in
+the meantime. It does not claim an in-flight read completed.
 
 No raw reasoning, partial answer, provider metadata, credentials or guessed
 progress percentage is included. Explicit provider interruption still follows

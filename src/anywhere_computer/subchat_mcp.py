@@ -13,6 +13,7 @@ from .subchat import (
     SubchatAccessError,
     SubchatBrowserClosed,
     SubchatInterrupted,
+    SubchatObservedSubmission,
     SubchatOutcomeUnknown,
     SubchatPreparationFailed,
     Subchats,
@@ -275,7 +276,10 @@ def session(service: Subchats, *,
                     if not deadline.expired():
                         raise
                     current = service.store.get(wait.operation_id, owner=None)
-                    if current.state != result.state:
+                    if (current.state != result.state
+                            or isinstance(result, SubchatObservedSubmission)
+                            and service.store.get(result.observation.operation_id,
+                                owner=None).state != 'submitted'):
                         result = current
                 return Reply(operation_id=request.operation_id, state='completed',
                              data=result.model_dump(mode='json'))
