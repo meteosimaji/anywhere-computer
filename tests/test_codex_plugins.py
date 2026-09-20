@@ -214,7 +214,10 @@ async def test_targeted_inspection_and_summary_preserve_digest(stub_catalog, tmp
     ('starting', 'unknown', 'runtime_not_ready'),
     ('disabled', 'unknown', 'unavailable'),
 ])
-async def test_unavailable_server_never_dispatches(stub_catalog, tmp_path, runtime, auth, expected):
+async def test_unavailable_server_never_dispatches(
+    stub_catalog, tmp_path, runtime, auth, expected, monkeypatch,
+):
+    monkeypatch.setattr(codex_plugins, "STARTUP_TIMEOUT", 0.02)
     stub_catalog['rows'][0].update(runtimeStatus=runtime, authStatus=auth)
     inspected = await list_codex_plugin_tools(str(tmp_path), server='demo', tool='echo')
     assert inspected['servers'][0]['availability'] == expected
@@ -523,3 +526,67 @@ async def test_unrelated_large_catalog_does_not_block_exact_tool(stub_catalog, t
     }})
     result = await list_codex_plugin_tools(str(tmp_path), server="demo", tool="echo")
     assert result["servers"][0]["tools"][0]["name"] == "echo"
+
+
+@pytest.mark.parametrize("ready_state,expected", [
+    ("connected", None),
+    ("authenticationRequired", "authentication_required"),
+    ("changed", "catalog_stale"),
+])
+async def test_call_waits_for_same_runtime_startup(
+    stub_catalog, tmp_path, monkeypatch, ready_state, expected,
+):
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    digest = catalog["servers"][0]["tools"][0]["catalog_sha256"]
+    original = codex_plugins._Session.request
+    polls = []
+
+    async def starting_then_ready(self, method, params):
+        if method == "mcpServerStatus/list":
+            polls.append(params["threadId"])
+            stub_catalog["rows"][0]["runtimeStatus"] = (
+                "starting" if len(polls) == 1 else
+                "connected" if ready_state == "changed" else ready_state
+            )
+            if len(polls) > 1 and ready_state == "changed":
+                stub_catalog["rows"][0]["tools"]["echo"]["description"] = "Changed"
+        return await original(self, method, params)
+
+    monkeypatch.setattr(codex_plugins._Session, "request", starting_then_ready)
+    stub_catalog["calls"].clear()
+    if expected:
+        with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+            await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
+        assert caught.value.code == expected
+    else:
+        result = await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
+        assert result["content"][0]["text"] == "ok"
+    assert polls == ["isolated", "isolated"]
+    methods = [method for method, _ in stub_catalog["calls"]]
+    assert methods.count("thread/start") == 1
+    assert methods.count("mcpServer/tool/call") == (0 if expected else 1)
+
+
+async def test_startup_catalog_transport_failure_is_not_retried(
+    stub_catalog, tmp_path, monkeypatch,
+):
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    digest = catalog["servers"][0]["tools"][0]["catalog_sha256"]
+    original = codex_plugins._Session.request
+    polls = 0
+
+    async def failing_startup(self, method, params):
+        nonlocal polls
+        if method == "mcpServerStatus/list":
+            polls += 1
+            if polls == 2:
+                raise ConnectionError("startup transport lost")
+            stub_catalog["rows"][0]["runtimeStatus"] = "starting"
+        return await original(self, method, params)
+
+    monkeypatch.setattr(codex_plugins._Session, "request", failing_startup)
+    stub_catalog["calls"].clear()
+    with pytest.raises(codex_plugins.PluginPreflightError, match="plugin_catalog_failed"):
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
+    assert polls == 2
+    assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])

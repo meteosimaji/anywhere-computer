@@ -488,12 +488,23 @@ async def _call_tool(
     _validate_call(server, tool, catalog_sha256)
     clean_cwd = context.cwd
     session, thread_id = context.session, context.thread_id
-    servers, remaining_cursor, _ = await asyncio.wait_for(
-        _start_and_catalog(
-            session, clean_cwd, limit=MAX_CATALOG, max_pages=MAX_PAGES,
-            thread_id=thread_id, target_server=server, target_tool=tool,
-        ), timeout=STARTUP_TIMEOUT,
-    )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + STARTUP_TIMEOUT
+    while True:
+        servers, remaining_cursor, _ = await asyncio.wait_for(
+            _start_and_catalog(
+                session, clean_cwd, limit=MAX_CATALOG, max_pages=MAX_PAGES,
+                thread_id=thread_id, target_server=server, target_tool=tool,
+            ), timeout=max(0.001, deadline - loop.time()),
+        )
+        selected_server = next((row for row in servers if row.get("server") == server), None)
+        if selected_server is None or selected_server.get("availability") != "runtime_not_ready":
+            break
+        # Observe startup in this process only. Never replay a dispatched tool or
+        # retry a failed catalog RPC, which can leave an unread response behind.
+        await asyncio.sleep(min(0.25, max(0, deadline - loop.time())))
+        if loop.time() >= deadline:
+            break
     selected: dict[str, JsonValue] | None = None
     for row in servers:
         if row.get("server") != server:
@@ -506,7 +517,6 @@ async def _call_tool(
                 if selected is not None:
                     raise ValueError("Plugin catalog contains duplicate tool names")
                 selected = candidate
-    selected_server = next((row for row in servers if row.get("server") == server), None)
     if selected_server is not None and selected_server.get("availability") in {
         "authentication_required", "runtime_not_ready", "unavailable",
     }:
