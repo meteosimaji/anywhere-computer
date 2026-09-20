@@ -241,6 +241,13 @@ async def test_http_binary_lost_response_is_recovered_without_reappend(
 
         engine.tools["files_write_binary"] = replace(original, handler=held_write)
         monkeypatch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", .05)
+        original_read = engine.tools["files_read_binary"]
+
+        async def held_read(arguments):
+            await asyncio.sleep(.1)
+            return await original_read.handler(arguments)
+
+        engine.tools["files_read_binary"] = replace(original_read, handler=held_read)
     path = tmp_path / "http-upload.bin"
     path.write_bytes(b"prefix")
     content = bytes(range(256)) * 1024
@@ -272,7 +279,17 @@ async def test_http_binary_lost_response_is_recovered_without_reappend(
     read = await backend.execute(
         operation("files_read_binary", path=str(path), expected_sha256=sha256(b"prefix" + content))
     )
-    assert read.data["total_bytes"] == len(b"prefix" + content)
+    assert read.state in {"running", "completed"}
+    async with asyncio.timeout(15):
+        while True:
+            read_result = await backend.execute(
+                operation("operations_get", operation_id=read.operation_id)
+            )
+            if read_result.data["state"] != "running":
+                break
+            await asyncio.sleep(.05)
+    assert read_result.data["state"] == "completed"
+    assert read_result.data["data"]["total_bytes"] == len(b"prefix" + content)
     writes = [
         packet
         for packet in calls
