@@ -573,8 +573,10 @@ unobserved effort control is not evidence that the model lacks effort support.
 
 ### Bounded answer waiting
 
-The local MCP adapter adds `subchat_wait(operation_id, wait_ms=10000)`, bounded
-at 60 seconds. It returns a completed tool response containing the saved
+The local MCP adapter adds `subchat_wait(operation_id, wait_ms=1000)`, bounded
+at 10 seconds to leave headroom under direct MCP's 30-second read deadline.
+Longer requests are rejected before browser observation, not silently clamped.
+It returns a completed tool response containing the saved
 submission state; `submitted`/`sending` still mean no final answer was confirmed.
 Call again with the same submission ID when more waiting is useful. It does not
 stop generation, select another model, or resend. The browser lock covers only

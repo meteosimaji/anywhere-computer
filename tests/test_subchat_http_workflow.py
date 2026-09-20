@@ -26,6 +26,7 @@ class Provider:
         return SubchatReceipt(conversation_id='fixture-chat', user_message_id='user',
                               prompt=submission.prompt)
     async def read_answer(self, submission):
+        if not (Path(sys.argv[1]) / 'answer-ready').exists(): return None
         return SubchatAnswer(conversation_id='fixture-chat', user_message_id='user',
                               prompt=submission.prompt, answer_message_id='answer', text='42')
 async def main():
@@ -74,6 +75,20 @@ async def test_http_direct_mcp_subchat_receipt_and_process_restart(http_agent, t
                             assert inner['operation_id'] == operation
                             assert inner['data']['state'] == ('sending' if iteration == 0
                                                               else 'completed')
+                            if iteration == 0:
+                                invalid = await client.call_tool('mcp_call', {
+                                    **target, 'name': 'subchat_wait',
+                                    'arguments': {'operation_id': operation, 'wait_ms': 60_000},
+                                })
+                                assert invalid.isError
+                                pending = await call('mcp_call', {
+                                    **target, 'name': 'subchat_wait',
+                                    'arguments': {'operation_id': operation, 'wait_ms': 100},
+                                })
+                                assert pending['structured_content']['data']['state'] == 'submitted'
+                                status = await call('mcp_session_status', target)
+                                assert status['state'] == 'open'
+                                (tmp_path / 'answer-ready').touch()
                             done = await call('mcp_call', {
                                 **target, 'name': 'subchat_wait',
                                 'arguments': {'operation_id': operation, 'wait_ms': 1000},
