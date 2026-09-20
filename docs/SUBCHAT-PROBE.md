@@ -1589,3 +1589,25 @@ observations never authorize replay, automatic page reload, or a terminal-state
 transition. Existing adapters returning `None` remain supported but provide no
 new observation. The internal answer-reader return contract also accepts
 `SubchatPendingObservation`; the final-only `project_history` wrapper is retained.
+
+### Final completion metadata compatibility, 2026-09-21
+
+A live follow-up in conversation `6ab06cc9-20a0-83ee-aaf8-95c01767e4ea`
+returned final `a1514d4a-11d1-400e-9639-748b791c00e1` for input
+`5fe0a0e1-f927-4eaf-8434-78a8fc05230e`. HTTP history recorded
+`status: finished_successfully`, `channel: final` and `end_turn: true`, but
+omitted both `is_complete` and `finish_details`. Codex read_thread independently
+returned that same input/final identity and text `AC_STREAM_FOLLOWUP_OK`.
+Requiring those optional metadata keys left the completed answer pending.
+
+Recovery now requires the existing exact input/correlation, unique final,
+finished status, closed turn and nonempty text. If completion metadata is present,
+it must still agree: false/null completion, malformed/unknown finish information
+and explicit interruption are not accepted as success. Absence alone does not
+contradict the provider's explicit finished status. The regression failed before
+the change; live recovery then completed the same saved operation without replay.
+
+A separate page-local fetch-clone prototype observed the conversation ID in the
+live SSE response but its stream read failed. It was removed after the experiment
+and is not part of the product. This does not establish new-chat identity recovery
+or browser-independent sending. No reasoning text or authentication data was saved.

@@ -808,3 +808,31 @@ async def test_recovery_reports_request_scoped_http_observation(tmp_path, entry,
             'SELECT body FROM subchat_submissions WHERE operation_id=?', (operation,)).fetchone()[0]
     finally:
         ledger.close()
+
+
+@pytest.mark.parametrize('case', ['complete', 'unfinished', 'open_turn', 'false_marker',
+                                  'unknown_finish', 'interrupted'])
+def test_final_without_optional_completion_metadata(case):
+    submission, payload = sample()
+    answer = payload['messages'][1]
+    answer['metadata'].pop('is_complete')
+    answer['metadata'].pop('finish_details')
+    if case == 'unfinished':
+        answer['status'] = 'in_progress'
+    elif case == 'open_turn':
+        answer['end_turn'] = False
+    elif case == 'false_marker':
+        answer['metadata']['is_complete'] = False
+    elif case == 'unknown_finish':
+        answer['metadata']['finish_details'] = {'type': 'future-value'}
+    elif case == 'interrupted':
+        answer['metadata']['finish_details'] = {'type': 'interrupted'}
+    if case == 'interrupted':
+        with pytest.raises(SubchatInterrupted):
+            project_history(json.dumps(payload).encode(), submission)
+    else:
+        result = project_history(json.dumps(payload).encode(), submission)
+        if case == 'complete':
+            assert result is not None and result.text == '日本語 result'
+        else:
+            assert result is None

@@ -112,8 +112,9 @@ def project_observation(payload: bytes, submission: SubchatSubmission
     if isinstance(finish, dict) and finish.get('type') == 'interrupted':
         raise SubchatInterrupted('Provider recorded an interrupted response; do not resend')
     if (answer.status != 'finished_successfully' or answer.end_turn is not True
-            or answer.metadata.get('is_complete') is not True
-            or not isinstance(finish, dict) or finish.get('type') != 'stop'):
+            or ('is_complete' in answer.metadata and answer.metadata['is_complete'] is not True)
+            or ('finish_details' in answer.metadata
+                and (not isinstance(finish, dict) or finish.get('type') != 'stop'))):
         return SubchatPendingObservation(operation_id=submission.operation_id,
                                          reason='final_not_complete')
     parts = answer.content.get('parts')
