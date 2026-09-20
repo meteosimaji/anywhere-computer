@@ -69,3 +69,30 @@ CoS main is `8f76ccc790917b01ee758da6687a1cf9b576ba8a`.
 No completion percentage or delivery date is established by test counts. The
 largest remaining gap is production integration and end-to-end acceptance, not
 another standalone probe.
+
+## Shared work is a subchat acceptance requirement (2026-09-20)
+
+The current `SubchatSubmission` stores prompt/model/effort and message/result
+identity. It does not bind a device, workspace, or shared job. Thus a successful
+message exchange is not evidence that subchats can collaborate on real files.
+Production integration must bind the parent and subchats to the same explicitly
+selected device and workspace, using the existing device router and file/terminal
+APIs rather than copying project directories or inventing a second filesystem.
+This shared context must survive recovery and be returned to callers; model
+instructions alone are not an authorization or routing boundary. Each new Chat
+must actually discover and invoke its authorized Anywhere connection. Merely
+including a filesystem path in its prompt does not provide tool access.
+
+Use existing hash-conditional file writes for conflicting edits: a second writer
+with an old digest must re-read and reconcile rather than overwrite. This protects
+writes through the file API, not arbitrary shell processes or external editors.
+Start with distinct-file assignments or serialized edits to a shared file, not a
+new distributed locking service. Sharing a directory does not share terminal
+process state or conversation history.
+
+Acceptance must use two ordinary subchats on one test workspace: A creates code,
+B reads that actual file and runs it, A changes it, B observes the new contents,
+and a stale hash edit is rejected without losing A's change. Recover the work
+context after reconnect and verify an unavailable/different device is not
+silently substituted. Report actual tool calls and file/run results separately
+from conversational claims. This remains unimplemented acceptance work.
