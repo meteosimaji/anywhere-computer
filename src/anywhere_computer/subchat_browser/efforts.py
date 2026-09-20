@@ -27,6 +27,29 @@ def snapshot(value: dict[str, object]) -> tuple[int, int, int, str]:
     return minimum, maximum, index, description
 
 
+async def move_effort(
+    read: Read, step: Step, original: tuple[int, int, int, str], target: int,
+) -> tuple[int, int, int, str]:
+    minimum, maximum = original[:2]
+    if not minimum <= target <= maximum:
+        raise EffortUnconfirmed("target position is outside the observed range")
+    current = snapshot(await read())
+    if current[:2] != original[:2]:
+        raise EffortUnconfirmed("effort range changed")
+    for _ in range(maximum - minimum):
+        if current[2] == target:
+            break
+        direction = 1 if current[2] < target else -1
+        await step("ArrowRight" if direction == 1 else "ArrowLeft")
+        updated = snapshot(await read())
+        if updated[:2] != original[:2] or updated[2] != current[2] + direction:
+            raise EffortUnconfirmed("keyboard step was not confirmed")
+        current = updated
+    if current[2] != target:
+        raise EffortUnconfirmed("target position was not confirmed")
+    return current
+
+
 async def collect_efforts(read: Read, step: Step) -> dict[str, object]:
     observed: dict[str, object] = {}
     try:
@@ -43,33 +66,16 @@ async def collect_efforts(read: Read, step: Step) -> dict[str, object]:
                 "error_type": type(error).__name__}
     minimum, maximum, start, initial_description = original
 
-    async def move(target: int) -> tuple[int, int, int, str]:
-        current = snapshot(await read())
-        if current[:2] != original[:2]:
-            raise EffortUnconfirmed("effort range changed")
-        for _ in range(maximum - minimum):
-            if current[2] == target:
-                break
-            direction = 1 if current[2] < target else -1
-            await step("ArrowRight" if direction == 1 else "ArrowLeft")
-            updated = snapshot(await read())
-            if updated[:2] != original[:2] or updated[2] != current[2] + direction:
-                raise EffortUnconfirmed("keyboard step was not confirmed")
-            current = updated
-        if current[2] != target:
-            raise EffortUnconfirmed("target position was not confirmed")
-        return current
-
     positions: list[dict[str, object]] = []
     restored = False
     try:
         try:
             for index in range(minimum, maximum + 1):
-                current = await move(index)
+                current = await move_effort(read, step, original, index)
                 positions.append({"index": index, "description": current[3]})
         finally:
             # Restoration is verified, not inferred from the key dispatch receipt.
-            current = await move(start)
+            current = await move_effort(read, step, original, start)
             restored = current[3] == initial_description
     except (EffortUnconfirmed, ConnectionError, TimeoutError) as error:
         return {"state": "efforts_unconfirmed", "restored": restored,

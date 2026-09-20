@@ -12,6 +12,7 @@ from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt, SubchatStal
 from anywhere_computer.subchat_state import SubchatSubmission
 
 from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_page, picker_ready
+from .efforts import move_effort, snapshot
 
 INPUT = Path(__file__).with_name('subchat_input.js').read_text(encoding="utf-8")
 COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")
@@ -101,19 +102,22 @@ class BrowserSubchatBackend:
             raise ValueError('Requested model is not available in the observed menu')
         await page.get_by_role('menuitemradio', name=submission.model, exact=True).click()
         await page.locator(CONTROL).wait_for(state='visible')
-        # Use the account's observed description, without a model or effort table.
-        await page.locator(CONTROL).press('Home')
-        for _ in range(32):
-            effort = await page.evaluate(SOURCE + '\nobserveSubchatEffort(document)')
-            if effort.get('state') != 'effort_observed' or effort['disabled']:
-                raise ValueError('Effort selection is unavailable')
-            if effort['description'] == submission.effort:
+        # Use verified arrow steps; custom sliders need not implement Home.
+        async def read_effort() -> dict[str, object]:
+            value: dict[str, object] = await page.evaluate(
+                SOURCE + '\nobserveSubchatEffort(document)')
+            return value
+
+        async def step_effort(key: str) -> None:
+            await page.locator(CONTROL).press(key)
+
+        original = snapshot(await read_effort())
+        for index in range(original[0], original[1] + 1):
+            current = await move_effort(read_effort, step_effort, original, index)
+            if current[3] == submission.effort:
                 break
-            if effort['index'] == effort['maximum']:
-                raise ValueError('Requested effort is not available in the observed menu')
-            await page.locator(CONTROL).press('ArrowRight')
         else:
-            raise ValueError('Effort menu exceeded its observation bound')
+            raise ValueError('Requested effort is not available in the observed menu')
         await page.locator(TOGGLE).click()
         selected = await page.evaluate(SOURCE + '\nobserveSubchatModelMenu(document)')
         if [model['label'] for model in selected.get('models', []) if model['selected']] != [
