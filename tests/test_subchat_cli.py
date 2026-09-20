@@ -64,3 +64,37 @@ async def test_json_lines_continue_after_invalid_input_and_keep_unknown_identity
         assert backend.sends == 1
     finally:
         ledger.close()
+
+
+async def test_saved_commands_do_not_start_chrome(tmp_path, monkeypatch):
+    from io import StringIO
+
+    import playwright.async_api
+
+    from anywhere_computer import subchat_cli
+
+    def no_browser():
+        raise AssertionError('Saved-state commands must not launch or focus Chrome')
+
+    monkeypatch.setattr(playwright.async_api, 'async_playwright', no_browser)
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    completed, prepared = 'a' * 32, 'b' * 32
+    for operation in (completed, prepared):
+        store.prepare(operation, 'work', 'model', 'effort', owner=None)
+    store.begin_send(completed, owner=None)
+    store.submitted(completed, 'chat', 'user', owner=None)
+    store.complete(completed, 'answer', 'saved result', owner=None)
+    ledger.close()
+    source = StringIO('\n'.join(json.dumps({'action': action, 'operation_id': operation})
+                               for action, operation in [('status', completed),
+                                                         ('recover', completed),
+                                                         ('cancel', prepared)]) + '\n')
+    output = StringIO()
+    monkeypatch.setattr(subchat_cli.sys, 'stdin', source)
+    monkeypatch.setattr(subchat_cli.sys, 'stdout', output)
+    await subchat_cli.run(tmp_path / 'unused-profile', tmp_path)
+    replies = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [item['state'] for item in replies] == ['completed', 'completed', 'cancelled']
+    assert replies[1]['answer'] == 'saved result'
+    assert not (tmp_path / 'unused-profile').exists()

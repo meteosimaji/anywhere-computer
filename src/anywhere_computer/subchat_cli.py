@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import sys
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Literal, TextIO
 
@@ -71,33 +72,39 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
 
 async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
     # Keep this dependency optional for all non-browser installations.
-    from playwright.async_api import async_playwright
+    from playwright.async_api import BrowserContext, Playwright, async_playwright
 
     from .subchat_browser.backend import BrowserSubchatBackend
 
     ledger = Ledger(state)
     try:
-        async with async_playwright() as driver:
-            context = await driver.chromium.launch_persistent_context(
-                str(profile), channel='chrome', headless=False)
-            try:
-                backend = BrowserSubchatBackend(context)
-                service = Subchats(SubchatSubmissions(ledger.connection), backend)
-                # Multiple commands share one browser. EOF is explicit shutdown;
-                # no per-request window closing and no automatic message retry.
-                if mcp:
-                    from .mcp_server import serve_stdio
-                    from .subchat_mcp import session
+        async with AsyncExitStack() as resources:
+            driver: Playwright | None = None
 
-                    server = session(service, observe_catalog=backend.catalog)
-                    try:
-                        await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
-                    finally:
-                        await server.close()
-                else:
-                    await process_lines(service, sys.stdin, sys.stdout)
-            finally:
-                await context.close()
+            async def open_browser() -> BrowserContext:
+                nonlocal driver
+                if driver is None:
+                    driver = await resources.enter_async_context(async_playwright())
+                context = await driver.chromium.launch_persistent_context(
+                    str(profile), channel='chrome', headless=False)
+                resources.push_async_callback(context.close)
+                return context
+
+            backend = BrowserSubchatBackend(open_browser)
+            service = Subchats(SubchatSubmissions(ledger.connection), backend)
+            # Saved-state requests need no browser. Once needed, commands share
+            # one dedicated context until EOF; no per-request restart or replay.
+            if mcp:
+                from .mcp_server import serve_stdio
+                from .subchat_mcp import session
+
+                server = session(service, observe_catalog=backend.catalog)
+                try:
+                    await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
+                finally:
+                    await server.close()
+            else:
+                await process_lines(service, sys.stdin, sys.stdout)
     finally:
         ledger.close()
 

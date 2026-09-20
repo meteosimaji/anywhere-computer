@@ -462,7 +462,12 @@ Chrome profile or open the same dedicated profile in another process.
 
 The process reads one JSON object per stdin line and writes one JSON result per
 stdout line. Keep stdin open between commands: the same browser remains open.
-EOF explicitly shuts down this controller and its browser. This entry point is
+The browser starts lazily on the first operation that requires it. Saved status,
+completed-answer recovery and unsent cancellation do not launch Chrome or touch
+its profile. Once started, browser operations reuse the dedicated context.
+First launch still uses headed Chrome and may display its window; this is not a
+fully browser-free or guaranteed background-only Chat creation path.
+EOF explicitly shuts down this controller and its browser, if started. This entry point is
 local-only; it is not an authenticated HTTP/MCP endpoint or a shared-work router.
 
 A `send` command requires `action`, a caller-generated 32-character lowercase
