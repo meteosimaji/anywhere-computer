@@ -304,3 +304,18 @@ predecessor has no verified final answer; neither elapsed time nor an apparently
 idle page authorizes resend or completion. Better explanations of unresolved
 receipt/answer states remain useful follow-up work, separate from inventing a
 terminal result for a long-thinking model.
+
+## September 21 native control and account scope review
+
+GitHub main was rechecked at `04c6a298078817cf25c197f2b8bb639f8239243c`
+(commit timestamp September 20, 12:03 UTC). The following issue bodies were read;
+upstream-reported test counts are not Anywhere acceptance evidence.
+
+| Evidence | Anywhere decision |
+| --- | --- |
+| [#307](https://github.com/totec448-spec/chat-on-steroids/issues/307): off-Space discovery and distinct physical-pointer/keyboard focus proof | Keep discovery separate from input authority. The experimental native helper revalidates process/window/element identity and the observed value before direct AX replacement. It neither activates the application nor falls back to global keyboard input. Its window handles are not WindowServer IDs. Off-Space geometry, physical input and focused-element ownership remain separate, unverified work; successful AX replacement does not certify them. See the native implementation and live limits in [GUI reliability](GUI-RELIABILITY-2026-09-14.md). |
+| [#338](https://github.com/totec448-spec/chat-on-steroids/issues/338): built-in account switching and automatic continuation on another account at a usage limit | Defer account switching. It requires explicit account-to-conversation, credential and workspace binding; adding an account picker alone would not establish these. Do not silently change accounts, publish conversation share links, or continue on another account when a limit is encountered. Retain the selected dedicated browser profile and report access/availability separately from generation state. This is not an implemented multi-account capability. |
+
+These decisions add no alternate execution scheduler, credential-import path or
+upstream code dependency. Browser-independent PC control and ordinary Chat
+transport remain separate acceptance tracks.

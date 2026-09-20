@@ -62,7 +62,7 @@ async def test_persistent_requests_and_recovery_after_invalid_input(native_gui_h
             await process.wait()
 
 
-def test_serialized_observation_budget_in_real_swift_source(tmp_path):
+def test_observation_budget_and_value_identity_in_real_swift_source(tmp_path):
     source = Path(__file__).resolve().parents[1] / "native/macos/AXHelper.swift"
     text = source.read_text()
     entry = "\nrunJSONLines()\n"
@@ -80,6 +80,13 @@ for _ in 0..<128 {
 }
 emit(["id": "bounded", "result": ["nodes": nodes, "truncated": state.truncated]])
 emit(["id": "oversized", "result": ["value": String(repeating: "x", count: 70000)]])
+emit(["id": "value-identity", "result": [
+    "same": valueDigest("日本語 ✅" as CFString) == valueDigest("日本語 ✅" as CFString),
+    "changed": valueDigest("before" as CFString) != valueDigest("after" as CFString),
+    "typed": valueDigest("1" as CFString) != valueDigest(NSNumber(value: 1)),
+    "empty": valueDigest(nil) != valueDigest("" as CFString),
+    "unsupported": valueDigest(NSArray(array: [1, 2])) == nil
+]])
 '''
     program = tmp_path / "Budget.swift"
     program.write_text(harness)
@@ -88,8 +95,11 @@ emit(["id": "oversized", "result": ["value": String(repeating: "x", count: 70000
                    check=True, capture_output=True, timeout=90)
     result = subprocess.run([str(executable)], check=True, capture_output=True, timeout=5)
     lines = result.stdout.splitlines(keepends=True)
-    assert len(lines) == 2 and all(len(line) <= 65536 for line in lines)
-    bounded, oversized = map(json.loads, lines)
+    assert len(lines) == 3 and all(len(line) <= 65536 for line in lines)
+    bounded, oversized, identity = map(json.loads, lines)
     assert bounded["result"]["truncated"] is True
     assert len(bounded["result"]["nodes"]) == 128
     assert oversized == {"id": "oversized", "error": {"code": "response_too_large"}}
+
+    assert identity["result"] == dict.fromkeys(
+        ["same", "changed", "typed", "empty", "unsupported"], True)

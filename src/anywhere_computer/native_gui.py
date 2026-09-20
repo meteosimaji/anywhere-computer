@@ -40,6 +40,10 @@ class NativeGUIOutcomeUnknown(Exception):
     pass
 
 
+class NativeGUIValueChanged(ValueError):
+    pass
+
+
 def installed_helper() -> Path:
     if sys.platform != "darwin":
         raise ValueError("Native GUI requires macOS")
@@ -122,6 +126,9 @@ class NativeGUI:
                 if not isinstance(result, dict) or "error" in response:
                     error = response.get("error")
                     code = error.get("code") if isinstance(error, dict) else None
+                    if code == "value_changed":
+                        raise NativeGUIValueChanged(
+                            "Native GUI value changed since observation; input was not attempted")
                     # Never expose arbitrary helper diagnostics or exception text.
                     raise ValueError("Native GUI helper rejected request: " + (
                         code if isinstance(code, str) and code.replace("_", "").isalnum()
@@ -129,7 +136,8 @@ class NativeGUI:
                 return result
         except BaseException as error:
             await self._retire(session_id)
-            if mutation and dispatched and isinstance(error, Exception):
+            if (mutation and dispatched and isinstance(error, Exception)
+                    and not isinstance(error, NativeGUIValueChanged)):
                 raise NativeGUIOutcomeUnknown(
                     "Native GUI input outcome unknown; inspect the target before any new input"
                 ) from None
