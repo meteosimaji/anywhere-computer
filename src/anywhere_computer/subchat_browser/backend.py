@@ -25,14 +25,14 @@ class BrowserSubchatBackend:
         self.context = context
         self.pages: dict[str, Page] = {}
 
-    async def catalog(self) -> dict[str, object]:
+    async def catalog(self, model: str | None = None) -> dict[str, object]:
         page = await self.context.new_page()
         page.set_default_timeout(15_000)
         try:
             response = await page.goto('https://chatgpt.com/', wait_until='domcontentloaded')
             if response is None or not response.ok or not await picker_ready(page):
                 return {'state': 'catalog_unavailable', 'submitted': False}
-            return await collect_page(page)
+            return await collect_page(page, model)
         finally:
             # This is a separate observation tab, never a submission or user draft.
             await page.close()

@@ -19,7 +19,9 @@ async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
             raise
         try:
             page = await browser.new_page()
-            page.set_default_timeout(2000)
+            # Match the production catalog adapter action budget. This test checks
+            # DOM identity/visibility, not a two-second Windows rendering SLA.
+            page.set_default_timeout(15_000)
             async def observe(html: str, function: str = "observeSubchatModelMenu") -> object:
                 await page.set_content(html)
                 return await page.evaluate(source + f"\n{function}(document)")
@@ -151,6 +153,20 @@ async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
             assert result["submitted"] is False
             assert len(result["efforts_for_selected_model"]["positions"]) == 7
             assert await page.locator(catalog.TRIGGER).get_attribute("aria-expanded") == "false"
+            await page.get_by_role('menuitemradio', include_hidden=True).evaluate(
+                "node => node.onclick = () => {models.inert = true; control.inert = false;}")
+            selected = await catalog.collect_page(page, 'Future model')
+            assert selected['state'] == 'catalog_observed'
+            assert len(selected['efforts_for_selected_model']['positions']) == 7
+            missing = await catalog.collect_page(page, 'removed model')
+            assert missing['state'] == 'requested_model_unavailable'
+            assert missing['submitted'] is False
+            assert await page.locator(catalog.TRIGGER).get_attribute('aria-expanded') == 'false'
+            row = page.get_by_role('menuitemradio', include_hidden=True)
+            await row.evaluate("node => node.setAttribute('aria-disabled', 'true')")
+            disabled = await catalog.collect_page(page, 'Future model')
+            assert disabled['state'] == 'requested_model_unavailable'
+            await row.evaluate("node => node.removeAttribute('aria-disabled')")
             # An automatic model may have no effort slider. Its observed model
             # list remains useful and must not disappear with that partial gap.
             await page.locator('[data-reasoning-slider]').evaluate(

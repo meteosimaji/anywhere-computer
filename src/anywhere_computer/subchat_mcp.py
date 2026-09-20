@@ -7,7 +7,7 @@ from typing import cast
 from pydantic import Field, JsonValue, TypeAdapter
 
 from .mcp_server import MCPSession
-from .models import Contract, Empty, OperationId, Reply, Request
+from .models import Contract, OperationId, Reply, Request
 from .subchat import SubchatOutcomeUnknown, Subchats
 
 
@@ -16,6 +16,10 @@ class Send(Contract):
     model: str = Field(min_length=1, max_length=256)
     effort: str = Field(min_length=1, max_length=256)
     conversation_id: str | None = None
+
+
+class Catalog(Contract):
+    model: str | None = Field(default=None, min_length=1, max_length=256)
 
 
 INSTRUCTIONS = (
@@ -30,7 +34,7 @@ INSTRUCTIONS = (
 
 
 def session(service: Subchats, *,
-            observe_catalog: Callable[[], Awaitable[dict[str, object]]] | None = None,
+            observe_catalog: Callable[[str | None], Awaitable[dict[str, object]]] | None = None,
             ) -> MCPSession:
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
@@ -42,7 +46,9 @@ def session(service: Subchats, *,
 
     if observe_catalog is not None:
         definitions['subchat_catalog'] = (
-            Empty, 'Observe model labels and effort for the selected model without sending. '
+            Catalog, 'Observe model labels and effort without sending. Optionally select an '
+            'exact observed model in the dedicated empty tab to discover its effort choices; '
+            'this can change the dedicated profile default. '
             'A partial catalog preserves known models; never infer missing effort choices.')
 
     async def catalog() -> list[JsonValue]:
@@ -55,9 +61,9 @@ def session(service: Subchats, *,
     async def execute(request: Request) -> Reply:
         try:
             if request.tool == 'subchat_catalog' and observe_catalog is not None:
-                Empty.model_validate(request.arguments)
+                args_catalog = Catalog.model_validate(request.arguments)
                 async with browser_lock:
-                    observed = await observe_catalog()
+                    observed = await observe_catalog(args_catalog.model)
                 data = TypeAdapter(dict[str, JsonValue]).validate_python(observed)
                 return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_send':

@@ -223,3 +223,21 @@ window for up to two seconds. It never navigates when confirmation is absent.
 Tests cover delayed confirmation, no confirmation, an unresponsive transport,
 and a connection error. The delayed-state test fails with the original single
 read and passes with the bounded observation loop.
+
+## Selecting a model for effort discovery (2026-09-20)
+
+The local stdio tool `subchat_catalog` accepts an optional `model` label from its
+observed catalog. On an owned empty ordinary-Chat tab it selects that exact
+available row, verifies selection, and reads the model's actual effort choices.
+No model IDs, effort counts, or retirement replacements are hardcoded. Missing
+or disabled rows return `requested_model_unavailable`; no substitute is selected.
+This selection can change the dedicated profile's default model. It does not
+submit a message or grant the Chat access to any tools/workspaces.
+
+A real DOM fixture covers model selection, seven dynamically described effort
+positions, missing models, preservation of partial catalogs, and untouched drafts.
+The authenticated SDK/stdio trial retrieved the live model list, but the following
+model-specific request returned `empty_chat_unconfirmed`: a draft was present in
+the new Chat composer. Subsequent read-only observation confirmed the draft,
+ordinary Chat selection, and root URL. The draft was preserved. Live model-specific
+validation therefore remains unconfirmed, not a successful acceptance result.
