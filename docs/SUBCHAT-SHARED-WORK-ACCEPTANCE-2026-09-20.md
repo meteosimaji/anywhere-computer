@@ -127,6 +127,41 @@ test verifies request/response correlation, no retained secrets or unrelated
 requests, listener removal and preservation of the existing page. It does not
 certify live authentication, cancellation, or assistant completion.
 
+### Direct SSE body and model-effort verification
+
+A later hidden-tab trial captured the generation response with CDP
+`Network.streamResourceContent`, after HTTP 200 `text/event-stream` was observed.
+Unlike the earlier post-completion lookup, it returned buffered response bytes.
+The observed `v1` stream contained compressed add/append/patch records: omitted
+path and operation fields reused preceding values. The final-channel text was
+reconstructed as `AC_SSE_BODY_20260920: 17 × 23 = 391`, followed by
+`finished_successfully`, `end_turn=true`, `message_stream_complete` and `[DONE]`.
+The UI and Codex `read_thread` independently returned that exact text and answer
+ID `7c0cc899-d931-449b-92fc-795c4705df55`, for user message
+`1bb66363-bb87-40c8-90ed-e48ca608ffc1` in conversation
+`6aaf9138-20f4-83ee-b3f6-2a7b42bad9fe`. The SSE final carried the observed model
+`gpt-5-6-thinking`. No credential or resume-token values were persisted.
+
+This establishes final-text recovery from one actual generation response, not
+just a 200 status or a rendered-page copy. It is still browser-mediated and is
+not a shipped general SSE decoder, independent authentication client, or proof
+of recovery after a mid-stream disconnect. A future decoder must preserve stream
+context and message identity rather than treating every `v` as answer text.
+
+The controller then explicitly selected the checked GPT-5.6 Sol option and
+the observed extreme effort label (4 of 5). One further Send produced POST
+`/backend-api/f/conversation` with `model=gpt-5-6-thinking` and
+`thinking_effort=max`, followed by HTTP 200 SSE. UI and Codex readback agreed on
+`AC_MODEL_EFFORT_20260920`, user ID
+`f910d014-0387-45b1-8746-db3ece368311` and answer ID
+`aa45f27f-35ea-4030-955d-57224df9c3e3`. No Pro or Work request was made.
+Model selection is represented in the generation HTTP body; this trial used
+the UI to create that request and does not establish UI-free generation replay.
+The latest/default menu had reappeared before explicit selection, so an old
+selection must not be assumed to persist merely because the effort label stayed
+the same. Network observation was disabled after the trial; the existing test
+tab was retained for continued acceptance.
+
 The development browser adapter created ordinary Chat A with GPT-5.6 Sol and the
 observed medium effort label. Through the installed Anywhere HTTP plugin, that
 Chat created Python code in a dedicated temporary directory and reported a zero

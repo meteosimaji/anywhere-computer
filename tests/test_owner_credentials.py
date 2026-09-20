@@ -134,24 +134,27 @@ def test_verification_waits_for_password_writer(configured_owner, monkeypatch):
     owner = configured_owner
     entered, release = threading.Event(), threading.Event()
     original = owner.vault.set_password
+    # Real scrypt derivations precede the write. Allow slow CI scheduling without
+    # changing the 100 ms assertion that verification stays blocked by the writer.
+    deadline = 30
 
     def paused_write(*args):
         original(*args)
         entered.set()
-        assert release.wait(5)
+        assert release.wait(deadline)
 
     monkeypatch.setattr(owner.vault, "set_password", paused_write)
     with ThreadPoolExecutor(max_workers=2) as executor:
         rotation = executor.submit(owner.change_password, OLD_PASSWORD, NEW_PASSWORD)
         try:
-            assert entered.wait(5)
+            assert entered.wait(deadline)
             verification = executor.submit(owner.verify, OLD_PASSWORD)
             with pytest.raises(TimeoutError):
                 verification.result(timeout=0.1)
         finally:
             release.set()
-        rotation.result(timeout=5)
-        assert verification.result(timeout=5) is False
+        rotation.result(timeout=deadline)
+        assert verification.result(timeout=deadline) is False
 
 
 def test_owner_password_is_salted_and_never_written_to_files(tmp_path):
