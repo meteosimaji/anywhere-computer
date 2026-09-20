@@ -149,6 +149,21 @@ class SubchatSubmissions:
     def _replace(self, old: SubchatSubmission, new: SubchatSubmission,
                  owner: str | None) -> SubchatSubmission:
         with self.connection:
+            # Serialize identity validation and mutation across ledger connections.
+            self.connection.execute('BEGIN IMMEDIATE')
+            if new.user_message_id is not None:
+                peers = self.connection.execute(
+                    'SELECT body FROM subchat_submissions WHERE owner IS ? AND operation_id != ?',
+                    (owner, old.operation_id),
+                )
+                for peer_row in peers:
+                    peer = SubchatSubmission.model_validate_json(peer_row[0])
+                    if peer.conversation_id != new.conversation_id:
+                        continue
+                    if (peer.user_message_id == new.user_message_id or
+                            (new.answer_message_id is not None and
+                             peer.answer_message_id == new.answer_message_id)):
+                        raise ValueError('Observed message is already bound to another submission')
             row = self.connection.execute(
                 'SELECT body FROM subchat_submissions WHERE operation_id=? AND owner IS ?',
                 (old.operation_id, owner),
