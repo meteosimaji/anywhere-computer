@@ -64,3 +64,23 @@ def test_submission_owner_arguments_and_stage_are_enforced(tmp_path):
             store.complete(operation, 'user', '42', owner=None)
     finally:
         ledger.close()
+
+
+def test_followup_conversation_is_reserved_before_send(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    operation = 'f' * 32
+    try:
+        record = store.prepare(operation, 'followup', 'model', 'effort', owner='peer',
+                               conversation_id='existing')
+        assert record.conversation_id == 'existing'
+        with pytest.raises(ValueError, match='prepared submission'):
+            store.begin_send(operation, owner='peer', conversation_id='different')
+        assert store.begin_send(operation, owner='peer').conversation_id == 'existing'
+        with pytest.raises(ValueError, match='different arguments'):
+            store.prepare(operation, 'followup', 'model', 'effort', owner='peer',
+                          conversation_id='different')
+        with pytest.raises(ValueError, match='different arguments'):
+            store.prepare(operation, 'followup', 'model', 'effort', owner='peer')
+    finally:
+        ledger.close()

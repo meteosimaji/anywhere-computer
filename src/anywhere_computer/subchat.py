@@ -44,8 +44,10 @@ class Subchats:
                                     receipt.user_message_id, owner=owner)
 
     async def send(self, operation_id: str, prompt: str, model: str, effort: str,
-                   *, owner: str | None) -> SubchatSubmission:
-        submission = self.store.prepare(operation_id, prompt, model, effort, owner=owner)
+                   *, owner: str | None,
+                   conversation_id: str | None = None) -> SubchatSubmission:
+        submission = self.store.prepare(operation_id, prompt, model, effort, owner=owner,
+                                        conversation_id=conversation_id)
         if submission.state != 'prepared':
             # A duplicate request never enters the backend again, even after restart.
             return submission

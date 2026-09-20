@@ -322,9 +322,15 @@ Thinking/missing answer observation leaves the submitted stage intact. Recovery
 checks prompt and conversation/message identity before committing an answer.
 There is no stop-generation operation and no automatic resend scheduler.
 
-Five focused tests use real SQLite close/reopen and a deterministic effectful
+Six focused tests use real SQLite close/reopen and a deterministic effectful
 backend to cover response loss, restart, repeated Thinking reads, completion,
 cancellation, ownership and mismatched answer identity. They do not establish
 browser compatibility or CoS worker connectivity. The lifecycle is not yet
 registered in Engine/MCP: an actual adapter and outcome-unknown mapping must be
 connected and accepted before advertising a callable production subchat tool.
+
+For a follow-up, the requested conversation is stored at preparation, before
+dispatch. Reusing its operation ID with a different conversation or as a new-Chat
+request is rejected. The requested identity is kept separately from the observed
+conversation created by a new-Chat send, so later receipt recovery does not change
+the original request's meaning.

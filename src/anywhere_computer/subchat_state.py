@@ -18,6 +18,7 @@ class SubchatSubmission(Contract):
     model: str = Field(min_length=1, max_length=256)
     effort: str = Field(min_length=1, max_length=256)
     state: Literal['prepared', 'sending', 'submitted', 'completed'] = 'prepared'
+    requested_conversation_id: str | None = None
     conversation_id: str | None = None
     user_message_id: str | None = None
     answer_message_id: str | None = None
@@ -43,16 +44,21 @@ class SubchatSubmissions:
         return SubchatSubmission.model_validate_json(row[1])
 
     def prepare(self, operation_id: str, prompt: str, model: str, effort: str,
-                *, owner: str | None) -> SubchatSubmission:
+                *, owner: str | None, conversation_id: str | None = None) -> SubchatSubmission:
+        if conversation_id is not None and not conversation_id.strip():
+            raise ValueError('Conversation identity must not be empty')
         proposed = SubchatSubmission(operation_id=operation_id, prompt=prompt,
-                                     model=model, effort=effort)
+                                     model=model, effort=effort,
+                                     requested_conversation_id=conversation_id,
+                                     conversation_id=conversation_id)
         with self.connection:
             self.connection.execute(
                 'INSERT OR IGNORE INTO subchat_submissions VALUES (?,?,?)',
                 (operation_id, owner, proposed.model_dump_json()),
             )
         existing = self.get(operation_id, owner=owner)
-        if (existing.prompt, existing.model, existing.effort) != (prompt, model, effort):
+        if (existing.prompt, existing.model, existing.effort,
+            existing.requested_conversation_id) != (prompt, model, effort, conversation_id):
             raise ValueError('Subchat submission ID was already used for different arguments')
         return existing
 
@@ -75,8 +81,10 @@ class SubchatSubmissions:
             raise ValueError('Submission may already have been sent; recover it without resending')
         if conversation_id is not None and not conversation_id.strip():
             raise ValueError('Conversation identity must not be empty')
+        if old.conversation_id is not None and conversation_id not in {None, old.conversation_id}:
+            raise ValueError('Conversation identity does not match the prepared submission')
         return self._replace(old, old.model_copy(update={
-            'state': 'sending', 'conversation_id': conversation_id}), owner)
+            'state': 'sending', 'conversation_id': old.conversation_id or conversation_id}), owner)
 
     def submitted(self, operation_id: str, conversation_id: str, user_message_id: str,
                   *, owner: str | None) -> SubchatSubmission:
