@@ -360,3 +360,34 @@ concurrent reader bootstrap within that session, not arbitrary direct backend
 calls or multiple sessions sharing one backend. Any future HTTP parallelization
 must first define authentication-cache ownership, bootstrap lifetime and context
 replacement. Removing the outer lock alone would not establish safe concurrency.
+
+## September 21 shell attribution and worker round-trip update
+
+Upstream main advanced to `fbf2944c79c50b105f202a97799087729e7e0a1c`.
+[PR #342](https://github.com/totec448-spec/chat-on-steroids/pull/342),
+head `0d8c34d26388db767a744864a8992d44f5c95f2b`, was inspected as source
+differences, not run as a live CoS deployment.
+
+- `extension/content.js` now refreshes witnessed manual-Send evidence and
+  rechecks route/document lifetime after asynchronous owner confirmation. Its
+  provisional exchange requires a separate request-owner handshake. This does
+  not turn a conversation ID or shared connector grant into authenticated child
+  identity. Anywhere's stdio subchat adapter has no equivalent companion/Fiber
+  handshake; keep work_context descriptive and shared-grant inbox append disabled.
+- `agents.ts:reconcileAgentRequestOwners` fills an existing worker origin's
+  missing parent after late prime identification, including sleeping workers,
+  while `recorder.ts:applyOrigin` notifies observers. Anywhere does not have this
+  provisional worker-family representation. Do not add a second family registry
+  merely to copy the repair; operation/input/conversation identities remain its
+  existing source of receipt and answer correlation.
+- Writable-composer readiness after model selection is distinct from a rejected
+  prompt. Retain this as a browser-adapter acceptance concern; the upstream diff
+  alone does not demonstrate an Anywhere failure or browser-free sending.
+
+[Issue #341](https://github.com/totec448-spec/chat-on-steroids/issues/341) proposes
+filing a compaction ticket when a work episode ends, after an earlier busy-turn
+refusal. Anywhere has no automatic Compact & Resume workflow to patch. Defer
+that scheduler rather than introduce automatic reloads, stop/send, or generated
+handoffs into result recovery. Preserve pending/unknown and retrieve an existing
+result without replay. The reporter's measurements and tests are upstream
+claims, not independently reproduced Anywhere evidence.
