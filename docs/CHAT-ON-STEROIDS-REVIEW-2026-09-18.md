@@ -391,3 +391,39 @@ that scheduler rather than introduce automatic reloads, stop/send, or generated
 handoffs into result recovery. Preserve pending/unknown and retrieve an existing
 result without replay. The reporter's measurements and tests are upstream
 claims, not independently reproduced Anywhere evidence.
+
+## Integrated pairing/Skills/Stop review, 2026-09-21
+
+Reviewed upstream main `7777e517603289696bb5febddb9bbf51cdde9aea`, including
+[PR #344](https://github.com/totec448-spec/chat-on-steroids/pull/344)
+(head `1eed5abbffb375163ada6200b711df312450037e`), against the earlier
+`fbf2944c79c50b105f202a97799087729e7e0a1c` baseline. This is source review;
+upstream test and installed-runtime claims are not our reproduced evidence.
+
+- `session/input.ts:authorizeBrowserInput` and `failBrowserInput` distinguish a
+  proven pre-Send withdrawal from a generic failure after send authorization.
+  Anywhere already commits `sending` before backend dispatch and never resets
+  it on a send exception. Receipt/answer recovery is distinct from replay.
+  Retain this contract instead of adding a second delivery-state registry.
+- `skill-links.ts:approvedManagedSkillLink` requires a canonical target within
+  currently approved ordinary roots, rechecks link identity and approval, and
+  does not use the managed Skills directory as an escape permission. Anywhere
+  has no equivalent approved-root registry: its explicit collection roots and
+  per-skill resource containment have a different contract. Internal resource
+  links already work; external collection escapes stay rejected. Users can
+  explicitly select the actual containing collection. Do not import implicit
+  root approval or advertise collection containment as an OS sandbox.
+- `extension/content.js` separates a Stop request from actual provider
+  cancellation and preserves later exact request-owned work. Anywhere's HTTP
+  history uses correlated provider cancellation metadata, not a local click or
+  idle page. Its local cancel only cancels unsent work; a provider-stop command
+  remains unimplemented. No automatic stop/send or continuation loop is adopted.
+- Pairing serialization and transactional browser-bridge port replacement apply
+  to CoS's companion bridge. They do not demonstrate a defect in Anywhere's
+  standalone read client and do not remove Chat's generation preparation.
+
+Local verification: `tests/test_common_skills.py` and
+`tests/test_subchat_lifecycle.py` passed all 28 tests. These cover contained and
+escaping links, resource replacement, uncertain-send persistence, restart,
+Thinking, wrong answer identity and pre-dispatch error handling. They do not
+prove live CoS pairing, native steer or browser-independent Chat generation.
