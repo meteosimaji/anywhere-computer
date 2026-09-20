@@ -23,6 +23,28 @@ def resources():
     })
 
 
+@pytest.mark.parametrize('case', ['decorated', 'wrong_target', 'wrong_label', 'newline'])
+def test_generated_url_decoration_preserves_canonical_prompt(case):
+    submission, history = sample()
+    url = 'https://github.com/meteosimaji/anywhere-computer/pull/99'
+    prompt = f'Review {url} now'
+    submission = submission.model_copy(update={'prompt': prompt, 'resources': resources()})
+    label = url if case != 'wrong_label' else 'another label'
+    target = url if case != 'wrong_target' else 'https://example.com/other'
+    text = f'Review [{label}]({target}) now'
+    if case == 'newline':
+        text += '\n'
+    message = history['messages'][0].copy()
+    message.update(content={'content_type': 'text', 'parts': [text]}, metadata={})
+    payload = json.dumps({'action': 'next', 'messages': [message]})
+    if case != 'decorated':
+        with pytest.raises(ValueError, match='input'):
+            add_resources(payload, submission)
+    else:
+        sent = json.loads(add_resources(payload, submission))
+        assert sent['messages'][0]['content']['parts'] == [submission.wire_prompt]
+
+
 @pytest.mark.parametrize('case', ['match', 'text', 'conversation', 'extra', 'missing_file',
                                   'missing_hint', 'thinking'])
 def test_resource_dispatch_and_saved_history(case):

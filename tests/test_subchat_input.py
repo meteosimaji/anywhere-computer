@@ -63,5 +63,48 @@ async def test_literal_draft_preserves_text_and_rejects_existing_content():
             finally:
                 await guard.evaluate('guard => guard.stop()')
                 await guard.dispose()
+            # Real Chat decorates URLs with a noneditable icon. Its block layout
+            # changes innerText, although the saved input retains the literal URL.
+            await page.set_content('''<main></main><form data-chatgpt-composer>
+                <div data-composer-markdown role="textbox" contenteditable="true">
+                </div><button type="button" aria-label="Send"
+                onclick="window.sends=(window.sends||0)+1">Send</button></form>''')
+            url = 'https://github.com/meteosimaji/anywhere-computer/pull/99'
+            decorated = (
+                '<p>Review <span data-rich-text-generated-autolink '
+                f'text-link-href="{url}"><span><span data-inline-url-icon '
+                'aria-hidden="true" contenteditable="false" style="display:block">'
+                f'<svg></svg></span>{url}</span></span> now</p>')
+            await editor.evaluate('(e, html) => e.innerHTML=html', decorated)
+            literal = f'Review {url} now'
+            assert await editor.inner_text() != literal
+
+            async def submit(text):
+                return await page.evaluate(
+                    source + '\ntext => submitSubchatDraft(document,location.href,text,[])', text)
+
+            assert await submit(literal)
+            assert await page.evaluate('window.sends') == 1
+            for changed in [decorated.replace(' now', ' later'),
+                            decorated.replace(' now', '<br> now'),
+                            decorated.replace(f'>{url}</span>', '>different</span>'),
+                            decorated.replace(' now', '<strong> now</strong>')]:
+                await editor.evaluate('(e, html) => e.innerHTML=html', changed)
+                assert not await submit(literal)
+            assert await page.evaluate('window.sends') == 1
+            # Matching displayed text must not bypass destination verification.
+            inline = decorated.replace('display:block', 'display:inline')
+            for changed in [inline.replace(f'text-link-href="{url}"',
+                                           'text-link-href="https://example.com/other"'),
+                            inline.replace('data-rich-text-generated-autolink ',
+                                           'data-rich-text-generated-autolink '
+                                           'data-rich-text-link-href='
+                                           '"https://example.com/other" ')]:
+                await editor.evaluate('(e, html) => e.innerHTML=html', changed)
+                assert await editor.inner_text() == literal
+                assert not await submit(literal)
+            await editor.evaluate('(e, html) => e.innerHTML=html',
+                                  decorated + '<p>Keep  two spaces<br>and a newline</p>')
+            assert await submit(literal + '\nKeep  two spaces\nand a newline')
         finally:
             await browser.close()

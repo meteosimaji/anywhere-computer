@@ -1,4 +1,46 @@
 // Current ordinary-Chat editor contract. Insertion itself never sends.
+function subchatDraftMatches(editor, text) {
+  if (editor.innerText === text &&
+      !editor.querySelector('[data-rich-text-generated-autolink], a')) return true;
+  // Generated URL icons can add layout-only newlines to innerText. Read only
+  // the observed paragraph/inline contract; never trim or collapse user text.
+  let autolink = false;
+  function read(node, root = false) {
+    if (node.nodeType === 3) return node.nodeValue;
+    if (node.nodeType !== 1) throw new Error('Unrecognized draft node');
+    if (!root && node.matches('[data-rich-text-generated-autolink]')) {
+      const href = node.getAttribute('text-link-href') ||
+        node.getAttribute('data-rich-text-link-href');
+      if (!href || !/^https?:\/\//.test(href)) throw new Error('Unrecognized URL');
+      if (['text-link-href', 'data-rich-text-link-href'].some(
+        key => node.hasAttribute(key) && node.getAttribute(key) !== href))
+        throw new Error('Conflicting URL targets');
+      const copy = node.cloneNode(true);
+      for (const icon of copy.querySelectorAll(
+        '[data-inline-url-icon][aria-hidden="true"][contenteditable="false"]')) icon.remove();
+      if (copy.textContent !== href || copy.querySelector(':not(span)'))
+        throw new Error('Changed URL label');
+      autolink = true;
+      return href;
+    }
+    if (!root && node.tagName === 'BR') return '\n';
+    if (!root && !['P', 'SPAN'].includes(node.tagName))
+      throw new Error('Unrecognized draft markup');
+    if (!root && (node.getAttribute('contenteditable') === 'false' ||
+                  node.getAttribute('aria-hidden') === 'true'))
+      throw new Error('Unrecognized draft widget');
+    const children = [...node.childNodes];
+    if (children.some(child => child.nodeType === 1 && child.tagName === 'P')) {
+      if (!root || children.some(child => child.nodeType !== 1 || child.tagName !== 'P'))
+        throw new Error('Unrecognized paragraphs');
+      return children.map(child => read(child)).join('\n');
+    }
+    return children.map(child => read(child)).join('');
+  }
+  try { return read(editor, true) === text && autolink; }
+  catch { return false; }
+}
+
 function insertSubchatDraft(document, text) {
   if (typeof text !== 'string' || text.length === 0 || text.includes('\r')) {
     return {state: 'invalid_input', input_dispatched: false};
@@ -28,7 +70,7 @@ function insertSubchatDraft(document, text) {
   }
   const accepted = document.execCommand('insertHTML', false, literal.outerHTML);
   // A rejected or changed edit must be inspected, never retried automatically.
-  if (!accepted || !editor.isConnected || editor.innerText !== text) {
+  if (!accepted || !editor.isConnected || !subchatDraftMatches(editor, text)) {
     return {state: 'draft_unconfirmed', input_dispatched: true};
   }
   return {state: 'draft_observed', input_dispatched: true, submitted: false};
@@ -71,7 +113,7 @@ function submitSubchatDraft(document, expectedUrl, text, previousIds) {
       document.querySelectorAll('main').length !== 1) return false;
   const editors = document.querySelectorAll(
     'form[data-chatgpt-composer] [data-composer-markdown][role="textbox"]');
-  if (editors.length !== 1 || editors[0].innerText !== text ||
+  if (editors.length !== 1 || !subchatDraftMatches(editors[0], text) ||
       !editors[0].getClientRects().length) return false;
   const ids = [...document.querySelectorAll('main [data-turn-key]')]
     .map(node => node.getAttribute('data-turn-key'));
