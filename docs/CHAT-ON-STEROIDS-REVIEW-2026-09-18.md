@@ -229,9 +229,10 @@ silently broadening equality would hide it rather than resolve it.
 inflight work when the five-second observer expires, and returns saved outcomes
 for repeated IDs. Its ledger marks unfinished work unknown after engine restart.
 Reuse this behavior for submission; do not add a second retry scheduler. A
-subchat-specific durable record still needs the peer, conversation, selected model,
-submission identity and state **before** send, because the general ledger stores
-an argument digest and final result, not intermediate browser recovery data.
+subchat-specific durable record now stores the transport owner, requested/observed
+conversation, selected model/effort, submission identity and state before send.
+The general ledger stores an argument digest and final result, not intermediate
+browser recovery data. Caller-supplied work context is descriptive, not a grant.
 An observer timeout is not a failed generation, and the generic handler exception
 path must not classify an uncertain send as a confirmed failure.
 
@@ -256,3 +257,31 @@ The published release inspected is v2.1.14. Its documented setup requires the
 desktop app, workspace configuration, Core connection and companion extension.
 This is materially more than attaching an arbitrary stateless MCP server. Keep
 CoS optional so using Anywhere's file/terminal/device tools does not require it.
+
+## Browser-free controls versus ordinary Chat transport
+
+Rechecked upstream main on September 20: it remains
+`8f76ccc790917b01ee758da6687a1cf9b576ba8a`. In that exact source,
+`extension/content.js`'s `acceptDesktopInput` waits for and claims a composer;
+its direct-turn branch calls `CLF_DOM.stopGeneration` before sending. This is
+browser-companion delivery, not a demonstrated browser-free Chat backend API.
+Do not transplant Stop+Send as immediate steer. This source inspection does not
+prove that no other provider transport is possible.
+
+Anywhere's saved-list and CLI queue commands reuse its existing ledger without
+opening Chrome. Queue inherits the confirmed target model, effort and context;
+recovery drives delivery through the existing adapter. These controls do not
+establish browser-free Chat creation or answer retrieval. The owning Codex app
+has separately demonstrated existing-Chat send/read, but the available create
+tool exposes Work rather than ordinary Chat creation. A complete replacement
+transport remains unverified; do not substitute Work or paid API inference.
+
+[Issue 327](https://github.com/totec448-spec/chat-on-steroids/issues/327) reports
+stale session waiting; its suspected causes are not demonstrated Anywhere bugs.
+Anywhere records the exact predecessor operation for queued input and rejects
+changed targets under the same identity. Queue registration is local acceptance,
+not an active background dispatcher. `recover` may remain pending while the
+predecessor has no verified final answer; neither elapsed time nor an apparently
+idle page authorizes resend or completion. Better explanations of unresolved
+receipt/answer states remain useful follow-up work, separate from inventing a
+terminal result for a long-thinking model.
