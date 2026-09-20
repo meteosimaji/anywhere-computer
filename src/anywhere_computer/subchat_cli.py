@@ -10,7 +10,7 @@ from typing import Literal, TextIO
 
 from pydantic import Field, TypeAdapter
 
-from .models import Contract
+from .models import Contract, OperationId
 from .state import Ledger
 from .subchat import SubchatOutcomeUnknown, Subchats
 from .subchat_state import SubchatList, SubchatSubmissions, SubchatWorkContext
@@ -30,10 +30,19 @@ class ListCommand(SubchatList):
     action: Literal['list']
 
 
-async def dispatch(service: Subchats, command: Command | ListCommand) -> str:
+class QueueCommand(OperationId):
+    action: Literal['queue']
+    target_operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    prompt: str = Field(min_length=1, max_length=100_000)
+
+
+async def dispatch(service: Subchats, command: Command | ListCommand | QueueCommand) -> str:
     if isinstance(command, ListCommand):
         return service.store.list(SubchatList(limit=command.limit, before=command.before),
                                   owner=None).model_dump_json()
+    if isinstance(command, QueueCommand):
+        return service.queue(command.operation_id, command.target_operation_id,
+                             command.prompt, owner=None).model_dump_json()
     if command.action == 'send':
         if command.prompt is None or command.model is None or command.effort is None:
             raise ValueError('send requires prompt, model and effort')
@@ -60,16 +69,17 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         line = await asyncio.to_thread(source.readline)
         if not line:
             return
-        command: Command | ListCommand | None = None
+        command: Command | ListCommand | QueueCommand | None = None
         try:
-            command = TypeAdapter(Command | ListCommand).validate_json(line)
+            command = TypeAdapter(Command | ListCommand | QueueCommand).validate_json(line)
             output = await dispatch(service, command)
         except Exception as error:
             # Do not print provider errors or invalid input: both can contain secrets.
             output = json.dumps({
                 'state': ('submission_unconfirmed'
                           if isinstance(error, SubchatOutcomeUnknown) else 'command_failed'),
-                'operation_id': command.operation_id if isinstance(command, Command) else None,
+                'operation_id': (command.operation_id
+                                 if isinstance(command, Command | QueueCommand) else None),
                 'error_type': type(error).__name__,
                 'automatic_retry': False,
             })
