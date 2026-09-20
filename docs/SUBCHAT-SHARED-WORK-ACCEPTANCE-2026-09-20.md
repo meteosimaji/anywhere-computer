@@ -121,3 +121,11 @@ only after the store accepts cancellation. It never cancels already-dispatched
 generation. Waiting observers receive the saved cancelled state. All 83 subchat
 tests and full source mypy passed; the review's ordinary read-timeout cancellation
 claim is not treated as a defect without evidence of harmful effects.
+
+Preparation failures now return `preparation_failed` with `dispatched=false`,
+separately from a send whose receipt is unknown. A regression test fails on the
+previous generic error response, verifies that preparation failure never calls
+Send, retries the same identity after correcting preparation, then loses the
+receipt and confirms that a repeated request does not send again. Provider error
+text is not returned. The live high-effort follow-up remains `prepared`; no
+receipt or completed review is claimed for that attempt.

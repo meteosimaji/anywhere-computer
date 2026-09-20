@@ -238,3 +238,41 @@ async def test_wait_rejects_transport_exceeding_budget_before_observation(tmp_pa
         assert backend.sends == 0
     finally:
         ledger.close()
+
+
+async def test_preparation_failure_is_unsent_and_same_request_can_retry(tmp_path):
+    from anywhere_computer.models import Request
+
+    class UnreadyBrowser(BrowserFixture):
+        ready = False
+
+        async def prepare(self, submission):
+            if not self.ready:
+                raise ValueError('private draft and account details')
+            return await super().prepare(submission)
+
+    ledger = Ledger(tmp_path)
+    backend = UnreadyBrowser()
+    service = Subchats(SubchatSubmissions(ledger.connection), backend)
+    server = session(service)
+    request = Request(operation_id='f' * 32, tool='subchat_send',
+                      arguments={'prompt': 'work', 'model': 'model', 'effort': 'effort'})
+    try:
+        failed = await server.execute(request)
+        assert failed.state == 'failed'
+        assert failed.data == {'error_code': 'preparation_failed', 'dispatched': False}
+        assert 'private' not in failed.model_dump_json()
+        assert service.store.get(request.operation_id, owner=None).state == 'prepared'
+        assert backend.sends == 0
+        # Once preparation is corrected, reuse the original identity. This
+        # fixture loses the send receipt, so neither error path claims success.
+        backend.ready = True
+        unconfirmed = await server.execute(request)
+        assert unconfirmed.state == 'unknown'
+        assert backend.sends == 1
+        duplicate = await server.execute(request)
+        assert duplicate.data['state'] == 'sending'
+        assert backend.sends == 1
+    finally:
+        await server.close()
+        ledger.close()
