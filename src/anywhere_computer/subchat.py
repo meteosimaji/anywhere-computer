@@ -118,7 +118,7 @@ class Subchats:
             if receipt is None:
                 # Dispatch happened, but receipt observation is not yet available.
                 # Keep the durable reservation; recover/wait may observe it later.
-                return submission
+                return self.store.get(submission.operation_id, owner=owner)
             return self._accept(submission, receipt, owner)
         except Exception as error:
             # Provider errors may contain account data; retain only the cause locally.

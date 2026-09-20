@@ -219,6 +219,21 @@ class SubchatSubmissions:
             'state': 'sending', 'conversation_id': old.conversation_id or conversation_id,
             'baseline_message_ids': baseline_message_ids}), owner)
 
+    def observe_request(self, operation_id: str, user_message_id: str,
+                        *, owner: str | None) -> SubchatSubmission:
+        """Checkpoint outgoing identity before transport; not server acceptance."""
+        old = self.get(operation_id, owner=owner)
+        if (old.state != 'sending' or not user_message_id.strip()
+                or len(user_message_id) > 256
+                or user_message_id in old.baseline_message_ids):
+            raise ValueError('Invalid outgoing submission identity')
+        if old.user_message_id is not None:
+            if old.user_message_id != user_message_id:
+                raise ValueError('Outgoing submission identity changed')
+            return old
+        return self._replace(
+            old, old.model_copy(update={'user_message_id': user_message_id}), owner)
+
     def submitted(self, operation_id: str, conversation_id: str, user_message_id: str,
                   *, owner: str | None) -> SubchatSubmission:
         old = self.get(operation_id, owner=owner)
@@ -228,6 +243,8 @@ class SubchatSubmissions:
             raise ValueError('Observed conversation does not match the submission')
         if user_message_id in old.baseline_message_ids:
             raise ValueError('Observed message predates this submission')
+        if old.user_message_id is not None and old.user_message_id != user_message_id:
+            raise ValueError('Observed message does not match the submission')
         if old.state in {'submitted', 'completed'}:
             if old.user_message_id != user_message_id:
                 raise ValueError('Observed message does not match the submission')

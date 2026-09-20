@@ -22,7 +22,7 @@ from anywhere_computer.subchat_state import SubchatSubmission
 from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_page, picker_ready
 from .efforts import move_effort, snapshot
 from .http_reader import ChatHTTPReader
-from .request_content import add_resources
+from .request_content import add_resources, generation_input
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page, Route
@@ -35,8 +35,10 @@ CHAT = re.compile(r'https://chatgpt\.com/c/'
 
 class BrowserSubchatBackend:
     def __init__(self, context: BrowserContext | Callable[[], Awaitable[BrowserContext]],
-                 *, http_read: bool = False) -> None:
+                 *, http_read: bool = False,
+                 record_request: Callable[[str, str], None] | None = None) -> None:
         self.http_read = http_read
+        self._record_request = record_request
         self._http_reader = ChatHTTPReader()
         self._context = None if callable(context) else context
         self._create_context = context if callable(context) else None
@@ -190,24 +192,36 @@ class BrowserSubchatBackend:
         return baseline
 
     async def send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
-        if submission.resources is None:
+        if submission.resources is None and self._record_request is None:
             return await self._send(submission)
         page = self.pages.get(submission.operation_id)
         if page is None or page.is_closed():
             raise ValueError('Prepared browser page is unavailable')
         dispatched: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        claimed = False
         pattern = re.compile(r'^https://chatgpt\.com/backend-api/f/conversation(?:\?.*)?$')
 
         async def augment(route: Route) -> None:
+            nonlocal claimed
+            if claimed or route.request.method != 'POST':
+                await route.abort()
+                return
+            claimed = True
             accepted = False
             try:
-                if dispatched.done() or route.request.method != 'POST':
-                    await route.abort()
-                    return
                 payload = route.request.post_data
                 if payload is None:
                     raise ValueError('Missing generation payload')
-                await route.continue_(post_data=add_resources(payload, submission))
+                body = generation_input(payload, submission)
+                messages = body['messages']
+                assert isinstance(messages, list) and isinstance(messages[0], dict)
+                identity = messages[0]['id']
+                assert isinstance(identity, str)
+                outgoing = (add_resources(payload, submission)
+                            if submission.resources is not None else payload)
+                if self._record_request is not None:
+                    self._record_request(submission.operation_id, identity)
+                await route.continue_(post_data=outgoing)
                 accepted = True
             except Exception:
                 # Provider details can contain account information; do not expose them.
@@ -262,12 +276,18 @@ class BrowserSubchatBackend:
                              'recover without replay')
         # Release the caller's browser lock after one observation. An unavailable
         # receipt is durable 'sending', never permission to click Send again.
-        if submission.resources is not None:
+        if submission.resources is not None or self._record_request is not None:
             # HTTP input verification belongs to recover, not the dispatch deadline.
             return None
         return await self.find_submission(submission)
 
     async def find_submission(self, submission: SubchatSubmission) -> SubchatReceipt | None:
+        if (self.http_read and submission.conversation_id is not None
+                and submission.user_message_id is not None):
+            if CHAT.fullmatch('https://chatgpt.com/c/' + submission.conversation_id) is None:
+                raise ValueError('Invalid conversation identity')
+            async with asyncio.timeout(20):
+                return await self._http_reader.receipt(await self._browser(), submission)
         page = await self._page(submission)
         if page is None:
             return None

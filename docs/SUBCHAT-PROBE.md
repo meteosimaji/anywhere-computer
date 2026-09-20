@@ -1305,3 +1305,26 @@ An explicitly replaced reader or browser context permits a fresh observation.
 This does not refresh credentials, bypass an access rejection, or establish
 browser-independent authentication. Regression tests cover both statuses,
 page cleanup, repeated polls and explicit context replacement.
+
+### Outgoing input identity checkpoint
+
+The HTTP-read controller records the browser-generated input message ID in the
+existing submission row before forwarding its generation request. This keeps the
+state `sending`: a locally observed request is not proof of server acceptance.
+Storage failure aborts forwarding; uncertain sends are never replayed. The stored
+ID cannot change, and a later receipt must match it. For a known conversation,
+recovery uses that exact ID with the existing HTTP receipt and answer projections,
+without discovering message IDs from a rendered page. Authentication bootstrap
+may still require an observation page.
+
+This avoids treating HTTP messages absent from a partial DOM baseline as newly
+sent messages. On September 21, the existing audit Chat exposed four DOM input
+IDs but eight HTTP input IDs; all four DOM IDs matched, while four other HTTP
+inputs were absent from the rendered baseline. This was read-only live evidence,
+not a new generation trial. The baseline-set-difference proposal was therefore
+not adopted.
+
+New Chat creation still requires the browser to establish its conversation ID.
+An unknown conversation after a crash remains unresolved rather than triggering
+history-wide search or resend. Generation preparation, model/effort selection,
+and authentication are not made browser-independent by this checkpoint.

@@ -469,3 +469,50 @@ async def test_bootstrap_access_rejection_does_not_reopen_tabs(status):
     with pytest.raises(SubchatAccessError):
         await reader._read(replacement, None, observe)
     assert len(observations) == 2 and replacement.pages[0].closed
+
+
+async def test_checkpointed_request_recovers_after_restart_without_page(tmp_path):
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_browser.history import project_receipt
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    submission, payload = sample()
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    op = submission.operation_id
+    store.prepare(op, submission.prompt, submission.model, submission.effort, owner=None,
+                  conversation_id=submission.conversation_id)
+    store.begin_send(op, owner=None)
+    assert store.observe_request(op, 'user', owner=None).state == 'sending'
+    with pytest.raises(ValueError, match='identity changed'):
+        store.observe_request(op, 'different', owner=None)
+    ledger.close()
+    ledger = Ledger(tmp_path)
+
+    class Context:
+        browser = None
+
+        def on(self, *_):
+            pass
+
+        async def new_page(self):
+            raise AssertionError('Receipt recovery must not create a page')
+
+    class Reader:
+        async def receipt(self, context, saved):
+            assert saved.user_message_id == 'user'
+            return project_receipt(json.dumps(payload).encode(), saved)
+
+        async def history(self, context, saved):
+            return project_history(json.dumps(payload).encode(), saved)
+
+    try:
+        backend = BrowserSubchatBackend(Context(), http_read=True)
+        backend._http_reader = Reader()
+        service = Subchats(SubchatSubmissions(ledger.connection), backend)
+        result = await service.recover(op, owner=None)
+        assert result.state == 'completed' and result.answer == '日本語 result'
+    finally:
+        ledger.close()
