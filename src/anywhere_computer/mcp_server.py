@@ -26,7 +26,8 @@ OPERATION_META = OPERATION_CAPABILITY + "/operation_id"
 REQUEST_ID_ARGUMENT = "request_id"
 REQUEST_ID_SCHEMA: dict[str, JsonValue] = {
     "type": "string", "pattern": "^[a-f0-9]{32}$",
-    "description": "Choose this ID before sending to recover even a lost first response. "
+    "description": "Generate a fresh 32-character lowercase hexadecimal ID (UUID hex, no hyphens) "
+    "before sending to recover even a lost first response. "
     "Use the same ID only for the identical call. Poll operations_get with this ID.",
 }
 INSTRUCTIONS = (
@@ -223,7 +224,9 @@ class MCPSession:
                 not isinstance(metadata_id, str)
                 or re.fullmatch(r"[a-f0-9]{32}", metadata_id) is None
             ):
-                return rpc_error(identity, -32602, "Invalid operation ID")
+                return rpc_error(identity, -32602,
+                                 "Invalid operation ID: expected 32 lowercase hexadecimal "
+                                 "characters, without hyphens. No tool was executed.")
             if supplied_id is not None and metadata_id is not None and supplied_id != metadata_id:
                 return rpc_error(identity, -32602, "Conflicting request_id and operation metadata")
             operation_id = supplied_id if supplied_id is not None else (
@@ -233,7 +236,9 @@ class MCPSession:
                 not isinstance(operation_id, str)
                 or re.fullmatch(r"[a-f0-9]{32}", operation_id) is None
             ):
-                return rpc_error(identity, -32602, "Invalid operation ID")
+                return rpc_error(identity, -32602,
+                                 "Invalid operation ID: expected 32 lowercase hexadecimal "
+                                 "characters, without hyphens. No tool was executed.")
             operation = Request(operation_id=operation_id, tool=name, arguments=arguments)
             try:
                 reply = await self.execute(operation)

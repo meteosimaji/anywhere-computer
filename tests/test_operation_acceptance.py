@@ -1,6 +1,8 @@
 import asyncio
 import uuid
 
+import pytest
+
 from anywhere_computer import engine as engine_module
 from anywhere_computer.engine import Engine
 from anywhere_computer.mcp_server import OPERATION_META, MCPSession
@@ -14,6 +16,28 @@ async def ready(engine):
     session = MCPSession(catalog, engine.execute)
     session.initialized = session.ready = True
     return session
+
+
+@pytest.mark.parametrize("metadata", [False, True])
+async def test_invalid_id_explains_format_before_dispatch(metadata):
+    async def catalog():
+        return [{"name": "terminal_start"}]
+
+    async def execute(_):
+        pytest.fail("Invalid IDs must not dispatch a tool")
+
+    session = MCPSession(catalog, execute)
+    session.initialized = session.ready = True
+    params = {"name": "terminal_start", "arguments": {}}
+    if metadata:
+        params["_meta"] = {OPERATION_META: "a" * 33}
+    else:
+        params["arguments"] = {"request_id": "a" * 33}
+    response = await session.handle({"jsonrpc": "2.0", "id": 1,
+                                     "method": "tools/call", "params": params})
+    assert response["error"]["code"] == -32602
+    assert "32 lowercase hexadecimal" in response["error"]["message"]
+    assert "No tool was executed" in response["error"]["message"]
 
 
 async def test_idle_status_does_not_block_its_own_update(tmp_path):
