@@ -298,9 +298,11 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                 real_get = request.get
 
                 async def local_get(url, **kwargs):
-                    assert url == 'https://chatgpt.com' + path
+                    assert url in ('https://chatgpt.com' + path,
+                                   'https://chatgpt.com/backend-api/conversations/other')
                     assert kwargs['max_redirects'] == kwargs['max_retries'] == 0
-                    return await real_get(f'http://127.0.0.1:{server.server_port}' + path, **kwargs)
+                    return await real_get(f'http://127.0.0.1:{server.server_port}' +
+                                          url.removeprefix('https://chatgpt.com'), **kwargs)
 
                 monkeypatch.setattr(request, 'get', local_get)
                 backend = BrowserSubchatBackend(context, http_read=True,
@@ -337,6 +339,24 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                         await read()
                     assert repeated.value.code == rejected.value.code
                 assert len(tab_gets) == 2 and len(calls) == before
+                # A resource denial is not evidence that another resource is denied.
+                async def forbidden_observation(page):
+                    raise AssertionError('Cross-resource read opened a browser tab')
+
+                other_url = 'https://chatgpt.com/backend-api/conversations/other'
+                if expired_status == 403:
+                    assert json.loads(await backend._http_reader._read(
+                        context, other_url, forbidden_observation)) == payload
+                    assert len(calls) == before + 1
+                    with pytest.raises(SubchatAccessError):
+                        await read()  # The denied resource remains latched.
+                    assert len(calls) == before + 1
+                else:
+                    with pytest.raises(SubchatAccessError):
+                        await backend._http_reader._read(
+                            context, other_url, forbidden_observation)
+                    assert len(calls) == before  # Authentication rejection is global.
+                before = len(calls)
                 # An explicitly restarted adapter can observe the repaired login.
                 backend = BrowserSubchatBackend(context, http_read=True,
                     http_request_factory=request_factory if independent else None)
@@ -344,7 +364,8 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                 assert len(tab_gets) == 4 and len(calls) == before
                 assert await read() == first
                 assert len(tab_gets) == 4 and len(calls) == before + 1
-                assert all(call == (path, True) for call in calls)
+                assert all(ok and called_path in (path, '/backend-api/conversations/other')
+                           for called_path, ok in calls)
                 assert context.pages == [original] and original.url == 'about:blank'
                 if independent:
                     await browser.close()

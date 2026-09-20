@@ -885,9 +885,13 @@ submission tabs are not reloaded. This is a browser-session-backed HTTP reader,
 not a browser-independent login client or a public provider API.
 
 Only the fixed HTTPS conversation-history GET is requested. Redirects and
-transport retries are disabled. A 401/403 clears the cached header and fails the
-current read. Later recovery polls retain that access error without requests or
-new tabs. Repair login/access explicitly and restart the adapter with the same
+transport retries are disabled. A 401 clears cached authorization and rejects all
+later reads. A 403 from an authenticated HTTP read rejects only that exact resource
+URL; other conversation
+and catalog reads remain available. Repeated reads of the rejected scope make no
+requests or new tabs. Initial browser-bootstrap rejection remains session-wide
+because no authenticated HTTP session has been established. Repair login/access
+explicitly and restart the adapter with the same
 profile and state directory to bootstrap a new reader; recover the original
 operation ID rather than sending again. Restarting does not itself repair access.
 Other failures do not cause a generation replay or automatic browser fallback.
@@ -1430,7 +1434,8 @@ after that browser closes, while the controller and its HTTP client stay alive.
 Sending and any unbootstrapped browser-dependent operation still report browser
 closure. Closing Chrome does not imply cancellation of server-side generation.
 This does not yet provide browser-free sending, persistent login or token refresh.
-401/403 remain latched until explicit controller/context replacement, and neither
+401 and bootstrap rejection remain session-wide; subsequent HTTP 403 is latched
+per resource URL until explicit controller/context replacement. Neither
 transport failures nor missing answers authorize generation replay.
 
 The browser-close behavior is covered with a real Chrome process, standalone
@@ -1444,3 +1449,20 @@ memory from the existing authenticated session; its 14 tabs stayed unchanged.
 Thus this verifies live recovery with the adapter's browser disconnected, not
 initial login, token renewal, or absence of every Chrome process on the host.
 No generation was sent. The full local suite passed 1506 tests with 19 skips.
+
+### HTTP denial scope audit
+
+A normal Chat review of PR #124 identified that one authenticated history/catalog
+403 prevented unrelated reads in the same controller. A controlled transport
+regression reproduced this before the fix. Subsequent HTTP 403 is now retained
+per exact URL; 401 and initial bootstrap rejection still stop the whole reader.
+The existing real Chrome/APIRequestContext test covers both transport modes,
+history/catalog rejection, allowed cross-resource reads, and no requests to a
+latched denied URL. This is not a live ChatGPT permission-revocation trial.
+
+The same review identified a separate unresolved limitation: authorization is
+cached for a BrowserContext object, not independently bound to each submission's
+account. Switching accounts/workspaces inside that context can leave old headers
+in use. Exact history/input matching prevents accepting unrelated answers, but
+correct recovery after account switching is not verified or implemented. This
+change does not silently refresh or substitute another account's authorization.
