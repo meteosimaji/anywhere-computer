@@ -151,6 +151,29 @@ async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
             assert result["submitted"] is False
             assert len(result["efforts_for_selected_model"]["positions"]) == 7
             assert await page.locator(catalog.TRIGGER).get_attribute("aria-expanded") == "false"
+            # An automatic model may have no effort slider. Its observed model
+            # list remains useful and must not disappear with that partial gap.
+            await page.locator('[data-reasoning-slider]').evaluate(
+                "node => node.removeAttribute('data-reasoning-slider')")
+            partial = await catalog.collect_page(page)
+            assert partial["state"] == "catalog_partial"
+            assert partial["models"] == result["models"]
+            assert partial["efforts_for_selected_model"]["state"] == "efforts_unconfirmed"
+            assert partial["submitted"] is False
+            assert await page.locator(catalog.TRIGGER).get_attribute("aria-expanded") == "false"
+            # Real UI can remember the model-list view after reopening. The
+            # effort-view toggle is then inert, despite matching :visible.
+            await page.evaluate("""() => {
+                const trigger = document.querySelector('[data-composer-navigation-target]');
+                const toggle = document.querySelector('[data-model-picker-view-toggle]');
+                trigger.onclick = () => {
+                    menu.hidden = false; trigger.setAttribute('aria-expanded', 'true');
+                    models.inert = false; control.inert = true; toggle.inert = true;
+                };
+            }""")
+            remembered = await catalog.collect_page(page)
+            assert remembered["state"] == "catalog_partial"
+            assert remembered["models"] == result["models"]
             await page.get_by_role("textbox").fill("Keep this draft")
             assert await catalog.collect_page(page) == {"state": "empty_chat_unconfirmed"}
             assert await page.get_by_role("textbox").inner_text() == "Keep this draft"

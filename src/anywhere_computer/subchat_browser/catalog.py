@@ -60,13 +60,14 @@ async def collect_page(page: Page) -> dict[str, object]:
             await page.locator(CONTROL).press(key)
 
         efforts = await collect_efforts(read, step)
-        if efforts["state"] != "efforts_observed":
-            return {"state": "catalog_unconfirmed", "efforts": efforts}
-        await page.locator(TOGGLE).click()
         final_models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
+        if final_models.get("state") == "model_list_not_visible":
+            await page.locator(TOGGLE).click()
+            final_models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
         if final_models != models:
             return {"state": "model_selection_changed", "submitted": False}
-        return {"state": "catalog_observed", "models": models["models"],
+        state = "catalog_observed" if efforts["state"] == "efforts_observed" else "catalog_partial"
+        return {"state": state, "models": models["models"],
                 "efforts_for_selected_model": efforts, "submitted": False}
     finally:
         if await trigger.get_attribute("aria-expanded") == "true":

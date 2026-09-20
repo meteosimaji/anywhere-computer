@@ -76,15 +76,16 @@ async def run(profile: Path, state: Path, *, mcp: bool = False) -> None:
             context = await driver.chromium.launch_persistent_context(
                 str(profile), channel='chrome', headless=False)
             try:
-                service = Subchats(SubchatSubmissions(ledger.connection),
-                                   BrowserSubchatBackend(context))
+                backend = BrowserSubchatBackend(context)
+                service = Subchats(SubchatSubmissions(ledger.connection), backend)
                 # Multiple commands share one browser. EOF is explicit shutdown;
                 # no per-request window closing and no automatic message retry.
                 if mcp:
                     from .mcp_server import serve_stdio
                     from .subchat_mcp import session
 
-                    await serve_stdio(session(service), sys.stdin.buffer, sys.stdout.buffer)
+                    await serve_stdio(session(service, observe_catalog=backend.catalog),
+                                      sys.stdin.buffer, sys.stdout.buffer)
                 else:
                     await process_lines(service, sys.stdin, sys.stdout)
             finally:

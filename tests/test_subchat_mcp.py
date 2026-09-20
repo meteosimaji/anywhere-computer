@@ -104,3 +104,31 @@ asyncio.run(main())
                                                     {'operation_id': '2' * 32})
                     assert answer.structuredContent['data']['answer'] == '42'
     assert (tmp_path / 'sends').read_text().splitlines() == ['sent']
+
+
+async def test_catalog_preserves_partial_observation_and_cannot_send(tmp_path):
+    from anywhere_computer.models import Request
+
+    ledger = Ledger(tmp_path)
+    backend = BrowserFixture()
+    expected = {'state': 'catalog_partial', 'models': [{'label': 'dynamic model'}],
+                'efforts_for_selected_model': {'state': 'efforts_unconfirmed'},
+                'submitted': False}
+
+    async def observe():
+        return expected
+
+    try:
+        server = session(Subchats(SubchatSubmissions(ledger.connection), backend),
+                         observe_catalog=observe)
+        tools = await server.catalog()
+        assert 'subchat_catalog' in [item['name'] for item in tools]
+        reply = await server.execute(Request(operation_id='3' * 32, tool='subchat_catalog'))
+        assert reply.state == 'completed'
+        assert reply.data == expected
+        invalid = await server.execute(Request(operation_id='4' * 32, tool='subchat_catalog',
+                                                arguments={'prompt': 'do not send'}))
+        assert invalid.state == 'failed'
+        assert backend.sends == 0
+    finally:
+        ledger.close()
