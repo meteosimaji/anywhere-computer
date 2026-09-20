@@ -256,3 +256,28 @@ The published release inspected is v2.1.14. Its documented setup requires the
 desktop app, workspace configuration, Core connection and companion extension.
 This is materially more than attaching an arbitrary stateless MCP server. Keep
 CoS optional so using Anywhere's file/terminal/device tools does not require it.
+
+## Recovery issue recheck, 2026-09-20
+
+GitHub still reports main `8f76ccc790917b01ee758da6687a1cf9b576ba8a`.
+[Issue 328](https://github.com/totec448-spec/chat-on-steroids/issues/328) reports
+mid-task `401 tunnel_use_forbidden` after initially successful access, while
+[issue 323](https://github.com/totec448-spec/chat-on-steroids/issues/323) reports
+loss of an existing workspace association. These are upstream field reports,
+not reproduced Anywhere defects; the suspected identity/lifecycle causes are
+not established by the reports.
+
+Adopt their acceptance concerns: preserve the selected device/workspace across
+recovery, distinguish authorization failure from transport failure, and recover
+results using the original authorized operation identity. Anywhere's
+`AuthorizedDeviceMCP.current()` already revalidates grants at dispatch, and the
+HTTP authorization tests exercise revoked grants/devices. Do not automatically
+re-enroll, widen permissions, change devices, or replay writes on every 401.
+Refresh of legitimately expired credentials must remain distinct from revocation.
+Persistent product subchat work-context binding is still incomplete, as tracked
+in the goal review; carrying a workspace string is not authenticated binding.
+
+The all-tools Chat-like HTTP acceptance suite caught a missing invocation of the
+new `audio_status` tool. It now invokes the real tool through authenticated HTTP
+and checks that no capture started. This closes test coverage, not native capture
+acceptance, and is not evidence of browser-free subchat creation.

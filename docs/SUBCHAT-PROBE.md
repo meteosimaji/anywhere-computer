@@ -782,3 +782,36 @@ and expected-turn behavior are verified; do not spoof executor identities,
 replace ordinary Chat with Codex inference, or silently map steer to queue/Stop.
 
 Source: https://github.com/openai/codex/blob/5c5308fc9a9ee789049d646ef11e5400384b9c6f/codex-rs/app-server/src/request_processors/turn_processor.rs#L1020
+
+### Dedicated browser startup visibility
+
+The CLI now requests a minimized dedicated Chrome window by default and checks
+its window state before giving the context to the subchat backend. If that check
+fails, it closes that context and fails before navigating or preparing a prompt;
+it does not fall back to visible interaction. `--show-browser` explicitly opts
+into the previous visible startup for login or diagnosis. Saved-state commands
+still do not launch Chrome. Once opened, the same context is reused until EOF.
+
+This is a startup visibility check, not browser-free Chat creation or an OS-wide
+focus guarantee. Chrome can appear briefly while starting, subsequent tab creation
+and user window changes may affect visibility, and full ordinary-Chat acceptance
+under minimization remains separate. Controlled tests cover both confirmation
+outcomes, cleanup, context reuse, and saved-state operation without a browser.
+
+Live local Chrome check (2026-09-20): the production CLI startup followed by
+three ordinary blank-tab creations reported `normal` for all three windows. An
+experimental CDP `Target.createTarget(background=true)` path reported
+`minimized`, then `normal`, `normal`; it was removed rather than presented as a
+fix. Neither run visited ChatGPT or sent messages. Startup minimization does not
+yet provide unobtrusive multi-tab operation. PR85 must remain unmerged pending
+a working browser integration or an explicit revision of its behavior.
+
+A follow-up blank-page phase probe separated startup, target creation, navigation
+and delayed observation. After a one-second startup wait the window was still
+minimized. After `Target.createTarget(background=true)`, it initially reported
+minimized but became normal within the subsequent 0.5-second observation,
+before calling `page.goto`. The window ID was unchanged. This narrows the
+observed trigger to target creation/its delayed effects in this Chrome environment;
+it does not establish a universal Chrome cause or a successful fix. Rechecking
+only immediately after creation would miss this behavior. No Chat navigation or
+message submission occurred in these probes.
