@@ -24,6 +24,7 @@ from .engine_selection import require_no_migration
 from .files import read_bytes
 from .http_mcp import HTTPMCP
 from .locking import ProcessLock
+from .models import MAX_TOOL_SCOPES
 from .oauth_endpoints import OAuthEndpoints
 from .owner_credentials import OwnerCredentials
 from .state import prepare_directory
@@ -37,7 +38,7 @@ class HTTPServiceConfig(BaseModel):
     device: str = Field(pattern=r"^[a-f0-9]{32}$")
     client: str = Field(min_length=1, max_length=128, pattern=r"^[\x21-\x7e]+$")
     port: int = Field(ge=1, le=65535)
-    scopes: frozenset[str] = Field(min_length=1, max_length=64)
+    scopes: frozenset[str] = Field(min_length=1, max_length=MAX_TOOL_SCOPES)
     redirects: frozenset[str] = Field(min_length=1, max_length=10)
     shared_agent_directory: str | None = Field(default=None, max_length=4096)
 

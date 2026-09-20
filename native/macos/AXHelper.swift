@@ -62,6 +62,27 @@ private struct TraversalState {
     var visited: [AXUIElement] = []
     var nodeCount = 0
     var truncated = false
+    var outputBytes = 0
+}
+
+private func reserveNodeOutput(_ node: inout [String: Any],
+                               state: inout TraversalState) throws -> Bool {
+    // Include escaping and per-child punctuation; leave room for reply framing.
+    var size = try JSONSerialization.data(withJSONObject: node).count + 4
+    if state.outputBytes + size > 48 * 1024 {
+        node["value"] = NSNull()
+        node["label"] = NSNull()
+        node["value_truncated"] = true
+        node["label_truncated"] = true
+        state.truncated = true
+        size = try JSONSerialization.data(withJSONObject: node).count + 4
+    }
+    if state.outputBytes + size > 48 * 1024 {
+        state.truncated = true
+        return false
+    }
+    state.outputBytes += size
+    return true
 }
 
 private enum LocatedElement {
@@ -552,6 +573,10 @@ private final class AXHelper {
         if label.1 { node["label_truncated"] = true }
         if !label.2.isEmpty { node["label_diagnostics"] = label.2 }
         if value.1 { node["value_truncated"] = true }
+        if try !reserveNodeOutput(&node, state: &state) {
+            refs.removeValue(forKey: ref)
+            return nil
+        }
 
         if depth >= maxTreeDepth {
             var childCount: CFIndex = 0
@@ -875,6 +900,11 @@ private func emit(_ object: [String: Any]) {
     } catch {
         let fallback = #"{"error":{"code":"internal_error"},"id":null}"#
         FileHandle.standardOutput.write(Data((fallback + "\n").utf8))
+        return
+    }
+    if data.count + 1 > 64 * 1024 {
+        emit(["id": object["id"] ?? NSNull(),
+              "error": ["code": "response_too_large"]])
         return
     }
     FileHandle.standardOutput.write(data)

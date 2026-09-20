@@ -52,9 +52,15 @@ jobs:
           native = Path('desktop/target/debug/anywhere-computer-manager' +
                         ('.exe' if os.name == 'nt' else '')).resolve()
           archive = Path('dist/managed-portable.zip')
+          helpers = []
+          if sys.platform == 'darwin':
+              gui = Path('dist/anywhere-gui').resolve()
+              gui.parent.mkdir(exist_ok=True)
+              subprocess.run(['swiftc', 'native/macos/AXHelper.swift', '-o', str(gui)], check=True)
+              helpers = ['--gui-helper', str(gui)]
           subprocess.run([sys.executable, 'scripts/build_portable.py',
                           '--allow-downloads', '--manager', str(native),
-                          '--output', str(archive)], check=True)
+                          '--output', str(archive), *helpers], check=True)
           destination = Path('dist/managed relocation 日本語')
           with zipfile.ZipFile(archive) as bundle:
               bundle.extractall(destination)

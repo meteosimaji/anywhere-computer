@@ -13,6 +13,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .authorization import pkce_s256, validate_authorization_url
 from .client_tokens import ClientAuthorizationRequired, ClientTokens, TokenReply
+from .models import MAX_TOOL_SCOPES
 
 
 def https_code_exchange(
@@ -226,7 +227,7 @@ async def login(
     """Authenticate to this product's colocated issuer; never print codes or tokens."""
     if (
         not scopes
-        or len(scopes) > 64
+        or len(scopes) > MAX_TOOL_SCOPES
         or any(re.fullmatch(r"[a-z][a-z0-9_]{0,63}", scope) is None for scope in scopes)
     ):
         raise ValueError("Specify valid tool names for the connection")

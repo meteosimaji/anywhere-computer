@@ -19,7 +19,7 @@ from .credentials import local_credential
 from .engine import Engine
 from .engine_selection import engine_directory
 from .locking import ProcessLock
-from .models import Contract, Reply, Request
+from .models import MAX_TOOL_SCOPES, Contract, Reply, Request
 from .owner_json_pipe import (
     OwnerJsonPipeServer,
     OwnerPipeEndpoint,
@@ -47,7 +47,7 @@ class GrantedRequest(Contract):
     """Trusted local gateway envelope; never registered as a public MCP tool."""
 
     identity: str = Field(min_length=1, max_length=128, pattern=r"^[\x21-\x7e]+$")
-    tools: list[str] = Field(max_length=64)
+    tools: list[str] = Field(max_length=MAX_TOOL_SCOPES)
     request: Request
 
 
