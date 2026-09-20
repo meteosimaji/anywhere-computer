@@ -3,7 +3,8 @@ import json
 
 import pytest
 
-from anywhere_computer.subchat_browser.history import SubchatInterrupted, project_history
+from anywhere_computer.subchat import SubchatInterrupted
+from anywhere_computer.subchat_browser.history import project_history
 from anywhere_computer.subchat_state import SubchatSubmission
 
 
@@ -137,4 +138,43 @@ async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path):
         assert store.get(submission.operation_id, owner=None).state == 'submitted'
         assert store.get('b' * 32, owner=None).state == 'queued'
     finally:
+        ledger.close()
+
+
+async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(tmp_path):
+    from io import StringIO
+
+    from anywhere_computer.models import Request
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_cli import process_lines
+    from anywhere_computer.subchat_mcp import session
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    class Reader:
+        async def read_answer(self, saved):
+            raise SubchatInterrupted('private provider details')
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    op = 'e' * 32
+    store.prepare(op, 'prompt', 'model', 'effort', owner=None)
+    store.begin_send(op, owner=None)
+    store.submitted(op, 'chat', 'user', owner=None)
+    service = Subchats(store, Reader())
+    server = session(service)
+    try:
+        output = StringIO()
+        await process_lines(service, StringIO(json.dumps(
+            {'action': 'recover', 'operation_id': op}) + '\n'), output)
+        cli = json.loads(output.getvalue())
+        assert cli['state'] == 'reply_interrupted' and cli['automatic_retry'] is False
+        result = await server.execute(Request(operation_id='f' * 32, tool='subchat_recover',
+                                              arguments={'operation_id': op}))
+        assert result.state == 'failed'
+        assert result.data == {'error_code': 'reply_interrupted', 'automatic_retry': False}
+        assert 'private provider details' not in output.getvalue() + result.model_dump_json()
+        assert store.get(op, owner=None).state == 'submitted'
+    finally:
+        await server.close()
         ledger.close()

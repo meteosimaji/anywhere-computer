@@ -859,8 +859,9 @@ match the original prompt, and provide matching request, exchange and working
 turn identities for exactly one final assistant response. Normal completion
 requires nonempty text, successful status, end-turn, completeness and an observed
 `finish_details.type=stop`. Unknown or missing evidence remains pending. An
-`interrupted` finish raises `SubchatInterrupted`, exposed as the error type; the
-saved submission remains submitted, cannot be resent, and cannot release a
+`interrupted` finish returns the explicit `reply_interrupted` CLI state or MCP
+error code, with automatic retry disabled. Provider exception details are not
+returned. The saved submission remains submitted, cannot be resent, and cannot release a
 queued follow-up as though it completed. No DOM fallback is used in this mode.
 Pagination without the original input, alternative finals and future schemas
 are not guessed. The default DOM path remains available without this option.

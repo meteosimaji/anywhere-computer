@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from ..subchat import SubchatAnswer
+from ..subchat import SubchatAnswer, SubchatInterrupted
 from ..subchat_state import SubchatSubmission
 
 if TYPE_CHECKING:
@@ -28,10 +28,6 @@ class HistoryPage(BaseModel):
     model_config = ConfigDict(strict=True)
     conversation_id: str
     messages: list[HistoryMessage] = Field(max_length=1000)
-
-
-class SubchatInterrupted(ValueError):
-    """The saved provider response records interruption, not a complete answer."""
 
 
 def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAnswer | None:

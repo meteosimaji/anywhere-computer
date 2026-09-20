@@ -10,6 +10,7 @@ from .mcp_server import Catalog as ToolCatalog
 from .mcp_server import Execute, MCPSession
 from .models import Contract, OperationId, Reply, Request
 from .subchat import (
+    SubchatInterrupted,
     SubchatOutcomeUnknown,
     SubchatPreparationFailed,
     Subchats,
@@ -53,6 +54,8 @@ INSTRUCTIONS = (
     'mode=steer is currently unsupported by this ordinary Chat adapter; it never falls '
     'back to queue or Stop. Submitted is a receipt, not proof of consumption. '
     'Thinking is pending, not failure. Never repeat an uncertain send with a new ID. '
+    'reply_interrupted means saved partial output was not accepted as a final answer; '
+    'inspect the conversation instead of automatically resending or releasing its queue. '
     'subchat_wait defaults to one second, allows at most ten seconds, and returns the '
     'current saved state; '
     'a pending result can be waited on again without stopping generation. '
@@ -265,6 +268,11 @@ def session(service: Subchats, *,
                     return Reply(operation_id=request.operation_id, state='completed',
                                  data=current.model_dump(mode='json'))
             raise
+        except SubchatInterrupted:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='The provider recorded an interrupted answer. Inspect the '
+                               'conversation; do not automatically resend or advance its queue.',
+                         data={'error_code': 'reply_interrupted', 'automatic_retry': False})
         except SubchatStaleTarget:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Queue target is stale; inspect the conversation before continuing.',
