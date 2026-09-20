@@ -43,6 +43,60 @@ browser-free live Chat submission.
 
 ## Actual ordinary Chat trials
 
+### HTTP lifecycle and Codex readback follow-up
+
+A hidden test tab was reopened at the previously known copy-review conversation.
+The model menu initially reported Latest; the controller explicitly selected
+GPT-5.6 Sol/high before sending. The bounded model-selection observation contained
+usage/subscription reads, not a dedicated model-change POST. This does not prove
+that model changes never make network requests. The next generation POST carried
+the observed model and effort; these values are not a future model catalog.
+
+One deliberately long, tool-free test request used POST
+`/backend-api/f/conversation` and received HTTP 200 `text/event-stream`.
+Clicking Stop caused a separate POST `/backend-api/stop_conversation`, with
+`conversation_id` and `exclude_async_types` body keys, returning JSON HTTP 200.
+Some more output appeared after clicking Stop before the UI became idle. Treat
+stop requested and stop observed as different states. This trial does not prove
+immediate server-side cancellation or termination of separately running tools.
+
+A subsequent same-conversation request was sent once and returned SSE HTTP 200.
+The exact final `AC_FOLLOWUP_AFTER_STOP_20260920` was verified both in the UI and
+through Codex `read_thread`, with the corresponding exact user prompt, user ID
+and answer ID. Thus app-MCP readback can recover this final without copying from
+the page. It is not evidence that a standalone Anywhere process can authenticate
+to that app MCP. The stopped earlier turn also appeared as `completed` in this
+projection (its long text was explicitly truncated at the requested limit).
+Keep local cancellation and truncation records; do not infer successful task
+completion solely from that projected status.
+
+The generation request exposed an Authorization header and Sentinel/conduit
+verification header names. Browser cookie metadata included split HttpOnly,
+Secure session cookies. Values were not exported. The request's ordinary CDP
+event did not show Cookie, and matching extra-info was unavailable, so actual
+cookie transmission and cookie-to-Authorization derivation remain unverified.
+The later reload trace was truncated and cannot establish the auth refresh
+sequence. A completed SSE response-body lookup returned no data; this trial
+does not establish standalone SSE body parsing or browser-free auth renewal.
+
+`scripts/probe_subchat_transport.py` attaches only to one exact existing Chat
+tab over an existing loopback CDP endpoint. It observes at most 300 seconds,
+retains bounded allowlisted metadata and reports dropped events. It does not
+read request headers/bodies/cookies, send prompts, create tabs, navigate, focus,
+or close the browser. Example (requires a developer-provided existing endpoint):
+
+```sh
+.venv/bin/python scripts/probe_subchat_transport.py \
+  --cdp-endpoint http://127.0.0.1:9222 \
+  --page-url https://chatgpt.com/c/KNOWN-CONVERSATION-UUID \
+  --seconds 30 --output /tmp/subchat-transport-new.json
+```
+
+The script is a diagnostic, not a product HTTP backend. Its real offline browser
+test verifies request/response correlation, no retained secrets or unrelated
+requests, listener removal and preservation of the existing page. It does not
+certify live authentication, cancellation, or assistant completion.
+
 The development browser adapter created ordinary Chat A with GPT-5.6 Sol and the
 observed medium effort label. Through the installed Anywhere HTTP plugin, that
 Chat created Python code in a dedicated temporary directory and reported a zero
