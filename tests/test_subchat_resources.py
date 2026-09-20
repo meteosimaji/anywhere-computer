@@ -11,7 +11,12 @@ from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
 from anywhere_computer.subchat_browser.history import project_history, project_receipt
 from anywhere_computer.subchat_browser.request_content import add_resources
 from anywhere_computer.subchat_content import SubchatResources
-from anywhere_computer.subchat_state import SubchatSubmissions
+from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmissions
+
+
+def selection():
+    return SubchatHTTPSelection(version_id="fixture", preset_id=7, model_slug="observed",
+                                thinking_effort=None)
 
 
 def resources():
@@ -111,7 +116,8 @@ async def test_resources_reach_persisted_submission_through_public_entry(entry, 
     ledger = Ledger(tmp_path)
     service = Subchats(SubchatSubmissions(ledger.connection), BrowserFixture())
     args = {'prompt': 'read the attached file', 'model': 'observed model',
-            'effort': 'observed effort', 'resources': resources().model_dump(mode='json')}
+            'effort': 'observed effort', 'resources': resources().model_dump(mode='json'),
+            'http_selection': selection().model_dump()}
     operation_id = 'c' * 32
     try:
         if entry == 'cli':
@@ -130,6 +136,7 @@ async def test_resources_reach_persisted_submission_through_public_entry(entry, 
         saved = service.store.get(operation_id, owner=None)
         assert saved.state == 'sending'
         assert saved.resources == resources()
+        assert saved.http_selection == selection()
     finally:
         ledger.close()
 
@@ -137,6 +144,7 @@ async def test_resources_reach_persisted_submission_through_public_entry(entry, 
 @pytest.mark.parametrize(('checkpoint', 'with_resources'), [
     ('none', True), ('saved', True), ('failed', True), ('saved', False), ('failed', False),
     ('missing_account', False), ('changed_account', False),
+    ('wrong_model', False), ('wrong_effort', False),
 ])
 async def test_browser_dispatches_resources_without_enter_or_clipboard(
         tmp_path, monkeypatch, checkpoint, with_resources):
@@ -157,6 +165,10 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
       window.wire=await response.json();
     };
     </script>'''
+    if checkpoint == 'wrong_model':
+        script = script.replace("model:'observed'", "model:'different'")
+    if checkpoint == 'wrong_effort':
+        script = script.replace("model:'observed'", "model:'observed',thinking_effort:'different'")
     if checkpoint == 'missing_account':
         script = script.replace("'chatgpt-account-id':'fixture-account'", "'unrelated':'fixture'")
     async with async_playwright() as driver:
@@ -178,10 +190,23 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
             monkeypatch.setattr(Route, 'continue_', transport)
 
             async def fixture(route):
-                if route.request.method == 'POST':
+                if route.request.url.endswith('/backend-api/models'):
+                    from test_subchat_http_catalog import catalog
+
+                    data = catalog()
+                    data['models'][0]['slug'] = 'observed'
+                    data['versions'][0]['id'] = 'fixture'
+                    data['versions'][0]['intelligence_presets'][0].update(
+                        model_slug='observed', thinking_effort=None)
+                    await route.fulfill(content_type='application/json', body=json.dumps(data))
+                elif route.request.method == 'POST':
                     await route.abort()  # Never send a fixture to the real service.
                 else:
-                    await route.fulfill(content_type='text/html', body=HTML + script)
+                    await route.fulfill(content_type='text/html',
+                        body=HTML + script + '<script>fetch("/backend-api/models",'
+                        '{headers:{authorization:"fixture","chatgpt-account-id":"' +
+                        ('previous-account' if checkpoint == 'changed_account'
+                         else 'fixture-account') + '"}})</script>')
 
             await context.route('https://chatgpt.com/**', fixture)
             store = SubchatSubmissions(ledger.connection)
@@ -197,17 +222,20 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
             if checkpoint == 'changed_account':
                 backend._http_reader._headers = {'chatgpt-account-id': 'previous-account'}
             service = Subchats(store, backend)
-            if checkpoint in ('failed', 'missing_account', 'changed_account'):
+            if checkpoint in ('failed', 'missing_account', 'changed_account',
+                              'wrong_model', 'wrong_effort'):
                 from anywhere_computer.subchat import SubchatOutcomeUnknown
 
                 with pytest.raises(SubchatOutcomeUnknown):
                     await service.send('b' * 32, 'two lines\n日本語',
-                        'Future model', 'Future effort', owner=None, resources=selected_resources)
+                        'Future model', 'Future effort', owner=None, resources=selected_resources,
+                        http_selection=selection())
                 assert bodies == []
                 assert store.get('b' * 32, owner=None).state == 'sending'
                 return
             reply = await service.send('b' * 32, 'two lines\n日本語',
-                'Future model', 'Future effort', owner=None, resources=selected_resources)
+                'Future model', 'Future effort', owner=None, resources=selected_resources,
+                        http_selection=selection())
             assert reply.state == 'sending'  # A POST is not a saved server receipt.
             assert len(bodies) == 1
             assert bodies[0]['messages'][0]['metadata'].get('attachments', []) == (
@@ -216,7 +244,8 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
             assert await backend.pages[reply.operation_id].evaluate('window.sends') == 1
             assert await backend.pages[reply.operation_id].evaluate('window.osWrites') == 0
             await service.send(reply.operation_id, reply.prompt, reply.model, reply.effort,
-                               owner=None, resources=selected_resources)
+                               owner=None, resources=selected_resources,
+                        http_selection=selection())
             assert len(bodies) == 1  # No duplicate dispatch while receipt is unknown.
         finally:
             ledger.close()

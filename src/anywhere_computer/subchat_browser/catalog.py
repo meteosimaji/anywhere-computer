@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..subchat import SubchatAccessError
+from ..subchat_state import SubchatHTTPSelection
 from .efforts import collect_efforts
 
 if TYPE_CHECKING:
@@ -80,12 +81,32 @@ def project_http_catalog(payload: bytes) -> dict[str, object]:
             if model.is_work_mode_model:
                 continue
             choices.append({**preset.model_dump(), 'model_title': model.title,
-                            'available': version.enabled and preset.preset_type == 'available'})
+                            'available': version.enabled and preset.preset_type == 'available',
+                            'http_selection': SubchatHTTPSelection(
+                                version_id=version.id, preset_id=preset.id,
+                                model_slug=preset.model_slug,
+                                thinking_effort=preset.thinking_effort).model_dump()})
         versions.append({'id': version.id, 'label': version.display_text,
                          'enabled': version.enabled, 'choices': choices})
     return {'state': 'http_catalog_observed', 'versions': versions, 'submitted': False,
             'source': 'browser_observed_http', 'generation_http_verified': False,
             'send_requires_ui_labels': True}
+
+
+def require_http_selection(catalog: dict[str, object], selected: SubchatHTTPSelection) -> None:
+    """Require the exact caller-observed choice to still be available; never resolve aliases."""
+    versions = catalog.get('versions')
+    if catalog.get('state') != 'http_catalog_observed' or not isinstance(versions, list):
+        raise ValueError('HTTP model catalog is unavailable')
+    matches = 0
+    for version in versions:
+        if not isinstance(version, dict) or not isinstance(version.get('choices'), list):
+            raise ValueError('HTTP model catalog shape changed')
+        matches += sum(1 for choice in version['choices']
+                       if isinstance(choice, dict) and choice.get('available') is True
+                       and choice.get('http_selection') == selected.model_dump())
+    if matches != 1:
+        raise ValueError('Selected HTTP model or effort is unavailable or changed')
 
 
 async def observe_http_catalog(page: Page) -> Response:

@@ -1502,3 +1502,56 @@ account and operation ID; it must not resend or reassign the operation. Provider
 error details and account identifiers are not included in this diagnostic. A send
 whose acceptance remains unknown still reports `submission_unconfirmed`; this
 recovery diagnostic does not establish that an uncertain send was rejected.
+
+### Exact HTTP send selection
+
+HTTP-read controllers now require `http_selection` on new sends. Obtain it from
+an available choice returned by `subchat_catalog({"source":"http"})`, or send
+`{"action":"catalog"}` to the JSON-lines CLI. Copy the choice's complete
+`http_selection` object into `subchat_send`/CLI `send`: `version_id`, `preset_id`,
+`model_slug`, and `thinking_effort`. Null effort is explicit, not a wildcard.
+Continue supplying the observed UI `model` and `effort` labels for preparation.
+The adapter does not guess which provider ID a label means. The catalog also
+reports `http_selection_send_supported`: true identifies an HTTP-read controller;
+false permits discovery only. Restart the adapter with `--http-read` before
+attempting constrained sends when this flag is false.
+
+Preparation rechecks that exact choice against the current authenticated catalog
+before opening a composer. At the generation POST boundary, its model and effort
+must match before forwarding. A mismatch aborts the intercepted request; it never
+rewrites the provider request or substitutes a different model. The operation
+retains conservative `sending`/unknown semantics after reservation. Matching
+request fields prove requested settings, not which model the provider ultimately
+executed; correlated answer metadata remains separate evidence.
+
+The selection is an immutable send argument saved in the existing submission,
+and queued follow-ups inherit it. Reusing an operation ID with different settings
+is rejected. HTTP sends without a selection fail before browser work; saved old
+operations remain readable/recoverable. Previously queued work without a selection
+cannot be newly dispatched in HTTP mode. Creating a new queue from a legacy
+parent without the required selection is rejected before saving a child operation,
+through both CLI and MCP. UI-only mode cannot accept this HTTP
+constraint. Unconstrained legacy records retain their old JSON shape; constrained
+records contain the new field and must not be processed by an older runtime that
+does not understand it. Unlike answer evidence, this send constraint must not be
+silently ignored on downgrade.
+
+A September 21 live catalog read observed different Pro slugs under latest and
+5.6, and different UI/HTTP effort vocabulary. These observations are not hardcoded
+mappings. Controlled real-browser tests change the outgoing model or effort and
+verify no forwarding, alongside matching dispatch and durable queue tests. This
+is controlled transport evidence, not browser-free sending.
+
+A live ordinary-Chat trial then completed with operation
+`a6642fe8d853405186e76c5434c42147`, conversation
+`6ab057fd-148c-83ee-bcdd-3e4610e6eed0`, input
+`fc54bccc-ff38-4b9f-a2cc-b8a013279a7f`, and answer
+`f8e31d67-8187-4a31-b999-5445ef6d7d25`. The selected catalog choice was
+version 5.6, preset 2, `gpt-5-6-thinking` / `extended`; recovered answer metadata
+matched and the final text was exactly `AC_WIRE_SELECTION_OK`. The dedicated
+window was minimized before sending. An earlier preparation-only attempt using
+the short effort label failed before draft exposure; after observing the full UI
+label, that unsent operation was cancelled and a new test operation was created.
+The successful operation was sent once and recovered without replay. This proves
+live constrained browser-prepared generation plus independent HTTP recovery,
+not browser-independent generation or universal provider-model guarantees.

@@ -14,12 +14,21 @@ from typing import TYPE_CHECKING
 from anywhere_computer.subchat import (
     SubchatAnswer,
     SubchatBrowserClosed,
+    SubchatPreparationFailed,
     SubchatReceipt,
     SubchatStaleTarget,
 )
-from anywhere_computer.subchat_state import SubchatSubmission
+from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmission
 
-from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_page, picker_ready
+from .catalog import (
+    CONTROL,
+    SOURCE,
+    TOGGLE,
+    TRIGGER,
+    collect_page,
+    picker_ready,
+    require_http_selection,
+)
 from .efforts import move_effort, snapshot
 from .http_reader import ChatHTTPReader
 from .request_content import add_resources, generation_input
@@ -83,7 +92,9 @@ class BrowserSubchatBackend:
 
     async def http_catalog(self) -> dict[str, object]:
         async with asyncio.timeout(20):
-            return await self._http_reader.catalog(await self._read_context(catalog=True))
+            result = await self._http_reader.catalog(await self._read_context(catalog=True))
+            result['http_selection_send_supported'] = self.http_read
+            return result
 
     async def _page(self, submission: SubchatSubmission) -> Page | None:
         if self._context is not None:
@@ -131,7 +142,18 @@ class BrowserSubchatBackend:
                 and await editor.count() == 1 and not (await editor.inner_text()).strip()
                 and await stop.filter(visible=True).count() == 0)
 
+    def validate_send_selection(self, selection: SubchatHTTPSelection | None) -> None:
+        """Check controller compatibility without opening a browser or saving a queue."""
+        if self.http_read and selection is None:
+            raise SubchatPreparationFailed('HTTP sends require an exact observed http_selection')
+        if not self.http_read and selection is not None:
+            raise SubchatPreparationFailed('HTTP selection requires the HTTP-read adapter')
+
     async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
+        self.validate_send_selection(submission.http_selection)
+        if self.http_read:
+            assert submission.http_selection is not None
+            require_http_selection(await self.http_catalog(), submission.http_selection)
         if submission.resources is not None and not self.http_read:
             raise ValueError('Resource sends require HTTP history verification')
         url = self._url(submission)
@@ -199,7 +221,8 @@ class BrowserSubchatBackend:
         return baseline
 
     async def send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
-        if submission.resources is None and self._record_request is None:
+        if (submission.resources is None and self._record_request is None
+                and submission.http_selection is None):
             return await self._send(submission)
         page = self.pages.get(submission.operation_id)
         if page is None or page.is_closed():
@@ -287,7 +310,8 @@ class BrowserSubchatBackend:
                              'recover without replay')
         # Release the caller's browser lock after one observation. An unavailable
         # receipt is durable 'sending', never permission to click Send again.
-        if submission.resources is not None or self._record_request is not None:
+        if (submission.resources is not None or self._record_request is not None
+                or submission.http_selection is not None):
             # HTTP input verification belongs to recover, not the dispatch deadline.
             return None
         return await self.find_submission(submission)

@@ -7,6 +7,7 @@ from pydantic import Field
 from .models import Contract
 from .subchat_content import SubchatResources
 from .subchat_state import (
+    SubchatHTTPSelection,
     SubchatReportedSettings,
     SubchatSubmission,
     SubchatSubmissions,
@@ -89,10 +90,11 @@ class Subchats:
                    *, owner: str | None,
                    conversation_id: str | None = None,
                    work_context: SubchatWorkContext | None = None,
-                   resources: SubchatResources | None = None) -> SubchatSubmission:
+                   resources: SubchatResources | None = None,
+                   http_selection: SubchatHTTPSelection | None = None) -> SubchatSubmission:
         submission = self.store.prepare(operation_id, prompt, model, effort, owner=owner,
                                         conversation_id=conversation_id, work_context=work_context,
-                                        resources=resources)
+                                        resources=resources, http_selection=http_selection)
         if submission.state != 'prepared':
             # A duplicate request never enters the backend again, even after restart.
             return submission
@@ -101,10 +103,14 @@ class Subchats:
     def queue(self, operation_id: str, target_operation_id: str, prompt: str,
               *, owner: str | None) -> SubchatSubmission:
         target = self.store.get(target_operation_id, owner=owner)
+        validate = getattr(self.backend, 'validate_send_selection', None)
+        if validate is not None:
+            validate(target.http_selection)
         return self.store.prepare(operation_id, prompt, target.model, target.effort, owner=owner,
                                   conversation_id=target.conversation_id,
                                   work_context=target.work_context,
-                                  after_operation_id=target_operation_id)
+                                  after_operation_id=target_operation_id,
+                                  http_selection=target.http_selection)
 
     async def _dispatch(self, submission: SubchatSubmission,
                         *, owner: str | None) -> SubchatSubmission:

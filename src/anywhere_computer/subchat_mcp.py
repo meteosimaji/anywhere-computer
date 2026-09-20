@@ -21,6 +21,7 @@ from .subchat import (
 from .subchat_content import SubchatResources
 from .subchat_state import (
     SubchatAccountMismatch,
+    SubchatHTTPSelection,
     SubchatList,
     SubchatSubmission,
     SubchatWorkContext,
@@ -34,6 +35,7 @@ class Send(Contract):
     conversation_id: str | None = None
     work_context: SubchatWorkContext | None = None
     resources: SubchatResources | None = None
+    http_selection: SubchatHTTPSelection | None = None
 
 
 class Message(Contract):
@@ -54,6 +56,13 @@ class Wait(OperationId):
 
 INSTRUCTIONS = (
     'Ordinary Chat subchats. Use an observed model and effort; never silently substitute. '
+    'HTTP-read sends require http_selection copied exactly from an available choice in '
+    'subchat_catalog source=http with http_selection_send_supported=true. A false flag '
+    'allows catalog inspection only; restart with --http-read before constrained sends. '
+    'Keep its version_id, preset_id, model_slug and explicit '
+    'thinking_effort (including null); still provide observed UI model/effort labels. '
+    'The adapter rechecks availability and rejects a different wire model or effort before '
+    'forwarding. Queue follow-ups inherit the selection; never guess IDs from labels. '
     'Choose request_id before subchat_send. Its response is a submission receipt, not a '
     'finished answer. Poll subchat_recover with operation_id equal to that send request_id. '
     'subchat_message mode=queue persists a follow-up bound to the target operation; '
@@ -282,7 +291,8 @@ def session(service: Subchats, *,
                                                 args.effort, owner=None,
                                                 conversation_id=args.conversation_id,
                                                 work_context=args.work_context,
-                                                resources=args.resources)
+                                                resources=args.resources,
+                                                http_selection=args.http_selection)
             elif request.tool in {'subchat_recover', 'subchat_status'}:
                 target = OperationId.model_validate(request.arguments)
                 if request.tool == 'subchat_status':
@@ -331,9 +341,12 @@ def session(service: Subchats, *,
         except SubchatPreparationFailed:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Adapter preparation failed before dispatch. Check for an existing '
-                               'draft, active generation or unavailable model in the dedicated '
-                               'Chat before retrying the same exact request ID; '
-                               'for a queued message, recover its existing operation instead.',
+                               'draft, active generation, missing HTTP selection or unavailable '
+                               'model in the dedicated Chat before retrying the same exact '
+                               'request ID; '
+                               'a new queue also requires its parent selection to match this '
+                               'controller. '
+                               'For an existing queued message, recover its operation instead.',
                          data={'error_code': 'preparation_failed', 'dispatched': False})
         except SubchatOutcomeUnknown as error:
             return Reply(operation_id=request.operation_id, state='unknown',
