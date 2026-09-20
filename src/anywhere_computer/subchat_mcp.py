@@ -288,7 +288,8 @@ def session(service: Subchats, *,
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Check the dedicated Chat login and account access. Saved '
                                'submissions are preserved; recover their existing IDs after '
-                               'restoring access, without sending them again.',
+                               'restoring access and restarting the subchat controller with the '
+                               'same profile and state directory, without sending them again.',
                          data={'error_code': error.code, 'automatic_retry': False})
         except SubchatInterrupted:
             return Reply(operation_id=request.operation_id, state='failed',

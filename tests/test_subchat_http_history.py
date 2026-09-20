@@ -292,6 +292,13 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
                 assert len(tab_gets) == 2  # No automatic reauthentication/retry.
                 before = len(calls)
                 status[0] = 200
+                for _ in range(3):
+                    with pytest.raises(SubchatAccessError) as repeated:
+                        await read()
+                    assert repeated.value.code == rejected.value.code
+                assert len(tab_gets) == 2 and len(calls) == before
+                # An explicitly restarted adapter can observe the repaired login.
+                backend = BrowserSubchatBackend(context, http_read=True)
                 assert await read() == first
                 assert len(tab_gets) == 4 and len(calls) == before
                 assert await read() == first
