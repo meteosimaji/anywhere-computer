@@ -93,7 +93,8 @@ async def test_backend_observes_history_without_send_or_original_tab_reload(inte
                     await r.fulfill(content_type='application/json', body=json.dumps(payload))
                 else:
                     await r.fulfill(content_type='text/html', body='<script>fetch(' +
-                        json.dumps(path) + ',{headers:{Authorization:"Bearer fixture"}})</script>')
+                        json.dumps(path) +
+                            ',{headers:{Authorization:"Bearer fixture"}})</script>')
             await context.route('https://chatgpt.com/**', route)
             backend = BrowserSubchatBackend(context, http_read=True)
             if interrupted:
@@ -178,3 +179,102 @@ async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(
     finally:
         await server.close()
         ledger.close()
+
+
+@pytest.mark.parametrize('expired_status', [401, 403])
+async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expired_status):
+    """Real APIRequestContext transport against a controlled local HTTP server."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from threading import Thread
+
+    from playwright.async_api import Error, async_playwright
+
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    submission, payload = sample()
+    status, calls, tab_gets = [200], [], []
+    path = '/backend-api/conversations/' + submission.conversation_id
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            calls.append((self.path, self.headers.get('Authorization') == 'Bearer fixture'))
+            if status[0] == 0:
+                self.connection.close()
+                return
+            self.send_response(status[0])
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Location', '/must-not-follow')
+            self.end_headers()
+            self.wfile.write(json.dumps(payload).encode())
+
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    worker = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    try:
+        async with async_playwright() as driver:
+            try:
+                browser = await driver.chromium.launch(channel='chrome', headless=True)
+            except Error as error:
+                if 'not found' in str(error) or "doesn't exist" in str(error):
+                    pytest.skip('Chrome required')
+                raise
+            try:
+                context = await browser.new_context()
+                original = await context.new_page()
+
+                async def route(r):
+                    tab_gets.append(r.request.method)
+                    if path in r.request.url:
+                        await r.fulfill(content_type='application/json', body=json.dumps(payload))
+                    else:
+                        await r.fulfill(content_type='text/html', body='<script>fetch(' +
+                            json.dumps(path) +
+                            ',{headers:{Authorization:"Bearer fixture"}})</script>')
+
+                await context.route('https://chatgpt.com/**', route)
+                request = context.request
+                real_get = request.get
+
+                async def local_get(url, **kwargs):
+                    assert url == 'https://chatgpt.com' + path
+                    assert kwargs['max_redirects'] == kwargs['max_retries'] == 0
+                    return await real_get(f'http://127.0.0.1:{server.server_port}' + path, **kwargs)
+
+                monkeypatch.setattr(request, 'get', local_get)
+                backend = BrowserSubchatBackend(context, http_read=True)
+                first = await backend.read_answer(submission)
+                for _ in range(2):
+                    assert await backend.read_answer(submission) == first
+                assert tab_gets == ['GET', 'GET']  # Only the initial bootstrap navigated.
+                assert calls == [(path, True)] * 2
+                for failure in (302, 429, 500, 0):
+                    status[0] = failure
+                    before = len(calls)
+                    with pytest.raises(Error if failure == 0 else ConnectionError):
+                        await backend.read_answer(submission)
+                    assert len(calls) == before + 1  # No redirects or automatic retries.
+                    assert len(tab_gets) == 2
+                status[0] = 200
+                assert await backend.read_answer(submission) == first
+                assert len(tab_gets) == 2  # Transport recovery stays HTTP-only.
+                status[0] = expired_status
+                with pytest.raises(ConnectionError):
+                    await backend.read_answer(submission)
+                assert len(tab_gets) == 2  # No automatic reauthentication/retry.
+                before = len(calls)
+                status[0] = 200
+                assert await backend.read_answer(submission) == first
+                assert len(tab_gets) == 4 and len(calls) == before
+                assert await backend.read_answer(submission) == first
+                assert len(tab_gets) == 4 and len(calls) == before + 1
+                assert all(call == (path, True) for call in calls)
+                assert context.pages == [original] and original.url == 'about:blank'
+            finally:
+                await browser.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join()

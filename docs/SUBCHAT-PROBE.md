@@ -848,11 +848,24 @@ operation on every browser/OS.
 
 ### Experimental saved HTTP answer recovery
 
-`anywhere-subchat --http-read --browser-profile … --state-dir … [--mcp]`
-uses the dedicated browser application's own conversation-history GET when
-recovering a submitted answer. It neither replays generation nor copies login
-credentials. The owned observation tab is closed within a bounded cleanup;
-existing submission tabs are not reloaded. This remains browser-mediated.
+`anywhere-subchat --http-read --minimized --browser-profile … --state-dir … [--mcp]`
+bootstraps from the dedicated browser application's authenticated conversation-history
+GET. It retains only the observed authorization header in process memory, bound
+to that browser context; cookies remain managed by the context. Subsequent reads
+use the context's HTTP client without opening tabs, navigating or inspecting DOM.
+No credentials are written to the ledger, exported, or returned to the caller.
+The initial owned observation tab is closed with bounded cleanup; existing
+submission tabs are not reloaded. This is a browser-session-backed HTTP reader,
+not a browser-independent login client or a public provider API.
+
+Only the fixed HTTPS conversation-history GET is requested. Redirects and
+transport retries are disabled. A 401/403 clears the cached header and fails the
+current read; the next explicit recovery re-observes the application's login.
+Other failures do not cause a generation replay or automatic browser fallback.
+The overall read remains bounded and response objects are disposed after use.
+`--minimized` verifies OS window minimization before page work, using the existing
+minimization helper. If verification fails, no Chat page work starts. Initial
+window creation may still briefly show on some desktops; it is not headless mode.
 
 The response must identify the exact conversation and original user message,
 match the original prompt, and provide matching request, exchange and working
@@ -872,3 +885,19 @@ but had `finish_details={type: interrupted, reason: client_stopped}`. Normal
 answers had finish type `stop`. User and assistant `turn_id` differed; their
 request/exchange/working-turn identifiers matched. This is provider observation,
 not authenticated child identity or an official API stability guarantee.
+
+
+Live production-reader acceptance (2026-09-20): an existing ordinary Chat's
+`AC_MODEL_EFFORT_20260920` final answer and exact message ID were recovered via
+`BrowserSubchatBackend(http_read=True)`. After initial bootstrap the test forbade
+`context.new_page`; two further reads still returned the identical result and
+left the page count unchanged. This used the logged-in dedicated Chrome profile
+with its window minimized, not a fixture or the normal user Chrome profile.
+It verifies saved-answer retrieval, not HTTP generation dispatch or uninterrupted
+operation across all future provider changes. Controlled real HTTP transport tests
+separately cover redirect refusal, authorization expiry and explicit rebootstrap.
+
+The actual `anywhere-subchat --http-read --minimized` CLI was also run in a fresh
+isolated ledger against that saved conversation. It returned `completed`, the
+exact answer text, and exit 0. The repeated-read regression fails on pre-change
+source because every recovery navigates; it passes with the HTTP reader.

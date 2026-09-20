@@ -93,7 +93,8 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         destination.flush()
 
 
-async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool = False) -> None:
+async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool = False,
+              minimized: bool = False) -> None:
     from .subchat_browser.backend import BrowserSubchatBackend
 
     ledger = Ledger(state)
@@ -108,8 +109,20 @@ async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool 
                 if driver is None:
                     driver = await resources.enter_async_context(async_playwright())
                 context = await driver.chromium.launch_persistent_context(
-                    str(profile), channel='chrome', headless=False)
+                    str(profile), channel='chrome', headless=False,
+                    args=['--start-minimized'] if minimized else [])
                 resources.push_async_callback(context.close)
+                if minimized:
+                    from .subchat_browser.catalog import minimize_window
+
+                    page = context.pages[0] if context.pages else await context.new_page()
+                    cdp = await context.new_cdp_session(page)
+                    try:
+                        window = await cdp.send('Browser.getWindowForTarget')
+                        if not await minimize_window(cdp, window['windowId']):
+                            raise ConnectionError('Browser minimization was not confirmed')
+                    finally:
+                        await cdp.detach()
                 return context
 
             backend = BrowserSubchatBackend(open_browser, http_read=http_read)
@@ -141,6 +154,8 @@ def main() -> None:
     parser.add_argument("--mcp", action="store_true", help="Serve MCP over stdio")
     parser.add_argument('--http-read', action='store_true',
                         help='Read saved answers through observed browser HTTP history')
+    parser.add_argument('--minimized', action='store_true',
+                        help='Verify the dedicated Chrome window is minimized before page work')
     args = parser.parse_args()
     asyncio.run(run(args.browser_profile.resolve(), args.state_dir.resolve(),
-                    mcp=args.mcp, http_read=args.http_read))
+                    mcp=args.mcp, http_read=args.http_read, minimized=args.minimized))

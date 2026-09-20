@@ -16,7 +16,7 @@ from anywhere_computer.subchat_state import SubchatSubmission
 
 from .catalog import CONTROL, SOURCE, TOGGLE, TRIGGER, collect_http_page, collect_page, picker_ready
 from .efforts import move_effort, snapshot
-from .history import collect_history
+from .history import HistoryReader
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Page
@@ -31,6 +31,7 @@ class BrowserSubchatBackend:
     def __init__(self, context: BrowserContext | Callable[[], Awaitable[BrowserContext]],
                  *, http_read: bool = False) -> None:
         self.http_read = http_read
+        self._history = HistoryReader()
         self._context = None if callable(context) else context
         self._create_context = context if callable(context) else None
         self._context_lock = asyncio.Lock()
@@ -237,14 +238,8 @@ class BrowserSubchatBackend:
                     or CHAT.fullmatch(
                         'https://chatgpt.com/c/' + submission.conversation_id) is None):
                 return None
-            observation = None
-            try:
-                async with asyncio.timeout(20):
-                    observation = await (await self._browser()).new_page()
-                    return await collect_history(observation, submission)
-            finally:
-                if observation is not None:
-                    await asyncio.wait_for(observation.close(), timeout=5)
+            async with asyncio.timeout(20):
+                return await self._history.read(await self._browser(), submission)
         page = await self._page(submission)
         if page is None or submission.user_message_id is None:
             return None
