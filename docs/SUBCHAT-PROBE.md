@@ -1259,3 +1259,11 @@ older concurrently running writer does not gain these checks automatically.
 Tests reproduce the original duplicate claim and race two real SQLite connections
 in separate threads. Exactly one receipt claim succeeds, including owner=None.
 This is storage concurrency evidence, not a live Chat misdelivery reproduction.
+
+Closed-context diagnosis also applies before a new conversation ID is known.
+An existing closed context returns browser_closed, while the durable sending
+record is unchanged. A fresh adapter with no context and no conversation ID
+still returns an unconfirmed observation without launching Chrome, searching
+history or resending. Isolated real-Chrome tests cover context/browser closure
+both before and after receipt identity; the pre-identity cases failed before
+this correction. This does not solve manual reconciliation after pre-ID crashes.
