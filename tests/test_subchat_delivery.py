@@ -215,3 +215,37 @@ async def test_cancelled_input_is_terminal_for_mcp_wait_and_cli(tmp_path):
             await dispatch(service, Command(action='cancel', operation_id=operation, prompt='edit'))
     finally:
         ledger.close()
+
+
+async def test_cancel_while_parent_is_observed_does_not_prepare_child(tmp_path):
+    import asyncio
+
+    observing, release = asyncio.Event(), asyncio.Event()
+
+    class SlowObservation(Provider):
+        async def read_answer(self, submission):
+            observing.set()
+            await release.wait()
+            return await super().read_answer(submission)
+
+    ledger = Ledger(tmp_path)
+    provider = SlowObservation()
+    provider.finished = True
+    service = Subchats(SubchatSubmissions(ledger.connection), provider)
+    parent, message = 'd' * 32, 'e' * 32
+    await service.send(parent, 'first', 'model', 'effort', owner=None)
+    service.queue(message, parent, 'next', owner=None)
+    task = asyncio.create_task(service.recover(message, owner=None))
+    try:
+        await asyncio.wait_for(observing.wait(), timeout=5)
+        service.store.cancel(message, owner=None)
+        release.set()
+        assert (await task).state == 'cancelled'
+        assert provider.prepares == [parent]
+        assert provider.sends == [parent]
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        ledger.close()
