@@ -430,3 +430,42 @@ async def test_unknown_conversation_recovery_does_not_launch_browser():
 
     backend = BrowserSubchatBackend(forbidden_factory, http_read=True)
     assert await backend.find_submission(unknown) is None
+
+
+@pytest.mark.parametrize('status', [401, 403])
+async def test_bootstrap_access_rejection_does_not_reopen_tabs(status):
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+
+    class Page:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class Context:
+        def __init__(self):
+            self.pages = []
+
+        async def new_page(self):
+            page = Page()
+            self.pages.append(page)
+            return page
+
+    observations = []
+
+    async def observe(page):
+        observations.append(page)
+        raise SubchatAccessError(status)
+
+    reader, context = ChatHTTPReader(), Context()
+    for _ in range(3):
+        with pytest.raises(SubchatAccessError) as rejected:
+            await reader._read(context, None, observe)
+        assert rejected.value.status == status
+    assert len(observations) == len(context.pages) == 1
+    assert context.pages[0].closed
+    # Explicitly replacing the connection permits a fresh login observation.
+    replacement = Context()
+    with pytest.raises(SubchatAccessError):
+        await reader._read(replacement, None, observe)
+    assert len(observations) == 2 and replacement.pages[0].closed
