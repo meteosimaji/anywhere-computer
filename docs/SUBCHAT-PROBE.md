@@ -850,8 +850,8 @@ operation on every browser/OS.
 
 `anywhere-subchat --http-read --minimized --browser-profile … --state-dir … [--mcp]`
 bootstraps from the dedicated browser application's authenticated conversation-history
-GET. It retains only the observed authorization header in process memory, bound
-to that browser context; cookies remain managed by the context. Subsequent reads
+GET. It retains the observed authorization, account and language headers in
+process memory, bound to that browser context; cookies remain managed by the context. Subsequent reads
 use the context's HTTP client without opening tabs, navigating or inspecting DOM.
 No credentials are written to the ledger, exported, or returned to the caller.
 The initial owned observation tab is closed with bounded cleanup; existing
