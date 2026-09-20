@@ -56,10 +56,10 @@ INSTRUCTIONS = (
     'current saved state; '
     'a pending result can be waited on again without stopping generation. '
     'subchat_status reads the saved record without browser interaction. '
-    'prepared means not sent; preparation_failed requires correcting preparation and '
-    'retrying the same exact send request ID. Sending means receipt unconfirmed, '
-    'not proof of delivery: recover it, never click Send again. Only submitted/completed '
-    'confirm a matching message receipt; completed also includes the answer. '
+    'prepared means this adapter has not dispatched; external/manual sends are not tracked. '
+    'After correcting preparation, reconcile the visible Chat before retrying the same ID. '
+    'sending means receipt unconfirmed: recover it, never click Send again. '
+    'Only submitted/completed confirm a matching message receipt; completed includes the answer. '
     'If a new Chat remains sending without a conversation_id after process loss, '
     'automatic recovery may be impossible: preserve unknown and reconcile manually; '
     'never scan unrelated history or resend to manufacture a receipt. '
@@ -256,9 +256,9 @@ def session(service: Subchats, *,
                          data={'error_code': 'stale_target', 'dispatched': False})
         except SubchatPreparationFailed:
             return Reply(operation_id=request.operation_id, state='failed',
-                         error='Message not sent: preparation failed. Correct preparation '
-                               'before retrying the same exact request ID; for a queued '
-                               'message, recover its existing operation instead.',
+                         error='Adapter preparation failed before dispatch. Inspect the existing '
+                               'Chat before retrying the same exact request ID; '
+                               'for a queued message, recover its existing operation instead.',
                          data={'error_code': 'preparation_failed', 'dispatched': False})
         except SubchatOutcomeUnknown:
             return Reply(operation_id=request.operation_id, state='unknown',
