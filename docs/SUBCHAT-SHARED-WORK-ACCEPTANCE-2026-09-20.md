@@ -79,6 +79,36 @@ The later reload trace was truncated and cannot establish the auth refresh
 sequence. A completed SSE response-body lookup returned no data; this trial
 does not establish standalone SSE body parsing or browser-free auth renewal.
 
+A subsequent targeted response-body capture succeeded for
+`/backend-api/models`: 21 model entries, three version groups and their
+intelligence presets. The captured mapping distinguished Latest/Pro from
+5.6/Pro, and exposed per-model `is_work_mode_model` and thinking efforts.
+These are dated account-specific observations, not hardcoded supported models.
+Using the exact observed catalog URL (including the same query parameters),
+two read-only in-origin HTTP trials returned 200: cookies without an explicit
+Authorization header yielded six model entries; adding the Authorization from
+this same session's observed request yielded 21, including both Pro versions.
+No token values were printed or persisted. This demonstrates an authenticated
+catalog GET, not browser-independent login/refresh or authenticated generation
+replay. Do not mistake a 200 response with a reduced public catalog for the full
+account catalog. `/backend-api/tpp/models/` was also observed returning JSON
+200; its semantics were not established by this trial.
+
+The separate external app-MCP preflight found a provided live endpoint, but
+the actual subprocess catalog call failed with RPC -32603. In-app `read_thread`
+succeeded as described above. Keep these two connection outcomes separate;
+there is no verified standalone readback bridge yet.
+
+The existing readback probe now retries only `ConnectionError` within its
+bounded read window, preserving exact message identity and returning unknown
+without resend on exhaustion. Empty projections and Thinking remain pending;
+permission/RPC errors propagate. Its matcher also accepts caller-supplied known
+interrupted message IDs, preventing a stopped turn's completed projection from
+being promoted. This is a readback helper contract, not automatic detection of
+unobserved user stops or a new production stop endpoint. Controlled regressions
+cover disconnect -> empty -> Thinking -> answer, permanent disconnect, known
+stop, and permission errors.
+
 `scripts/probe_subchat_transport.py` attaches only to one exact existing Chat
 tab over an existing loopback CDP endpoint. It observes at most 300 seconds,
 retains bounded allowlisted metadata and reports dropped events. It does not

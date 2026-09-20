@@ -152,6 +152,55 @@ def test_identity_selectors_are_exclusive():
         probe.matching_reply(snapshot(), "chat", "old", "new request", submitted_user_id="new")
 
 
+async def test_read_disconnect_empty_projection_and_thinking_recover_without_resend():
+    values = iter([ConnectionResetError('private peer text'), {}, snapshot(status='active'),
+                   snapshot()])
+
+    async def read():
+        value = next(values)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    result = await probe.wait_for_reply(read, 'chat', None, 'new request', 1, .001,
+                                        submitted_user_id='new')
+    assert result == {'state': 'reply_observed', 'read_attempts': 4,
+                      'connection_failures': 1, 'user_message_id': 'new',
+                      'answer_message_id': 'new-answer', 'text': '42'}
+
+
+async def test_known_stop_overrides_completed_projection_without_reading():
+    assert probe.matching_reply(snapshot(), 'chat', None, 'new request',
+                                submitted_user_id='new',
+                                interrupted_user_ids=frozenset({'new'})) is None
+
+    async def forbidden_read():
+        raise AssertionError('Known stopped submission must not be promoted by readback')
+
+    assert await probe.wait_for_reply(
+        forbidden_read, 'chat', None, 'new request', 1,
+        submitted_user_id='new', interrupted_user_ids=frozenset({'new'}),
+    ) == {'state': 'reply_interrupted', 'read_attempts': 0, 'resend': False}
+
+
+async def test_persistent_disconnect_is_unknown_and_auth_errors_are_not_retried():
+    async def disconnected():
+        raise ConnectionError('sensitive error detail')
+
+    result = await probe.wait_for_reply(disconnected, 'chat', None, 'new request', .01, .001,
+                                        submitted_user_id='new')
+    assert result['state'] == 'reply_unconfirmed' and result['resend'] is False
+    assert result['connection_failures'] == result['read_attempts'] >= 1
+    assert 'text' not in result
+
+    async def unauthorized():
+        raise PermissionError('access denied')
+
+    with pytest.raises(PermissionError):
+        await probe.wait_for_reply(unauthorized, 'chat', None, 'new request', 1,
+                                   submitted_user_id='new')
+
+
 @pytest.mark.parametrize("state", ["missing_answer", "failed", "truncated_answer"])
 def test_duplicate_prompt_is_ambiguous_even_if_only_one_answer_is_usable(state):
     import copy
