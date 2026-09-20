@@ -1132,3 +1132,31 @@ retrieval feature. The Codex read parity above returned user/final messages, not
 an internal reasoning trace. Generation still uses browser-assisted preparation;
 HTTP history reads and a CLI/MCP send interface do not establish a browser-free
 independent generation client.
+
+### Upstream waiting/recovery review, 2026-09-20
+
+The latest CoS commit observed through GitHub was
+[`04c6a298`](https://github.com/totec448-spec/chat-on-steroids/commit/04c6a298078817cf25c197f2b8bb639f8239243c).
+This refresh read the current issue bodies; it is not a fresh full-code audit of
+that commit. Earlier source-audit findings remain scoped to their pinned versions.
+
+- [#327](https://github.com/totec448-spec/chat-on-steroids/issues/327) reports a
+  stale waiting state after interruption. Anywhere independently reproduced its
+  own concrete variant: cancelled Thinking without a final message was pending.
+  The correlated cancellation projection above fixes that observed variant; it
+  does not claim to fix every stale-session cause described upstream.
+- [#326](https://github.com/totec448-spec/chat-on-steroids/issues/326) reports
+  indefinitely queued follow-ups. Anywhere preserves queued work when its parent
+  is interrupted and returns `reply_interrupted` on recovery rather than sending
+  it automatically. Broader queue diagnostics and explicit reconciliation remain
+  separate work; no age-based resend or assumed delivery is introduced.
+- [#336](https://github.com/totec448-spec/chat-on-steroids/issues/336) reports hours
+  of repeated browser recovery without execution progress. Keep HTTP reads bounded
+  and distinguish transport failure, unknown generation, and provider cancellation.
+  Do not copy automatic reload/retry loops or equate recovery attempts with task
+  progress. The reporter explicitly leaves the upstream root cause unresolved.
+
+These reports reinforce existing contracts rather than justify another task
+runtime. The accepted change reuses the current HTTP reader, interruption result,
+CLI/MCP mapping and queue guard. No upstream code or automatic restart watchdog
+was copied.
