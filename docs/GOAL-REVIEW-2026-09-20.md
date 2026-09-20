@@ -74,8 +74,9 @@ The broader PTY/ConPTY, native GUI, browser-provider, onboarding and durable-tas
 roadmap remains tracked work, not evidence of this goal's completion. Do not
 silently discard those requests or turn every new upstream feature into a release
 gate. Complete the selected subchat/context/recovery work before opening another
-orchestration framework. Review upstream at pinned revisions; current observed
-CoS main is `8f76ccc790917b01ee758da6687a1cf9b576ba8a`.
+orchestration framework. Review upstream at pinned revisions; the initial review
+pinned CoS at `8f76ccc790917b01ee758da6687a1cf9b576ba8a`. The later review
+below pins the newer main separately.
 
 No completion percentage or delivery date is established by test counts. The
 largest remaining gap is production integration and end-to-end acceptance, not
@@ -115,3 +116,42 @@ Persistent product work-context binding remains unimplemented. Per the clarified
 acceptance policy, deterministic real MCP/HTTP tests are the functional gate;
 live Chat trials supplement them. A model-reported rejection is not an established
 root cause or, on its own, proof of a plugin defect.
+
+
+## Follow-up comparison and HTTP acceptance (2026-09-20)
+
+The GitHub main endpoint and the local upstream ref both identified
+[`04c6a298078817cf25c197f2b8bb639f8239243c`](https://github.com/totec448-spec/chat-on-steroids/commit/04c6a298078817cf25c197f2b8bb639f8239243c),
+merged by [CoS PR 332](https://github.com/totec448-spec/chat-on-steroids/pull/332).
+This is a source comparison, not an independent execution of CoS's reported tests.
+
+| Upstream change | Anywhere decision and evidence |
+| --- | --- |
+| Delayed-final queue binds the exact source conversation/turn, rather than rejecting a late event using its old timestamp | Preserve the existing operation-bound queue. `SubchatSubmissions` persists `after_operation_id` and `expected_last_user_message_id`; `test_queue_restart_pending_completion_and_lost_receipt` verifies completion after reopening the ledger and no resend after a lost receipt. No parallel timestamp-based queue was added. This is not evidence that all of upstream issue 327 is resolved. |
+| Only an actual tunnel control-plane rejection invalidates credentials | Preserve the principle, do not port the provider-specific regex. Anywhere's `cloudflare_tunnel.run_tunnel_child` discards provider logs and reports exit/connector errors separately; it does not classify arbitrary log text containing 401/403. Public reachability remains explicitly unverified after credential handoff. |
+| Background rendering custody and live shell recording | Do not copy Chrome-companion/document-custody machinery into the HTTP reader. PR 96 instead reduces repeated page work to HTTP GET after authenticated bootstrap. Initial bootstrap and generation still require separate browser integration. |
+| Provider-specific model/Pro selection | Do not adopt model-name defaults. Retain observed model/effort discovery and exact selection, including the distinction between versioned 5.6 Pro and latest Pro. |
+
+CoS's own `docs/worklog-2026-09-20-delayed-final-queue.md` distinguishes synthetic
+production-bridge event-order tests from the reporter's unverified live acceptance.
+Anywhere keeps the same distinction in its evidence; upstream test counts are not
+Anywhere acceptance results.
+
+[PR 95](https://github.com/meteosimaji/anywhere-computer/pull/95) merged as
+`fe4c5a5` after all five CI jobs passed. It correlates saved HTTP answers to the
+exact original input and refuses interrupted success-looking output. The
+separate [PR 96](https://github.com/meteosimaji/anywhere-computer/pull/96) adds
+HTTP-only repeated retrieval and optional verified window minimization. At this
+record's creation PR 96 CI and main integration were still pending.
+
+PR 96's live production reader retrieved the known final text and exact answer
+ID, then repeated retrieval twice with new-page creation forbidden. The actual
+CLI also returned the exact answer and exit 0 in an isolated ledger. Controlled
+real HTTP transport tests cover disconnect, 302, 429, 500 and 401/403; these do not
+claim a real account was logged out or rate-limited. Final combined subchat and
+package verification passed 129 tests; Ruff and mypy passed. The prior source
+fails the repeated-navigation regression. Installed runtime was not replaced.
+
+Remaining HTTP work is generation dispatch, model-change/stop contracts,
+streaming-result recovery and authenticated lifecycle acceptance across process
+and login changes. Saved-answer HTTP recovery is not proof that these are done.
