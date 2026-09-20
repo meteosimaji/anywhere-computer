@@ -32,7 +32,9 @@ class SubchatSubmission(Contract):
     prompt: str = Field(min_length=1, max_length=100_000)
     model: str = Field(min_length=1, max_length=256)
     effort: str = Field(min_length=1, max_length=256)
-    state: Literal['queued', 'prepared', 'sending', 'submitted', 'completed'] = 'prepared'
+    state: Literal[
+        'queued', 'prepared', 'sending', 'submitted', 'completed', 'cancelled'
+    ] = 'prepared'
     after_operation_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
     expected_last_user_message_id: str | None = None
     requested_conversation_id: str | None = None
@@ -119,6 +121,15 @@ class SubchatSubmissions:
             if cursor.rowcount != 1:
                 raise ValueError('Subchat submission changed; inspect it before continuing')
         return new
+
+    def cancel(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
+        """Cancel only a not-yet-reserved submission, never stop a provider turn."""
+        old = self.get(operation_id, owner=owner)
+        if old.state == 'cancelled':
+            return old
+        if old.state not in {'queued', 'prepared'}:
+            raise ValueError('Submission may already be dispatched; cancellation is unavailable')
+        return self._replace(old, old.model_copy(update={'state': 'cancelled'}), owner)
 
     def begin_send(self, operation_id: str, *, owner: str | None,
                    conversation_id: str | None = None,

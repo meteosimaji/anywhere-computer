@@ -72,6 +72,9 @@ class Subchats:
 
     async def _dispatch(self, submission: SubchatSubmission,
                         *, owner: str | None) -> SubchatSubmission:
+        submission = self.store.get(submission.operation_id, owner=owner)
+        if submission.state not in {'prepared', 'queued'}:
+            return submission
         baseline = await self.backend.prepare(submission)
         submission = self.store.begin_send(submission.operation_id, owner=owner,
                                            baseline_message_ids=baseline)
@@ -97,7 +100,7 @@ class Subchats:
             if target.state != 'completed':
                 return submission
             return await self._dispatch(submission, owner=owner)
-        if submission.state in {'prepared', 'completed'}:
+        if submission.state in {'prepared', 'completed', 'cancelled'}:
             return submission
         if submission.state == 'sending':
             receipt = await self.backend.find_submission(submission)

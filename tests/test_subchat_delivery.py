@@ -138,3 +138,114 @@ async def test_two_dispatchers_do_not_send_same_queued_message_twice(tmp_path):
     finally:
         first.close()
         second.close()
+
+
+async def test_cancel_during_preparation_prevents_dispatch_and_survives_restart(tmp_path):
+    import asyncio
+
+    preparing, release = asyncio.Event(), asyncio.Event()
+
+    class PreparingProvider(Provider):
+        async def prepare(self, submission):
+            preparing.set()
+            await release.wait()
+            return ()
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    provider = PreparingProvider()
+    service = Subchats(store, provider)
+    parent, message = '8' * 32, '9' * 32
+    store.prepare(parent, 'first', 'model', 'effort', owner='peer', conversation_id='chat')
+    store.begin_send(parent, owner='peer')
+    store.submitted(parent, 'chat', 'parent-user', owner='peer')
+    store.complete(parent, 'answer', '42', owner='peer')
+    service.queue(message, parent, 'next', owner='peer')
+    task = asyncio.create_task(service.recover(message, owner='peer'))
+    try:
+        await asyncio.wait_for(preparing.wait(), timeout=5)
+        with pytest.raises(ValueError, match='Unknown'):
+            store.cancel(message, owner='other')
+        assert store.cancel(message, owner='peer').state == 'cancelled'
+        release.set()
+        with pytest.raises(ValueError, match='without resending'):
+            await task
+        assert provider.sends == []
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        ledger.close()
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        service = Subchats(store, provider)
+        assert store.cancel(message, owner='peer').state == 'cancelled'
+        assert (await service.recover(message, owner='peer')).state == 'cancelled'
+        assert service.queue(message, parent, 'next', owner='peer').state == 'cancelled'
+        assert provider.sends == []
+        with pytest.raises(ValueError, match='dispatched'):
+            store.cancel(parent, owner='peer')
+    finally:
+        ledger.close()
+
+
+async def test_cancelled_input_is_terminal_for_mcp_wait_and_cli(tmp_path):
+    from anywhere_computer.subchat_cli import Command, dispatch
+
+    ledger = Ledger(tmp_path)
+    provider = Provider()
+    service = Subchats(SubchatSubmissions(ledger.connection), provider)
+    operation = 'a' * 32
+    service.store.prepare(operation, 'pending', 'model', 'effort', owner=None)
+    server = session(service)
+    try:
+        cancelled = await server.execute(Request(operation_id='b' * 32, tool='subchat_cancel',
+                                                 arguments={'operation_id': operation}))
+        assert cancelled.data['state'] == 'cancelled'
+        waited = await server.execute(Request(operation_id='c' * 32, tool='subchat_wait',
+                                               arguments={'operation_id': operation}))
+        assert waited.data['state'] == 'cancelled'
+        result = await dispatch(service, Command(action='cancel', operation_id=operation))
+        assert '"state":"cancelled"' in result
+        assert provider.prepares == []
+        assert provider.sends == []
+        with pytest.raises(ValueError, match='only an operation identity'):
+            await dispatch(service, Command(action='cancel', operation_id=operation, prompt='edit'))
+    finally:
+        ledger.close()
+
+
+async def test_cancel_while_parent_is_observed_does_not_prepare_child(tmp_path):
+    import asyncio
+
+    observing, release = asyncio.Event(), asyncio.Event()
+
+    class SlowObservation(Provider):
+        async def read_answer(self, submission):
+            observing.set()
+            await release.wait()
+            return await super().read_answer(submission)
+
+    ledger = Ledger(tmp_path)
+    provider = SlowObservation()
+    provider.finished = True
+    service = Subchats(SubchatSubmissions(ledger.connection), provider)
+    parent, message = 'd' * 32, 'e' * 32
+    await service.send(parent, 'first', 'model', 'effort', owner=None)
+    service.queue(message, parent, 'next', owner=None)
+    task = asyncio.create_task(service.recover(message, owner=None))
+    try:
+        await asyncio.wait_for(observing.wait(), timeout=5)
+        service.store.cancel(message, owner=None)
+        release.set()
+        assert (await task).state == 'cancelled'
+        assert provider.prepares == [parent]
+        assert provider.sends == [parent]
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        ledger.close()
