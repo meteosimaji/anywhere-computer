@@ -3,7 +3,11 @@ import json
 
 import pytest
 
-from anywhere_computer.subchat import SubchatAccessError, SubchatInterrupted
+from anywhere_computer.subchat import (
+    SubchatAccessError,
+    SubchatBrowserClosed,
+    SubchatInterrupted,
+)
 from anywhere_computer.subchat_browser.history import project_history
 from anywhere_computer.subchat_state import SubchatSubmission
 
@@ -143,6 +147,7 @@ async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path):
 
 
 @pytest.mark.parametrize('failure, code', [(SubchatInterrupted, 'reply_interrupted'),
+    (SubchatBrowserClosed, 'browser_closed'),
     (lambda _: SubchatAccessError(401), 'authentication_required'),
     (lambda _: SubchatAccessError(403), 'access_denied')])
 async def test_interruption_is_distinct_in_cli_and_mcp_without_provider_details(
@@ -326,3 +331,49 @@ def test_cancelled_thinking_without_final_or_local_stop_receipt(case):
             project_history(json.dumps(payload).encode(), submission)
     else:
         assert project_history(json.dumps(payload).encode(), submission) is None
+
+
+@pytest.mark.parametrize('close_browser', [False, True])
+async def test_user_close_preserves_submission_without_relaunch(tmp_path, close_browser):
+    from playwright.async_api import async_playwright
+
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    saved, _ = sample()
+    ledger = Ledger(tmp_path)
+    async with async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        context = await browser.new_context()
+        launches = 0
+
+        async def factory():
+            nonlocal launches
+            launches += 1
+            return context
+
+        backend = BrowserSubchatBackend(factory, http_read=True)
+        store = SubchatSubmissions(ledger.connection)
+        store.prepare(saved.operation_id, saved.prompt, saved.model, saved.effort,
+                      owner=None, conversation_id=saved.conversation_id)
+        store.begin_send(saved.operation_id, owner=None)
+        store.submitted(saved.operation_id, saved.conversation_id, saved.user_message_id,
+                        owner=None)
+        before = store.get(saved.operation_id, owner=None)
+        try:
+            await backend._browser()
+            if close_browser:
+                await browser.close()
+            else:
+                await context.close()
+            service = Subchats(store, backend)
+            for _ in range(2):
+                with pytest.raises(SubchatBrowserClosed):
+                    await service.recover(saved.operation_id, owner=None)
+            assert launches == 1
+            assert store.get(saved.operation_id, owner=None) == before
+        finally:
+            await browser.close()
+            ledger.close()

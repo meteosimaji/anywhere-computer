@@ -46,6 +46,10 @@ class SubchatAccessError(ConnectionError):
         super().__init__(self.code)
 
 
+class SubchatBrowserClosed(ConnectionError):
+    """The dedicated browser closed; saved operations must not be replayed."""
+
+
 class SubchatInterrupted(ValueError):
     """The provider recorded interruption; partial output is not a completed answer."""
 

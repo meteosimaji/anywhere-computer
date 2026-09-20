@@ -11,6 +11,7 @@ from .mcp_server import Execute, MCPSession
 from .models import Contract, OperationId, Reply, Request
 from .subchat import (
     SubchatAccessError,
+    SubchatBrowserClosed,
     SubchatInterrupted,
     SubchatOutcomeUnknown,
     SubchatPreparationFailed,
@@ -277,6 +278,12 @@ def session(service: Subchats, *,
                     return Reply(operation_id=request.operation_id, state='completed',
                                  data=current.model_dump(mode='json'))
             raise
+        except SubchatBrowserClosed:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='The dedicated browser closed. Restart the subchat controller '
+                               'with the same saved state and profile, then recover existing '
+                               'operation IDs. Do not resend unconfirmed submissions.',
+                         data={'error_code': 'browser_closed', 'automatic_retry': False})
         except SubchatAccessError as error:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Check the dedicated Chat login and account access. Saved '
