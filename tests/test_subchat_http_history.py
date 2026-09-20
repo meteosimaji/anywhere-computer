@@ -293,3 +293,30 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(monkeypatch, expire
         server.shutdown()
         server.server_close()
         worker.join()
+
+
+@pytest.mark.parametrize('case', ['cancelled', 'other_request', 'not_terminal', 'unknown',
+                                  'wrong_type', 'missing_binding'])
+def test_cancelled_thinking_without_final_or_local_stop_receipt(case):
+    submission, payload = sample()
+    user, recap = payload['messages']
+    recap['channel'] = None
+    recap['content'] = {'content_type': 'reasoning_recap'}
+    recap['metadata'].pop('finish_details')
+    recap['metadata'].pop('is_complete')
+    recap['metadata']['reasoning_status'] = 'reasoning_cancelled'
+    if case == 'other_request':
+        recap['metadata']['request_id'] = 'other'
+    elif case == 'not_terminal':
+        recap['end_turn'] = False
+    elif case == 'unknown':
+        recap['metadata']['reasoning_status'] = 'future_status'
+    elif case == 'wrong_type':
+        recap['content']['content_type'] = 'thoughts'
+    elif case == 'missing_binding':
+        del user['metadata']['request_id']
+    if case == 'cancelled':
+        with pytest.raises(SubchatInterrupted):
+            project_history(json.dumps(payload).encode(), submission)
+    else:
+        assert project_history(json.dumps(payload).encode(), submission) is None

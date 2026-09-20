@@ -1103,10 +1103,28 @@ Thinking-stop attempt `b01574a65bae4628a05cf5daf03e1ece` had already completed
 before the stop precondition was checked, so it does not count as a successful
 Thinking-stop acceptance. No stop was issued against its completed answer.
 
-Current `project_history` recognizes interruption from a correlated final message's
-`finish_details.type`. If the provider stores no final message at all, that parser
-cannot yet distinguish stopped Thinking from pending generation. A separate
-observed terminal-state contract is needed before promising that distinction.
+A subsequent extreme-effort probe (`b56ee050fb644435b9bd2e54e5efa644`,
+conversation `6aafe834-c5b4-83ee-aec2-c77786d2101c`) stopped while the public UI
+showed Thinking and no final answer. An HTTP POST to the observed stop endpoint
+returned 200; no Stop-button click was used. Fresh HTTP history contained an
+assistant `reasoning_recap` with `end_turn=true` and
+`reasoning_status=reasoning_cancelled`, matching the saved user's request,
+exchange, and working-turn IDs. No final message existed. The owning Codex MCP
+reader independently returned the same user ID
+`38b3ba0c-729e-44be-b445-be6f3f87488f`, idle/completed, and no assistant answer.
+Codex's completed turn therefore does not establish a completed answer, nor does
+idle alone establish cancellation.
+
+The original parser left this case pending. The corrected HTTP projection reports
+`SubchatInterrupted` using the explicit correlated cancellation marker, without
+requiring a local stop receipt or reading reasoning text. Fresh HTTP history from
+the stopped conversation passed this check. Controlled regressions also reject
+unrelated requests, missing identity, nonterminal recaps, unknown statuses, and
+other content types. This supports detecting provider-recorded cancellation even
+when a local stop receipt is absent; a human clicking Stop during Thinking has
+not been separately exercised in this probe. The public provider-stop command is
+still not implemented. Unknown/missing terminal evidence remains unresolved and
+must not trigger automatic resending.
 
 The supported output is final text. Visible progress summaries are a different,
 not-yet-exposed output contract; nonpublic chain-of-thought is not a supported

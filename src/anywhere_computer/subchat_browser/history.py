@@ -76,9 +76,17 @@ def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAns
                       and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
     if len(matching_users) != 1:
         return None  # Provider correlation must not identify multiple input messages.
-    answers = [message for message in history.messages
-               if message.author.get('role') == 'assistant' and message.channel == 'final'
-               and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
+    correlated = [message for message in history.messages
+                  if message.author.get('role') == 'assistant'
+                  and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
+    # Thinking can be cancelled before a final message exists. Use the provider's
+    # explicit terminal marker, never absence of an answer or app-level idle.
+    if any(message.content.get('content_type') == 'reasoning_recap'
+           and message.end_turn is True
+           and message.metadata.get('reasoning_status') == 'reasoning_cancelled'
+           for message in correlated):
+        raise SubchatInterrupted('Provider recorded cancelled reasoning; do not resend')
+    answers = [message for message in correlated if message.channel == 'final']
     if len(answers) != 1:
         return None  # Regenerated alternatives require explicit reconciliation.
     answer = answers[0]
