@@ -1328,3 +1328,16 @@ New Chat creation still requires the browser to establish its conversation ID.
 An unknown conversation after a crash remains unresolved rather than triggering
 history-wide search or resend. Generation preparation, model/effort selection,
 and authentication are not made browser-independent by this checkpoint.
+
+September 21 live acceptance at source `f319869` / bundle `77e6ced` reused the
+existing dedicated browser and ordinary Chat
+`6aaff6f2-ee68-83e8-9212-fef4b9b8d44c`, with observed `GPT-5.6 Sol` and effort
+`高、5 件中 3 番目。`. Operation `f8bea83b264a414b8f71781a3bb64758`
+returned `sending` with outgoing input `40a87cde-e44e-45bc-bfb7-f9c92a00d00b`.
+A subsequent HTTP receipt/answer recovery returned `completed`, final message
+`a2d12389-e0e2-4d31-918c-57ed3d85c1ef`, and exact text
+`AC_RECEIPT_OK_20260921`. The browser was not restarted; tab count was 13 before
+and after. Initial authentication observation may transiently create a page;
+these endpoint counts do not prove that no observation page was opened.
+This is a plain-message live send and final-answer test. Resource forwarding and
+SQLite reopen remain controlled tests, not live crash or attachment acceptance.
