@@ -1,6 +1,7 @@
 """Submission lifecycle shared by browser adapters; no model or provider defaults."""
 
-from typing import Protocol
+from datetime import UTC, datetime
+from typing import Literal, Protocol
 
 from pydantic import Field
 
@@ -27,6 +28,24 @@ class SubchatAnswer(SubchatReceipt):
     reported_settings: SubchatReportedSettings | None = None
 
 
+class SubchatPendingObservation(Contract):
+    """Call-scoped evidence, never a durable generation state or permission to retry."""
+
+    operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    source: Literal['http_history'] = 'http_history'
+    reason: Literal[
+        'input_not_observed', 'correlation_unavailable', 'correlation_ambiguous',
+        'final_not_observed', 'final_ambiguous', 'final_not_complete', 'final_text_unavailable',
+    ]
+    observed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class SubchatObservedSubmission(SubchatSubmission):
+    """Recovery response only: do not save ephemeral observations in the submission ledger."""
+
+    observation: SubchatPendingObservation
+
+
 class SubchatBackend(Protocol):
     async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
         """Prepare input without submitting; failure is known not to have sent."""
@@ -36,7 +55,8 @@ class SubchatBackend(Protocol):
 
     async def find_submission(self, submission: SubchatSubmission) -> SubchatReceipt | None: ...
 
-    async def read_answer(self, submission: SubchatSubmission) -> SubchatAnswer | None: ...
+    async def read_answer(self, submission: SubchatSubmission
+                          ) -> SubchatAnswer | SubchatPendingObservation | None: ...
 
 
 class SubchatStaleTarget(ValueError):
@@ -145,6 +165,9 @@ class Subchats:
             assert submission.after_operation_id is not None
             target = await self.recover(submission.after_operation_id, owner=owner)
             if target.state != 'completed':
+                if isinstance(target, SubchatObservedSubmission):
+                    return SubchatObservedSubmission(**submission.model_dump(),
+                                                     observation=target.observation)
                 return submission
             return await self._dispatch(submission, owner=owner)
         if submission.state in {'prepared', 'completed', 'cancelled'}:
@@ -159,6 +182,10 @@ class Subchats:
         except SubchatInterrupted:
             self.store.interrupt(operation_id, owner=owner)
             raise
+        if isinstance(answer, SubchatPendingObservation):
+            if answer.operation_id != submission.operation_id:
+                raise ValueError('Observation belongs to a different subchat')
+            return SubchatObservedSubmission(**submission.model_dump(), observation=answer)
         if answer is None:
             # Thinking or unavailable observation: leave the submission untouched.
             return submission

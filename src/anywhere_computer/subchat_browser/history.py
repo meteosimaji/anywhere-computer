@@ -6,7 +6,13 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
-from ..subchat import SubchatAccessError, SubchatAnswer, SubchatInterrupted, SubchatReceipt
+from ..subchat import (
+    SubchatAccessError,
+    SubchatAnswer,
+    SubchatInterrupted,
+    SubchatPendingObservation,
+    SubchatReceipt,
+)
 from ..subchat_state import SubchatReportedSettings, SubchatSubmission
 from .request_content import matches_prompt
 
@@ -65,18 +71,28 @@ def project_receipt(payload: bytes, submission: SubchatSubmission) -> SubchatRec
 
 
 def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAnswer | None:
+    """Compatibility projection for callers that only need a verified final answer."""
+    observed = project_observation(payload, submission)
+    return observed if isinstance(observed, SubchatAnswer) else None
+
+
+def project_observation(payload: bytes, submission: SubchatSubmission
+                        ) -> SubchatAnswer | SubchatPendingObservation:
     matched = matched_input(payload, submission)
     if matched is None:
-        return None
+        return SubchatPendingObservation(operation_id=submission.operation_id,
+                                         reason='input_not_observed')
     history, user = matched
     keys = ('request_id', 'turn_exchange_id', 'working_turn_id')
     if any(not isinstance(user.metadata.get(key), str) or not user.metadata[key] for key in keys):
-        return None
+        return SubchatPendingObservation(operation_id=submission.operation_id,
+                                         reason='correlation_unavailable')
     matching_users = [message for message in history.messages
                       if message.author.get('role') == 'user'
                       and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
     if len(matching_users) != 1:
-        return None  # Provider correlation must not identify multiple input messages.
+        return SubchatPendingObservation(operation_id=submission.operation_id,
+                                         reason='correlation_ambiguous')
     correlated = [message for message in history.messages
                   if message.author.get('role') == 'assistant'
                   and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
@@ -89,7 +105,8 @@ def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAns
         raise SubchatInterrupted('Provider recorded cancelled reasoning; do not resend')
     answers = [message for message in correlated if message.channel == 'final']
     if len(answers) != 1:
-        return None  # Regenerated alternatives require explicit reconciliation.
+        return SubchatPendingObservation(operation_id=submission.operation_id,
+            reason='final_not_observed' if not answers else 'final_ambiguous')
     answer = answers[0]
     finish = answer.metadata.get('finish_details')
     if isinstance(finish, dict) and finish.get('type') == 'interrupted':
@@ -97,11 +114,13 @@ def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAns
     if (answer.status != 'finished_successfully' or answer.end_turn is not True
             or answer.metadata.get('is_complete') is not True
             or not isinstance(finish, dict) or finish.get('type') != 'stop'):
-        return None
+        return SubchatPendingObservation(operation_id=submission.operation_id,
+                                         reason='final_not_complete')
     parts = answer.content.get('parts')
     if (answer.content.get('content_type') != 'text' or not isinstance(parts, list)
             or len(parts) != 1 or not isinstance(parts[0], str) or not parts[0]):
-        return None
+        return SubchatPendingObservation(operation_id=submission.operation_id,
+                                         reason='final_text_unavailable')
     assert submission.conversation_id is not None and submission.user_message_id is not None
     # Optional evidence: retain only bounded provider settings, never arbitrary metadata.
     settings = {key: value for key in ('model_slug', 'thinking_effort')

@@ -8,7 +8,7 @@ from anywhere_computer.subchat import (
     SubchatBrowserClosed,
     SubchatInterrupted,
 )
-from anywhere_computer.subchat_browser.history import project_history
+from anywhere_computer.subchat_browser.history import project_history, project_observation
 from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatSubmission
 
 
@@ -68,6 +68,17 @@ def test_history_completion_and_identity(case):
             assert result.text == '日本語 result' and result.answer_message_id == 'answer'
         else:
             assert result is None
+            reasons = {
+                'thinking': 'final_not_observed', 'empty': 'final_text_unavailable',
+                'other_request': 'final_not_observed', 'missing_binding': 'correlation_unavailable',
+                'multiple_finals': 'final_ambiguous', 'missing_user': 'input_not_observed',
+                'unknown_finish': 'final_not_complete', 'shared_binding': 'correlation_ambiguous',
+            }
+            observation = project_observation(json.dumps(payload).encode(), submission)
+            assert observation.reason == reasons[case]
+            assert observation.operation_id == submission.operation_id
+            assert set(observation.model_dump()) == {
+                'operation_id', 'source', 'reason', 'observed_at'}
 
 
 @pytest.mark.parametrize('interrupted', [False, True])
@@ -735,5 +746,65 @@ def test_queued_request_cannot_change_parent_account_after_restart(tmp_path):
         assert store.get(child, owner=None).user_message_id is None
         assert store.observe_request(child, 'child-input', owner=None,
             provider_account_id='account-a').provider_account_id == 'account-a'
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('entry', ['cli', 'mcp', 'wait'])
+@pytest.mark.parametrize('queued', [False, True])
+async def test_recovery_reports_request_scoped_http_observation(tmp_path, entry, queued):
+    """A successful history read with no matching input must not look like Thinking."""
+    from anywhere_computer.models import Request
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+    from anywhere_computer.subchat_cli import Command, dispatch
+    from anywhere_computer.subchat_mcp import session
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    submission, payload = sample()
+    payload['messages'] = []
+    reader = ChatHTTPReader()
+    class Backend:
+        async def read_answer(self, saved):
+            async def history_payload(context, target):
+                assert target.operation_id == submission.operation_id
+                return json.dumps(payload).encode()
+            reader._history_payload = history_payload
+            return await reader.history(None, saved)
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    parent = submission.operation_id
+    store.prepare(parent, submission.prompt, submission.model, submission.effort, owner=None)
+    store.begin_send(parent, owner=None)
+    store.submitted(parent, submission.conversation_id, submission.user_message_id, owner=None)
+    service = Subchats(store, Backend())
+    operation = 'b' * 32 if queued else parent
+    if queued:
+        service.queue(operation, parent, 'follow-up', owner=None)
+    try:
+        if entry == 'cli':
+            result = json.loads(await dispatch(service, Command(
+                action='recover', operation_id=operation)))
+        else:
+            server = session(service)
+            try:
+                reply = await server.execute(Request(operation_id='c' * 32,
+                    tool='subchat_wait' if entry == 'wait' else 'subchat_recover',
+                    arguments={'operation_id': operation, **({'wait_ms': 50}
+                        if entry == 'wait' else {})}))
+                assert reply.state == 'completed'
+                result = reply.data
+            finally:
+                await server.close()
+        assert result['state'] == ('queued' if queued else 'submitted')
+        assert result['observation']['operation_id'] == parent
+        assert result['observation']['reason'] == 'input_not_observed'
+        assert result['observation']['source'] == 'http_history'
+        assert result['observation']['observed_at']
+        assert 'observation' not in store.get(operation, owner=None).model_dump()
+        assert 'observation' not in ledger.connection.execute(
+            'SELECT body FROM subchat_submissions WHERE operation_id=?', (operation,)).fetchone()[0]
     finally:
         ledger.close()

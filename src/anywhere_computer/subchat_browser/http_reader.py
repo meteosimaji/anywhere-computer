@@ -5,10 +5,10 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from ..subchat import SubchatAccessError, SubchatAnswer, SubchatReceipt
+from ..subchat import SubchatAccessError, SubchatAnswer, SubchatPendingObservation, SubchatReceipt
 from ..subchat_state import SubchatAccountMismatch, SubchatSubmission
 from .catalog import observe_http_catalog, project_http_catalog
-from .history import observe_history, project_history, project_receipt
+from .history import observe_history, project_observation, project_receipt
 
 if TYPE_CHECKING:
     from playwright.async_api import APIRequestContext, BrowserContext, Page, Response
@@ -107,8 +107,8 @@ class ChatHTTPReader:
             raise SubchatAccountMismatch('Saved submission belongs to a different Chat account')
 
     async def history(self, context: BrowserContext,
-                      submission: SubchatSubmission) -> SubchatAnswer | None:
-        return project_history(await self._history_payload(context, submission), submission)
+                      submission: SubchatSubmission) -> SubchatAnswer | SubchatPendingObservation:
+        return project_observation(await self._history_payload(context, submission), submission)
 
     async def receipt(self, context: BrowserContext,
                       submission: SubchatSubmission) -> SubchatReceipt | None:

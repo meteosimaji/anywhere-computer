@@ -166,3 +166,46 @@ async def test_access_diagnostics_preserved_only_before_dispatch(tmp_path, failu
             assert browser.sends == 1
     finally:
         ledger.close()
+
+
+async def test_parallel_pending_observations_are_call_scoped_and_identity_checked(tmp_path):
+    from anywhere_computer.subchat import SubchatPendingObservation
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    identifiers = ('a' * 32, 'b' * 32)
+    for operation in identifiers:
+        store.prepare(operation, 'input', 'model', 'effort', owner=None)
+        store.begin_send(operation, owner=None)
+        store.submitted(operation, 'chat-' + operation, 'input-' + operation, owner=None)
+    arrived = 0
+    both = asyncio.Event()
+
+    class Backend(BrowserFixture):
+        wrong_identity = False
+
+        async def read_answer(self, submission):
+            nonlocal arrived
+            arrived += 1
+            if arrived >= 2:
+                both.set()
+            await both.wait()
+            return SubchatPendingObservation(
+                operation_id=identifiers[1] if self.wrong_identity else submission.operation_id,
+                reason='final_not_observed' if submission.operation_id == identifiers[0]
+                    else 'correlation_unavailable')
+
+    backend = Backend()
+    service = Subchats(store, backend)
+    try:
+        results = await asyncio.gather(*(service.recover(op, owner=None) for op in identifiers))
+        assert [result.observation.operation_id for result in results] == list(identifiers)
+        assert [result.observation.reason for result in results] == [
+            'final_not_observed', 'correlation_unavailable']
+        backend.wrong_identity = True
+        with pytest.raises(ValueError, match='different subchat'):
+            await service.recover(identifiers[0], owner=None)
+        assert all(store.get(op, owner=None).state == 'submitted' for op in identifiers)
+        assert backend.sends == 0
+    finally:
+        ledger.close()

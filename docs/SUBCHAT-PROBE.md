@@ -1555,3 +1555,36 @@ label, that unsent operation was cancelled and a new test operation was created.
 The successful operation was sent once and recovered without replay. This proves
 live constrained browser-prepared generation plus independent HTTP recovery,
 not browser-independent generation or universal provider-model guarantees.
+
+
+### Call-scoped HTTP recovery observations
+
+A successful HTTP read is not proof that a turn is still Thinking. `recover` and
+MCP `subchat_wait` may return an additional `observation` containing the observed
+`operation_id`, `source: http_history`, `reason` and UTC `observed_at` timestamp.
+This is evidence from that call, not a new saved generation state. `status` and
+list remain ledger-only and do not retain or advertise old observations.
+
+| Reason | Meaning and response |
+| --- | --- |
+| `input_not_observed` | The requested input is absent from the fetched page. History may be incomplete; do not resend. |
+| `correlation_unavailable` | Input metadata does not establish answer ownership. Do not select an answer by proximity. |
+| `correlation_ambiguous` | Multiple input records share the correlation. Reconcile rather than guess. |
+| `final_not_observed` | No correlated final is present. This alone does not prove active Thinking or a stalled model. |
+| `final_ambiguous` | More than one correlated final exists. Do not choose a regenerated alternative automatically. |
+| `final_not_complete` | A final exists without all required completion markers. Keep the saved submission pending. |
+| `final_text_unavailable` | Completion markers exist but the supported final text is unavailable. Do not manufacture an empty success. |
+
+A queued child's recovery may return its predecessor's observation. Its explicit
+`observation.operation_id` identifies that predecessor; the outer submission ID
+still identifies the queued child. Wait returns the most recent completed
+observation within that wait, with its timestamp, unless the saved lifecycle
+state advanced in the meantime. It does not claim an in-flight read completed.
+
+No raw reasoning, partial answer, provider metadata, credentials or guessed
+progress percentage is included. Explicit provider interruption still follows
+the existing interrupted path. Transport/access errors remain errors. These
+observations never authorize replay, automatic page reload, or a terminal-state
+transition. Existing adapters returning `None` remain supported but provide no
+new observation. The internal answer-reader return contract also accepts
+`SubchatPendingObservation`; the final-only `project_history` wrapper is retained.
