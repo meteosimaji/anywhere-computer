@@ -149,7 +149,9 @@ async def test_session_joins_direct_send(tmp_path, finish):
 
 
 @pytest.mark.parametrize('outcome', ['answer', 'access_error', 'close'])
-async def test_short_wait_preserves_slow_observation_and_its_result(tmp_path, outcome):
+@pytest.mark.parametrize('serialize_recovery', [True, False])
+async def test_short_wait_preserves_slow_observation_and_its_result(
+        tmp_path, outcome, serialize_recovery):
     from anywhere_computer.subchat import SubchatAccessError
 
     release = asyncio.Event()
@@ -173,7 +175,7 @@ async def test_short_wait_preserves_slow_observation_and_its_result(tmp_path, ou
     ledger = Ledger(tmp_path)
     provider = SlowReader()
     service = Subchats(SubchatSubmissions(ledger.connection), provider)
-    server = session(service)
+    server = session(service, serialize_recovery=serialize_recovery)
     operation = '6' * 32
     try:
         await service.send(operation, 'prompt', 'model', 'effort', owner=None)
