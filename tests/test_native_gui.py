@@ -23,7 +23,7 @@ for line in sys.stdin:
     else:
         if mode in ('changed', 'press_changed'):
             code = 'press_target_changed' if mode == 'press_changed' else 'value_changed'
-        print(json.dumps({'id': req['id'], 'error': {'code': code}}), flush=True)
+            print(json.dumps({'id': req['id'], 'error': {'code': code}}), flush=True)
             continue
         counter.write_text(counter.read_text() + 'write\n' if counter.exists() else 'write\n')
         if mode == 'lost':
