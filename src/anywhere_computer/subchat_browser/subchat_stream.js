@@ -6,11 +6,13 @@ function observeSubchatStream(binding) {
     const response = await Reflect.apply(original, this, args);
     if (!active || response.url !== 'https://chatgpt.com/backend-api/f/conversation' ||
         !response.ok || !response.headers.get('content-type')?.includes('text/event-stream')) return response;
-    let input;
+    let input, account;
     try {
       const body = JSON.parse(args[1]?.body);
       if (body.messages?.length !== 1) return response;
       input = body.messages[0].id;
+      account = new Headers(args[1]?.headers).get('chatgpt-account-id');
+      if (!account || account.length > 256) return response;
       if (typeof input !== 'string' || !input || input.length > 256) return response;
     } catch { return response; }
     active = false;
@@ -42,7 +44,7 @@ function observeSubchatStream(binding) {
             const root = event?.p === '' && ['add', 'replace'].includes(event.o) ? event.v : event;
             const id = root?.conversation_id;
             if (typeof id !== 'string' || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(id)) continue;
-            await window[binding](input, id);
+            await window[binding](input, id, account);
             return;
           }
           if (buffer.length > 512 * 1024) break;

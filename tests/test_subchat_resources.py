@@ -223,8 +223,9 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
                 store.observe_request(operation_id, message_id, owner=None,
                                       provider_account_id=account_id)
 
-            def candidate(operation_id, message_id, conversation_id):
-                store.observe_conversation(operation_id, message_id, conversation_id, owner=None)
+            def candidate(operation_id, message_id, conversation_id, account_id):
+                store.observe_conversation(operation_id, message_id, conversation_id, owner=None,
+                                           provider_account_id=account_id)
 
             backend = BrowserSubchatBackend(context, http_read=True,
                 record_request=record if checkpoint != 'none' else None,

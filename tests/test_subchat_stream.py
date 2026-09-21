@@ -33,9 +33,10 @@ async def test_parallel_stream_candidates_survive_restart_without_acceptance(tmp
                 page = await browser.new_page()
                 done = asyncio.Event()
 
-                def observed(source, received, conversation):
+                def observed(source, received, conversation, account):
                     assert source['page'] is page
-                    store.observe_conversation(operation, received, conversation, owner=None)
+                    store.observe_conversation(operation, received, conversation, owner=None,
+                                               provider_account_id=account)
                     done.set()
 
                 await page.expose_binding('saveCandidate', observed)
@@ -57,15 +58,21 @@ async def test_parallel_stream_candidates_survive_restart_without_acceptance(tmp
                 }''', frames)
                 await page.evaluate(STREAM + '\nobserveSubchatStream', 'saveCandidate')
                 result = await page.evaluate('''async id => (await fetch('/unused',
-                    {body:JSON.stringify({messages:[{id}]})})).text()''', message)
+                    {headers:{'chatgpt-account-id':'account'},
+                     body:JSON.stringify({messages:[{id}]})})).text()''', message)
                 assert result == frames
                 await asyncio.wait_for(done.wait(), 3)
                 assert store.get(operation, owner=None).state == 'sending'
                 with pytest.raises(ValueError, match='outgoing request'):
                     store.observe_conversation(
-                        operation, 'wrong-input', identities[index], owner=None)
+                        operation, 'wrong-input', identities[index], owner=None,
+                        provider_account_id='account')
                 with pytest.raises(ValueError, match='changed'):
-                    store.observe_conversation(operation, message, identities[1-index], owner=None)
+                    store.observe_conversation(operation, message, identities[1-index], owner=None,
+                                               provider_account_id='account')
+                with pytest.raises(ValueError, match='outgoing request'):
+                    store.observe_conversation(operation, message, identities[index], owner=None,
+                                               provider_account_id='different-account')
 
             await asyncio.gather(run(0), run(1))
         finally:

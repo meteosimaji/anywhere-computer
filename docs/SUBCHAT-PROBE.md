@@ -1616,7 +1616,8 @@ or browser-independent sending. No reasoning text or authentication data was sav
 
 The HTTP-read controller observes a bounded clone of its owned page's generation
 SSE response. A full root event supplies a candidate conversation ID; the outgoing
-input ID must match the account-bound `sending` record before it is saved. The
+input ID and request account must match the account-bound `sending` record before
+it is saved. The
 record remains `sending`: subsequent authenticated HTTP history must verify the
 exact saved input, prompt and resources before accepting a receipt. No history
 scan, second generation request or automatic replay is introduced. Unknown event
@@ -1648,3 +1649,20 @@ account and language headers and the prepared body. No retry, copied cookies or
 protection-bypass fallback was attempted. This does not establish the cause of
 403, universal impossibility, or successful independent generation. The experiment
 is not shipped as a send backend. Browser-free sending remains unfinished.
+
+The normal Chat contract review (input `dde67b3d-d54b-4583-b6ab-c8d84a5145f0`,
+final `845d4837-9ca2-4a06-9723-4bfef3631468`, reported `gpt-5-6-thinking` / `extended`)
+identified the need to compare the observed request account at candidate save,
+not merely require an existing account binding. That comparison and regression
+are included. Its other concerns remain explicitly bounded: missing stream IDs
+remain unknown, and legacy records keep their existing recovery path. There is
+no new mandatory stored field or migration. This was contract review, not an
+independent execution of the implementation.
+
+After the request-account comparison was added, live operation
+`69775696c80845769f4b5e551eddceaa` again saved its candidate before recovery and a
+fresh controller recovered final `7b9d45ff-282b-4608-97f8-1650cf102c4a`, text
+`AC_STREAM_RECEIPT_OK`, with zero owned/new pages. Conversation:
+`6ab0759c-eaa8-83e9-b64b-268009689213`; input:
+`cdd5d92b-9df7-493f-acc4-55a68ac7d1d1`. This is final-source live acceptance of
+candidate capture plus HTTP recovery, still with browser-prepared generation.
