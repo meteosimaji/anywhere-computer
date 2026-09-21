@@ -129,3 +129,9 @@ runtime failures:
 No upstream code was copied. New generation, authenticated child identity and
 non-interrupting message delivery remain independent acceptance requirements;
 a read-only recovery mode cannot satisfy them.
+
+Capability responses also expose `queue_dispatch`, `background_dispatcher`,
+`native_steer`, `provider_stop` and `cancel_scope`. Browser-assisted queues advance
+through recovery/wait; HTTP-only queue dispatch is unavailable. Neither adapter
+provides native steer or provider stop. Cancellation applies only to local queued
+or prepared inputs. These are configured capabilities, not live service health.

@@ -324,3 +324,22 @@ async def test_http_only_legacy_receipt_does_not_infer_account_binding(tmp_path)
             0] == 0
     finally:
         ledger.close()
+
+
+@pytest.mark.parametrize('transport', ['browser', 'http'])
+async def test_capabilities_describe_dispatch_without_starting_transport(transport):
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    async def forbidden():
+        raise AssertionError('Capability inspection must not start a transport')
+
+    provider = (BrowserSubchatBackend(forbidden) if transport == 'browser'
+                else HTTPOnlySubchatBackend(forbidden))
+    caps = provider.capabilities()
+    assert caps['queue_dispatch'] == (
+        'recover_or_wait' if transport == 'browser' else 'unavailable')
+    assert caps['native_steer'] is False
+    assert caps['provider_stop'] is False
+    assert caps['cancel_scope'] == 'local_queued_or_prepared'
+    assert caps['background_dispatcher'] is False
