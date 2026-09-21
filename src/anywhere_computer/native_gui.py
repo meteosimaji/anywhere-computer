@@ -43,7 +43,7 @@ class NativeGUIOutcomeUnknown(Exception):
     pass
 
 
-class NativeGUIValueChanged(ValueError):
+class NativeGUIInputRefused(ValueError):
     pass
 
 
@@ -129,9 +129,10 @@ class NativeGUI:
                 if not isinstance(result, dict) or "error" in response:
                     error = response.get("error")
                     code = error.get("code") if isinstance(error, dict) else None
-                    if code == "value_changed":
-                        raise NativeGUIValueChanged(
-                            "Native GUI value changed since observation; input was not attempted")
+                    if code == "value_changed" or (code == "press_target_changed"
+                                                  and request.get("method") == "press"):
+                        raise NativeGUIInputRefused(
+                            "Native GUI target changed since observation; input was not attempted")
                     # Never expose arbitrary helper diagnostics or exception text.
                     raise ValueError("Native GUI helper rejected request: " + (
                         code if isinstance(code, str) and code.replace("_", "").isalnum()
@@ -140,7 +141,7 @@ class NativeGUI:
         except BaseException as error:
             await self._retire(session_id)
             if (mutation and dispatched and isinstance(error, Exception)
-                    and not isinstance(error, NativeGUIValueChanged)):
+                    and not isinstance(error, NativeGUIInputRefused)):
                 raise NativeGUIOutcomeUnknown(
                     "Native GUI input outcome unknown; inspect the target before any new input"
                 ) from None

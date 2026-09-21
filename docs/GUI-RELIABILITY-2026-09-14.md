@@ -281,3 +281,12 @@ covered 3,152 files and file/regex roundtrips. The bundled engine pressed the re
 fixture button once, returned the same result for the repeated operation ID, and
 closed its session; the independent counter was exactly 1. This is packaged local
 engine evidence, not a live ordinary Chat connector or Windows UIA test.
+
+The ordinary Chat PR review was recovered through HTTP (input
+`050a3783-dcb7-4e93-9ca2-f33ca2efd0b9`, answer
+`dd647194-3217-43d4-8a83-f74baa0258d5`). Its known-refusal classification finding
+was independently reproduced: `press_target_changed` was mapped to unknown by
+the engine even though the helper had not attempted AXPress. The adapter now
+recognizes this code only for press requests as a known pre-action refusal. A
+real subprocess regression fails before the fix and passes afterward; lost replies
+still remain unknown. No arbitrary helper error is treated as safe to replay.

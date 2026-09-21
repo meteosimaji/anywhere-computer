@@ -21,8 +21,9 @@ for line in sys.stdin:
     elif method == 'observe':
         result = {'observation_id': 'fixture-observation', 'tree': {}}
     else:
-        if mode == 'changed':
-            print(json.dumps({'id': req['id'], 'error': {'code': 'value_changed'}}), flush=True)
+        if mode in ('changed', 'press_changed'):
+            code = 'press_target_changed' if mode == 'press_changed' else 'value_changed'
+        print(json.dumps({'id': req['id'], 'error': {'code': code}}), flush=True)
             continue
         counter.write_text(counter.read_text() + 'write\n' if counter.exists() else 'write\n')
         if mode == 'lost':
@@ -79,8 +80,11 @@ async def test_owner_binding_and_cross_session_snapshot_invalidation(helper_proc
     assert all(p.returncode is not None for p in helper_process[2])
 
 
-@pytest.mark.parametrize("mode,expected", [("lost", "unknown"), ("changed", "failed")])
-@pytest.mark.parametrize("method", ["set_value", "press"])
+@pytest.mark.parametrize("method,mode,expected", [
+    ("set_value", "lost", "unknown"), ("press", "lost", "unknown"),
+    ("set_value", "changed", "failed"), ("press", "changed", "failed"),
+    ("press", "press_changed", "failed"),
+])
 async def test_native_outcome_is_durable_and_not_replayed(
         tmp_path, helper_process, mode, expected, method):
     helper_process[0][0] = mode
