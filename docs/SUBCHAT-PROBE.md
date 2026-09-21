@@ -1797,3 +1797,21 @@ refresh after expiry, persistence across controller restart, browser-free new
 generation, model changes on a submitted turn, or stop. The rejected standalone
 POST remains a separate unresolved result. No new generation POST was made in
 this browser-exit test, and the user's other browser sessions were not closed.
+
+### Positional effort announcements, 2026-09-21
+
+An ordinary Chat GPT-6 Pro research submission exposed a preparation failure:
+the current Japanese slider announces `Pro、5 件中 5 番目。`, while the requested
+effort label is `Pro`. Comparing the complete announcement to the label rejected
+the available choice. The adapter now accepts that observed announcement format
+only when its label, total count and ordinal match the current slider snapshot.
+Plain labels remain supported; unknown formats and inconsistent positions fail
+closed. No provider model IDs are inferred from this label comparison: the HTTP
+generation-model check remains separate.
+
+Before the change, live preparation raised `Requested effort is not available in
+the observed menu`; after it, the same requested selection prepared successfully
+in a separate empty tab without sending. Focused tests reject wrong labels,
+prefix collisions, stale ordinals, changed counts and trailing text. This is
+preparation evidence, not browser-free generation or completion of the research
+subchat (conversation `6ab0a173-5558-83e9-9a93-24c43aa322cc`).

@@ -30,7 +30,7 @@ from .catalog import (
     picker_ready,
     require_http_selection,
 )
-from .efforts import move_effort, snapshot
+from .efforts import matches_effort, move_effort, snapshot
 from .http_reader import ChatHTTPReader
 from .request_content import add_resources, generation_input
 
@@ -206,7 +206,7 @@ class BrowserSubchatBackend:
         original = snapshot(await read_effort())
         for index in range(original[0], original[1] + 1):
             current = await move_effort(read_effort, step_effort, original, index)
-            if current[3] == submission.effort:
+            if matches_effort(current, submission.effort):
                 break
         else:
             raise ValueError('Requested effort is not available in the observed menu')
