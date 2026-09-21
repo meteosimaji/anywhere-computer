@@ -49,10 +49,12 @@ class BrowserSubchatBackend:
                  *, http_read: bool = False,
                  http_request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None,
                  record_request: Callable[[str, str, str], None] | None = None,
-                 record_conversation: Callable[[str, str, str, str], None] | None = None) -> None:
+                 record_conversation: Callable[[str, str, str, str], None] | None = None,
+                 record_rejection: Callable[[str, str, int, str], None] | None = None) -> None:
         self.http_read = http_read
         self._record_request = record_request
         self._record_conversation = record_conversation
+        self._record_rejection = record_rejection
         self._http_reader = ChatHTTPReader(http_request_factory)
         self._context = None if callable(context) else context
         self._create_context = context if callable(context) else None
@@ -269,18 +271,23 @@ class BrowserSubchatBackend:
                 if not dispatched.done():
                     dispatched.set_result(accepted)
 
-        if self._record_conversation is not None:
+        if self._record_conversation is not None or self._record_rejection is not None:
             binding = 'ac_stream_' + submission.operation_id
 
-            def observed(source: dict[str, object], message: str, conversation: str,
-                         account: str) -> None:
+            def observed(source: dict[str, object], message: str, conversation: str | None,
+                         account: str, status: int | None = None) -> None:
                 if source.get('page') is not page or source.get('frame') is not page.main_frame:
                     raise ValueError('Stream observation came from another frame')
+                if status is not None:
+                    if self._record_rejection is not None:
+                        self._record_rejection(submission.operation_id, message, status, account)
+                    return
                 if (not isinstance(conversation, str)
                         or CHAT.fullmatch('https://chatgpt.com/c/' + conversation) is None):
                     raise ValueError('Invalid stream conversation identity')
-                assert self._record_conversation is not None
-                self._record_conversation(submission.operation_id, message, conversation, account)
+                if self._record_conversation is not None:
+                    self._record_conversation(
+                        submission.operation_id, message, conversation, account)
 
             await page.expose_binding(binding, observed)
             await page.evaluate(STREAM + '\nobserveSubchatStream', binding)

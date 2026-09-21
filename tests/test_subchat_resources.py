@@ -143,7 +143,8 @@ async def test_resources_reach_persisted_submission_through_public_entry(entry, 
 
 
 @pytest.mark.parametrize(('checkpoint', 'with_resources'), [
-    ('none', True), ('saved', True), ('failed', True), ('saved', False), ('failed', False),
+    ('rejected', False), ('none', True), ('saved', True), ('failed', True), ('saved', False),
+    ('failed', False),
     ('missing_account', False), ('changed_account', False),
     ('wrong_model', False), ('wrong_effort', False),
 ])
@@ -186,7 +187,10 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
                     assert store.get('b' * 32, owner=None).user_message_id == 'user'
                     assert store.get('b' * 32, owner=None).provider_account_id == 'fixture-account'
                 bodies.append(json.loads(post_data))
-                if checkpoint == 'saved':
+                if checkpoint == 'rejected':
+                    await route.fulfill(status=403, content_type='application/json',
+                                        body=json.dumps({'detail': 'private provider details'}))
+                elif checkpoint == 'saved':
                     await route.fulfill(content_type='text/event-stream', body='data: ' +
                         json.dumps({'conversation_id': '11111111-2222-3333-4444-555555555555'}) +
                         '\n\n')
@@ -227,9 +231,14 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
                 store.observe_conversation(operation_id, message_id, conversation_id, owner=None,
                                            provider_account_id=account_id)
 
+            def rejection(operation_id, message_id, status, account_id):
+                store.observe_rejection(operation_id, message_id, status, owner=None,
+                                        provider_account_id=account_id)
+
             backend = BrowserSubchatBackend(context, http_read=True,
                 record_request=record if checkpoint != 'none' else None,
-                record_conversation=candidate if checkpoint == 'saved' else None)
+                record_conversation=candidate if checkpoint == 'saved' else None,
+                record_rejection=rejection if checkpoint == 'rejected' else None)
             if checkpoint == 'changed_account':
                 backend._http_reader._headers = {'chatgpt-account-id': 'previous-account'}
             service = Subchats(store, backend)
@@ -248,6 +257,14 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
                 'Future model', 'Future effort', owner=None, resources=selected_resources,
                         http_selection=selection())
             assert reply.state == 'sending'  # A POST is not a saved server receipt.
+            if checkpoint == 'rejected':
+                async with asyncio.timeout(3):
+                    while store.get(reply.operation_id, owner=None).generation_http_status is None:
+                        await asyncio.sleep(0.01)
+                saved = SubchatSubmissions(ledger.connection).get(reply.operation_id, owner=None)
+                assert saved.generation_http_status == 403 and saved.state == 'sending'
+                assert saved.conversation_id is None
+                assert 'private provider' not in saved.model_dump_json()
             if checkpoint == 'saved':
                 async with asyncio.timeout(3):
                     while store.get(reply.operation_id, owner=None).conversation_id is None:
@@ -266,3 +283,39 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
         finally:
             ledger.close()
             await browser.close()
+
+
+@pytest.mark.parametrize('mismatch', ['owner', 'input', 'account', 'status'])
+def test_generation_rejection_is_bound_and_durable(tmp_path, mismatch):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    operation = 'f' * 32
+    try:
+        store.prepare(operation, 'prompt', 'model', 'effort', owner='owner')
+        store.begin_send(operation, owner='owner')
+        store.observe_request(operation, 'input', owner='owner', provider_account_id='account')
+        with pytest.raises(ValueError):
+            store.observe_rejection(operation, 'other' if mismatch == 'input' else 'input',
+                200 if mismatch == 'status' else 403,
+                owner='other' if mismatch == 'owner' else 'owner',
+                provider_account_id='other' if mismatch == 'account' else 'account')
+        assert store.get(operation, owner='owner').generation_http_status is None
+        store.observe_rejection(operation, 'input', 403, owner='owner',
+                                provider_account_id='account')
+        store.observe_rejection(operation, 'input', 403, owner='owner',
+                                provider_account_id='account')
+        with pytest.raises(ValueError, match='evidence changed'):
+            store.observe_rejection(operation, 'input', 500, owner='owner',
+                                    provider_account_id='account')
+        body = ledger.connection.execute(
+            'SELECT body FROM subchat_submissions WHERE operation_id=?', (operation,)).fetchone()[0]
+        # Older runtimes can still read the reservation.
+        assert 'generation_http_status' not in body
+    finally:
+        ledger.close()
+    restarted = Ledger(tmp_path)
+    try:
+        saved = SubchatSubmissions(restarted.connection).get(operation, owner='owner')
+        assert saved.state == 'sending' and saved.generation_http_status == 403
+    finally:
+        restarted.close()
