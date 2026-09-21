@@ -220,9 +220,11 @@ def session(service: Subchats, *,
                     # Retain late failures for the next observer, not just logs.
                     error = done.exception()
                     if (error is None and done.result().state in
-                            {'prepared', 'completed', 'cancelled', 'interrupted'}
+                            {'queued', 'prepared', 'completed', 'cancelled', 'interrupted'}
                             and recoveries.get(operation_id) is done):
-                        recoveries.pop(operation_id)  # Result is already durable.
+                        # A successful pending queue observation has no dispatch to retain.
+                        # Release it even if its watcher was disabled while awaiting it.
+                        recoveries.pop(operation_id)  # Submission is already durable.
 
             task.add_done_callback(completed)
         if task is not None:

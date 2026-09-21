@@ -771,7 +771,9 @@ Set `enabled: false` to release a watch. This stops the observation loop, not a
 recovery/preparation already in progress; use `subchat_cancel` to cancel an unsent
 queued/prepared message. To retry a failed watch deliberately, first reconcile its
 saved state, disable it, then re-arm it. At most eight watches, including stopped
-ones retained for inspection, are held per controller. Independent provider reads
+ones retained for inspection, are held per controller. A successful pending recovery
+releases its recovery slot even if its watcher was disabled while awaiting it;
+late failures remain available to the next observer. Independent provider reads
 and input operations retain their existing concurrency limits.
 
 Closing the MCP controller cancels and joins its watchers and recovery tasks.

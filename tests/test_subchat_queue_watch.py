@@ -192,3 +192,30 @@ asyncio.run(main())
                         break
                     await asyncio.sleep(.01)
             assert (tmp_path / 'sends').read_text().splitlines() == [parent, child]
+
+
+async def test_disarmed_watch_releases_finished_pending_recovery(watched):
+    service, provider, server, parent, child, watch = watched
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = provider.read_answer
+
+    async def delayed(submission):
+        entered.set()
+        await release.wait()
+        return await original(submission)
+
+    provider.read_answer = delayed
+    await watch()
+    await asyncio.wait_for(entered.wait(), 1)
+    recovery = server.recoveries[child]
+    try:
+        assert (await watch(False)).data['state'] == 'disabled'
+        assert not recovery.done()  # Disabling must not cancel in-flight preparation.
+        release.set()
+        await asyncio.wait_for(asyncio.shield(recovery), 1)
+        await asyncio.sleep(0)
+        assert service.store.get(child, owner=None).state == 'queued'
+        assert provider.sends == [parent]
+        assert child not in server.recoveries
+    finally:
+        release.set()
