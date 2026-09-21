@@ -29,6 +29,48 @@ def sample():
     return submission, payload
 
 
+@pytest.mark.parametrize('case', ['complete', 'other_turn', 'missing_source',
+                                 'regenerate', 'shared_turn', 'multiple_finals',
+                                 'other_exchange', 'empty_source', 'missing_request',
+                                 'incomplete', 'interrupted', 'exact_and_async'])
+def test_async_final_with_new_request_identity(case):
+    submission, payload = sample()
+    user, answer = payload['messages']
+    answer['metadata'].update(request_id='async-request', async_source='provider-worker',
+                              message_type='next')
+    if case == 'other_turn':
+        answer['metadata']['working_turn_id'] = 'other'
+    elif case == 'missing_source':
+        del answer['metadata']['async_source']
+    elif case == 'regenerate':
+        answer['metadata']['message_type'] = 'regenerate'
+    elif case == 'shared_turn':
+        payload['messages'].append({**user, 'id': 'other-user',
+            'metadata': {**user['metadata'], 'request_id': 'other-request'}})
+    elif case == 'multiple_finals':
+        payload['messages'].append({**answer, 'id': 'other-final'})
+    elif case == 'other_exchange':
+        answer['metadata']['turn_exchange_id'] = 'other'
+    elif case == 'empty_source':
+        answer['metadata']['async_source'] = ' '
+    elif case == 'missing_request':
+        del answer['metadata']['request_id']
+    elif case == 'incomplete':
+        answer['end_turn'] = False
+    elif case == 'exact_and_async':
+        payload['messages'].append({**answer, 'id': 'exact-final',
+            'metadata': {**answer['metadata'], 'request_id': 'request'}})
+    elif case == 'interrupted':
+        answer['metadata']['finish_details'] = {'type': 'interrupted'}
+        with pytest.raises(SubchatInterrupted):
+            project_history(json.dumps(payload).encode(), submission)
+        return
+    result = project_history(json.dumps(payload).encode(), submission)
+    assert (result is not None) is (case == 'complete')
+    if result is not None:
+        assert result.answer_message_id == 'answer'
+
+
 @pytest.mark.parametrize('case', ['complete', 'interrupted', 'thinking', 'empty', 'other_request',
                                   'missing_binding', 'multiple_finals', 'missing_user',
                                   'wrong_prompt', 'wrong_conversation', 'unknown_finish',
