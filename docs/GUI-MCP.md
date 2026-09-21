@@ -1,6 +1,38 @@
 # GUI操作を既存のMCPへ接続する
 
-## Current contract: target a window, then verify the effect
+## Choose the operation provider
+
+The development source supports two distinct GUI providers. Neither requires a
+subchat or a ChatGPT browser session. Discover the installed engine's actual tool
+schemas and capabilities before choosing a provider; source availability does not
+establish that an older installed release includes the helper.
+
+### Native macOS Accessibility
+
+`gui_native_windows(app)` opens an owner-scoped session and lists the target app's
+windows. Use the returned `session_id` and a listed `window_id` with
+`gui_native_observe(session_id, app, window_id)`. An observed element can then be
+used with:
+
+- `gui_native_set_value(session_id, app, window_id, observation_id, element_ref, value)`
+  for a supported writable value.
+- `gui_native_press(session_id, app, window_id, observation_id, element_ref)`
+  for an element advertising `pressable` (AXPress).
+
+Re-observe and verify the intended result after an action. Observations are consumed;
+action acceptance returns `postcondition_verified=false`. The helper checks target
+identity and observed content before input, but those checks do not make user
+interaction atomic. Recover an uncertain operation by its operation ID, not by
+repeating the action. End the session with `gui_native_close(session_id)`.
+
+This provider requires macOS Accessibility permission and a portable distribution
+containing the manifest-verified native helper. It does not provide coordinate
+clicks, screenshots, keyboard simulation or Windows UI Automation. It does not
+deliberately activate the app as a fallback; the app's own action can still affect
+focus or open windows. Build prerequisites and scoped live/packaged evidence are
+in [the native reliability record](GUI-RELIABILITY-2026-09-14.md).
+
+### Peekaboo MCP adapter: target a window, then verify the effect
 
 The typed GUI adapter now requires `window_id`. Discover the ID with the selected
 Peekaboo server's `window` tool (`action=list`, `app`), then call

@@ -504,3 +504,20 @@ fallback. Action acceptance is not postcondition verification. The live changed
 button-title refusal and one-effect/reused-observation checks are recorded in
 [GUI reliability](GUI-RELIABILITY-2026-09-14.md). Windows UIA and arbitrary
 coordinate/keyboard actions remain outside this change, not implied by Mac success.
+
+### Recovery and compaction follow-up, 2026-09-21
+
+Rechecked upstream main at `7777e517603289696bb5febddb9bbf51cdde9aea` and read
+[issue/PR #341](https://github.com/totec448-spec/chat-on-steroids/issues/341).
+Its run-end compaction proposal addresses a CoS-specific handoff scheduler.
+Anywhere has no equivalent automatic compaction scheduler, so copying that trigger
+would add a new lifecycle rather than repair an existing one. Defer that feature;
+retain the applicable principle that a stopped run and failed delivery must be
+observable without repeated reloads or automatic resubmission.
+
+The HTTP history/catalog regression suites passed 90 tests in 19.63 seconds on
+the PR #135 source tree. This is controlled test evidence, including access-error
+projection and browser-closure handling, not a reproduction of CoS issue #336
+or a live standalone-generation result. The standalone sender's acceptance scope
+is maintained in [the subchat contract](SUBCHAT-PROBE.md#standalone-send-acceptance-boundary)
+instead of duplicated here.
