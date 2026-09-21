@@ -21,13 +21,16 @@ for line in sys.stdin:
     elif method == 'observe':
         result = {'observation_id': 'fixture-observation', 'tree': {}}
     else:
-        if mode == 'changed':
-            print(json.dumps({'id': req['id'], 'error': {'code': 'value_changed'}}), flush=True)
+        if mode in ('changed', 'press_changed'):
+            code = 'press_target_changed' if mode == 'press_changed' else 'value_changed'
+            print(json.dumps({'id': req['id'], 'error': {'code': code}}), flush=True)
             continue
         counter.write_text(counter.read_text() + 'write\n' if counter.exists() else 'write\n')
         if mode == 'lost':
             sys.exit(0)
-        result = {'value_verified': True, 'persistence_verified': False}
+        result = ({'action_accepted': True, 'postcondition_verified': False}
+                  if method == 'press' else
+                  {'value_verified': True, 'persistence_verified': False})
     print(json.dumps({'id': req['id'], 'result': result}), flush=True)
 '''
 
@@ -77,8 +80,13 @@ async def test_owner_binding_and_cross_session_snapshot_invalidation(helper_proc
     assert all(p.returncode is not None for p in helper_process[2])
 
 
-@pytest.mark.parametrize("mode,expected", [("lost", "unknown"), ("changed", "failed")])
-async def test_native_outcome_is_durable_and_not_replayed(tmp_path, helper_process, mode, expected):
+@pytest.mark.parametrize("method,mode,expected", [
+    ("set_value", "lost", "unknown"), ("press", "lost", "unknown"),
+    ("set_value", "changed", "failed"), ("press", "changed", "failed"),
+    ("press", "press_changed", "failed"),
+])
+async def test_native_outcome_is_durable_and_not_replayed(
+        tmp_path, helper_process, mode, expected, method):
     helper_process[0][0] = mode
     engine = Engine(tmp_path / "state")
     try:
@@ -89,9 +97,9 @@ async def test_native_outcome_is_durable_and_not_replayed(tmp_path, helper_proce
         observed = await engine.execute(Request(operation_id="2" * 32,
             tool="gui_native_observe", arguments=arguments), peer="one")
         assert observed.state == "completed"
-        request = Request(operation_id="3" * 32, tool="gui_native_set_value", arguments={
+        request = Request(operation_id="3" * 32, tool=f"gui_native_{method}", arguments={
             **arguments, "observation_id": observed.data["observation_id"],
-            "element_ref": "field", "value": "write once",
+            "element_ref": "field", **({"value": "write once"} if method == "set_value" else {}),
         })
         first = await engine.execute(request, peer="one")
         second = await engine.execute(request, peer="one")

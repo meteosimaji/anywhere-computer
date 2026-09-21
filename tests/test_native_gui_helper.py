@@ -46,6 +46,12 @@ async def test_persistent_requests_and_recovery_after_invalid_input(native_gui_h
         request.update(method="observe", window_id=True)
         assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
             "invalid_input")
+        request.update(method="press", window_id=1, observation_id="snapshot",
+                       element_ref="button", value="must not be accepted")
+        assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
+            "invalid_input")
+        for key in ("observation_id", "element_ref", "value"):
+            request.pop(key)
         request.update(method="unsupported")
         request.pop("window_id")
         # Split input is retained until the delimiter, without requiring EOF.

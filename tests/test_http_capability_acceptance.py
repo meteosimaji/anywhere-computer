@@ -151,6 +151,11 @@ for line in sys.stdin:
                 "element_ref": "field", "value": "HTTP native fixture",
             })
             assert written["value_verified"] and not written["persistence_verified"]
+            snapshot = await call("gui_native_observe", target)
+            pressed = await call("gui_native_press", {
+                **target, "observation_id": snapshot["observation_id"], "element_ref": "button",
+            })
+            assert pressed["action_accepted"] and not pressed["postcondition_verified"]
             await call("gui_native_close", {"session_id": native["session_id"]})
             await call("workspace_open", {"path": str(tmp_path)})
             await call("settings_get")

@@ -240,3 +240,53 @@ are not proven absent. No global user-input monitoring guarantee is claimed.
 Screenshots, click/keyboard/scroll, Windows UIA, signed helper distribution and
 concurrent user-interference acceptance remain open. Packaged installation/live
 MCP acceptance is separate from these source-engine and helper tests.
+
+### AXPress development, 2026-09-21
+
+The development branch adds `gui_native_press` for an observed element's AXPress
+operation, not a mouse-coordinate click. Observation advertises `pressable` only
+when AXPress is present. Dispatch revalidates the process/window, current tree
+membership, enabled state, value digest and action identity (role, title,
+description, help and identifier) before one AX action. Like value assignment,
+this is optimistic validation rather than atomic exclusion of user changes.
+It invalidates snapshots and uses the existing owner binding and operation ledger.
+`action_accepted` is distinct from `postcondition_verified`; callers must observe
+the result separately and never infer task completion from AX acceptance.
+
+Initial verification: Swift helper compilation, mypy (112 sources), Ruff, and
+nine helper/engine/authenticated-HTTP tests pass. Controlled subprocess tests
+exercise lost replies and replay of the same operation ID, not actual button
+activation. Live AXPress, changed-action identity rejection and packaged acceptance
+remain required before publication. No existing grant or installed runtime was
+updated by this development change.
+
+Live AXPress acceptance used a dedicated AppKit fixture with a button that writes
+its invocation count to a file. After observation, changing the button title
+caused `press_target_changed`, with no counter file created. A fresh observation
+then accepted AXPress; the independently read counter was exactly 1. Reusing that
+observation returned `observation_unavailable` and the counter remained 1.
+This establishes the real helper/action path, not packaged or ordinary Chat
+acceptance. Evidence is retained locally in the dedicated fixture's evidence.json.
+The fixture was opened in the background; this is not a guarantee that arbitrary
+applications never activate in response to AXPress.
+
+The first fixture launch failed because the compiler's implicit deployment target
+was macOS 28 while this host is macOS 27. Building the fixture with an explicit
+macOS 13 target fixed launch. Direct execution without a Launch Services launch
+date was rejected by the existing helper identity check, which was not weakened.
+
+Relocated portable AXPress acceptance then passed using the archive's own Python
+and manifest-verified helper, without a source path override. Runtime verification
+covered 3,152 files and file/regex roundtrips. The bundled engine pressed the real
+fixture button once, returned the same result for the repeated operation ID, and
+closed its session; the independent counter was exactly 1. This is packaged local
+engine evidence, not a live ordinary Chat connector or Windows UIA test.
+
+The ordinary Chat PR review was recovered through HTTP (input
+`050a3783-dcb7-4e93-9ca2-f33ca2efd0b9`, answer
+`dd647194-3217-43d4-8a83-f74baa0258d5`). Its known-refusal classification finding
+was independently reproduced: `press_target_changed` was mapped to unknown by
+the engine even though the helper had not attempted AXPress. The adapter now
+recognizes this code only for press requests as a known pre-action refusal. A
+real subprocess regression fails before the fix and passes afterward; lost replies
+still remain unknown. No arbitrary helper error is treated as safe to replay.
