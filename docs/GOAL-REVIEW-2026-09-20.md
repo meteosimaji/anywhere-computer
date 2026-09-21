@@ -155,3 +155,48 @@ fails the repeated-navigation regression. Installed runtime was not replaced.
 Remaining HTTP work is generation dispatch, model-change/stop contracts,
 streaming-result recovery and authenticated lifecycle acceptance across process
 and login changes. Saved-answer HTTP recovery is not proof that these are done.
+
+## Integration review, 2026-09-21
+
+Main `1758a65ba261c739d65c65a13abd648a13ab350e` contains PRs 142–145:
+async-final correlation, browser-free HTTP reads, precise queue/cancel capability
+reporting and independent HTTP recovery. Each PR passed its five platform CI
+jobs before merge. PR145's final source passed 309 subchat tests locally; its
+verified CI head was `62885996b21dd399a670d2a51477c6ba4985cc47`.
+The runtime contract and credential limitations remain owned by
+[the HTTP guide](SUBCHAT-HTTP-RESEARCH.md), not this dated review.
+
+Two additional isolated acceptance harnesses used the product controller in a
+separate process with real stdio MCP and real HTTP redirected to localhost only
+by the harness. A blocked conversation A did not prevent B's distinct answer.
+The same result passed through the actual `DirectMCPSessions` wrapper using a
+10 ms wait followed by B recovery and then A recovery: exactly two HTTP requests,
+correct answer ownership and confirmed subprocess cleanup. Browser launch was
+forbidden. This validates short polling through the serial outer wrapper, not
+simultaneous outer calls or a live-provider parallel generation limit.
+
+A separate controlled browser-adapter test bootstrapped synthetic read credentials,
+marked that context closed, recovered the exact answer through its HTTP client,
+and then rejected repeated reads after a 401 without another request or page.
+This tests the real adapter/reader with a synthetic context/provider; it is not
+an additional real Chrome-crash or account-expiry experiment.
+
+Upstream main was rechecked and remains `7777e517603289696bb5febddb9bbf51cdde9aea`.
+[Issue 339](https://github.com/totec448-spec/chat-on-steroids/issues/339) reports
+listening on a local port without companion authorization. Preserve the separation
+between a live process, authenticated connection and successful operation; do not
+copy its companion pairing design into subchat or equate installed tools with
+working ordinary-Chat generation.
+[Issue 347](https://github.com/totec448-spec/chat-on-steroids/issues/347) reports a
+Windows Defender detection of CoS's packaged `tunnel-client.exe`. Neither its cause
+nor a false positive is established by that report. Anywhere uses a separate
+optional cloudflared adapter and a pinned, hash-checked CI download. No Defender
+exclusion, security setting change, replacement tunnel or claim of equivalent
+failure is adopted from this report.
+
+This integration does not finish the goal. The next subchat acceptance remains
+quiet new submission plus an established authentication lifecycle; recovery alone
+cannot satisfy it. Native steer, automatic queue delivery and child-specific
+permission isolation are still separate unmet requirements. Audio capture
+integration and real device/update recovery remain in the ordered work above.
+Published releases and resident installations were not updated by these merges.
