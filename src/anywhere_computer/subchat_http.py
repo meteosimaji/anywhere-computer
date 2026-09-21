@@ -34,7 +34,10 @@ class HTTPOnlySubchatBackend:
         self._http_reader = ChatHTTPReader(request_factory, browser_free=True, session=session)
 
     def capabilities(self) -> dict[str, object]:
-        return {'state': 'capabilities', 'transport': 'http_read_only',
+        return {'queue_dispatch': 'unavailable', 'background_dispatcher': False,
+                'native_steer': False, 'provider_stop': False,
+                'cancel_scope': 'local_queued_or_prepared',
+                'state': 'capabilities', 'transport': 'http_read_only',
                 'browser_required': False, 'generation_transport': 'unavailable',
                 'http_selection_send_supported': False, 'credential_refresh': False,
                 'independent_login': False, 'persistent_credentials': False,

@@ -65,7 +65,10 @@ class BrowserSubchatBackend:
             self._context.on('close', self._browser_closed)
 
     def capabilities(self) -> dict[str, object]:
-        return {'state': 'capabilities', 'transport': 'browser_prepared',
+        return {'queue_dispatch': 'recover_or_wait', 'background_dispatcher': False,
+                'native_steer': False, 'provider_stop': False,
+                'cancel_scope': 'local_queued_or_prepared',
+                'state': 'capabilities', 'transport': 'browser_prepared',
                 'browser_required': True, 'generation_transport': 'browser_prepared',
                 'http_selection_send_supported': self.http_read,
                 'credential_refresh': False, 'independent_login': False}
