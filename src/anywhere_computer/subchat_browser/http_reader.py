@@ -96,6 +96,12 @@ class ChatHTTPReader:
         else:
             assert context is not None
             request = context.request
+        # Another read may invalidate access while the client factory is awaiting.
+        if self._access_status is not None:
+            raise SubchatAccessError(self._access_status)
+        if url in self._denied_urls:
+            raise SubchatAccessError(403)
+        self._check_account(expected_account)
         response_http = await request.get(
             url, headers=self._headers, timeout=15_000, max_redirects=0, max_retries=0)
         try:

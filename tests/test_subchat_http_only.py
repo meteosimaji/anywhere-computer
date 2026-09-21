@@ -343,3 +343,87 @@ async def test_capabilities_describe_dispatch_without_starting_transport(transpo
     assert caps['provider_stop'] is False
     assert caps['cancel_scope'] == 'local_queued_or_prepared'
     assert caps['background_dispatcher'] is False
+
+
+async def test_independent_http_recovery_does_not_wait_for_slow_peer(tmp_path):
+    import asyncio
+
+    from anywhere_computer.models import Request
+    from anywhere_computer.subchat import SubchatAnswer
+    from anywhere_computer.subchat_mcp import session
+
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    class PendingHTTP(HTTPOnlySubchatBackend):
+        async def read_answer(self, submission):
+            if submission.operation_id == 'a' * 32:
+                entered.set()
+                await release.wait()
+            return SubchatAnswer(conversation_id=submission.conversation_id,
+                user_message_id=submission.user_message_id, prompt=submission.prompt,
+                answer_message_id='answer-' + submission.operation_id, text=submission.prompt)
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    for key in ('a', 'b'):
+        store.prepare(key * 32, key, 'model', 'effort', owner=None)
+        store.begin_send(key * 32, owner=None)
+        store.submitted(key * 32, 'chat-' + key, 'user-' + key, owner=None)
+    async def unused():
+        raise AssertionError('No network used in scheduling fixture')
+    server = session(Subchats(store, PendingHTTP(unused)), serialize_recovery=False)
+    async def recover(key):
+        return await server.execute(Request(operation_id=key * 32, tool='subchat_recover',
+            arguments={'operation_id':key * 32}))
+    slow = asyncio.create_task(recover('a'))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        fast = await asyncio.wait_for(recover('b'), 1)
+        assert fast.data['answer'] == 'b'
+        assert not slow.done()
+        release.set()
+        assert (await slow).data['answer'] == 'a'
+    finally:
+        release.set()
+        await server.close()
+        await asyncio.gather(slow, return_exceptions=True)
+        ledger.close()
+
+
+@pytest.mark.parametrize('status', [401, 403])
+async def test_queued_http_read_rechecks_access_after_client_initialization(status):
+    import asyncio
+
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    submission, payload = sample()
+    client = Client(payload)
+    client.status['https://chatgpt.com/backend-api/conversations/' +
+                  submission.conversation_id] = status
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def factory():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+        return client
+
+    adapter = HTTPOnlySubchatBackend(factory, credentials())
+    pending = asyncio.create_task(adapter.read_answer(submission))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        with pytest.raises(SubchatAccessError):
+            await adapter.read_answer(submission)
+        release.set()
+        with pytest.raises(SubchatAccessError) as error:
+            await pending
+        assert error.value.status == status
+        assert len(client.calls) == 1
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)

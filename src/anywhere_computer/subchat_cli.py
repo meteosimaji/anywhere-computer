@@ -155,6 +155,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
         async with AsyncExitStack() as resources:
             driver: Playwright | None = None
             http_client: APIRequestContext | None = None
+            http_init_lock = asyncio.Lock()
 
             async def runtime() -> Playwright:
                 from playwright.async_api import async_playwright
@@ -166,10 +167,11 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
 
             async def open_http() -> APIRequestContext:
                 nonlocal http_client
-                if http_client is None:
-                    http_client = await (await runtime()).request.new_context()
-                    resources.push_async_callback(http_client.dispose)
-                return http_client
+                async with http_init_lock:
+                    if http_client is None:
+                        http_client = await (await runtime()).request.new_context()
+                        resources.push_async_callback(http_client.dispose)
+                    return http_client
 
             async def open_browser() -> BrowserContext:
                 context = await (await runtime()).chromium.launch_persistent_context(
@@ -241,7 +243,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'a completed answer. Queued work is never sent by this adapter.')
                 server = session(service, observe_catalog=backend.catalog,
                                  observe_http_catalog=backend.http_catalog,
-                                 instructions=instructions)
+                                 instructions=instructions, serialize_recovery=not http_only)
                 try:
                     await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
                 finally:
