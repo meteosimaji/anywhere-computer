@@ -135,3 +135,20 @@ Capability responses also expose `queue_dispatch`, `background_dispatcher`,
 through recovery/wait; HTTP-only queue dispatch is unavailable. Neither adapter
 provides native steer or provider stop. Cancellation applies only to local queued
 or prepared inputs. These are configured capabilities, not live service health.
+
+### Product CLI restart acceptance, 2026-09-21
+
+A SQLite backup of the existing real 6 Pro submission was used in an isolated,
+owner-only temporary directory. Three separate CLI processes used the same
+operation ID and state, with both Playwright browser-launch methods forbidden:
+
+1. Without an HTTP session, recovery returned `http_session_required`.
+2. An already established session was passed through anonymous stdin, without
+   writing credentials to disk. Real HTTP recovery returned `completed`, answer
+   `ba44459e-8666-46ac-a102-fbc491e6d14a`, and 8,570 characters.
+3. A new CLI process without credentials returned that same saved final and length.
+
+All three exited 0 with no stderr. This verifies product-CLI recovery and persisted
+results across process restart, not authentication renewal, fresh generation,
+OS restart or retention of an in-progress provider stream. Original live state
+was not modified; no generation was sent and no Chrome launch was permitted.
