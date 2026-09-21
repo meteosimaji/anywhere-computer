@@ -292,3 +292,31 @@ async def test_recovery_identity_rejection_never_dispatches_or_restarts(
             assert "error" in await send(packet)
         assert not target.exists()
         assert len(children) == 1 and children[0].poll() is None
+
+
+@pytest.mark.parametrize('failure', ['OwnerPipeTimeout', 'OwnerPipeIdentityError',
+                                   'OwnerPipeProtocolError'])
+async def test_startup_retries_only_transient_owner_pipe_timeout(
+        isolated_agent, monkeypatch, failure):
+    from anywhere_computer import owner_json_pipe
+
+    error_type = getattr(owner_json_pipe, failure)
+
+    directory, children = isolated_agent
+    original = connection.exchange
+    injected = []
+
+    async def transient(*args, **kwargs):
+        if children and not injected:
+            injected.append(True)
+            raise error_type('synthetic readiness failure')
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(connection, 'exchange', transient)
+    if failure == 'OwnerPipeTimeout':
+        result = await asyncio.to_thread(connection.ensure_agent, directory)
+        assert result['runtime_id'] == connection.runtime_identity()
+    else:
+        with pytest.raises(error_type):
+            await asyncio.to_thread(connection.ensure_agent, directory)
+    assert injected == [True] and len(children) == 1
