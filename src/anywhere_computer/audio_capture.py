@@ -72,5 +72,5 @@ async def capture_audio(args: AudioCapture) -> dict[str, JsonValue]:
                 'artifact': {'path': str(artifact), 'size': len(data),
                              'sha256': hashlib.sha256(data).hexdigest(),
                              'media_type': 'audio/x-caf'}}
-    except (OSError, ValueError, TypeError, KeyError, TimeoutError) as error:
+    except (OSError, ValueError, TypeError, KeyError, OverflowError) as error:
         raise AudioCaptureUnknown(directory) from error

@@ -115,7 +115,7 @@ async def test_preflight_preserves_files_and_never_records(
 
 
 @pytest.mark.parametrize('case', ['wrong_source', 'inconsistent_duration', 'missing_artifact',
-                                  'symlink_artifact', 'invalid_format'])
+                                  'symlink_artifact', 'invalid_format', 'oversized_measurement'])
 async def test_unverified_capture_never_becomes_success(tmp_path, audio_helper, monkeypatch, case):
     original = audio_status._query
     async def corrupt(command, *, timeout):
@@ -125,6 +125,8 @@ async def test_unverified_capture_never_becomes_success(tmp_path, audio_helper, 
             result['source'] = 'microphone'
         elif case == 'inconsistent_duration':
             result['measurements']['system']['duration_seconds'] = 2
+        elif case == 'oversized_measurement':
+            result['measurements']['system']['sample_rate'] = 10 ** 1000
         elif case == 'missing_artifact':
             artifact.unlink()
         elif case == 'symlink_artifact':
