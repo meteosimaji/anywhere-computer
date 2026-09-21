@@ -1815,3 +1815,27 @@ in a separate empty tab without sending. Focused tests reject wrong labels,
 prefix collisions, stale ordinals, changed counts and trailing text. This is
 preparation evidence, not browser-free generation or completion of the research
 subchat (conversation `6ab0a173-5558-83e9-9a93-24c43aa322cc`).
+
+### Authenticated HTTP transport controls, 2026-09-21
+
+A paired read used the same conversation URL and explicit observed authorization,
+account and language headers with both the dedicated BrowserContext's request
+client and a fresh independent APIRequestContext without copied cookies. Both
+returned HTTP 200 JSON containing the same expected final message. This verifies
+session-authenticated reads, not credential renewal or generation permission.
+
+A separate one-attempt generation probe used the BrowserContext request client
+(its browser cookie context retained), the same minimal constructed body schema,
+and the same `gpt-5-6-thinking` / `extended` selection as the earlier independent
+probe. It also returned HTTP 403 JSON with the unusual-activity message. No UI
+actions, protective-token copying, or automatic retries were used. Merely changing
+to the browser-associated HTTP client did not make that request succeed.
+
+The BrowserContext APIRequestContext is not an in-page Chromium fetch or the
+site's normal generation pipeline. These results do not identify which missing
+preparation field or transport property caused rejection. Ordinary user-driven
+Chrome sends returned 200 but used a different model and prepared request shape;
+they are a normal-path reference, not a single-variable generation control.
+An initial observed normal send omitted conversation_id and parent_message_id;
+subsequent sends included both. Header-name observations alone do not establish
+all Cookie headers on the wire. No browser-free sender is enabled by this evidence.
