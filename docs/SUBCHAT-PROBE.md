@@ -1816,6 +1816,23 @@ prefix collisions, stale ordinals, changed counts and trailing text. This is
 preparation evidence, not browser-free generation or completion of the research
 subchat (conversation `6ab0a173-5558-83e9-9a93-24c43aa322cc`).
 
+### Async final request identity (2026-09-21)
+
+A real 6 Pro conversation returned a complete final in authenticated HTTP history,
+while the projection reported pending: the final had a different `request_id`,
+matching `turn_exchange_id` and `working_turn_id`, and explicit `async_source` /
+`message_type=next` metadata. Re-projecting the same captured response after the
+fix recovered 8,570 characters and the same answer ID independently read through
+Codex. No new send or browser restart was needed. This isolates a projection bug;
+it does not establish why the provider changed request identity.
+
+The fallback requires both turn identities, a unique user in that turn, explicit
+async metadata, and a unique final across exact and async candidates. Existing
+completion and interruption checks remain in force. Regression cases reject
+wrong turns, missing identity, ambiguous inputs/finals, and incomplete answers.
+This is saved real-response validation plus controlled regression tests, not a
+new live generation or proof of browser-free sending.
+
 ### Authenticated HTTP transport controls, 2026-09-21
 
 A paired read used the same conversation URL and explicit observed authorization,

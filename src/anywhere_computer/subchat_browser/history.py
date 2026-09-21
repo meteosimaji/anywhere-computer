@@ -104,6 +104,26 @@ def project_observation(payload: bytes, submission: SubchatSubmission
            for message in correlated):
         raise SubchatInterrupted('Provider recorded cancelled reasoning; do not resend')
     answers = [message for message in correlated if message.channel == 'final']
+    # Asynchronous provider work can finish under a new request ID. Require
+    # explicit async evidence and both stable turn IDs, never conversation alone.
+    async_answers = [message for message in history.messages
+                     if message.author.get('role') == 'assistant'
+                     and message.channel == 'final'
+                     and isinstance(request_id := message.metadata.get('request_id'), str)
+                     and request_id.strip()
+                     and request_id != user.metadata['request_id']
+                     and isinstance(async_source := message.metadata.get('async_source'), str)
+                     and async_source.strip()
+                     and message.metadata.get('message_type') == 'next'
+                     and all(message.metadata.get(key) == user.metadata[key] for key in keys[1:])]
+    if async_answers:
+        turn_users = [message for message in history.messages
+                      if message.author.get('role') == 'user'
+                      and all(message.metadata.get(key) == user.metadata[key] for key in keys[1:])]
+        if len(turn_users) != 1:
+            return SubchatPendingObservation(operation_id=submission.operation_id,
+                                             reason='correlation_ambiguous')
+        answers.extend(async_answers)
     if len(answers) != 1:
         return SubchatPendingObservation(operation_id=submission.operation_id,
             reason='final_not_observed' if not answers else 'final_ambiguous')
