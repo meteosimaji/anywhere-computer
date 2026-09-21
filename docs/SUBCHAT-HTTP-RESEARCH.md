@@ -165,3 +165,6 @@ Concurrent first use also shares one lazily initialized HTTP client. A controlle
 catalog/recovery race reproduced duplicate initialization before the fix; normal
 and exceptional shutdown now dispose that client once. Only initialization is
 locked, not the independent HTTP reads.
+Reads waiting for client initialization recheck session-wide 401 and URL-specific
+403 rejection before issuing their GET. Controlled races verify no extra GET is
+issued after that rejection; requests already in flight are not cancelled.

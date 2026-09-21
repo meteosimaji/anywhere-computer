@@ -390,3 +390,40 @@ async def test_independent_http_recovery_does_not_wait_for_slow_peer(tmp_path):
         await server.close()
         await asyncio.gather(slow, return_exceptions=True)
         ledger.close()
+
+
+@pytest.mark.parametrize('status', [401, 403])
+async def test_queued_http_read_rechecks_access_after_client_initialization(status):
+    import asyncio
+
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    submission, payload = sample()
+    client = Client(payload)
+    client.status['https://chatgpt.com/backend-api/conversations/' +
+                  submission.conversation_id] = status
+    entered, release = asyncio.Event(), asyncio.Event()
+    calls = 0
+
+    async def factory():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            entered.set()
+            await release.wait()
+        return client
+
+    adapter = HTTPOnlySubchatBackend(factory, credentials())
+    pending = asyncio.create_task(adapter.read_answer(submission))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        with pytest.raises(SubchatAccessError):
+            await adapter.read_answer(submission)
+        release.set()
+        with pytest.raises(SubchatAccessError) as error:
+            await pending
+        assert error.value.status == status
+        assert len(client.calls) == 1
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
