@@ -1,4 +1,4 @@
-"""Local JSON-lines subchat controller with one explicitly selected browser profile."""
+"""Local subchat controller with explicit browser-assisted or HTTP-only transport."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from .subchat import (
     SubchatInterrupted,
     SubchatOutcomeUnknown,
     Subchats,
+    SubchatUnsupported,
 )
 from .subchat_content import SubchatResources
 from .subchat_state import (
@@ -33,6 +34,8 @@ from .subchat_state import (
 if TYPE_CHECKING:
     from playwright.async_api import APIRequestContext, BrowserContext, Playwright
 
+    from .subchat_http_session import ObservedHTTPSession
+
 
 class Command(Contract):
     action: Literal['send', 'recover', 'status', 'cancel']
@@ -44,6 +47,10 @@ class Command(Contract):
     work_context: SubchatWorkContext | None = None
     resources: SubchatResources | None = None
     http_selection: SubchatHTTPSelection | None = None
+
+
+class CapabilitiesCommand(Contract):
+    action: Literal['capabilities']
 
 
 class CatalogCommand(Contract):
@@ -61,7 +68,13 @@ class QueueCommand(OperationId):
 
 
 async def dispatch(service: Subchats,
-                   command: Command | ListCommand | QueueCommand | CatalogCommand) -> str:
+                   command: Command | ListCommand | QueueCommand | CatalogCommand
+                   | CapabilitiesCommand) -> str:
+    if isinstance(command, CapabilitiesCommand):
+        capabilities = getattr(service.backend, 'capabilities', None)
+        if capabilities is None:
+            raise ValueError('This adapter does not report capabilities')
+        return json.dumps(capabilities(), ensure_ascii=False)
     if isinstance(command, CatalogCommand):
         observe = getattr(service.backend, 'http_catalog', None)
         if observe is None:
@@ -101,16 +114,19 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         line = await asyncio.to_thread(source.readline)
         if not line:
             return
-        command: Command | ListCommand | QueueCommand | CatalogCommand | None = None
+        command: (Command | ListCommand | QueueCommand | CatalogCommand
+                  | CapabilitiesCommand | None) = None
         try:
             command = TypeAdapter(
-                Command | ListCommand | QueueCommand | CatalogCommand).validate_json(line)
+                Command | ListCommand | QueueCommand | CatalogCommand
+                | CapabilitiesCommand).validate_json(line)
             output = await dispatch(service, command)
         except Exception as error:
             # Do not print provider errors or invalid input: both can contain secrets.
             output = json.dumps({
                 'state': (error.code
-                          if isinstance(error, SubchatAccessError | SubchatAccountMismatch)
+                          if isinstance(error, SubchatAccessError | SubchatAccountMismatch
+                                        | SubchatUnsupported)
                           else 'browser_closed' if isinstance(error, SubchatBrowserClosed)
                           else 'submission_unconfirmed'
                           if isinstance(error, SubchatOutcomeUnknown) else 'reply_interrupted'
@@ -119,14 +135,20 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
                                  if isinstance(command, Command | QueueCommand) else None),
                 'error_type': type(error).__name__,
                 'automatic_retry': False,
+                **({'dispatched': False} if isinstance(error, SubchatUnsupported)
+                   and error.code == 'http_generation_unavailable' else {}),
             })
         destination.write(output + '\n')
         destination.flush()
 
 
-async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool = False,
-              minimized: bool = False) -> None:
-    from .subchat_browser.backend import BrowserSubchatBackend
+async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read: bool = False,
+              minimized: bool = False, http_only: bool = False,
+              http_session: ObservedHTTPSession | None = None) -> None:
+    if http_only and (profile is not None or http_read or minimized):
+        raise ValueError('HTTP-only mode cannot use browser options')
+    if not http_only and (profile is None or http_session is not None):
+        raise ValueError('Browser mode requires a profile and cannot import an HTTP session')
 
     ledger = Ledger(state)
     try:
@@ -183,11 +205,19 @@ async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool 
                 store.observe_rejection(operation_id, message_id, status, owner=None,
                                         provider_account_id=account_id)
 
-            backend = BrowserSubchatBackend(open_browser, http_read=http_read,
-                http_request_factory=open_http if http_read else None,
-                record_request=record_request if http_read else None,
-                record_conversation=record_conversation if http_read else None,
-                record_rejection=record_rejection if http_read else None)
+            backend: BrowserSubchatBackend | HTTPOnlySubchatBackend
+            if http_only:
+                from .subchat_http import HTTPOnlySubchatBackend
+
+                backend = HTTPOnlySubchatBackend(open_http, http_session)
+            else:
+                from .subchat_browser.backend import BrowserSubchatBackend
+
+                backend = BrowserSubchatBackend(open_browser, http_read=http_read,
+                    http_request_factory=open_http if http_read else None,
+                    record_request=record_request if http_read else None,
+                    record_conversation=record_conversation if http_read else None,
+                    record_rejection=record_rejection if http_read else None)
             service = Subchats(store, backend)
             # Saved-state requests need no browser. Once needed, commands share
             # one dedicated context until EOF; no per-request restart or replay.
@@ -195,8 +225,23 @@ async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool 
                 from .mcp_server import serve_stdio
                 from .subchat_mcp import session
 
+                instructions = None
+                if http_only:
+                    instructions = (
+                        'Browser-free read-only ordinary Chat recovery. No browser fallback, '
+                        'independent login, credential refresh or generation is implemented. '
+                        'Use subchat_catalog source=http, saved status/list and recover/wait '
+                        'with the original operation ID. UI catalog is unsupported. '
+                        'Send and queue dispatch return http_generation_unavailable. '
+                        'Never resend an uncertain submission or supply credentials in tools. '
+                        'Recovery requires known conversation/input identity and an explicit '
+                        'in-memory session supplied by the operator at startup. Missing or '
+                        'expired authorization requires operator action, not a retry loop. '
+                        'A pending observation is not proof of Thinking. Interruption is not '
+                        'a completed answer. Queued work is never sent by this adapter.')
                 server = session(service, observe_catalog=backend.catalog,
-                                 observe_http_catalog=backend.http_catalog)
+                                 observe_http_catalog=backend.http_catalog,
+                                 instructions=instructions)
                 try:
                     await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
                 finally:
@@ -209,7 +254,7 @@ async def run(profile: Path, state: Path, *, mcp: bool = False, http_read: bool 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--browser-profile', type=Path, required=True,
+    parser.add_argument('--browser-profile', type=Path,
                         help='Dedicated logged-in Chrome profile, never your normal profile')
     parser.add_argument('--state-dir', type=Path, required=True,
                         help='Local subchat ledger directory')
@@ -218,6 +263,28 @@ def main() -> None:
                         help='Read HTTP history; sends require an observed HTTP catalog selection')
     parser.add_argument('--minimized', action='store_true',
                         help='Verify the dedicated Chrome window is minimized before page work')
+    parser.add_argument('--http-only', action='store_true',
+                        help='Browser-free recovery only; never send or fall back to Chrome')
+    parser.add_argument('--http-session-stdin', action='store_true',
+                        help='Consume one bounded observed-session JSON line before the protocol; '
+                             'HTTP-only mode only. No login, cookies or protection tokens.')
     args = parser.parse_args()
-    asyncio.run(run(args.browser_profile.resolve(), args.state_dir.resolve(),
-                    mcp=args.mcp, http_read=args.http_read, minimized=args.minimized))
+    if args.http_only:
+        if args.browser_profile is not None or args.http_read or args.minimized:
+            parser.error('--http-only cannot be combined with browser options')
+    elif args.browser_profile is None or args.http_session_stdin:
+        parser.error('Browser mode requires --browser-profile; session handoff needs --http-only')
+    observed_session = None
+    if args.http_session_stdin:
+        from .subchat_http_session import read_http_session
+
+        try:
+            observed_session = read_http_session(sys.stdin.buffer)
+        except ValueError:
+            print(json.dumps({'state': 'invalid_http_session', 'automatic_retry': False}),
+                  file=sys.stderr)
+            raise SystemExit(2) from None
+    asyncio.run(run(args.browser_profile.resolve() if args.browser_profile is not None else None,
+                    args.state_dir.resolve(), mcp=args.mcp, http_read=args.http_read,
+                    minimized=args.minimized, http_only=args.http_only,
+                    http_session=observed_session))
