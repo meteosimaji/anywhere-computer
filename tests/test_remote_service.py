@@ -114,16 +114,21 @@ async def test_shared_remote_service_owns_update_monitor(
     monkeypatch.setattr(remote_service, 'monitor_release_updates', monitor)
     monkeypatch.setattr(remote_service.subprocess, 'Popen', launch)
     task = asyncio.create_task(remote_service.serve_remote(directory))
+    ready = asyncio.create_task((started if enabled else listening).wait())
     try:
-        if enabled:
-            await asyncio.wait_for(started.wait(), timeout=5)
-        else:
-            await asyncio.wait_for(listening.wait(), timeout=5)
+        done, _ = await asyncio.wait({task, ready}, timeout=5,
+                                     return_when=asyncio.FIRST_COMPLETED)
+        if task in done:
+            code = await task  # Surface a startup exception instead of hiding it in cleanup.
+            pytest.fail(f'Remote service exited before readiness: {code}')
+        assert ready in done, 'Remote service did not become ready within five seconds'
+        await ready
         assert (await diagnose_http(directory))['state'] == 'metadata_reachable'
         assert started.is_set() == enabled
     finally:
+        ready.cancel()
         task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.gather(ready, task, return_exceptions=True)
     assert stopped.is_set() == enabled
 
 
