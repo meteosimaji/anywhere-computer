@@ -94,3 +94,38 @@ work. The earlier constructed generation POST returned 403 even with an
 associated browser request client. This mode does not retry or replace that send.
 The browser-assisted sending path also retains its failed fullscreen interference
 acceptance; minimized windows are not a guarantee of non-interference.
+
+## CoS comparison refreshed 2026-09-21
+
+The upstream main observed in this review was
+[`7777e517`](https://github.com/totec448-spec/chat-on-steroids/commit/7777e517603289696bb5febddb9bbf51cdde9aea).
+The following are upstream reports and source observations, not reproduced CoS
+runtime failures:
+
+- [Issue 336](https://github.com/totec448-spec/chat-on-steroids/issues/336)
+  reports repeated browser recovery without restored execution. Retain bounded
+  observations and operation recovery in Anywhere; do not treat reload attempts
+  as task progress. HTTP-only mode has no reload fallback. This does not prove
+  indefinite provider stalls are resolved.
+- [Issue 329](https://github.com/totec448-spec/chat-on-steroids/issues/329)
+  reports a partially degraded read-only tool surface. Explicit transport
+  capabilities and unavailable-send errors are adopted here so successful reads
+  cannot imply working generation. Per-turn health of unrelated connectors is
+  outside this change.
+- [Issue 327](https://github.com/totec448-spec/chat-on-steroids/issues/327)
+  reports stale waiting state. Anywhere's call-scoped pending reason and exact
+  input/final correlation remain authoritative; an idle page is not completion.
+  The async-final fix addresses our independently observed false pending case,
+  not the upstream issue itself.
+- The [Stop activity change](https://github.com/totec448-spec/chat-on-steroids/commit/20081243fd02a40de9918abe6524b247abcfe75f)
+  separates stop intent from later exact work and preserves canonical final
+  evidence. Its recorder can reopen an inferred ended turn only with earlier
+  request ownership and later work; a canonical final prevents reopening.
+  Anywhere should likewise distinguish a local cancel from provider termination.
+  Importing CoS's companion/Fiber/request ownership machinery is not part of this
+  HTTP recovery change: it would add a separate identity system without proving
+  that its observations exist on our transport.
+
+No upstream code was copied. New generation, authenticated child identity and
+non-interrupting message delivery remain independent acceptance requirements;
+a read-only recovery mode cannot satisfy them.
