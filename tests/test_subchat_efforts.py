@@ -3,11 +3,27 @@ from pathlib import Path
 
 import pytest
 
+from anywhere_computer.subchat_browser.efforts import matches_effort
+
 spec = importlib.util.spec_from_file_location(
     "subchat_efforts", Path(__file__).parents[1] / "scripts/subchat_efforts.py")
 assert spec and spec.loader
 collector = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(collector)
+
+
+@pytest.mark.parametrize('description,label,expected', [
+    ('Pro', 'Pro', True),
+    ('Pro、5 件中 5 番目。', 'Pro', True),
+    ('高、5 件中 5 番目。', 'Pro', False),
+    ('Pro extra、5 件中 5 番目。', 'Pro', False),
+    ('Pro、5 件中 4 番目。', 'Pro', False),
+    ('Pro、6 件中 5 番目。', 'Pro', False),
+    ('Pro、5 件中 5 番目。extra', 'Pro', False),
+])
+def test_effort_label_checks_complete_announcement(description, label, expected):
+    assert matches_effort((0, 4, 4, description), label) is expected
+    assert matches_effort((2, 6, 6, description), label) is expected
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@
 The caller supplies real DOM reads and keyboard steps. This does not send prompts,
 choose models, reconnect a browser, or establish ownership of an arbitrary page.
 """
+import re
 from collections.abc import Awaitable, Callable
 
 Read = Callable[[], Awaitable[dict[str, object]]]
@@ -11,6 +12,21 @@ Step = Callable[[str], Awaitable[None]]
 
 class EffortUnconfirmed(ValueError):
     pass
+
+
+def matches_effort(observed: tuple[int, int, int, str], label: str) -> bool:
+    """Match a plain label or the observed Japanese positional announcement.
+
+    Validate the entire announcement against the slider range; a prefix match
+    alone could confuse similarly named choices or stale accessibility text.
+    """
+    minimum, maximum, index, description = observed
+    if description == label:
+        return True
+    match = re.fullmatch(r'(.+)、\s*(\d+)\s*件中\s*(\d+)\s*番目。', description)
+    return (match is not None and match[1] == label
+            and int(match[2]) == maximum - minimum + 1
+            and int(match[3]) == index - minimum + 1)
 
 
 def snapshot(value: dict[str, object]) -> tuple[int, int, int, str]:
