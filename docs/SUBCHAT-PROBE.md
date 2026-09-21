@@ -1832,3 +1832,47 @@ completion and interruption checks remain in force. Regression cases reject
 wrong turns, missing identity, ambiguous inputs/finals, and incomplete answers.
 This is saved real-response validation plus controlled regression tests, not a
 new live generation or proof of browser-free sending.
+
+### Authenticated HTTP transport controls, 2026-09-21
+
+A paired read used the same conversation URL and explicit observed authorization,
+account and language headers with both the dedicated BrowserContext's request
+client and a fresh independent APIRequestContext without copied cookies. Both
+returned HTTP 200 JSON containing the same expected final message. This verifies
+session-authenticated reads, not credential renewal or generation permission.
+
+A separate one-attempt generation probe used the BrowserContext request client
+(its browser cookie context retained), the same minimal constructed body schema,
+and the same `gpt-5-6-thinking` / `extended` selection as the earlier independent
+probe. It also returned HTTP 403 JSON with the unusual-activity message. No UI
+actions, protective-token copying, or automatic retries were used. Merely changing
+to the browser-associated HTTP client did not make that request succeed.
+
+The BrowserContext APIRequestContext is not an in-page Chromium fetch or the
+site's normal generation pipeline. These results do not identify which missing
+preparation field or transport property caused rejection. Ordinary user-driven
+Chrome sends returned 200 but used a different model and prepared request shape;
+they are a normal-path reference, not a single-variable generation control.
+An initial observed normal send omitted conversation_id and parent_message_id;
+subsequent sends included both. Header-name observations alone do not establish
+all Cookie headers on the wire. No browser-free sender is enabled by this evidence.
+
+### Fullscreen playback interference: failed acceptance, 2026-09-21
+
+At the user's request, normal Chrome and the dedicated context were closed; the
+Chrome main-process check returned no matches. One normal Chrome was then started
+and YouTube playback entered fullscreen (the accessibility tree showed fullscreen,
+Pause and advancing playback time). The actual `anywhere-subchat --http-read
+--minimized` CLI subsequently launched the dedicated profile, read its catalog and
+started a GPT-5.6 Sol/high submission. The user reported that Chrome intervened in
+the viewing experience. This is a failed non-interference acceptance, regardless
+of successful minimization or eventual submission completion.
+
+The CLI currently launches headed Chrome before requesting/confirming minimized
+window bounds. Later preparation creates a page and uses picker/editor actions.
+The experiment did not continuously timestamp OS foreground/Space transitions,
+so it does not isolate launch, new-page creation or focus as the exact trigger.
+Do not advertise `--minimized` as guaranteed quiet/background-only operation.
+Next acceptance must cover cold start, preparation, dispatch and recovery while
+fullscreen playback remains visible; merely restoring the viewer afterward is
+not a pass. The pending send must be reconciled without automatic replay.
