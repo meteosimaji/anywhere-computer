@@ -274,3 +274,10 @@ The first fixture launch failed because the compiler's implicit deployment targe
 was macOS 28 while this host is macOS 27. Building the fixture with an explicit
 macOS 13 target fixed launch. Direct execution without a Launch Services launch
 date was rejected by the existing helper identity check, which was not weakened.
+
+Relocated portable AXPress acceptance then passed using the archive's own Python
+and manifest-verified helper, without a source path override. Runtime verification
+covered 3,152 files and file/regex roundtrips. The bundled engine pressed the real
+fixture button once, returned the same result for the repeated operation ID, and
+closed its session; the independent counter was exactly 1. This is packaged local
+engine evidence, not a live ordinary Chat connector or Windows UIA test.
