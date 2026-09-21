@@ -1666,3 +1666,9 @@ fresh controller recovered final `7b9d45ff-282b-4608-97f8-1650cf102c4a`, text
 `6ab0759c-eaa8-83e9-b64b-268009689213`; input:
 `cdd5d92b-9df7-493f-acc4-55a68ac7d1d1`. This is final-source live acceptance of
 candidate capture plus HTTP recovery, still with browser-prepared generation.
+
+A controlled consumed-response regression failed before the observer guarded
+`response.clone()`: another wrapper consuming the body caused the observer to
+reject the application's otherwise resolved fetch. Clone failure now returns the
+original response unchanged and supplies no candidate. This is controlled browser
+compatibility evidence, not a reproduced third-party extension failure.

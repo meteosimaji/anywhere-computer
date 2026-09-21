@@ -17,7 +17,9 @@ function observeSubchatStream(binding) {
     } catch { return response; }
     active = false;
     if (window.fetch === wrapped) window.fetch = original;
-    const reader = response.clone().body?.getReader();
+    let reader;
+    try { reader = response.clone().body?.getReader(); }
+    catch { return response; }
     if (!reader) return response;
     const timer = setTimeout(() => { void reader.cancel().catch(() => {}); }, 60000);
     void (async () => {

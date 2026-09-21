@@ -61,6 +61,18 @@ async def test_parallel_stream_candidates_survive_restart_without_acceptance(tmp
                     {headers:{'chatgpt-account-id':'account'},
                      body:JSON.stringify({messages:[{id}]})})).text()''', message)
                 assert result == frames
+                # Observation must not reject a response another wrapper already consumed.
+                await page.evaluate('''() => { window.fetch=async()=>{
+                    const response=new Response('already consumed',
+                        {headers:{'content-type':'text/event-stream'}});
+                    Object.defineProperty(response,'url',
+                        {value:'https://chatgpt.com/backend-api/f/conversation'});
+                    await response.text(); return response;
+                }; }''')
+                await page.evaluate(STREAM + '\nobserveSubchatStream', 'saveCandidate')
+                assert await page.evaluate('''async id => (await fetch('/unused',
+                    {headers:{'chatgpt-account-id':'account'},
+                     body:JSON.stringify({messages:[{id}]})})).bodyUsed''', message)
                 await asyncio.wait_for(done.wait(), 3)
                 assert store.get(operation, owner=None).state == 'sending'
                 with pytest.raises(ValueError, match='outgoing request'):
