@@ -98,6 +98,7 @@ class BrowserSubchatBackend:
         async with asyncio.timeout(20):
             result = await self._http_reader.catalog(await self._read_context(catalog=True))
             result['http_selection_send_supported'] = self.http_read
+            result['generation_transport'] = 'browser_prepared'
             return result
 
     async def _page(self, submission: SubchatSubmission) -> Page | None:

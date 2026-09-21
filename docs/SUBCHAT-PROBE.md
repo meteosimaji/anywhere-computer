@@ -1672,3 +1672,34 @@ A controlled consumed-response regression failed before the observer guarded
 reject the application's otherwise resolved fetch. Clone failure now returns the
 original response unchanged and supplies no candidate. This is controlled browser
 compatibility evidence, not a reproduced third-party extension failure.
+
+### Generation transport capability and passive envelope check, 2026-09-21
+
+`subchat_catalog source=http` reports `generation_transport=browser_prepared`.
+The existing `http_selection_send_supported` flag means the adapter can enforce
+an exact HTTP catalog choice; it never means independent HTTP generation. CLI
+and MCP share this response, and MCP instructions explicitly state the remaining
+browser requirement. The independent POST experiment above remains unsuccessful.
+
+A passive metadata-only observation of normal operation
+`594f23943f764c22b4db4e3a24b507db` found conversation initialization and generation
+preparation requests before the generation POST. The outgoing generation included
+`client_prepare_state` and request-preparation/proof/Turnstile token header names
+as well as account/authorization headers. Only field names and JSON types were
+retained; no token, cookie value, body text or reasoning was recorded. The observer
+was scoped to the owned submission page and removed afterward.
+
+This establishes a difference from the standalone POST's reduced header envelope,
+not which field caused its 403 or that copying the remaining headers would work.
+No verification-token fabrication, replay or protection bypass is implemented.
+Codex's current ordinary-Chat follow-up interface still does not provide a new
+ordinary-Chat target or a Chat model override; it cannot replace complete subchat
+creation. These restrictions must not be hidden behind an API-shaped tool name.
+
+The observed generation completed in conversation
+`6ab07b48-08e8-83ee-9e55-1048fd259158`, input
+`0dd2d4fc-10f7-4559-8f44-23ed82ec2763`, final
+`4d36178e-64ee-4605-a616-40f7cac3d644`, and was recovered with zero new/owned pages.
+Its contract review correctly did not infer a unique cause from 403; that response
+is not independent network diagnosis. A fresh controller's live HTTP catalog also
+returned the explicit `browser_prepared` capability with zero new pages.
