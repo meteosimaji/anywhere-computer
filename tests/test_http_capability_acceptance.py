@@ -15,6 +15,7 @@ import uuid
 import httpx
 import psutil
 import pytest
+from test_audio_capture import audio_helper as audio_helper
 from test_http_service import initialize
 from test_native_gui import helper_process as helper_process
 
@@ -26,7 +27,7 @@ from anywhere_computer.http_mcp import HTTPMCP
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX app-server executable fixture")
 async def test_every_remote_engine_tool_in_chat_like_http_workflows(
-    tmp_path, monkeypatch, helper_process,
+    tmp_path, monkeypatch, helper_process, audio_helper,
 ):
     skill = tmp_path / "skill/SKILL.md"
     skill.parent.mkdir()
@@ -142,7 +143,11 @@ for line in sys.stdin:
             audio = await call("audio_status")
             assert audio["state"] in {"available", "unavailable", "unsupported"}
             assert audio["capture_started"] is False
-            assert audio["capture_tool_available"] is False
+            assert audio["capture_tool_available"] is True
+            recording = await call("audio_capture", {"source": "system", "seconds": 1,
+                "output_directory": str(tmp_path / "audio-recording")})
+            assert recording["state"] == "captured" and not recording["microphone_used"]
+            assert len(audio_helper) == 1
             native = await call("gui_native_windows", {"app": "fixture"})
             target = {"session_id": native["session_id"], "app": "fixture", "window_id": 1}
             snapshot = await call("gui_native_observe", target)

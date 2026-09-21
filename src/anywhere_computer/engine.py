@@ -13,6 +13,7 @@ from typing import TypeVar, cast
 from pydantic import JsonValue
 
 from . import __version__, codex_context, codex_plugins, skills_context
+from .audio_capture import AudioCapture, AudioCaptureUnknown, capture_audio
 from .audio_status import inspect_audio
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
@@ -198,6 +199,14 @@ class Engine:
             "and input devices. Does not record, request permission or select an input. "
             "Device names do not prove virtual routing or a present audio signal.",
             Empty, audio_status, read_only=True,
+        )
+        self.register(
+            "audio_capture", "Record 1–30 seconds of macOS system playback to a new directory. "
+            "Requires the verified portable helper and existing screen-capture permission. "
+            "Never selects a microphone. Returns a CAF artifact and helper measurements, "
+            "not proof of physical speaker output. Recover the original operation after "
+            "response loss; never automatically repeat a recording.",
+            AudioCapture, capture_audio, destructive=True, open_world=True,
         )
 
         async def gui_observe(args: GUIObserve) -> Result:
@@ -1021,6 +1030,14 @@ class Engine:
                         "target before any new call; do not automatically retry",
                         "details": error.details,
                     },
+                )
+            except AudioCaptureUnknown as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state="unknown", error=str(error),
+                    data={"error_code": "audio_capture_outcome_unknown",
+                          "output_directory": error.directory, "partial_files_possible": True,
+                          "next_action": "Recover with operations_get and inspect the output "
+                                         "directory; do not automatically record again"},
                 )
             except NativeGUIOutcomeUnknown as error:
                 reply = Reply(
