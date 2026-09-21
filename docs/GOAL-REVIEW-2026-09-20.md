@@ -200,3 +200,36 @@ cannot satisfy it. Native steer, automatic queue delivery and child-specific
 permission isolation are still separate unmet requirements. Audio capture
 integration and real device/update recovery remain in the ordered work above.
 Published releases and resident installations were not updated by these merges.
+
+## Audio integration and remaining acceptance, 2026-09-21
+
+PR 147 merged at `3188046984e42f4073a622b68dfb6c594e90e058` after all five
+Quality jobs passed on `38f1baa3d8de61581d3043c52c8d7890755470b8`.
+The final local suite passed 1,639 tests with 19 skips. Optional system-audio
+capture now uses the existing engine ledger; its current contract and live versus
+synthetic evidence belong to [the audio guide](AUDIO-PROBE.md). This is source
+integration, not a release, resident update or new live recording acceptance.
+
+The earlier documentation PR's Windows run failed twice on different reconnect
+paths: initial agent readiness and concurrent HTTP catalog recovery. A later
+passing runtime run does not identify or repair their cause. PR 148 retains
+bounded disposable-child stderr and the actual failed catalog envelope, and runs
+reconnect tests before the parallel suite without removing them from that suite.
+Its native Windows pre-parallel reconnect step passed; full CI was pending when
+this record was written. Production deadlines and permission checks are unchanged.
+
+Remaining requirements are not discharged by these passing tests:
+
+| Requirement | Evidence still needed |
+| --- | --- |
+| Quiet new ordinary-Chat submission | Accepted send and correlated final output with no foreground browser intervention; current standalone HTTP adapter is read-only. |
+| Authentication lifecycle | Supported initial login and expiry/restart recovery, rather than only an explicit in-memory handoff. |
+| Queue and immediate communication | Automatic queue delivery with bounded lifetime and non-interference; verified caller/turn binding for tool-boundary messages or native steer. Unsupported modes remain explicit. |
+| Shared work and child permissions | Authenticated child identity or a scoped broker; descriptive task/workspace strings do not restrict a shared connector grant. |
+| Context capture | Packaged-engine live system capture and explicitly selected microphone/device-loss acceptance; no implicit phone/default input. |
+| Deployment and recovery | Installed-runtime version evidence and real update, sleep/reboot and Windows recovery acceptance. |
+
+The existing competitor decision table remains in the
+[reliability comparison](CHAT-ON-STEROIDS-REVIEW-2026-09-18.md). No second task
+engine, speculative retry loop or copied companion-authentication scheme was
+added to turn these missing requirements into apparent successes.
