@@ -1773,3 +1773,27 @@ The existing reservation and recovery rules remain in force. Separate storage
 keeps legacy submission JSON readable and preserves the evidence across restart.
 The regression uses a local synthetic response; it is not a new live-service
 rejection test or a successful standalone sender.
+
+### Reads after dedicated Chrome exit, 2026-09-21
+
+After checking the dedicated context for active generation and composer drafts,
+the probe closed that context. The browser reported disconnected and an OS
+process check found no Chrome process for the dedicated subchat profile. A
+separate Python process then created only a Playwright APIRequestContext (no
+browser launch or BrowserContext). With previously observed authorization passed
+through memory/stdin, catalog and conversation-history GETs both returned 200.
+The history contained the exact positive-control answer ID recorded above and
+`AC_NORMAL_ROUTE_CONTROL_20260921`. No credentials were written to the report.
+
+The existing ChatHTTPReader also fetched the catalog again with its original
+browser disconnected. Its projected versions distinguished latest/Pro (GPT-6
+Pro) from 5.6/Pro (GPT-5.6 Pro), and included the observed thinking-effort choices.
+These are live catalog observations, not hardcoded availability guarantees or
+evidence that a generation used a selected model.
+
+This proves reads can continue without the dedicated Chrome process while the
+in-memory authorization remains valid. It does not prove fresh login, credential
+refresh after expiry, persistence across controller restart, browser-free new
+generation, model changes on a submitted turn, or stop. The rejected standalone
+POST remains a separate unresolved result. No new generation POST was made in
+this browser-exit test, and the user's other browser sessions were not closed.
