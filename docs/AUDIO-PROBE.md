@@ -1,7 +1,8 @@
 # Native audio capture experiment
 
-This is an experimental macOS 15+ helper, not an installed Anywhere Computer
-capability or a supported virtual microphone driver. Windows is not implemented.
+This is an experimental macOS 15+ helper with an optional engine integration.
+It is not a virtual microphone driver. Windows is not implemented, and source
+integration does not establish installation in a published or running package.
 
 Compile `scripts/probe_audio_capture.swift` with `swiftc -parse-as-library`.
 Use `--check` to inspect existing permissions and `--list-devices` to list audio
@@ -47,9 +48,8 @@ with `afconvert` and Python WAV reading confirmed two seconds of stereo audio;
 positive zero crossings estimated 441.5 Hz. This confirms non-silent OS playback
 capture, not physical speaker output. Playback and recording both ended.
 
-Virtual-device routing, device disconnect,
-Windows support, and MCP/operation-ledger integration remain pending. Do not
-advertise this experiment as a shipped audio feature.
+Virtual-device routing, device disconnect and Windows support remain pending. The engine integration below is newer than
+these capture experiments; they do not prove its live end-to-end acceptance.
 
 ## Optional portable packaging
 
@@ -66,8 +66,8 @@ directory. Its bytes are included in the existing `manifest.json` file hashes.
 The build rejects non-macOS hosts, relative paths, symlinks and non-executable
 files. The builder must supply a trusted binary for the target architecture;
 file validation is not code-signature or architecture verification. This option
-does not request permissions, record audio or enable an engine/MCP audio tool.
-Native signing, permission onboarding and engine integration remain pending.
+does not request permissions or record audio. The current engine exposes the
+system-capture tool below; permission onboarding and native signing remain pending.
 
 A local build with the compiled helper was extracted into a separate Unicode
 path. Its manifest digest and binary bytes matched, and its `--check` command
@@ -84,8 +84,35 @@ oversized responses fail and the owned child is terminated and reaped.
 
 The tool reports `unsupported` outside macOS and `unavailable` when the helper
 is absent. A valid inspection reports permissions and named input IDs, always
-with `capture_started=false` and `capture_tool_available=false`. It neither
+with `capture_started=false`, `capture_tool_available=true` and
+`capture_sources=["system"]`. Availability does not mean permission is granted. It neither
 requests permissions nor chooses a default input. The helper's presence is not
-proof of an audio signal or of permission to record. Capture remains a separate
-pending integration. A manifest digest checks installation consistency, not
-publisher authentication. Existing HTTP grants still determine tool access.
+proof of an audio signal or of permission to record. A manifest digest checks
+installation consistency, not publisher authentication. Existing HTTP grants still determine tool access.
+
+
+## Experimental system capture through the engine
+
+`audio_capture` accepts `source="system"`, an integer `seconds` between 1 and 30,
+and an absolute `output_directory` that does not yet exist under an existing
+parent. It requires the manifest-verified optional helper and already-granted
+screen-capture permission. Microphone capture is not exposed by this tool; it
+never selects an input device or requests permission.
+
+Use a unique operation ID for the authorized recording. The existing engine
+ledger handles duplicate calls and recovery with `operations_get`, including
+after engine restart. Never use a new ID merely because a recording response
+was lost. A helper failure or invalid receipt after dispatch yields `unknown`
+and may leave partial files; those files are preserved for inspection.
+
+The result includes the CAF path, byte count and SHA-256, plus frame count,
+sample rate, duration and peak/RMS reported by the native helper. The engine
+checks receipt consistency, rejects symlink artifacts and checks the CAF magic;
+it does not independently decode the audio. `measurements_source=native_helper`
+and `speaker_output_verified=false` preserve that boundary. Silence is valid.
+
+The new engine and HTTP/MCP acceptance tests use a synthetic helper, never an
+actual recording device. They verify one dispatch for duplicate operations,
+restart recovery, permission refusal, partial failures and invalid artifacts.
+Real capture through the packaged engine, microphone device-loss behavior and
+Windows capture remain separate acceptance work.
