@@ -119,6 +119,7 @@ async def test_actual_http_catalog_request_without_picker_or_send(authenticated,
                 result = await backend.http_catalog()
                 assert result['state'] == 'http_catalog_observed'
                 assert result['http_selection_send_supported'] is http_read
+                assert result['generation_transport'] == 'browser_prepared'
             else:
                 with pytest.raises(ConnectionError, match='Authenticated'):
                     await backend.http_catalog()
