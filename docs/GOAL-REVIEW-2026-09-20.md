@@ -233,3 +233,43 @@ The existing competitor decision table remains in the
 [reliability comparison](CHAT-ON-STEROIDS-REVIEW-2026-09-18.md). No second task
 engine, speculative retry loop or copied companion-authentication scheme was
 added to turn these missing requirements into apparent successes.
+
+
+## Queue integration checkpoint, 2026-09-21
+
+This checkpoint supersedes the automatic-queue status in the preceding dated
+entries. PR 150 merged at `65facf02af7cb34f948c0139b5df6525c3c0c1a9` after all
+five Quality jobs passed on `340cb9c347ab3498375e5c935a9350de08154a60` (run
+`35568103164`). The merged tree equals that tested tree. Explicit automatic queue
+observation is now implemented in the stdio MCP controller; the single maintained
+contract is [automatic queue observation](SUBCHAT-PROBE.md#explicit-automatic-queue-observation-development).
+It is not native steer, an OS-resident scheduler or browser-independent sending.
+The sequential JSON-lines interface does not offer this watcher; do not implement
+a second scheduler there to claim interface parity.
+
+Evidence for this checkpoint:
+
+- The final source suite passed 1,651 tests with 19 skips; 318 subchat tests passed.
+  Ruff, mypy (115 source files), README references and bundle consistency passed.
+- A separate controlled-provider harness completed 100 concurrent watch
+  enable/disable and cancellation trials without a child send after cancellation.
+- The installed Anywhere Plugin opened the development controller through its
+  actual Direct MCP session. A controlled provider received the parent and child
+  once each, readonly status observed automatic child submission, and session
+  closure confirmed cleanup. This exercised the installed transport, not real
+  Chat generation, browser focus or a newly installed engine.
+- The macOS CI portable artifact passed verification of 3,154 manifest files and
+  relocated bundled-runtime file roundtrip and regex-child checks. That additional
+  local check used `--runtime-only`; it did not exercise the OS credential vault
+  or native agent. Its temporary archive and extraction were removed.
+
+PRs 148 and 149 also passed all five CI jobs before merging. PR 149's source fix
+retries an owner-pipe timeout during newly spawned agent readiness; identity and
+protocol errors remain fatal. This does not establish the cause of both earlier
+Windows failures or replace real sleep/reboot acceptance.
+
+Quiet new ordinary-Chat submission, authentication lifecycle, authenticated
+immediate communication, child-specific permissions and deployment acceptance
+remain open. Published Beta 1 and the running installation were not updated by
+these merges. Same version labels alone do not establish that a resident engine
+contains the current source or its tool catalog.
