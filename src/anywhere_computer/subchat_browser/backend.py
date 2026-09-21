@@ -76,6 +76,16 @@ class BrowserSubchatBackend:
     def _browser_closed(self, context: BrowserContext) -> None:
         self._closed = True
 
+    def queue_watch_ready(self, submission: SubchatSubmission) -> bool:
+        """Background delivery may reuse a live owned tab, never cold-start Chrome."""
+        context = self._context
+        if context is None or self._closed:
+            return False
+        if context.browser is not None and not context.browser.is_connected():
+            return False
+        return any(not page.is_closed() and page.url == self._url(submission)
+                   for page in self.pages.values())
+
     async def _browser(self) -> BrowserContext:
         async with self._context_lock:
             if self._context is None:

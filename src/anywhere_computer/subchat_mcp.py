@@ -57,6 +57,13 @@ class Wait(OperationId):
     wait_ms: int = Field(default=1000, ge=0, le=10_000)
 
 
+class QueueWatch(OperationId):
+    enabled: bool = True
+
+
+QUEUE_WATCH_INTERVAL = 5.0
+
+
 INSTRUCTIONS = (
     'Ordinary Chat subchats. Use an observed model and effort; never silently substitute. '
     'Recovery may include a call-scoped observation with its operation_id, source, reason '
@@ -79,6 +86,9 @@ INSTRUCTIONS = (
     'recover/wait on its message operation dispatches only after that target completes. '
     'subchat_cancel cancels only a local queued/prepared input, never generation. '
     'No background dispatcher is implied. queued is local acceptance, not delivery. '
+    'Explicit subchat_queue_watch can observe and dispatch an existing queue in this '
+    'controller using an already open owned browser tab. It stops on error or dispatch; '
+    'status exposes queue_watch evidence. It is not saved across controller restart. '
     'mode=steer is currently unsupported by this ordinary Chat adapter; it never falls '
     'back to queue or Stop. Submitted is a receipt, not proof of consumption. '
     'Thinking is pending, not failure. Never repeat an uncertain send with a new ID. '
@@ -115,6 +125,8 @@ class SubchatSession(MCPSession):
         self.recoveries = tasks
         self.closed = False
         self.calls: dict[asyncio.Task[Reply], Request] = {}
+        self.queue_watches: dict[str, asyncio.Task[None]] = {}
+        self.queue_watch_states: dict[str, dict[str, JsonValue]] = {}
 
         async def managed(request: Request) -> Reply:
             if self.closed:
@@ -134,12 +146,14 @@ class SubchatSession(MCPSession):
 
     async def close(self) -> None:
         self.closed = True
-        tasks = [*self.recoveries.values(), *self.calls]
+        tasks = [*self.queue_watches.values(), *self.recoveries.values(), *self.calls]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.recoveries.clear()
         self.calls.clear()
+        self.queue_watches.clear()
+        self.queue_watch_states.clear()
 
 
 def session(service: Subchats, *,
@@ -151,6 +165,32 @@ def session(service: Subchats, *,
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
     recoveries: dict[str, asyncio.Task[SubchatSubmission]] = {}
+
+    async def watch_queue(operation_id: str) -> None:
+        try:
+            while not server.closed:
+                current = service.store.get(operation_id, owner=None)
+                if current.state != 'queued':
+                    server.queue_watch_states[operation_id] = {
+                        'state': 'stopped', 'reason': 'queue_left',
+                        'submission_state': current.state}
+                    return
+                ready = getattr(service.backend, 'queue_watch_ready', None)
+                if ready is None or not ready(current):
+                    server.queue_watch_states[operation_id] = {
+                        'state': 'stopped', 'reason': 'owned_browser_unavailable'}
+                    return
+                await observe(operation_id)
+                if service.store.get(operation_id, owner=None).state == 'queued':
+                    await asyncio.sleep(QUEUE_WATCH_INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            # Stop on errors; a later explicit re-arm is required. Never expose
+            # provider text or repeatedly reload/retry while the user is absent.
+            server.queue_watch_states[operation_id] = {
+                'state': 'stopped', 'reason': 'observation_failed',
+                'error_type': type(error).__name__}
 
     async def observe(operation_id: str) -> SubchatSubmission:
         if server.closed:
@@ -205,6 +245,13 @@ def session(service: Subchats, *,
         return current
 
     definitions: dict[str, tuple[type[Contract], str]] = {
+        'subchat_queue_watch': (QueueWatch, 'Explicitly arm or disarm automatic delivery of an '
+            'existing queued input while this MCP controller remains alive. Requires an already '
+            'open owned browser tab; never launches Chrome. Checks every five seconds, stops on '
+            'errors or after dispatch. At most eight retained watches; disable to release a slot. '
+            'Restart requires explicit re-arming. Disabling observation does not cancel a queue '
+            'or a preparation already in progress; use subchat_cancel for unsent cancellation. '
+            'This is browser-assisted delivery, not quiet HTTP generation or immediate steer.'),
         'subchat_list': (SubchatList, 'List saved submission summaries without opening Chrome.'),
         'subchat_cancel': (OperationId, 'Cancel an unsent queued/prepared input; never stop Chat.'),
         'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
@@ -243,9 +290,39 @@ def session(service: Subchats, *,
 
     async def execute(request: Request) -> Reply:
         try:
+            if request.tool == 'subchat_queue_watch':
+                watch = QueueWatch.model_validate(request.arguments)
+                current = service.store.get(watch.operation_id, owner=None)
+                if not watch.enabled:
+                    watch_task = server.queue_watches.get(watch.operation_id)
+                    if watch_task is not None:
+                        server.queue_watch_states[watch.operation_id] = {'state': 'disabling'}
+                        watch_task.cancel()
+                        await asyncio.gather(watch_task, return_exceptions=True)
+                        if server.queue_watches.get(watch.operation_id) is watch_task:
+                            server.queue_watches.pop(watch.operation_id)
+                            server.queue_watch_states.pop(watch.operation_id, None)
+                    data: dict[str, JsonValue] = {'state': 'disabled'}
+                elif watch.operation_id in server.queue_watches:
+                    data = server.queue_watch_states[watch.operation_id]
+                else:
+                    ready = getattr(service.backend, 'queue_watch_ready', None)
+                    if (current.state != 'queued' or ready is None or not ready(current)):
+                        raise ValueError('Automatic delivery requires a queued input and live tab')
+                    if len(server.queue_watches) >= 8:
+                        raise ValueError('Queue watch limit reached; disable an existing watch')
+                    data = {'state': 'watching'}
+                    server.queue_watch_states[watch.operation_id] = data
+                    server.queue_watches[watch.operation_id] = asyncio.create_task(
+                        watch_queue(watch.operation_id))
+                return Reply(operation_id=request.operation_id, state='completed',
+                             data={'submission_operation_id': watch.operation_id, **data})
             if request.tool == 'subchat_capabilities' and capabilities is not None:
                 Contract.model_validate(request.arguments)
-                data = TypeAdapter(dict[str, JsonValue]).validate_python(capabilities())
+                data = TypeAdapter(dict[str, JsonValue]).validate_python({
+                    **capabilities(),
+                    'queue_watch_supported': hasattr(service.backend, 'queue_watch_ready'),
+                })
                 return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_list':
                 page = service.store.list(SubchatList.model_validate(request.arguments), owner=None)
@@ -332,7 +409,9 @@ def session(service: Subchats, *,
             else:
                 raise ValueError('Unknown subchat tool')
             return Reply(operation_id=request.operation_id, state='completed',
-                         data=result.model_dump(mode='json'))
+                         data={**result.model_dump(mode='json'),
+                               **({'queue_watch': server.queue_watch_states[result.operation_id]}
+                                  if result.operation_id in server.queue_watch_states else {})})
         except asyncio.CancelledError:
             if request.tool == 'subchat_send' and not server.closed:
                 current = service.store.get(request.operation_id, owner=None)

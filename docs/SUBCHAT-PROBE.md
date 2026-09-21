@@ -742,6 +742,50 @@ These are local stdio controls and inherit the existing operator connection.
 They do not establish a child principal, revoke a connector grant, or provide
 read-only isolation. Remote delegated-child authorization remains separate work.
 
+### Explicit automatic queue observation (development)
+
+In the stdio MCP controller, call `subchat_queue_watch` with the queued child's
+`operation_id` to arm automatic observation and delivery. This is separate from
+queue registration. It reuses the existing recovery tasks, input lock and durable
+send reservation; there is no second scheduler service or task database.
+
+```json
+{"operation_id":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"}
+```
+
+The browser backend requires an already open, connected dedicated browser and an
+owned tab for the target conversation before arming and before each observation.
+The watcher cannot cold-start Chrome. It may manipulate that existing browser;
+this is not the quiet, HTTP-only sending path. HTTP-only and providers without this
+capability reject arming. `subchat_capabilities.queue_watch_supported` describes
+adapter support, not current browser readiness.
+
+Pending parent observations are spaced by five seconds. The watcher stops when
+the child leaves `queued`, on an observation/preparation error, or when its owned
+browser becomes unavailable. An uncertain send is never resent. `subchat_status`
+includes controller-local `queue_watch` evidence: `watching`, or `stopped` with a
+reason and, for an error, its type without provider text. Repeating an enabled
+watch returns that watch, including a stopped failure; it does not retry it.
+
+Set `enabled: false` to release a watch. This stops the observation loop, not a
+recovery/preparation already in progress; use `subchat_cancel` to cancel an unsent
+queued/prepared message. To retry a failed watch deliberately, first reconcile its
+saved state, disable it, then re-arm it. At most eight watches, including stopped
+ones retained for inspection, are held per controller. Independent provider reads
+and input operations retain their existing concurrency limits.
+
+Closing the MCP controller cancels and joins its watchers and recovery tasks.
+Queued messages survive in the ledger, but watches are not restored automatically
+after restart. Explicit re-arming requires a live owned tab again; saved `sending`
+records cannot be armed. This addition is available through `--mcp`, not the
+JSON-lines protocol. It does not implement immediate steer, provider Stop, or an
+OS-resident dispatcher.
+
+Verification uses controlled providers and the real SDK/stdio subprocess. It checks
+delivery without caller recovery polling, pending generation, unknown receipts,
+duplicate watch requests, cancellation, connection loss, controller closure and
+bounded watch slots. This is not a new live Chat or fullscreen-interference trial.
+
 ### Tool-boundary delivery: source audit and acceptance gate
 
 The CoS source audit is pinned to `8f76ccc790917b01ee758da6687a1cf9b576ba8a`
