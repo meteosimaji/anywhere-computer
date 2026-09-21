@@ -370,7 +370,7 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
                     if replace_idle and selection is not None:
                         save_runtime_selection(directory, selection)
                     return reply.data
-            except (OSError, ValueError, TimeoutError):
+            except (OSError, ValueError, TimeoutError, OwnerPipeTimeout):
                 pass
             time.sleep(0.1)
         raise RuntimeError("Agent did not become ready. Run anywhere serve to see startup errors.")
