@@ -38,6 +38,7 @@ if TYPE_CHECKING:
     from playwright.async_api import APIRequestContext, BrowserContext, Page, Route
 
 INPUT = Path(__file__).with_name('subchat_input.js').read_text(encoding="utf-8")
+STREAM = Path(__file__).with_name('subchat_stream.js').read_text(encoding='utf-8')
 COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")
 CHAT = re.compile(r'https://chatgpt\.com/c/'
                   r'([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\Z')
@@ -47,9 +48,11 @@ class BrowserSubchatBackend:
     def __init__(self, context: BrowserContext | Callable[[], Awaitable[BrowserContext]],
                  *, http_read: bool = False,
                  http_request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None,
-                 record_request: Callable[[str, str, str], None] | None = None) -> None:
+                 record_request: Callable[[str, str, str], None] | None = None,
+                 record_conversation: Callable[[str, str, str, str], None] | None = None) -> None:
         self.http_read = http_read
         self._record_request = record_request
+        self._record_conversation = record_conversation
         self._http_reader = ChatHTTPReader(http_request_factory)
         self._context = None if callable(context) else context
         self._create_context = context if callable(context) else None
@@ -264,6 +267,22 @@ class BrowserSubchatBackend:
             finally:
                 if not dispatched.done():
                     dispatched.set_result(accepted)
+
+        if self._record_conversation is not None:
+            binding = 'ac_stream_' + submission.operation_id
+
+            def observed(source: dict[str, object], message: str, conversation: str,
+                         account: str) -> None:
+                if source.get('page') is not page or source.get('frame') is not page.main_frame:
+                    raise ValueError('Stream observation came from another frame')
+                if (not isinstance(conversation, str)
+                        or CHAT.fullmatch('https://chatgpt.com/c/' + conversation) is None):
+                    raise ValueError('Invalid stream conversation identity')
+                assert self._record_conversation is not None
+                self._record_conversation(submission.operation_id, message, conversation, account)
+
+            await page.expose_binding(binding, observed)
+            await page.evaluate(STREAM + '\nobserveSubchatStream', binding)
 
         await page.route(pattern, augment)
         try:

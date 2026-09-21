@@ -1611,3 +1611,64 @@ A separate page-local fetch-clone prototype observed the conversation ID in the
 live SSE response but its stream read failed. It was removed after the experiment
 and is not part of the product. This does not establish new-chat identity recovery
 or browser-independent sending. No reasoning text or authentication data was saved.
+
+### Generation stream identity checkpoint, 2026-09-21
+
+The HTTP-read controller observes a bounded clone of its owned page's generation
+SSE response. A full root event supplies a candidate conversation ID; the outgoing
+input ID and request account must match the account-bound `sending` record before
+it is saved. The
+record remains `sending`: subsequent authenticated HTTP history must verify the
+exact saved input, prompt and resources before accepting a receipt. No history
+scan, second generation request or automatic replay is introduced. Unknown event
+formats, stream errors or missing identities leave recovery unconfirmed.
+
+The observer retains only identifiers, not response text, credentials or reasoning.
+It reads at most 4 MiB, bounds each event/buffer to 512 KiB and stops within 60 seconds
+of the response. Its fetch hook expires within 60 seconds of installation. It only
+handles the observed exact generation endpoint and the fetch string-body form;
+other request representations and alternate streaming formats remain unsupported.
+A crash before the candidate is saved still requires manual reconciliation.
+
+Controlled tests exercise concurrent page streams, split chunks, nested decoys,
+unchanged original response, wrong-input/conflicting-ID refusal, reopened storage
+and the actual backend dispatch hook. Live operation
+`719d4cc00b2d432f9c058ec9b2264ce1` saved conversation
+`6ab07408-d14c-83ee-9703-0192f45611ab` while still `sending`, without calling
+recovery. A fresh controller with no owned pages then reopened the ledger and
+recovered input `4a6de0eb-f72b-428d-b5e8-ccdcb4df1537`, final
+`49ac7687-90fe-488f-8a5e-4facc7cc9713`, text `AC_STREAM_RECEIPT_OK` using independent
+HTTP reads with zero new pages. This reused this process's in-memory authorization;
+it was not an OS/process restart or independent login test.
+
+A separate experimental independent HTTP generation POST was rejected with HTTP
+403 and HTML, operation `2e53530eee6e42aaa00477ce3d5fb60c`, input
+`650d62c3-72af-4c93-815f-71d60d717b74`. The browser request was aborted before
+forwarding; the standalone client made one attempt using the observed authorization,
+account and language headers and the prepared body. No retry, copied cookies or
+protection-bypass fallback was attempted. This does not establish the cause of
+403, universal impossibility, or successful independent generation. The experiment
+is not shipped as a send backend. Browser-free sending remains unfinished.
+
+The normal Chat contract review (input `dde67b3d-d54b-4583-b6ab-c8d84a5145f0`,
+final `845d4837-9ca2-4a06-9723-4bfef3631468`, reported `gpt-5-6-thinking` / `extended`)
+identified the need to compare the observed request account at candidate save,
+not merely require an existing account binding. That comparison and regression
+are included. Its other concerns remain explicitly bounded: missing stream IDs
+remain unknown, and legacy records keep their existing recovery path. There is
+no new mandatory stored field or migration. This was contract review, not an
+independent execution of the implementation.
+
+After the request-account comparison was added, live operation
+`69775696c80845769f4b5e551eddceaa` again saved its candidate before recovery and a
+fresh controller recovered final `7b9d45ff-282b-4608-97f8-1650cf102c4a`, text
+`AC_STREAM_RECEIPT_OK`, with zero owned/new pages. Conversation:
+`6ab0759c-eaa8-83e9-b64b-268009689213`; input:
+`cdd5d92b-9df7-493f-acc4-55a68ac7d1d1`. This is final-source live acceptance of
+candidate capture plus HTTP recovery, still with browser-prepared generation.
+
+A controlled consumed-response regression failed before the observer guarded
+`response.clone()`: another wrapper consuming the body caused the observer to
+reject the application's otherwise resolved fetch. Clone failure now returns the
+original response unchanged and supplies no candidate. This is controlled browser
+compatibility evidence, not a reproduced third-party extension failure.

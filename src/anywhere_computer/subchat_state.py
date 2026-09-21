@@ -315,6 +315,23 @@ class SubchatSubmissions:
             old, old.model_copy(update={'user_message_id': user_message_id,
                                         'provider_account_id': provider_account_id}), owner)
 
+    def observe_conversation(self, operation_id: str, user_message_id: str,
+                             conversation_id: str, *, owner: str | None,
+                             provider_account_id: str) -> SubchatSubmission:
+        """Save a transport candidate; HTTP history must still verify acceptance."""
+        old = self.get(operation_id, owner=owner)
+        if (old.state != 'sending' or old.user_message_id != user_message_id
+                or old.provider_account_id is None
+                or old.provider_account_id != provider_account_id):
+            raise ValueError('Conversation candidate does not match the outgoing request')
+        if (not conversation_id.strip() or len(conversation_id) > 256
+                or old.conversation_id not in {None, conversation_id}):
+            raise ValueError('Conversation candidate changed')
+        if old.conversation_id == conversation_id:
+            return old
+        return self._replace(
+            old, old.model_copy(update={'conversation_id': conversation_id}), owner)
+
     def submitted(self, operation_id: str, conversation_id: str, user_message_id: str,
                   *, owner: str | None) -> SubchatSubmission:
         old = self.get(operation_id, owner=owner)
