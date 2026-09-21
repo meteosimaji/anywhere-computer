@@ -90,7 +90,8 @@ asyncio.run(main())
                 initialized = await client.initialize()
                 assert initialized.serverInfo.name == "anywhere-computer"
                 tools = await client.list_tools()
-                assert len(tools.tools) == 66
+                assert len(tools.tools) == 67
+                assert "gui_native_press" in {tool.name for tool in tools.tools}
                 # An unavailable optional integration must not disable core tools.
                 unavailable = await client.call_tool("codex_skills_list", {"cwd": str(tmp_path)})
                 assert unavailable.isError
