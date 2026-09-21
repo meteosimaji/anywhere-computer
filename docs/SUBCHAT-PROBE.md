@@ -1681,6 +1681,38 @@ an exact HTTP catalog choice; it never means independent HTTP generation. CLI
 and MCP share this response, and MCP instructions explicitly state the remaining
 browser requirement. The independent POST experiment above remains unsuccessful.
 
+### Standalone send acceptance boundary
+
+The intended replacement is an Anywhere-owned HTTP sender, not another hidden
+browser window. Current `BrowserSubchatBackend.prepare` still navigates an owned
+page, selects the model/effort through controls, checks the empty composer and
+records rendered history. `send` intercepts the page-created generation POST,
+validates its input/account/selection, checkpoints the input ID and continues the
+original browser request. `_send` still inserts a draft and submits the composer.
+Thus HTTP payload validation and interception do not constitute standalone sending.
+
+A replacement must reuse the existing reservation, input/conversation checkpoints
+and history verification, rather than introduce a second task ledger. Acceptance
+must demonstrate, separately:
+
+1. After explicitly identified authentication bootstrap, no Chrome process is
+   needed for one new ordinary Chat input, response stream and final-text recovery.
+2. Requested model, effort, account and input identity match the saved provider
+   input; a successful HTTP status alone is insufficient.
+3. Loss of the response after dispatch preserves an uncertain submission and
+   permits reconciliation without repeating the generation request. Missing
+   conversation identity must remain explicit, not trigger history-wide guessing.
+4. Follow-up and user interruption preserve the same identity checks; stopped
+   Thinking without a final answer is not reported as completed text.
+5. Authentication expiry and a fresh Anywhere process have tested, explicit
+   recovery behavior. Bootstrap-only success does not prove independent login
+   or credential refresh.
+
+The independent POST's 403 establishes a failed attempt, not which preparation
+step is required. Observed request-header names do not establish a supported
+authentication contract. No independent sender is enabled until these boundaries
+have corresponding evidence; browser-prepared sending remains accurately labeled.
+
 A passive metadata-only observation of normal operation
 `594f23943f764c22b4db4e3a24b507db` found conversation initialization and generation
 preparation requests before the generation POST. The outgoing generation included
