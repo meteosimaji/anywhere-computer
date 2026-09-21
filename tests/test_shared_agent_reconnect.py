@@ -29,6 +29,7 @@ PERMISSIONS = frozenset({"computer_status", "files_write", "files_read", "operat
 def isolated_agent(tmp_path, monkeypatch):
     directory = tmp_path / "shared-agent"
     children = []
+    diagnostics = []
     spawn = subprocess.Popen
     source = Path(connection.__file__).resolve().parents[1]
     program = (
@@ -42,10 +43,14 @@ def isolated_agent(tmp_path, monkeypatch):
     def launch(command, **kwargs):
         assert command[0] == sys.executable
         assert command[-3:] == ["serve", "--state-dir", str(directory)]
-        child = spawn(
-            [sys.executable, "-I", "-u", "-c", program, str(directory), str(source)],
-            **kwargs,
-        )
+        log = tmp_path / f"agent-{len(children)}.stderr"
+        with log.open('wb') as stderr:
+            kwargs['stderr'] = stderr
+            child = spawn(
+                [sys.executable, "-I", "-u", "-c", program, str(directory), str(source)],
+                **kwargs,
+            )
+        diagnostics.append(log)
         children.append(child)
         return child
 
@@ -62,6 +67,13 @@ def isolated_agent(tmp_path, monkeypatch):
         except subprocess.TimeoutExpired:
             child.kill()
             child.wait(timeout=10)
+    # Pytest shows captured teardown output on failure. Only disposable fixture
+    # processes write here; never collect installed-agent logs or credentials.
+    for child, log in zip(children, diagnostics, strict=True):
+        with log.open('rb') as stderr:
+            stderr.seek(max(0, log.stat().st_size - 8192))
+            tail = stderr.read().decode('utf-8', errors='replace')
+        print(f'fixture agent pid={child.pid} exit={child.returncode}: {tail}')
 
 
 def initialize_packet():
@@ -251,6 +263,7 @@ async def test_concurrent_catalog_recovery_launches_one_agent(
             for index in range(4)
         ])
         for result in results:
+            assert 'result' in result, result
             assert "files_read" in {tool["name"] for tool in result["result"]["tools"]}
         assert len(children) == 2
 
