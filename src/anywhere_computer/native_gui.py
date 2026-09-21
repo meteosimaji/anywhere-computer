@@ -30,9 +30,12 @@ class NativeObserve(NativeSession, NativeApp):
     window_id: int = Field(strict=True, ge=1)
 
 
-class NativeSetValue(NativeObserve):
+class NativePress(NativeObserve):
     observation_id: str = Field(min_length=1, max_length=128)
     element_ref: str = Field(min_length=1, max_length=128)
+
+
+class NativeSetValue(NativePress):
     value: str = Field(max_length=8000)
 
 
@@ -184,6 +187,18 @@ class NativeGUI:
                 "method": "set_value", "app": args.app, "window_id": args.window_id,
                 "observation_id": args.observation_id, "element_ref": args.element_ref,
                 "value": args.value,
+            }, mutation=True)
+
+    async def press(self, args: NativePress, *, owner: str | None) -> dict[str, JsonValue]:
+        async with self.lock:
+            entry = self._entry(args.session_id, owner)
+            if args.observation_id not in entry.observations:
+                raise ValueError("Native GUI observation unavailable; observe again")
+            for current in self.entries.values():
+                current.observations.clear()
+            return await self._call(args.session_id, {
+                "method": "press", "app": args.app, "window_id": args.window_id,
+                "observation_id": args.observation_id, "element_ref": args.element_ref,
             }, mutation=True)
 
     async def stop(self, args: NativeSession, *, owner: str | None) -> dict[str, JsonValue]:

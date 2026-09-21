@@ -78,6 +78,7 @@ from .native_gui import (
     NativeGUI,
     NativeGUIOutcomeUnknown,
     NativeObserve,
+    NativePress,
     NativeSession,
     NativeSetValue,
 )
@@ -162,6 +163,9 @@ class Engine:
         async def native_set(args: NativeSetValue) -> Result:
             return await self.native_gui.set_value(args, owner=self._plugin_owner.get())
 
+        async def native_press(args: NativePress) -> Result:
+            return await self.native_gui.press(args, owner=self._plugin_owner.get())
+
         async def native_close(args: NativeSession) -> Result:
             return await self.native_gui.stop(args, owner=self._plugin_owner.get())
 
@@ -178,6 +182,11 @@ class Engine:
                       "readback verification, never file-save verification. Observe again and "
                       "verify the requested effect independently. Never automatically retries.",
                       NativeSetValue, native_set, destructive=True, open_world=True)
+        self.register("gui_native_press", "Perform AXPress once on an observed pressable element. "
+                      "Revalidates the target and invalidates native observations; no coordinate "
+                      "click or app activation. Action acceptance is not task completion. Observe "
+                      "again to verify the effect; never replay an unknown outcome.",
+                      NativePress, native_press, destructive=True, open_world=True)
         self.register("gui_native_close", "Close an owned native helper and its references. "
                       "Does not close the target application.", NativeSession, native_close)
 

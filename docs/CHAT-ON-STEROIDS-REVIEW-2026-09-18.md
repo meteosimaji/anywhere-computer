@@ -494,3 +494,13 @@ The live/controlled evidence and unsupported formats are maintained in
 [the subchat contract](SUBCHAT-PROBE.md#generation-stream-identity-checkpoint-2026-09-21).
 An independent HTTP POST experiment returned 403; it is not advertised or shipped
 as browser-free generation. No credential or protection bypass is added.
+
+### Native action selection, 2026-09-21
+
+The native-control comparison is applied as an AXPress operation over the existing
+owner-scoped GUI provider, rather than another browser/agent runtime. This extends
+the existing AXValue path to observed buttons without a coordinate or foreground
+fallback. Action acceptance is not postcondition verification. The live changed
+button-title refusal and one-effect/reused-observation checks are recorded in
+[GUI reliability](GUI-RELIABILITY-2026-09-14.md). Windows UIA and arbitrary
+coordinate/keyboard actions remain outside this change, not implied by Mac success.

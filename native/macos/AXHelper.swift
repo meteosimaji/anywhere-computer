@@ -53,6 +53,7 @@ private struct WindowRecord {
 private struct ObservedElement {
     let element: AXUIElement
     let valueDigest: Data?
+    let pressIdentity: Data?
 }
 
 private func valueDigest(_ value: CFTypeRef?) -> Data? {
@@ -67,6 +68,24 @@ private func valueDigest(_ value: CFTypeRef?) -> Data? {
         return Data([2]) + Data(SHA256.hash(data: encoded))
     }
     return nil // Unsupported values remain observable but cannot be safely replaced.
+}
+
+// The action and its visible identity must be observed, then rechecked before dispatch.
+private func pressIdentity(_ element: AXUIElement) throws -> Data? {
+    var raw: CFArray?
+    let status = AXUIElementCopyActionNames(element, &raw)
+    if status == .attributeUnsupported || status == .noValue || status == .actionUnsupported {
+        return nil
+    }
+    guard status == .success else { throw helperError("ax_error") }
+    guard let actions = raw as? [String], actions.contains(kAXPressAction as String) else {
+        return nil
+    }
+    let attributes = [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
+                      kAXHelpAttribute, kAXIdentifierAttribute]
+    let identity: [String?] = try attributes.map { try stringAttribute(element, $0 as CFString) }
+    let data = try JSONEncoder().encode(identity)
+    return Data(SHA256.hash(data: data))
 }
 
 private struct ObservationRecord {
@@ -574,7 +593,9 @@ private final class AXHelper {
         let label = try labelForElement(element, deadline: deadline)
         try deadline.check()
         let observedValue = try copyOptionalAttribute(element, kAXValueAttribute as CFString)
-        refs[ref] = ObservedElement(element: element, valueDigest: valueDigest(observedValue))
+        let press = try pressIdentity(element)
+        refs[ref] = ObservedElement(element: element, valueDigest: valueDigest(observedValue),
+                                    pressIdentity: press)
         let value = jsonScalar(observedValue)
         try deadline.check()
         let enabled = try boolAttribute(element, kAXEnabledAttribute as CFString)
@@ -589,6 +610,7 @@ private final class AXHelper {
             "value": value.0,
             "enabled": enabled ?? NSNull(),
             "settable": settable,
+            "pressable": press != nil,
             "children": [[String: Any]](),
         ]
         if label.1 { node["label_truncated"] = true }
@@ -715,6 +737,7 @@ private final class AXHelper {
                 "screen_capture": false,
                 "keyboard": false,
                 "click": false,
+                "press": true,
                 "set_value": true,
             ],
         ]
@@ -761,12 +784,13 @@ private final class AXHelper {
         ]
     }
 
-    private func setValueResult(
+    private func mutateResult(
         app: String,
         windowID: Int,
         observationID: String,
         elementRef: String,
         rawValue: Any?,
+        press: Bool = false,
         deadline: RequestDeadline
     ) throws -> [String: Any] {
         try deadline.check()
@@ -787,7 +811,7 @@ private final class AXHelper {
         // Consume before a possible effect; an ambiguous AX set is never replayable.
         observations.removeAll()
 
-        let requested = try requestedCFValue(rawValue)
+        let requested = press ? nil : try requestedCFValue(rawValue)
         let record = try windowRecord(windowID, app: app)
         guard record.process == observation.process else {
             throw helperError("process_identity_changed")
@@ -823,7 +847,7 @@ private final class AXHelper {
             throw helperError("element_not_enabled")
         }
         try deadline.check()
-        guard try valueIsSettable(currentElement) else {
+        if try !press && !valueIsSettable(currentElement) {
             throw helperError("value_not_settable")
         }
         let before = try copyOptionalAttribute(currentElement, kAXValueAttribute as CFString)
@@ -832,8 +856,23 @@ private final class AXHelper {
             throw helperError("value_not_comparable")
         }
         guard expected == current else { throw helperError("value_changed") }
+        if press {
+            guard enabledState.value == true else { throw helperError("element_not_enabled") }
+            guard let expected = observedElement.pressIdentity,
+                  let current = try pressIdentity(currentElement), expected == current else {
+                throw helperError("press_target_changed")
+            }
+            try deadline.check()
+            let status = AXUIElementPerformAction(currentElement, kAXPressAction as CFString)
+            guard status == .success else { throw helperError("ax_error") }
+            return ["process_id": Int(record.process.pid), "window_id": windowID,
+                    "observation_id": observationID, "element_ref": elementRef,
+                    "action": "AXPress", "action_accepted": true,
+                    "postcondition_verified": false]
+        }
         // No mutation is attempted after the request budget has expired.
         try deadline.check()
+        guard let requested else { throw helperError("invalid_input") }
 
         let status = AXUIElementSetAttributeValue(
             currentElement,
@@ -888,19 +927,20 @@ private final class AXHelper {
             let windowID = try positiveInt(object["window_id"])
             return try observeResult(app: app, windowID: windowID, deadline: deadline)
 
-        case "set_value":
+        case "set_value", "press":
             let windowID = try positiveInt(object["window_id"])
             let observationID = try nonEmptyString(object["observation_id"], maxBytes: 128)
             let elementRef = try nonEmptyString(object["element_ref"], maxBytes: 128)
-            guard object.keys.contains("value") else {
+            guard (method == "set_value") == object.keys.contains("value") else {
                 throw helperError("invalid_input")
             }
-            return try setValueResult(
+            return try mutateResult(
                 app: app,
                 windowID: windowID,
                 observationID: observationID,
                 elementRef: elementRef,
                 rawValue: object["value"],
+                press: method == "press",
                 deadline: deadline
             )
 
