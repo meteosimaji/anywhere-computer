@@ -64,6 +64,12 @@ class BrowserSubchatBackend:
         if self._context is not None:
             self._context.on('close', self._browser_closed)
 
+    def capabilities(self) -> dict[str, object]:
+        return {'state': 'capabilities', 'transport': 'browser_prepared',
+                'browser_required': True, 'generation_transport': 'browser_prepared',
+                'http_selection_send_supported': self.http_read,
+                'credential_refresh': False, 'independent_login': False}
+
     def _browser_closed(self, context: BrowserContext) -> None:
         self._closed = True
 

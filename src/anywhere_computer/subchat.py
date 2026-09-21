@@ -94,6 +94,15 @@ class SubchatPreparationFailed(ValueError):
     """Preparation failed before dispatch; provider details remain local."""
 
 
+class SubchatUnsupported(ValueError):
+    """An explicit unavailable capability; no fallback or automatic retry is allowed."""
+
+    def __init__(self, code: Literal['http_generation_unavailable', 'http_session_required',
+                                    'ui_unavailable']) -> None:
+        self.code = code
+        super().__init__(code)
+
+
 class Subchats:
     def __init__(self, store: SubchatSubmissions, backend: SubchatBackend) -> None:
         self.store = store
@@ -139,7 +148,7 @@ class Subchats:
             return submission
         try:
             baseline = await self.backend.prepare(submission)
-        except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError):
+        except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError, SubchatUnsupported):
             raise
         except Exception as error:
             raise SubchatPreparationFailed(str(error)) from error

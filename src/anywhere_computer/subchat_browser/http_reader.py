@@ -1,17 +1,25 @@
-"""Read-only Chat HTTP session, bootstrapped from the dedicated browser once."""
+"""Read-only Chat HTTP session, with browser bootstrap or explicit in-memory handoff."""
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
-from ..subchat import SubchatAccessError, SubchatAnswer, SubchatPendingObservation, SubchatReceipt
+from ..subchat import (
+    SubchatAccessError,
+    SubchatAnswer,
+    SubchatPendingObservation,
+    SubchatReceipt,
+    SubchatUnsupported,
+)
 from ..subchat_state import SubchatAccountMismatch, SubchatSubmission
 from .catalog import observe_http_catalog, project_http_catalog
 from .history import observe_history, project_observation, project_receipt
 
 if TYPE_CHECKING:
     from playwright.async_api import APIRequestContext, BrowserContext, Page, Response
+
+    from ..subchat_http_session import ObservedHTTPSession
 
 
 class ChatHTTPReader:
@@ -20,14 +28,18 @@ class ChatHTTPReader:
     Only history and the observed model-catalog URL are requested. Cookies stay
     with the browser context; an injected standalone client receives no copied cookies.
     Its owner manages disposal. No generation, redirects or automatic retries.
+    Browser-free mode cannot create a page, acquire credentials or repair access.
     """
 
-    def __init__(self, request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None
-                 ) -> None:
+    def __init__(self, request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None,
+                 *, browser_free: bool = False, session: ObservedHTTPSession | None = None) -> None:
+        if (browser_free and request_factory is None) or (session is not None and not browser_free):
+            raise ValueError('Explicit HTTP sessions require a browser-free request factory')
         self._request_factory = request_factory
+        self._browser_free = browser_free
         self._context: BrowserContext | None = None
-        self._headers: dict[str, str] = {}
-        self._catalog_url: str | None = None
+        self._headers: dict[str, str] = session.headers() if session is not None else {}
+        self._catalog_url: str | None = session.catalog_url if session is not None else None
         self._access_status: int | None = None
         self._denied_urls: set[str] = set()
 
@@ -38,10 +50,15 @@ class ChatHTTPReader:
                 and (self._access_status is not None
                      or bool(self._headers) and (not catalog or self._catalog_url is not None)))
 
-    async def _read(self, context: BrowserContext, url: str | None,
+    async def _read(self, context: BrowserContext | None, url: str | None,
                     observe: Callable[[Page], Awaitable[Response]],
                     expected_account: str | None = None) -> bytes:
-        if self._context is not context:
+        if self._browser_free:
+            if context is not None:
+                raise ValueError('A browser-free reader cannot accept a browser context')
+        elif context is None:
+            raise ValueError('Browser bootstrap requires an explicit context')
+        elif self._context is not context:
             self._context = context
             self._headers = {}
             self._catalog_url = None
@@ -52,6 +69,9 @@ class ChatHTTPReader:
         if url in self._denied_urls:
             raise SubchatAccessError(403)
         if not self._headers or url is None:
+            if self._browser_free:
+                raise SubchatUnsupported('http_session_required')
+            assert context is not None
             page = await context.new_page()
             try:
                 response = await observe(page)
@@ -71,8 +91,11 @@ class ChatHTTPReader:
             finally:
                 await asyncio.wait_for(page.close(), timeout=5)
         self._check_account(expected_account)
-        request = (await self._request_factory() if self._request_factory is not None
-                   else context.request)
+        if self._request_factory is not None:
+            request = await self._request_factory()
+        else:
+            assert context is not None
+            request = context.request
         response_http = await request.get(
             url, headers=self._headers, timeout=15_000, max_redirects=0, max_retries=0)
         try:
@@ -106,16 +129,20 @@ class ChatHTTPReader:
                 and self._headers.get('chatgpt-account-id') != expected_account):
             raise SubchatAccountMismatch('Saved submission belongs to a different Chat account')
 
-    async def history(self, context: BrowserContext,
+    async def history(self, context: BrowserContext | None,
                       submission: SubchatSubmission) -> SubchatAnswer | SubchatPendingObservation:
         return project_observation(await self._history_payload(context, submission), submission)
 
-    async def receipt(self, context: BrowserContext,
+    async def receipt(self, context: BrowserContext | None,
                       submission: SubchatSubmission) -> SubchatReceipt | None:
         return project_receipt(await self._history_payload(context, submission), submission)
 
-    async def _history_payload(self, context: BrowserContext,
+    async def _history_payload(self, context: BrowserContext | None,
                                submission: SubchatSubmission) -> bytes:
+        # Report a missing/expired explicit session before account comparison. This
+        # never bootstraps a browser or makes a request when authorization is absent.
+        if self._browser_free and (not self._headers or self._access_status is not None):
+            await self.catalog(context)
         # Establish the account on a non-conversation read before requesting a
         # bound operation's history. Never probe another account's conversation.
         if (submission.provider_account_id is not None
@@ -130,7 +157,7 @@ class ChatHTTPReader:
             'https://chatgpt.com/backend-api/conversations/' + str(submission.conversation_id),
             observe, expected_account=submission.provider_account_id)
 
-    async def catalog(self, context: BrowserContext) -> dict[str, object]:
+    async def catalog(self, context: BrowserContext | None) -> dict[str, object]:
         async def observe(page: Page) -> Response:
             response = await observe_http_catalog(page)
             self._catalog_url = response.url  # Preserve observed query parameters.
@@ -138,5 +165,5 @@ class ChatHTTPReader:
 
         payload = await self._read(context, self._catalog_url, observe)
         result = project_http_catalog(payload)
-        result['source'] = 'browser_session_http'
+        result['source'] = 'preauthenticated_http' if self._browser_free else 'browser_session_http'
         return result

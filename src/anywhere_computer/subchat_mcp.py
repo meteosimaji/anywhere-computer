@@ -18,6 +18,7 @@ from .subchat import (
     SubchatPreparationFailed,
     Subchats,
     SubchatStaleTarget,
+    SubchatUnsupported,
 )
 from .subchat_content import SubchatResources
 from .subchat_state import (
@@ -108,7 +109,8 @@ INSTRUCTIONS = (
 
 class SubchatSession(MCPSession):
     def __init__(self, catalog: ToolCatalog, execute: Execute,
-                 tasks: dict[str, asyncio.Task[SubchatSubmission]]) -> None:
+                 tasks: dict[str, asyncio.Task[SubchatSubmission]],
+                 *, instructions: str = INSTRUCTIONS) -> None:
         self.recoveries = tasks
         self.closed = False
         self.calls: dict[asyncio.Task[Reply], Request] = {}
@@ -127,7 +129,7 @@ class SubchatSession(MCPSession):
             finally:
                 self.calls.pop(task, None)
 
-        super().__init__(catalog, managed, instructions=INSTRUCTIONS)
+        super().__init__(catalog, managed, instructions=instructions)
 
     async def close(self) -> None:
         self.closed = True
@@ -142,6 +144,7 @@ class SubchatSession(MCPSession):
 def session(service: Subchats, *,
             observe_catalog: Callable[[str | None], Awaitable[dict[str, object]]] | None = None,
             observe_http_catalog: Callable[[], Awaitable[dict[str, object]]] | None = None,
+            instructions: str | None = None,
             ) -> SubchatSession:
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
@@ -211,6 +214,11 @@ def session(service: Subchats, *,
                          'the current saved state, not a failed generation.'),
     }
 
+    capabilities = getattr(service.backend, 'capabilities', None)
+    if capabilities is not None:
+        definitions['subchat_capabilities'] = (
+            Contract, 'Read configured transport capabilities without network or browser work.')
+
     if observe_catalog is not None:
         definitions['subchat_catalog'] = (
             Catalog, 'Observe model labels and effort without sending. Optionally select an '
@@ -219,7 +227,8 @@ def session(service: Subchats, *,
             'A partial catalog preserves known models; never infer missing effort choices. '
             'source=http observes the dedicated browser app catalog without picker interaction; '
             'model must be omitted. Returned transport IDs are not UI labels for subchat_send. '
-            'This still requires the dedicated browser, not independent HTTP login.')
+            'Uses the configured transport; inspect subchat_capabilities when available. '
+            'An HTTP catalog does not establish independent login or generation support.')
 
     async def catalog() -> list[JsonValue]:
         return [cast(JsonValue, {
@@ -230,6 +239,10 @@ def session(service: Subchats, *,
 
     async def execute(request: Request) -> Reply:
         try:
+            if request.tool == 'subchat_capabilities' and capabilities is not None:
+                Contract.model_validate(request.arguments)
+                data = TypeAdapter(dict[str, JsonValue]).validate_python(capabilities())
+                return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_list':
                 page = service.store.list(SubchatList.model_validate(request.arguments), owner=None)
                 return Reply(operation_id=request.operation_id, state='completed',
@@ -351,6 +364,13 @@ def session(service: Subchats, *,
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Queue target is stale; inspect the conversation before continuing.',
                          data={'error_code': 'stale_target', 'dispatched': False})
+        except SubchatUnsupported as error:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='The configured transport cannot perform this operation. '
+                               'No browser, alternative backend or automatic retry is used.',
+                         data={'error_code': error.code, 'automatic_retry': False,
+                               **({'dispatched': False}
+                                  if error.code == 'http_generation_unavailable' else {})})
         except SubchatPreparationFailed:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Adapter preparation failed before dispatch. Check for an existing '
@@ -372,5 +392,6 @@ def session(service: Subchats, *,
                          error='Subchat call failed; inspect its saved status before retrying.',
                          data={'error_type': type(error).__name__})
 
-    server = SubchatSession(catalog, execute, recoveries)
+    server = SubchatSession(catalog, execute, recoveries,
+                            instructions=INSTRUCTIONS if instructions is None else instructions)
     return server
