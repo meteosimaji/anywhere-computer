@@ -160,3 +160,8 @@ A controlled slow-read fixture previously blocked a second independent recovery;
 it now completes the second result before releasing the first. This is inner MCP
 scheduling evidence, not proof that an enclosing direct-MCP transport multiplexes
 calls or that live ChatGPT permits any particular parallel generation rate.
+
+Concurrent first use also shares one lazily initialized HTTP client. A controlled
+catalog/recovery race reproduced duplicate initialization before the fix; normal
+and exceptional shutdown now dispose that client once. Only initialization is
+locked, not the independent HTTP reads.

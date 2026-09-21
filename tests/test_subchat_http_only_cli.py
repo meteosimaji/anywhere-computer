@@ -92,7 +92,9 @@ def test_cli_invalid_session_redacted_before_any_operation(tmp_path):
 
 
 @pytest.mark.parametrize('fail', [False, True])
-async def test_http_only_cli_owns_only_request_client_and_disposes_it(tmp_path, monkeypatch, fail):
+@pytest.mark.parametrize('concurrent', [False, True])
+async def test_http_only_cli_owns_only_request_client_and_disposes_it(
+        tmp_path, monkeypatch, fail, concurrent):
     import playwright.async_api
 
     from anywhere_computer import subchat_cli
@@ -112,6 +114,7 @@ async def test_http_only_cli_owns_only_request_client_and_disposes_it(tmp_path, 
     async def new_context(**kwargs):
         assert kwargs == {}  # No browser profile, cookies or storage_state imported.
         events.append('client')
+        await asyncio.sleep(0)  # Allow simultaneous first-use initialization to race.
         return client
 
     @asynccontextmanager
@@ -130,19 +133,28 @@ async def test_http_only_cli_owns_only_request_client_and_disposes_it(tmp_path, 
     monkeypatch.setattr(subchat_cli.sys, 'stdin',
                         StringIO(''.join(json.dumps(item) + '\n' for item in commands)))
     monkeypatch.setattr(subchat_cli.sys, 'stdout', output)
+    if concurrent or fail:
+        async def controlled(service, source, destination):
+            if concurrent:
+                results = await asyncio.gather(
+                    service.backend.http_catalog(),
+                    service.recover(submission.operation_id, owner=None))
+                assert results[1].state == 'completed'
+            else:
+                await service.backend.http_catalog()
+            if fail:
+                raise RuntimeError('fixture observer failure')
+        monkeypatch.setattr(subchat_cli, 'process_lines', controlled)
     if fail:
-        async def broken(service, source, destination):
-            await service.backend.http_catalog()
-            raise RuntimeError('fixture observer failure')
-        monkeypatch.setattr(subchat_cli, 'process_lines', broken)
         with pytest.raises(RuntimeError, match='fixture observer failure'):
             await subchat_cli.run(None, tmp_path, http_only=True, http_session=credentials())
     else:
         await subchat_cli.run(None, tmp_path, http_only=True, http_session=credentials())
-        replies = list(map(json.loads, output.getvalue().splitlines()))
-        assert replies[0]['generation_transport'] == 'unavailable'
-        assert replies[1]['state'] == 'completed'
-        assert replies[1]['answer'] == '日本語 result'
+        if not concurrent:
+            replies = list(map(json.loads, output.getvalue().splitlines()))
+            assert replies[0]['generation_transport'] == 'unavailable'
+            assert replies[1]['state'] == 'completed'
+            assert replies[1]['answer'] == '日本語 result'
     assert events == ['runtime', 'client', 'client_closed', 'runtime_closed']
     assert SECRET not in output.getvalue()
 
