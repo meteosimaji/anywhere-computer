@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from typing import Literal, cast
 
 from pydantic import Field, JsonValue, TypeAdapter
@@ -145,6 +146,7 @@ def session(service: Subchats, *,
             observe_catalog: Callable[[str | None], Awaitable[dict[str, object]]] | None = None,
             observe_http_catalog: Callable[[], Awaitable[dict[str, object]]] | None = None,
             instructions: str | None = None,
+            serialize_recovery: bool = True,
             ) -> SubchatSession:
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
@@ -162,7 +164,9 @@ def session(service: Subchats, *,
                 raise RuntimeError('Recovery limit reached; collect existing observations first')
 
             async def run() -> SubchatSubmission:
-                async with browser_lock:
+                lock = browser_lock if serialize_recovery or current.state == 'queued' else (
+                    nullcontext())
+                async with lock:
                     if current.state == 'queued':
                         return await service.recover(operation_id, owner=None)
                     async with asyncio.timeout(25):

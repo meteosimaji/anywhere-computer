@@ -241,7 +241,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'a completed answer. Queued work is never sent by this adapter.')
                 server = session(service, observe_catalog=backend.catalog,
                                  observe_http_catalog=backend.http_catalog,
-                                 instructions=instructions)
+                                 instructions=instructions, serialize_recovery=not http_only)
                 try:
                     await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
                 finally:

@@ -152,3 +152,11 @@ All three exited 0 with no stderr. This verifies product-CLI recovery and persis
 results across process restart, not authentication renewal, fresh generation,
 OS restart or retention of an in-progress provider stream. Original live state
 was not modified; no generation was sent and no Chrome launch was permitted.
+
+HTTP-only MCP recovery permits separate operation IDs to be observed concurrently
+within the existing eight-recovery limit. Same-operation observers share the
+existing task. Browser-assisted recovery and queued dispatch retain serialization.
+A controlled slow-read fixture previously blocked a second independent recovery;
+it now completes the second result before releasing the first. This is inner MCP
+scheduling evidence, not proof that an enclosing direct-MCP transport multiplexes
+calls or that live ChatGPT permits any particular parallel generation rate.
