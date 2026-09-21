@@ -4,8 +4,7 @@ function observeSubchatStream(binding) {
   let active = true;
   const wrapped = async function (...args) {
     const response = await Reflect.apply(original, this, args);
-    if (!active || response.url !== 'https://chatgpt.com/backend-api/f/conversation' ||
-        !response.ok || !response.headers.get('content-type')?.includes('text/event-stream')) return response;
+    if (!active || response.url !== 'https://chatgpt.com/backend-api/f/conversation') return response;
     let input, account;
     try {
       const body = JSON.parse(args[1]?.body);
@@ -17,6 +16,14 @@ function observeSubchatStream(binding) {
     } catch { return response; }
     active = false;
     if (window.fetch === wrapped) window.fetch = original;
+    if (!response.ok) {
+      if (response.status >= 400 && response.status <= 599) {
+        // Never read provider error bodies: they can contain account data.
+        void window[binding](input, null, account, response.status).catch(() => {});
+      }
+      return response;
+    }
+    if (!response.headers.get('content-type')?.includes('text/event-stream')) return response;
     let reader;
     try { reader = response.clone().body?.getReader(); }
     catch { return response; }

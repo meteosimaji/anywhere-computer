@@ -1735,3 +1735,41 @@ The observed generation completed in conversation
 Its contract review correctly did not infer a unique cause from 403; that response
 is not independent network diagnosis. A fresh controller's live HTTP catalog also
 returned the explicit `browser_prepared` capability with zero new pages.
+
+
+### Independent HTTP diagnosis and rejected-send evidence, 2026-09-21
+
+Live requests narrowed the earlier standalone-send failure: a fresh httpx catalog
+GET returned 403 HTML with `cf-mitigated=challenge`. The same observed catalog URL
+and authorization/account/language headers in an independent Playwright
+APIRequestContext returned 200 JSON. A constructed generation POST from that
+context returned 403 JSON. A separate one-attempt diagnostic retained the redacted
+provider reason: unusual activity detected from the device. No further generation
+attempts, protection-token replay or identity substitution followed that refusal.
+This establishes the refusal category, not the provider's triggering risk rule.
+The sender lacks the preceding preparation observed in successful browser sends;
+no individual missing field is demonstrated to be the cause.
+
+Operation `a4444231b92b447cb9e1cd71e0e3e1ff`, input
+`b911f257-e8cb-45eb-a484-892961ad88ac`, acquired no confirmed conversation or answer.
+Authorization was already bootstrapped in memory, and Chrome was not stopped.
+Zero page actions therefore does not establish browser-independent login or send.
+A subsequent ordinary-Chat control succeeded in conversation
+`6ab07408-d14c-83ee-9703-0192f45611ab`: input
+`50d9d8cc-3ce7-4774-bbd9-837e3ba33a83`, final
+`be2da794-b949-4e4f-b031-daa4565efc10`, text
+`AC_NORMAL_ROUTE_CONTROL_20260921`. Independent HTTP history recovered that exact
+answer when the Codex reader initially returned older data; no resend was needed.
+These paths need not share the same transport/security context.
+
+A controlled real-browser fixture reproduced a separate product gap: a 403 JSON
+response reached the page while the submission remained `sending`, without any
+saved rejection evidence. The HTTP-enabled adapter now persists
+`generation_http_status` for 400–599 responses, bound to the reserved operation,
+outgoing message, owner and account. Raw error bodies are never read or saved by
+this observer. This status is diagnostic evidence, not a terminal outcome,
+permission to resend, proof of zero effects, or a claim of expired credentials.
+The existing reservation and recovery rules remain in force. Separate storage
+keeps legacy submission JSON readable and preserves the evidence across restart.
+The regression uses a local synthetic response; it is not a new live-service
+rejection test or a successful standalone sender.

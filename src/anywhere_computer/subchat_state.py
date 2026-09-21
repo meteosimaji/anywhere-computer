@@ -66,6 +66,7 @@ class SubchatSubmission(Contract):
     user_message_id: str | None = None
     answer_message_id: str | None = None
     answer: str | None = None
+    generation_http_status: int | None = Field(default=None, ge=400, le=599)
     reported_settings: SubchatReportedSettings | None = None
     provider_account_id: str | None = Field(default=None, min_length=1, max_length=256)
     work_context: SubchatWorkContext | None = None
@@ -101,6 +102,10 @@ class SubchatSubmissions:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self.connection = connection
         with connection:
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_generation_responses ('
+                               'operation_id TEXT PRIMARY KEY, owner TEXT, '
+                               'user_message_id TEXT NOT NULL, account_id TEXT NOT NULL, '
+                               'status INTEGER NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_account_bindings ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, '
                                'user_message_id TEXT NOT NULL, account_id TEXT NOT NULL)')
@@ -134,6 +139,13 @@ class SubchatSubmissions:
             if evidence is not None:
                 saved = saved.model_copy(update={
                     'reported_settings': SubchatReportedSettings.model_validate_json(evidence[0])})
+        response = self.connection.execute(
+            'SELECT status FROM subchat_generation_responses WHERE operation_id=? '
+            'AND owner IS ? AND user_message_id=? AND account_id=?',
+            (operation_id, owner, saved.user_message_id, saved.provider_account_id),
+        ).fetchone()
+        if response is not None:
+            saved = saved.model_copy(update={'generation_http_status': response[0]})
         return saved
 
     def list(self, request: SubchatList, *, owner: str | None) -> SubchatPage:
@@ -187,7 +199,7 @@ class SubchatSubmissions:
             self.connection.execute(
                 'INSERT OR IGNORE INTO subchat_submissions VALUES (?,?,?)',
                 (operation_id, owner, proposed.model_dump_json(
-                    exclude={'reported_settings', 'provider_account_id'} |
+                    exclude={'reported_settings', 'provider_account_id', 'generation_http_status'} |
                     ({'http_selection'} if proposed.http_selection is None else set()))),
             )
         existing = self.get(operation_id, owner=owner)
@@ -226,7 +238,8 @@ class SubchatSubmissions:
             cursor = self.connection.execute(
                 'UPDATE subchat_submissions SET body=? '
                 'WHERE operation_id=? AND owner IS ? AND body=?',
-                (new.model_dump_json(exclude={'reported_settings', 'provider_account_id'} |
+                (new.model_dump_json(exclude={'reported_settings', 'provider_account_id',
+                                              'generation_http_status'} |
                                      ({'http_selection'} if new.http_selection is None else set())),
                  old.operation_id, owner, row[0]),
             )
@@ -314,6 +327,26 @@ class SubchatSubmissions:
         return self._replace(
             old, old.model_copy(update={'user_message_id': user_message_id,
                                         'provider_account_id': provider_account_id}), owner)
+
+    def observe_rejection(self, operation_id: str, user_message_id: str, status: int,
+                          *, owner: str | None, provider_account_id: str) -> None:
+        """Save bound HTTP evidence without declaring effects absent or permitting replay."""
+        if type(status) is not int or not 400 <= status <= 599:
+            raise ValueError('Invalid generation rejection status')
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            saved = self.get(operation_id, owner=owner)
+            if (saved.state != 'sending' or saved.user_message_id != user_message_id
+                    or not provider_account_id
+                    or saved.provider_account_id != provider_account_id):
+                raise ValueError('Generation response identity does not match submission')
+            if saved.generation_http_status is not None:
+                if saved.generation_http_status != status:
+                    raise ValueError('Generation response evidence changed')
+                return
+            self.connection.execute(
+                'INSERT INTO subchat_generation_responses VALUES (?,?,?,?,?)',
+                (operation_id, owner, user_message_id, provider_account_id, status))
 
     def observe_conversation(self, operation_id: str, user_message_id: str,
                              conversation_id: str, *, owner: str | None,
