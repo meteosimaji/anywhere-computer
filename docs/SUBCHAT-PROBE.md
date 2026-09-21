@@ -1839,3 +1839,23 @@ they are a normal-path reference, not a single-variable generation control.
 An initial observed normal send omitted conversation_id and parent_message_id;
 subsequent sends included both. Header-name observations alone do not establish
 all Cookie headers on the wire. No browser-free sender is enabled by this evidence.
+
+### Fullscreen playback interference: failed acceptance, 2026-09-21
+
+At the user's request, normal Chrome and the dedicated context were closed; the
+Chrome main-process check returned no matches. One normal Chrome was then started
+and YouTube playback entered fullscreen (the accessibility tree showed fullscreen,
+Pause and advancing playback time). The actual `anywhere-subchat --http-read
+--minimized` CLI subsequently launched the dedicated profile, read its catalog and
+started a GPT-5.6 Sol/high submission. The user reported that Chrome intervened in
+the viewing experience. This is a failed non-interference acceptance, regardless
+of successful minimization or eventual submission completion.
+
+The CLI currently launches headed Chrome before requesting/confirming minimized
+window bounds. Later preparation creates a page and uses picker/editor actions.
+The experiment did not continuously timestamp OS foreground/Space transitions,
+so it does not isolate launch, new-page creation or focus as the exact trigger.
+Do not advertise `--minimized` as guaranteed quiet/background-only operation.
+Next acceptance must cover cold start, preparation, dispatch and recovery while
+fullscreen playback remains visible; merely restoring the viewer afterward is
+not a pass. The pending send must be reconciled without automatic replay.
