@@ -1,4 +1,5 @@
 """Resources must survive HTTP dispatch, ledger recovery and exact input matching."""
+import asyncio
 import json
 
 import pytest
@@ -185,7 +186,12 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
                     assert store.get('b' * 32, owner=None).user_message_id == 'user'
                     assert store.get('b' * 32, owner=None).provider_account_id == 'fixture-account'
                 bodies.append(json.loads(post_data))
-                await route.fulfill(content_type='application/json', body=post_data)
+                if checkpoint == 'saved':
+                    await route.fulfill(content_type='text/event-stream', body='data: ' +
+                        json.dumps({'conversation_id': '11111111-2222-3333-4444-555555555555'}) +
+                        '\n\n')
+                else:
+                    await route.fulfill(content_type='application/json', body=post_data)
 
             monkeypatch.setattr(Route, 'continue_', transport)
 
@@ -217,8 +223,12 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
                 store.observe_request(operation_id, message_id, owner=None,
                                       provider_account_id=account_id)
 
+            def candidate(operation_id, message_id, conversation_id):
+                store.observe_conversation(operation_id, message_id, conversation_id, owner=None)
+
             backend = BrowserSubchatBackend(context, http_read=True,
-                record_request=record if checkpoint != 'none' else None)
+                record_request=record if checkpoint != 'none' else None,
+                record_conversation=candidate if checkpoint == 'saved' else None)
             if checkpoint == 'changed_account':
                 backend._http_reader._headers = {'chatgpt-account-id': 'previous-account'}
             service = Subchats(store, backend)
@@ -237,6 +247,11 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
                 'Future model', 'Future effort', owner=None, resources=selected_resources,
                         http_selection=selection())
             assert reply.state == 'sending'  # A POST is not a saved server receipt.
+            if checkpoint == 'saved':
+                async with asyncio.timeout(3):
+                    while store.get(reply.operation_id, owner=None).conversation_id is None:
+                        await asyncio.sleep(0.01)
+                assert store.get(reply.operation_id, owner=None).state == 'sending'
             assert len(bodies) == 1
             assert bodies[0]['messages'][0]['metadata'].get('attachments', []) == (
                 resources().files() if with_resources else [])

@@ -1611,3 +1611,40 @@ A separate page-local fetch-clone prototype observed the conversation ID in the
 live SSE response but its stream read failed. It was removed after the experiment
 and is not part of the product. This does not establish new-chat identity recovery
 or browser-independent sending. No reasoning text or authentication data was saved.
+
+### Generation stream identity checkpoint, 2026-09-21
+
+The HTTP-read controller observes a bounded clone of its owned page's generation
+SSE response. A full root event supplies a candidate conversation ID; the outgoing
+input ID must match the account-bound `sending` record before it is saved. The
+record remains `sending`: subsequent authenticated HTTP history must verify the
+exact saved input, prompt and resources before accepting a receipt. No history
+scan, second generation request or automatic replay is introduced. Unknown event
+formats, stream errors or missing identities leave recovery unconfirmed.
+
+The observer retains only identifiers, not response text, credentials or reasoning.
+It reads at most 4 MiB, bounds each event/buffer to 512 KiB and stops within 60 seconds
+of the response. Its fetch hook expires within 60 seconds of installation. It only
+handles the observed exact generation endpoint and the fetch string-body form;
+other request representations and alternate streaming formats remain unsupported.
+A crash before the candidate is saved still requires manual reconciliation.
+
+Controlled tests exercise concurrent page streams, split chunks, nested decoys,
+unchanged original response, wrong-input/conflicting-ID refusal, reopened storage
+and the actual backend dispatch hook. Live operation
+`719d4cc00b2d432f9c058ec9b2264ce1` saved conversation
+`6ab07408-d14c-83ee-9703-0192f45611ab` while still `sending`, without calling
+recovery. A fresh controller with no owned pages then reopened the ledger and
+recovered input `4a6de0eb-f72b-428d-b5e8-ccdcb4df1537`, final
+`49ac7687-90fe-488f-8a5e-4facc7cc9713`, text `AC_STREAM_RECEIPT_OK` using independent
+HTTP reads with zero new pages. This reused this process's in-memory authorization;
+it was not an OS/process restart or independent login test.
+
+A separate experimental independent HTTP generation POST was rejected with HTTP
+403 and HTML, operation `2e53530eee6e42aaa00477ce3d5fb60c`, input
+`650d62c3-72af-4c93-815f-71d60d717b74`. The browser request was aborted before
+forwarding; the standalone client made one attempt using the observed authorization,
+account and language headers and the prepared body. No retry, copied cookies or
+protection-bypass fallback was attempted. This does not establish the cause of
+403, universal impossibility, or successful independent generation. The experiment
+is not shipped as a send backend. Browser-free sending remains unfinished.

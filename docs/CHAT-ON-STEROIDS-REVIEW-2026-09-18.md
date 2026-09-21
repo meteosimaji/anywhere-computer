@@ -478,3 +478,19 @@ child's current generation state. No new ledger table, scheduler, raw reasoning
 capture or timeout-based terminal state is added. A normal Chat independently
 reviewed the design and recommended the same nonpersistent, per-call boundary;
 its review was source analysis, not execution evidence.
+
+## Stream identity versus standalone sending, 2026-09-21
+
+Re-fetched upstream main at `7777e517603289696bb5febddb9bbf51cdde9aea` and read
+`extension/usage.js`'s `readOrigin` / `inspectRequestOrigins`. CoS passively joins
+conversation/request IDs from bounded cloned response events. This is not an
+independent generation client, nor equivalent to Anywhere's outgoing input ID.
+
+Anywhere adopts the bounded, metadata-only observation principle, with an
+independently implemented per-submission checkpoint and existing HTTP receipt
+verification. It does not copy CoS's global correlation registry, UI reload,
+provider request-ID authority, websocket/delta-format coverage or estimated ACK.
+The live/controlled evidence and unsupported formats are maintained in
+[the subchat contract](SUBCHAT-PROBE.md#generation-stream-identity-checkpoint-2026-09-21).
+An independent HTTP POST experiment returned 403; it is not advertised or shipped
+as browser-free generation. No credential or protection bypass is added.
