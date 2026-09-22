@@ -28,7 +28,7 @@ function render(snapshot) {
   else pairs("features",Object.entries(snapshot.capabilities).filter(([k]) => k in featureNames).map(([k,v]) => [featureNames[k],v?"エンジンが利用可能と報告":"未対応"]));
   const blockerRows = (snapshot.update_blocker_details ?? []).filter((item) => item && typeof item === "object").map((item) => [
     `更新を阻む：${resourceNames[item.resource] ?? item.resource ?? "セッション"}`,
-    `${item.id ?? "ID未確認"} / 状態 ${item.state ?? "未確認"} / ${item.stop_tool ? `${item.stop_tool}：停止${item.stop_available === true ? "可能" : "不可"}` : item.inspect_tool ? `${item.inspect_tool}で状態照会可能（停止操作なし）` : "停止操作未確認"}`,
+    `${item.id ?? "ID未確認"}${item.session_id ? ` / session ${item.session_id}` : ""} / 状態 ${item.state ?? "未確認"}${item.reason ? ` / 理由 ${item.reason}` : ""} / ${item.stop_tool ? `${item.stop_tool}：停止${item.stop_available === true ? "可能" : "不可"}${item.stop_arguments ? ` ${JSON.stringify(item.stop_arguments)}` : ""}` : item.inspect_tool ? `${item.inspect_tool}で状態照会可能（停止操作なし）` : "停止操作未確認"}`,
   ]);
   pairs("work",[...Object.entries(snapshot.active_resources).map(([k,v]) => [resourceNames[k] ?? k,v]),...blockerRows]);
   if (!Object.keys(snapshot.active_resources).length) pairs("work",[["処理状態","未確認"]]);

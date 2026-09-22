@@ -1127,6 +1127,30 @@ class Engine:
                     "state": direct_entry.state, "stop_tool": "mcp_session_close",
                     "stop_available": not busy,
                 })
+        for watch in self.direct_mcp_sessions.watch_history(owner=owner):
+            if watch.get("state") != "watching":
+                continue
+            watch_session_raw = watch.get("session_id")
+            watch_operation_raw = watch.get("operation_id")
+            if not isinstance(watch_session_raw, str) or not isinstance(watch_operation_raw, str):
+                continue
+            watch_session_id = watch_session_raw
+            watch_operation_id = watch_operation_raw
+            watch_direct_entry = self.direct_mcp_sessions.entries.get(watch_session_id)
+            stop_available = (watch_direct_entry is not None
+                              and watch_direct_entry.owner == owner
+                              and watch_direct_entry.state == "open"
+                              and not watch_direct_entry.lock.locked())
+            blocker_details.append({
+                "resource": "subchat_queue_watch", "id": watch_operation_id,
+                "session_id": watch_session_id, "state": "watching",
+                "reason": watch.get("reason"), "stop_tool": "mcp_call",
+                "stop_arguments": {
+                    "session_id": watch_session_id, "name": "subchat_queue_watch",
+                    "arguments": {"operation_id": watch_operation_id, "enabled": False},
+                },
+                "inspect_tool": "mcp_watch_list", "stop_available": stop_available,
+            })
         for session_id, gui_entry in self.native_gui.entries.items():
             if gui_entry.owner == owner and gui_entry.process.returncode is None:
                 busy = self.native_gui.lock.locked()

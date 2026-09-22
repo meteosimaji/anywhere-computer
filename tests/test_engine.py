@@ -120,6 +120,42 @@ async def test_capacity_failure_has_fixed_code_and_safe_action(engine, tmp_path,
     assert reply.data["next_action"]
 
 
+async def test_status_shows_owned_live_watch_stop_contract(engine, monkeypatch):
+    session_id = "e" * 32
+    operation_id = "f" * 32
+    context = SimpleNamespace(cleanup_confirmed=False)
+    watch = SimpleNamespace(state="watching")
+    engine.direct_mcp_sessions.entries[session_id] = SimpleNamespace(
+        owner="owner-a", context=context, lock=asyncio.Lock(), state="open",
+        watches={operation_id: watch},
+    )
+    monkeypatch.setattr(
+        engine.direct_mcp_sessions, "watch_history",
+        lambda *, owner: [{"session_id": session_id, "operation_id": operation_id,
+                           "state": "watching", "reason": None}] if owner == "owner-a" else [],
+    )
+    try:
+        status = engine.status(owner="owner-a")
+        assert status["active_resources"]["subchat_queue_watches"] == 1
+        detail = next(
+            row for row in status["update_blocker_details"]
+            if isinstance(row, dict) and row.get("resource") == "subchat_queue_watch"
+        )
+        assert detail == {
+            "resource": "subchat_queue_watch", "id": operation_id,
+            "session_id": session_id, "state": "watching", "reason": None,
+            "stop_tool": "mcp_call",
+            "stop_arguments": {
+                "session_id": session_id, "name": "subchat_queue_watch",
+                "arguments": {"operation_id": operation_id, "enabled": False},
+            },
+            "inspect_tool": "mcp_watch_list", "stop_available": True,
+        }
+        assert engine.status(owner="owner-b")["update_blocker_details"] == []
+    finally:
+        engine.direct_mcp_sessions.entries.clear()
+
+
 @pytest.fixture
 async def engine(tmp_path):
     result = Engine(tmp_path / "state")

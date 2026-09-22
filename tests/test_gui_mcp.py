@@ -270,7 +270,9 @@ async def test_engine_records_busy_without_replaying_input(tmp_path):
         await asyncio.wait_for(focused.wait(), 1)
         rejected = Request(operation_id="3" * 32, tool="gui_type", arguments=arguments)
         busy = await engine.execute(rejected, peer="owner")
-        assert busy.state == "failed" and "busy" in busy.error
+        assert busy.state == "failed"
+        assert busy.data["error_code"] == "session_busy"
+        assert busy.data["dispatched"] is False
         release.set()
         assert (await running).state == "completed"
         count = len(peer.calls)
