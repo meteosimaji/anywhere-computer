@@ -1,5 +1,6 @@
 """Submission lifecycle shared by browser adapters; no model or provider defaults."""
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 
@@ -20,6 +21,15 @@ class SubchatReceipt(Contract):
     conversation_id: str = Field(min_length=1)
     user_message_id: str = Field(min_length=1)
     prompt: str
+
+
+@dataclass(frozen=True)
+class SubchatPreparedSend:
+    """Locally prepared HTTP identity; this is not provider acceptance."""
+
+    baseline_message_ids: tuple[str, ...]
+    user_message_id: str
+    provider_account_id: str
 
 
 class SubchatAnswer(SubchatReceipt):
@@ -47,7 +57,8 @@ class SubchatObservedSubmission(SubchatSubmission):
 
 
 class SubchatBackend(Protocol):
-    async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
+    async def prepare(self, submission: SubchatSubmission
+                      ) -> tuple[str, ...] | SubchatPreparedSend:
         """Prepare input without submitting; failure is known not to have sent."""
         ...
 
@@ -147,13 +158,20 @@ class Subchats:
         if submission.state not in {'prepared', 'queued'}:
             return submission
         try:
-            baseline = await self.backend.prepare(submission)
+            prepared = await self.backend.prepare(submission)
         except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError, SubchatUnsupported):
             raise
         except Exception as error:
             raise SubchatPreparationFailed(str(error)) from error
-        submission = self.store.begin_send(submission.operation_id, owner=owner,
-                                           baseline_message_ids=baseline)
+        if isinstance(prepared, SubchatPreparedSend):
+            submission = self.store.begin_send(
+                submission.operation_id, owner=owner,
+                baseline_message_ids=prepared.baseline_message_ids,
+                user_message_id=prepared.user_message_id,
+                provider_account_id=prepared.provider_account_id)
+        else:
+            submission = self.store.begin_send(submission.operation_id, owner=owner,
+                                               baseline_message_ids=prepared)
         try:
             receipt = await self.backend.send(submission)
             if receipt is None:

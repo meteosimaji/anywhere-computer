@@ -3,7 +3,12 @@ import pytest
 
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt, Subchats
+from anywhere_computer.subchat import (
+    SubchatAnswer,
+    SubchatPreparedSend,
+    SubchatReceipt,
+    Subchats,
+)
 from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatSubmissions
 
@@ -35,6 +40,40 @@ class Provider:
             return None
         return SubchatAnswer(conversation_id='chat', user_message_id='parent-user',
                              prompt=submission.prompt, answer_message_id='answer', text='42')
+
+
+async def test_prepared_http_identity_is_durable_before_dispatch(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    operation = 'e' * 32
+
+    class PreparedProvider(Provider):
+        async def prepare(self, submission):
+            self.prepares.append(submission.operation_id)
+            return SubchatPreparedSend((), 'input-id', 'account-id')
+
+        async def send(self, submission):
+            self.sends.append(submission.operation_id)
+            saved = store.get(submission.operation_id, owner=None)
+            assert (saved.state, saved.user_message_id, saved.provider_account_id) == (
+                'sending', 'input-id', 'account-id')
+            return None  # Missing receipt is not permission to POST again.
+
+    provider = PreparedProvider()
+    service = Subchats(store, provider)
+    try:
+        first = await service.send(operation, 'prompt', 'model', 'effort', owner=None)
+        second = await service.send(operation, 'prompt', 'model', 'effort', owner=None)
+        assert first == second
+        assert first.state == 'sending'
+        assert provider.prepares == provider.sends == [operation]
+        other = 'f' * 32
+        with pytest.raises(ValueError, match='already bound'):
+            await service.send(other, 'another', 'model', 'effort', owner=None)
+        assert store.get(other, owner=None).state == 'prepared'
+        assert provider.sends == [operation]
+    finally:
+        ledger.close()
 
 
 async def test_queue_restart_pending_completion_and_lost_receipt(tmp_path):

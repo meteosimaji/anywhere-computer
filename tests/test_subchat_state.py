@@ -5,7 +5,7 @@ import sqlite3
 import pytest
 
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat_state import SubchatSubmissions
+from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatSubmissions
 
 
 def test_restart_retains_uncertain_send_and_completed_reply(tmp_path):
@@ -85,6 +85,62 @@ def test_followup_conversation_is_reserved_before_send(tmp_path):
                           conversation_id='different')
         with pytest.raises(ValueError, match='different arguments'):
             store.prepare(operation, 'followup', 'model', 'effort', owner='peer')
+    finally:
+        ledger.close()
+
+
+def test_http_input_and_account_reservation_is_atomic_and_survives_restart(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    first, second = '1' * 32, '2' * 32
+    try:
+        for operation in (first, second):
+            store.prepare(operation, 'prompt', 'model', 'effort', owner='peer')
+        reserved = store.begin_send(first, owner='peer', user_message_id='input-1',
+                                    provider_account_id='account-1')
+        assert (reserved.state, reserved.user_message_id,
+                reserved.provider_account_id) == ('sending', 'input-1', 'account-1')
+        with pytest.raises(ValueError, match='already bound'):
+            store.begin_send(second, owner='peer', user_message_id='input-1',
+                             provider_account_id='account-1')
+        assert store.get(second, owner='peer').state == 'prepared'
+        assert ledger.connection.execute(
+            'SELECT count(*) FROM subchat_account_bindings').fetchone()[0] == 1
+        with pytest.raises(ValueError, match='together'):
+            store.begin_send(second, owner='peer', user_message_id='input-2')
+        assert store.get(second, owner='peer').state == 'prepared'
+    finally:
+        ledger.close()
+    ledger = Ledger(tmp_path)
+    try:
+        restored = SubchatSubmissions(ledger.connection).get(first, owner='peer')
+        assert restored.state == 'sending'
+        assert (restored.user_message_id, restored.provider_account_id) == (
+            'input-1', 'account-1')
+        with pytest.raises(ValueError, match='without resending'):
+            SubchatSubmissions(ledger.connection).begin_send(
+                first, owner='peer', user_message_id='input-1',
+                provider_account_id='account-1')
+    finally:
+        ledger.close()
+
+
+def test_http_queue_reservation_rejects_a_different_parent_account(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    parent, child = '3' * 32, '4' * 32
+    try:
+        store.prepare(parent, 'parent', 'model', 'effort', owner=None)
+        store.begin_send(parent, owner=None, user_message_id='parent-user',
+                         provider_account_id='account-1')
+        store.submitted(parent, 'chat', 'parent-user', owner=None)
+        store.complete(parent, 'answer', '42', owner=None)
+        store.prepare(child, 'child', 'model', 'effort', owner=None,
+                      conversation_id='chat', after_operation_id=parent)
+        with pytest.raises(SubchatAccountMismatch):
+            store.begin_send(child, owner=None, user_message_id='child-user',
+                             provider_account_id='account-2')
+        assert store.get(child, owner=None).state == 'queued'
     finally:
         ledger.close()
 
