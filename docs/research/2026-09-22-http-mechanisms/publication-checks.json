@@ -1,0 +1,14 @@
+{
+  "observed_at": "2026-09-22T10:50:29.819239+00:00",
+  "base_commit": "61d38e091ac4d5d1a179c6cee759255d9ceb9d8b",
+  "evidence_hashes_checked": 7,
+  "new_document_relative_links_checked": 12,
+  "syntax_check": "passed",
+  "selected_private_path_check": "passed",
+  "direct_upstream_tests": 12,
+  "direct_reference_tests": 21,
+  "packaged_runner_reexecution": "blocked before execution",
+  "additional_package_tests": "blocked before execution",
+  "production_code_changed": false,
+  "provider_generation_attempted": false
+}

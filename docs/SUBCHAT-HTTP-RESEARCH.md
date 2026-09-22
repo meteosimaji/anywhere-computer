@@ -11,6 +11,11 @@ and the proposed HTTP sender design, with [local evidence and reproduction
 instructions](research/2026-09-22-subchat-http/README.md). These are research results,
 not an enabled generation backend or a new live-send acceptance.
 
+The follow-up [HTTP/Codex mechanism study](SUBCHAT-HTTP-MECHANISMS-2026-09-22.ja.md)
+traces selected third-party implementations and reports isolated characterization
+and localhost streaming tests. Its [research code and evidence](research/2026-09-22-http-mechanisms/README.md)
+do not enable a production sender or establish live ChatGPT acceptance.
+
 ## Implemented behavior
 
 `HTTPOnlySubchatBackend` reuses `ChatHTTPReader`, existing receipt/final projections

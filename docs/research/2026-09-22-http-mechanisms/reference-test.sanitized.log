@@ -1,0 +1,46 @@
+test_all_standard_line_endings (__main__.FramingTests.test_all_standard_line_endings) ... ok
+test_bytewise_chunks (__main__.FramingTests.test_bytewise_chunks) ... ok
+test_closed_after_finish_and_error (__main__.FramingTests.test_closed_after_finish_and_error) ... ok
+test_comments_and_empty_data (__main__.FramingTests.test_comments_and_empty_data) ... ok
+test_do_not_strip_user_whitespace (__main__.FramingTests.test_do_not_strip_user_whitespace) ... ok
+test_done_is_data_not_completion (__main__.FramingTests.test_done_is_data_not_completion) ... ok
+test_event_budget_across_lines (__main__.FramingTests.test_event_budget_across_lines) ... ok
+test_event_count_budget (__main__.FramingTests.test_event_count_budget) ... ok
+test_event_type_reset_and_id_persistence (__main__.FramingTests.test_event_type_reset_and_id_persistence) ... ok
+test_every_split_of_utf8_bom_and_crlf (__main__.FramingTests.test_every_split_of_utf8_bom_and_crlf) ... ok
+test_invalid_budgets (__main__.FramingTests.test_invalid_budgets) ... ok
+test_invalid_utf8_is_explicit_local_rejection (__main__.FramingTests.test_invalid_utf8_is_explicit_local_rejection) ... ok
+test_line_budget (__main__.FramingTests.test_line_budget) ... ok
+test_multiline_json (__main__.FramingTests.test_multiline_json) ... ok
+test_nul_id_rejected_without_changing_previous (__main__.FramingTests.test_nul_id_rejected_without_changing_previous) ... ok
+test_optional_one_space_and_no_space (__main__.FramingTests.test_optional_one_space_and_no_space) ... ok
+test_total_budget_before_decode (__main__.FramingTests.test_total_budget_before_decode) ... ok
+test_unterminated_tail_discarded (__main__.FramingTests.test_unterminated_tail_discarded) ... ok
+test_async_semaphore_cancellation_preserves_capacity (__main__.TransportTests.test_async_semaphore_cancellation_preserves_capacity) ... ok
+test_real_http_first_event_and_short_wait (__main__.TransportTests.test_real_http_first_event_and_short_wait) ... [local asyncio timing diagnostic omitted]
+ok
+test_redirect_does_not_replay_post (__main__.TransportTests.test_redirect_does_not_replay_post) ... ok
+
+----------------------------------------------------------------------
+Ran 21 tests in 0.399s
+
+OK
+{
+  "scope": "reference framing plus localhost HTTP only; not provider send acceptance",
+  "tests_run": 21,
+  "failures": 0,
+  "errors": 0,
+  "live_chat_requests": 0,
+  "metrics": {
+    "split_positions_checked": 71,
+    "localhost_posts": 2,
+    "external_connects": 0,
+    "process_launch_attempts": 0,
+    "stream_first_event_before_tail": true,
+    "stream_survived_caller_wait": true,
+    "redirect_followed": false
+  },
+  "client_versions": {
+    "httpx": "0.28.1"
+  }
+}

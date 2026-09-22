@@ -22,6 +22,10 @@ plan (Japanese)](SUBCHAT-HTTP-AUDIT-2026-09-22.ja.md) and its
 That dated record does not claim independent HTTP generation is complete.
 Its non-interference target is subchat transport, not GUI work performed by a child.
 
+The [follow-up mechanism study](SUBCHAT-HTTP-MECHANISMS-2026-09-22.ja.md) covers
+third-party HTTP/Codex routing, observed protocol boundaries, and isolated tests;
+see its [reproduction instructions](research/2026-09-22-http-mechanisms/README.md).
+
 The requested subchat uses ordinary ChatGPT Chat, not a Codex task, ChatGPT
 Work task, or paid OpenAI API. Creating a new conversation and recovering its
 identity are required; appending to an existing conversation is insufficient.
