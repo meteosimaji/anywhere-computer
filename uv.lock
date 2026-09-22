@@ -56,6 +56,7 @@ relay = [
 [package.dev-dependencies]
 dev = [
     { name = "build" },
+    { name = "httpx" },
     { name = "mcp" },
     { name = "mypy" },
     { name = "playwright" },
@@ -82,6 +83,7 @@ provides-extras = ["browser", "mcp", "relay"]
 [package.metadata.requires-dev]
 dev = [
     { name = "build", specifier = ">=1" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "mcp", specifier = ">=1.12,<2" },
     { name = "mypy", specifier = ">=1.15" },
     { name = "playwright", specifier = "==1.58.0" },
