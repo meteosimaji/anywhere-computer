@@ -89,7 +89,8 @@ INSTRUCTIONS = (
     'subchat_cancel cancels only a local queued/prepared input, never generation. '
     'No background dispatcher is implied. queued is local acceptance, not delivery. '
     'Explicit subchat_queue_watch can observe and dispatch an existing queue in this '
-    'controller using an already open owned browser tab. It stops on error or dispatch; '
+    'controller using an already open owned browser tab. It stops on error, final saved '
+    'result or lease expiry; '
     'status exposes queue_watch evidence. It is not saved across controller restart. '
     'mode=steer is currently unsupported by this ordinary Chat adapter; it never falls '
     'back to queue or Stop. Submitted is a receipt, not proof of consumption. '
@@ -164,7 +165,7 @@ def session(service: Subchats, *,
             observe_catalog: Callable[[str | None], Awaitable[dict[str, object]]] | None = None,
             observe_http_catalog: Callable[[], Awaitable[dict[str, object]]] | None = None,
             instructions: str | None = None,
-            serialize_recovery: bool = True,
+            serialize_recovery: bool = False,
             ) -> SubchatSession:
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
@@ -178,22 +179,30 @@ def session(service: Subchats, *,
                         'state': 'stopped', 'reason': 'lease_expired'}
                     return
                 current = service.store.get(operation_id, owner=None)
-                if current.state != 'queued':
+                if current.state not in {'queued', 'sending', 'submitted'}:
                     server.queue_watch_states[operation_id] = {
-                        'state': 'stopped', 'reason': 'queue_left',
+                        'state': 'stopped', 'reason': 'submission_finished'
+                        if current.state == 'completed' else 'queue_left',
                         'submission_state': current.state}
                     return
                 ready = getattr(service.backend, 'queue_watch_ready', None)
-                if ready is None or not ready(current):
+                if current.state == 'queued' and (ready is None or not ready(current)):
                     server.queue_watch_states[operation_id] = {
                         'state': 'stopped', 'reason': 'owned_browser_unavailable'}
                     return
                 await observe(operation_id)
-                if service.store.get(operation_id, owner=None).state == 'queued':
+                if service.store.get(operation_id, owner=None).state in {
+                        'queued', 'sending', 'submitted'}:
                     await asyncio.sleep(min(QUEUE_WATCH_INTERVAL,
                         max(0, server.queue_watch_deadlines[operation_id] - time.monotonic())))
         except asyncio.CancelledError:
             raise
+        except (SubchatAccessError, SubchatAccountMismatch):
+            server.queue_watch_states[operation_id] = {
+                'state': 'stopped', 'reason': 'authorization_lost'}
+        except SubchatBrowserClosed:
+            server.queue_watch_states[operation_id] = {
+                'state': 'stopped', 'reason': 'owned_browser_unavailable'}
         except Exception as error:
             # Stop on errors; a later explicit re-arm is required. Never expose
             # provider text or repeatedly reload/retry while the user is absent.
@@ -257,7 +266,8 @@ def session(service: Subchats, *,
         'subchat_queue_watch': (QueueWatch, 'Explicitly arm or disarm automatic delivery of an '
             'existing queued input while this MCP controller remains alive. Requires an already '
             'open owned browser tab; never launches Chrome. Checks every five seconds, stops on '
-            'errors or after dispatch. At most eight retained watches; disable to release a slot. '
+            'errors or after final saved result. At most eight retained watches; disable to '
+            'release a slot. '
             'Lease is 30-1800 seconds (default 900); expiry requires explicit re-arming. '
             'Restart requires explicit re-arming. Disabling observation does not cancel a queue '
             'or a preparation already in progress; use subchat_cancel for unsent cancellation. '

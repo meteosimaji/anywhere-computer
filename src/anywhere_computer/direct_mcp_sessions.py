@@ -292,7 +292,7 @@ class DirectMCPSessions:
                     if isinstance(observed, dict) and observed.get('state') == 'stopped':
                         watch.state, watch.reason = 'stopped', str(observed.get('reason'))
                         return
-                    if data.get('state') != 'queued':
+                    if data.get('state') not in {'queued', 'sending', 'submitted'}:
                         watch.state, watch.reason = 'stopped', 'queue_left'
                         return
         except asyncio.CancelledError:
