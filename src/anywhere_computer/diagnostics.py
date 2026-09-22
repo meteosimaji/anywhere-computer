@@ -9,6 +9,7 @@ from pathlib import Path
 import psutil
 from pydantic import JsonValue
 
+from . import __version__
 from .codex_context import _executable
 from .connection import exchange, load_endpoint
 from .credentials import local_credential
@@ -57,8 +58,11 @@ def runtime_environment() -> dict[str, JsonValue]:
 
 
 async def diagnose(directory: Path) -> dict[str, JsonValue]:
+    source_runtime_id = runtime_identity()
+
     def report(state: str, action: str, **details: JsonValue) -> dict[str, JsonValue]:
         return {"state": state, "action": action, "changed": False,
+                "source_build": {"version": __version__, "runtime_id": source_runtime_id},
                 "runtime_environment": runtime_environment(), **details}
 
     try:
@@ -108,11 +112,28 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
         return report("not_ready", "Agent responded without readiness; retry diagnosis.")
     if reply.data.get("instance_id") != endpoint.get("instance_id"):
         return report("endpoint_changed", "Connection metadata changed; rerun anywhere doctor.")
-    if reply.data.get("runtime_id") != runtime_identity():
+    agent_version = reply.data.get("version")
+    agent_runtime_id = reply.data.get("runtime_id")
+    same_version = isinstance(agent_version, str) and agent_version == __version__
+    same_runtime = isinstance(agent_runtime_id, str) and agent_runtime_id == source_runtime_id
+    runtime_comparison: dict[str, JsonValue] = {
+        "state": "same" if same_runtime else "different" if isinstance(agent_runtime_id, str)
+        else "unknown",
+        "version_matches": same_version if isinstance(agent_version, str) else None,
+        "runtime_id_matches": same_runtime if isinstance(agent_runtime_id, str) else None,
+        "source_implementation": "current_diagnostic_process",
+        "connection_authorization": "authenticated_status_only",
+        "feature_authorization": "unknown",
+        "helper_and_os_permissions": "not_checked",
+        "acceptance": "not_verified",
+    }
+    if not same_runtime:
         return report(
             "different_build",
             "Finish active work with the previous installation, then run anywhere start "
-            "to switch an idle agent to this build.",
-            agent=reply.data,
+            "to switch an idle agent to this build. Feature authorization, helper permissions, "
+            "and acceptance were not checked.",
+            runtime_comparison=runtime_comparison, agent=reply.data,
         )
-    return report("ready", "No action required.", agent=reply.data)
+    return report("ready", "No action required.",
+                  runtime_comparison=runtime_comparison, agent=reply.data)

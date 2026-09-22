@@ -379,6 +379,55 @@ async def test_invalid_expiry_preserves_existing_grant(tmp_path, expiry):
         await engine.close()
 
 
+async def test_computer_status_reports_only_this_peers_feature_grant(tmp_path):
+    from anywhere_computer.engine import Engine
+    from anywhere_computer.remote_bridge import RemoteAgent
+
+    engine = Engine(tmp_path / "engine")
+    bridge = RemoteAgent(engine, {
+        "peer": frozenset({"computer_status", "files_read", "files_write", "skills_list"}),
+    })
+    try:
+        reply = Reply.model_validate_json(await bridge.dispatch(
+            "peer", request("computer_status").model_dump_json().encode(),
+        ))
+        assert reply.state == "completed"
+        diagnostics = reply.data["capability_diagnostics"]
+        assert diagnostics["files"]["connection_authorization"] == "authorized"
+        assert diagnostics["skills"]["connection_authorization"] == "partial_grant"
+        assert diagnostics["terminal"]["connection_authorization"] == "not_granted"
+        assert diagnostics["terminal"]["authorization_next_action"].endswith(
+            "no permission was changed."
+        )
+    finally:
+        await engine.close()
+
+
+async def test_remote_authorization_failures_have_fixed_safe_actions(tmp_path):
+    from anywhere_computer.engine import Engine
+    from anywhere_computer.remote_bridge import RemoteAgent
+
+    engine = Engine(tmp_path / "engine")
+    bridge = RemoteAgent(engine, {"peer": frozenset({"computer_status"})})
+    try:
+        denied = Reply.model_validate_json(await bridge.dispatch(
+            "peer", request("files_read", path=str(tmp_path / "private.txt")).model_dump_json()
+            .encode(),
+        ))
+        assert denied.state == "failed"
+        assert denied.data["error_code"] == "capability_not_authorized"
+        assert denied.data["dispatched"] is False
+        bridge.revoke("peer")
+        pending = Reply.model_validate_json(await bridge.dispatch(
+            "peer", request("computer_status").model_dump_json().encode(),
+        ))
+        assert pending.state == "failed"
+        assert pending.data["error_code"] == "authentication_required"
+        assert "permission was changed" in pending.data["next_action"]
+    finally:
+        await engine.close()
+
+
 async def test_peer_expiry_after_tls_connect_prevents_file_dispatch(certificates, tmp_path):
     from anywhere_computer.remote_bridge import RemoteAgent
 

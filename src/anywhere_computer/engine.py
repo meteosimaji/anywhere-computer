@@ -14,7 +14,7 @@ from pydantic import JsonValue
 
 from . import __version__, codex_context, codex_plugins, skills_context
 from .audio_capture import AudioCapture, AudioCaptureUnknown, capture_audio
-from .audio_status import inspect_audio
+from .audio_status import inspect_audio, verified_audio_helper
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
@@ -82,6 +82,7 @@ from .native_gui import (
     NativePress,
     NativeSession,
     NativeSetValue,
+    installed_helper,
 )
 from .plugin_sessions import PluginSessions
 from .processes import list_processes, stop_process
@@ -93,6 +94,61 @@ from .uploads import UploadOutcomeUnknown, Uploads
 
 Input = TypeVar("Input", bound=Contract)
 Result = dict[str, JsonValue]
+
+_PREFLIGHT_FAILURES: dict[str, tuple[str, str]] = {
+    "Direct MCP capacity reached; close an existing session": (
+        "session_capacity", "Inspect sessions and explicitly close an idle session before retrying."
+    ),
+    "Direct MCP session is busy; inspect the existing operation": (
+        "session_busy", "Inspect the active operation and wait for it to finish; do not close it."
+    ),
+    "Direct MCP is not connected; no automatic restart performed": (
+        "session_ended", "Inspect the prior operation, then explicitly open a new session."
+    ),
+    "Direct MCP session is closed; no automatic restart performed": (
+        "session_ended", "Inspect the prior operation, then explicitly open a new session."
+    ),
+    "Direct MCP session not found for this connection": (
+        "session_unavailable",
+        "Use a session ID returned to this connection; no session was changed.",
+    ),
+    "GUI is busy; observe again after the current interaction finishes": (
+        "session_busy", "Wait for the current GUI interaction, then observe again."
+    ),
+    "Direct MCP server did not initialize": (
+        "session_start_failed", "Inspect the selected server and its separate authentication "
+        "requirements before opening another session."
+    ),
+    "Direct MCP catalog request failed; session retired": (
+        "provider_unavailable", "Inspect this session's status; open a new session only after "
+        "reviewing active work."
+    ),
+    "Direct MCP sessions are shutting down": (
+        "engine_shutting_down", "Wait for shutdown to finish, then inspect status before retrying."
+    ),
+    "Native GUI requires macOS": (
+        "unsupported_platform", "Native GUI sessions require macOS; no GUI operation was made."
+    ),
+    "Verified native GUI helper is not installed": (
+        "helper_unavailable", "Check the verified portable installation; no helper was run."
+    ),
+    "Native GUI helper does not match its portable manifest": (
+        "helper_integrity_failed", "Repair the signed portable installation before using GUI."
+    ),
+    "Native GUI session unavailable": (
+        "session_unavailable", "Use a session ID returned to this connection; no GUI action ran."
+    ),
+    "Close a native GUI session before opening another": (
+        "session_capacity", "Review this connection's sessions and explicitly close an idle one."
+    ),
+    "System audio capture requires the installed macOS helper and permission": (
+        "helper_or_permission_required", "Run audio_status to inspect the existing helper and "
+        "permissions; this call did not request access or record audio."
+    ),
+    "Audio helper is no longer installed": (
+        "helper_unavailable", "Check the verified portable installation; no recording was made."
+    ),
+}
 OBSERVER_WAIT_SECONDS = 5.0
 
 
@@ -131,6 +187,7 @@ class Engine:
         self.started = time.monotonic()
         self.tools: dict[str, Tool] = {}
         self.inflight: dict[str, asyncio.Task[Reply]] = {}
+        self.inflight_owners: dict[str, str | None] = {}
         self._register_tools()
 
     def register(
@@ -544,7 +601,7 @@ class Engine:
         )
 
         async def status(_: Empty) -> Result:
-            return self.status()
+            return self.status(owner=self._plugin_owner.get())
 
         async def document(args: ReadDocument) -> Result:
             return await asyncio.to_thread(read_document, args)
@@ -944,7 +1001,7 @@ class Engine:
             if allowed is None or tool.name in allowed
         ]
 
-    def status(self) -> Result:
+    def status(self, *, owner: str | None = None) -> Result:
         operations = sum(task.get_name() not in {"computer_status", "operations_get"}
                          for task in self.inflight.values() if not task.done())
         terminals = sum(s.process.returncode is None for s in self.sessions.sessions.values())
@@ -961,6 +1018,139 @@ class Engine:
             "native_gui_sessions": len(self.native_gui.entries),
             "searches": searches, "operations": operations,
         }
+        capabilities: dict[str, JsonValue] = {
+            "files": True,
+            "terminal": True,
+            "literal_search": True,
+            "remote": False,
+            "office": False,
+            "office_text_read": True,
+            "gui": False,
+            "gui_native_adapter": {
+                "available": True, "provider": "macos_ax",
+                "requires": "verified portable helper and existing Accessibility permission",
+                "runtime_verified": False,
+            },
+            "gui_mcp_adapter": {
+                "available": True,
+                "provider": "peekaboo",
+                "requires": "explicit direct MCP session and provider OS permissions",
+                "runtime_verified": False,
+            },
+        }
+        capability_diagnostics: dict[str, JsonValue] = {
+            name: {
+                "running_implementation": "present",
+                "runtime_available": value if isinstance(value, bool) else "unknown",
+                "connection_authorization": "not_observed",
+                "helper": "not_required",
+                "os_permission": "not_required",
+                "acceptance": "not_verified",
+            }
+            for name, value in capabilities.items()
+            if isinstance(value, bool)
+        }
+        for name in ("gui_native_adapter", "gui_mcp_adapter"):
+            capability_diagnostics[name] = {
+                "running_implementation": "present",
+                "runtime_available": "unknown",
+                "connection_authorization": "not_observed",
+                "helper": "not_checked",
+                "os_permission": "not_checked",
+                "acceptance": "not_verified",
+            }
+        implementation_tools = {
+            "skills": ("skills_list", "skills_read"),
+            "audio_capture": ("audio_status", "audio_capture"),
+            "gui_native": ("gui_native_windows", "gui_native_observe"),
+            "gui_mcp": ("gui_observe",),
+        }
+        for name, required_tools in implementation_tools.items():
+            capability_diagnostics[name] = {
+                "running_implementation": (
+                    "present" if all(tool in self.tools for tool in required_tools) else "absent"
+                ),
+                "runtime_available": "unknown",
+                "connection_authorization": "not_observed",
+                "helper": "not_required",
+                "os_permission": "not_required",
+                "acceptance": "not_verified",
+            }
+        for capability, check in (
+            ("audio_capture", verified_audio_helper), ("gui_native", installed_helper),
+        ):
+            if platform.system() != "Darwin":
+                helper_status = "unsupported_platform"
+            else:
+                try:
+                    helper_status = "verified_available" if check() is not None else "unavailable"
+                except (OSError, RuntimeError, ValueError):
+                    helper_status = "verification_failed"
+            details = capability_diagnostics[capability]
+            assert isinstance(details, dict)
+            details["helper"] = helper_status
+            details["os_permission"] = "not_checked"
+            if helper_status == "unsupported_platform":
+                details["runtime_available"] = False
+                details["next_action"] = "This helper requires macOS; no helper was run."
+            elif helper_status in {"unavailable", "verification_failed"}:
+                details["runtime_available"] = False
+                details["next_action"] = (
+                    "Check the signed portable installation and its helper manifest; this status "
+                    "check did not execute or replace the helper."
+                )
+            else:
+                details["next_action"] = (
+                    "Inspect the existing Accessibility permission in macOS settings; no "
+                    "permission request or GUI operation was made."
+                    if capability == "gui_native" else
+                    "Run the separate audio_status check to inspect existing permission; no "
+                    "permission request or recording was made."
+                )
+        blocker_details: list[JsonValue] = []
+        # Owner-scoped resources are disclosed only to their authenticated owner.
+        for session_id, plugin_entry in self.plugin_sessions.entries.items():
+            if plugin_entry.owner == owner and not plugin_entry.cleanup_confirmed:
+                busy = plugin_entry.lock.locked()
+                blocker_details.append({
+                    "resource": "plugin_session", "id": session_id,
+                    "state": ("busy" if busy and plugin_entry.state == "open"
+                              else plugin_entry.state),
+                    "stop_tool": "codex_plugin_session_close",
+                    "stop_available": not busy,
+                })
+        for session_id, direct_entry in self.direct_mcp_sessions.entries.items():
+            if direct_entry.owner == owner and not direct_entry.context.cleanup_confirmed:
+                busy = direct_entry.lock.locked()
+                blocker_details.append({
+                    "resource": "direct_mcp_session", "id": session_id,
+                    "state": direct_entry.state, "stop_tool": "mcp_session_close",
+                    "stop_available": not busy,
+                })
+        for session_id, gui_entry in self.native_gui.entries.items():
+            if gui_entry.owner == owner and gui_entry.process.returncode is None:
+                busy = self.native_gui.lock.locked()
+                blocker_details.append({
+                    "resource": "native_gui_session", "id": session_id,
+                    "state": "busy" if busy else "running",
+                    "stop_tool": "gui_native_close", "stop_available": not busy,
+                })
+        if owner is None:
+            for session_id, session in self.sessions.sessions.items():
+                if session.process.returncode is None:
+                    blocker_details.append({
+                        "resource": "terminal_session", "id": session_id,
+                        "state": "running", "stop_tool": "terminal_stop",
+                        "stop_available": not session.input_lock.locked(),
+                    })
+        for operation_id, task in self.inflight.items():
+            if (not task.done() and task.get_name() not in {"computer_status", "operations_get"}
+                    and self.inflight_owners.get(operation_id) == owner):
+                blocker_details.append({
+                    "resource": "operation", "id": operation_id,
+                    "state": "running", "inspect_tool": "operations_get",
+                    "stop_available": False,
+                })
         return {
             "state": "ready",
             "version": __version__,
@@ -974,29 +1164,12 @@ class Engine:
             "active_resources": resources,
             "update_blocked": any(bool(count) for count in resources.values()),
             "update_blockers": [name for name, count in resources.items() if count],
+            "update_blocker_details": blocker_details,
             "tools": len(self.tools),
             "transport": "authenticated-loopback",
             "remote_ready": False,
-            "capabilities": {
-                "files": True,
-                "terminal": True,
-                "literal_search": True,
-                "remote": False,
-                "office": False,
-                "office_text_read": True,
-                "gui": False,
-                "gui_native_adapter": {
-                    "available": True, "provider": "macos_ax",
-                    "requires": "verified portable helper and existing Accessibility permission",
-                    "runtime_verified": False,
-                },
-                "gui_mcp_adapter": {
-                    "available": True,
-                    "provider": "peekaboo",
-                    "requires": "explicit direct MCP session and provider OS permissions",
-                    "runtime_verified": False,
-                },
-            },
+            "capabilities": capabilities,
+            "capability_diagnostics": capability_diagnostics,
         }
 
     async def execute(self, request: Request, *, peer: str | None = None) -> Reply:
@@ -1077,9 +1250,28 @@ class Engine:
                     },
                 )
             except UploadOutcomeUnknown as error:
-                reply = Reply(operation_id=request.operation_id, state="unknown", error=str(error))
+                reply = Reply(operation_id=request.operation_id, state="unknown", error=str(error),
+                              data={
+                                  "error_code": "upload_publication_outcome_unknown",
+                                  "dispatched": None, "execution_state": "unknown",
+                                  "next_action": "Recover with operations_get and inspect "
+                                  "upload_status and the destination; do not automatically "
+                                  "publish again.",
+                              })
             except Exception as error:
-                reply = Reply(operation_id=request.operation_id, state="failed", error=str(error))
+                fixed = _PREFLIGHT_FAILURES.get(str(error))
+                if fixed is not None and type(error) in (RuntimeError, ValueError):
+                    code, action = fixed
+                    reply = Reply(
+                        operation_id=request.operation_id, state="failed",
+                        error="Operation was not dispatched.",
+                        data={"error_code": code, "dispatched": False,
+                              "execution_state": "not_dispatched", "next_action": action},
+                    )
+                else:
+                    reply = Reply(
+                        operation_id=request.operation_id, state="failed", error=str(error),
+                    )
             self.ledger.finish(reply)
             return reply
 
@@ -1092,7 +1284,13 @@ class Engine:
 
         task = asyncio.create_task(scoped_run(), name=request.tool)
         self.inflight[request.operation_id] = task
-        task.add_done_callback(lambda _: self.inflight.pop(request.operation_id, None))
+        self.inflight_owners[request.operation_id] = peer
+
+        def completed(_: asyncio.Task[Reply]) -> None:
+            self.inflight.pop(request.operation_id, None)
+            self.inflight_owners.pop(request.operation_id, None)
+
+        task.add_done_callback(completed)
         return await self._observe(request.operation_id, task)
 
     async def _observe(self, operation_id: str, task: asyncio.Task[Reply]) -> Reply:

@@ -116,6 +116,11 @@ async def test_management_reads_live_engine_and_never_restarts_it(tmp_path, monk
         assert first.engine_state == "ready"
         assert first.capabilities["files"] is True
         assert first.capabilities["gui"] is False
+        assert first.capability_diagnostics["skills"]["running_implementation"] == "present"
+        assert first.capability_diagnostics["skills"]["connection_authorization"] == "not_observed"
+        assert first.capability_diagnostics["skills"]["acceptance"] == "not_verified"
+        assert first.runtime_comparison["runtime_id_matches"] is True
+        assert first.runtime_comparison["feature_authorization"] == "unknown"
         assert first.active_resources["terminal_sessions"] == 0
         assert first.version and first.runtime_id and first.instance_id
         second = await controller.snapshot()

@@ -105,6 +105,13 @@ def normalize_tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
     output: dict[str, JsonValue] = {
         "content": clean_content, "is_error": is_error, "truncated": truncated,
     }
+    if is_error:
+        output["error_diagnostic"] = {
+            "error_code": "provider_rejected",
+            "execution_state": "rejected",
+            "next_action": "Review the bounded provider result and this connection's required "
+            "authorization before deciding whether to retry; no automatic retry was made.",
+        }
     diagnostics = _provider_diagnostics(result.get("_meta"))
     if diagnostics:
         output["provider_diagnostics"] = diagnostics

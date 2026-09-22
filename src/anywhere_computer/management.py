@@ -56,6 +56,10 @@ class ManagementSnapshot(Contract):
     runtime_id: str | None = None
     instance_id: str | None = None
     capabilities: dict[str, bool] = Field(default_factory=dict)
+    capability_diagnostics: dict[str, JsonValue] = Field(default_factory=dict)
+    source_build: dict[str, JsonValue] = Field(default_factory=dict)
+    runtime_comparison: dict[str, JsonValue] = Field(default_factory=dict)
+    update_blocker_details: list[JsonValue] = Field(default_factory=list)
     active_resources: dict[str, int] = Field(default_factory=dict)
     setup: SetupProgress
     remote_connection: Literal["not_checked"] = "not_checked"
@@ -202,7 +206,11 @@ class ManagementController:
                 if store is not None:
                     store.close()
         capabilities = agent.get("capabilities")
+        capability_diagnostics = agent.get("capability_diagnostics")
         resources = agent.get("active_resources")
+        source_build = diagnosis.get("source_build")
+        runtime_comparison = diagnosis.get("runtime_comparison")
+        blocker_details = agent.get("update_blocker_details")
         return ManagementSnapshot(
             observed_at=datetime.now(UTC).isoformat(),
             engine_state=_text(diagnosis, "state") or "unknown",
@@ -211,6 +219,11 @@ class ManagementController:
             instance_id=_text(agent, "instance_id"),
             capabilities={k: v for k, v in capabilities.items() if isinstance(v, bool)}
             if isinstance(capabilities, dict) else {},
+            capability_diagnostics=capability_diagnostics
+            if isinstance(capability_diagnostics, dict) else {},
+            source_build=source_build if isinstance(source_build, dict) else {},
+            runtime_comparison=runtime_comparison if isinstance(runtime_comparison, dict) else {},
+            update_blocker_details=blocker_details if isinstance(blocker_details, list) else [],
             active_resources={k: v for k, v in resources.items()
                               if isinstance(v, int) and not isinstance(v, bool) and v >= 0}
             if isinstance(resources, dict) else {},
