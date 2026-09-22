@@ -207,3 +207,55 @@ async def test_short_wait_preserves_slow_observation_and_its_result(
     finally:
         await server.close()
         ledger.close()
+
+
+@pytest.mark.parametrize('state', ['sending', 'submitted'])
+@pytest.mark.parametrize('serialize_recovery', [True, False])
+async def test_finished_pending_observations_release_recovery_capacity(
+        tmp_path, state, serialize_recovery):
+    class PendingReader(Provider):
+        gate = asyncio.Event()
+        entered = asyncio.Event()
+        reads = 0
+
+        async def pending(self):
+            self.reads += 1
+            self.entered.set()
+            await self.gate.wait()
+            return None
+
+        async def find_submission(self, submission):
+            return await self.pending()
+
+        async def read_answer(self, submission):
+            return await self.pending()
+
+    ledger = Ledger(tmp_path)
+    provider = PendingReader()
+    store = SubchatSubmissions(ledger.connection)
+    server = session(Subchats(store, provider), serialize_recovery=serialize_recovery)
+    try:
+        for index in range(9):
+            operation = f'{index + 1:032x}'
+            store.prepare(operation, 'prompt', 'model', 'effort', owner=None)
+            store.begin_send(operation, owner=None)
+            if state == 'submitted':
+                store.submitted(operation, 'chat', f'user-{index}', owner=None)
+            provider.gate = asyncio.Event()
+            provider.entered = asyncio.Event()
+            waiting = asyncio.create_task(server.execute(Request(
+                operation_id=f'{index + 100:032x}', tool='subchat_wait',
+                arguments={'operation_id': operation, 'wait_ms': 20})))
+            await asyncio.wait_for(provider.entered.wait(), 2)
+            assert (await waiting).data['state'] == state
+            recovery = server.recoveries[operation]
+            provider.gate.set()
+            await asyncio.wait_for(asyncio.shield(recovery), 2)
+            await asyncio.sleep(0)
+            assert operation not in server.recoveries
+        assert provider.reads == 9
+        assert provider.sends == []
+    finally:
+        provider.gate.set()
+        await server.close()
+        ledger.close()
