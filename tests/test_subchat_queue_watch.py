@@ -1,5 +1,6 @@
 """Explicit background queue delivery without caller polling or implicit browser startup."""
 import asyncio
+import time
 
 import pytest
 from test_subchat_delivery import Provider
@@ -121,6 +122,19 @@ async def test_watch_slots_are_bounded_and_released_explicitly(watched):
     await watch(False, operation_id=f'{10:032x}')
     assert (await watch()).state == 'completed'
     assert len(server.queue_watches) == 8 and provider.sends == [parent]
+
+
+async def test_watch_lease_expires_without_dispatch_or_implicit_restart(watched):
+    service, provider, server, parent, child, watch = watched
+    armed = await server.execute(Request(operation_id='c' * 32, tool='subchat_queue_watch',
+        arguments={'operation_id': child, 'lease_seconds': 30}))
+    assert armed.data['state'] == 'watching'
+    server.queue_watch_deadlines[child] = time.monotonic() - 1
+    await asyncio.wait_for(server.queue_watches[child], 2)
+    assert server.queue_watch_states[child] == {'state': 'stopped', 'reason': 'lease_expired'}
+    assert provider.sends == [parent]
+    assert service.store.get(child, owner=None).state == 'queued'
+    assert (await watch()).data['state'] == 'watching'
 
 
 async def test_real_browser_backend_readiness_does_not_create_context():

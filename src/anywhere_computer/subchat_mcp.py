@@ -1,6 +1,7 @@
 """Local stdio adapter, reusable through Anywhere's existing direct-MCP sessions."""
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 from typing import Literal, cast
@@ -59,6 +60,7 @@ class Wait(OperationId):
 
 class QueueWatch(OperationId):
     enabled: bool = True
+    lease_seconds: int = Field(default=900, ge=30, le=1800)
 
 
 QUEUE_WATCH_INTERVAL = 5.0
@@ -127,6 +129,7 @@ class SubchatSession(MCPSession):
         self.calls: dict[asyncio.Task[Reply], Request] = {}
         self.queue_watches: dict[str, asyncio.Task[None]] = {}
         self.queue_watch_states: dict[str, dict[str, JsonValue]] = {}
+        self.queue_watch_deadlines: dict[str, float] = {}
 
         async def managed(request: Request) -> Reply:
             if self.closed:
@@ -154,6 +157,7 @@ class SubchatSession(MCPSession):
         self.calls.clear()
         self.queue_watches.clear()
         self.queue_watch_states.clear()
+        self.queue_watch_deadlines.clear()
 
 
 def session(service: Subchats, *,
@@ -169,6 +173,10 @@ def session(service: Subchats, *,
     async def watch_queue(operation_id: str) -> None:
         try:
             while not server.closed:
+                if time.monotonic() >= server.queue_watch_deadlines[operation_id]:
+                    server.queue_watch_states[operation_id] = {
+                        'state': 'stopped', 'reason': 'lease_expired'}
+                    return
                 current = service.store.get(operation_id, owner=None)
                 if current.state != 'queued':
                     server.queue_watch_states[operation_id] = {
@@ -182,7 +190,8 @@ def session(service: Subchats, *,
                     return
                 await observe(operation_id)
                 if service.store.get(operation_id, owner=None).state == 'queued':
-                    await asyncio.sleep(QUEUE_WATCH_INTERVAL)
+                    await asyncio.sleep(min(QUEUE_WATCH_INTERVAL,
+                        max(0, server.queue_watch_deadlines[operation_id] - time.monotonic())))
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -251,6 +260,7 @@ def session(service: Subchats, *,
             'existing queued input while this MCP controller remains alive. Requires an already '
             'open owned browser tab; never launches Chrome. Checks every five seconds, stops on '
             'errors or after dispatch. At most eight retained watches; disable to release a slot. '
+            'Lease is 30-1800 seconds (default 900); expiry requires explicit re-arming. '
             'Restart requires explicit re-arming. Disabling observation does not cancel a queue '
             'or a preparation already in progress; use subchat_cancel for unsent cancellation. '
             'This is browser-assisted delivery, not quiet HTTP generation or immediate steer.'),
@@ -303,8 +313,24 @@ def session(service: Subchats, *,
                         await asyncio.gather(watch_task, return_exceptions=True)
                         if server.queue_watches.get(watch.operation_id) is watch_task:
                             server.queue_watches.pop(watch.operation_id)
-                            server.queue_watch_states.pop(watch.operation_id, None)
+                            server.queue_watch_deadlines.pop(watch.operation_id, None)
+                        server.queue_watch_states[watch.operation_id] = {
+                            'state': 'stopped', 'reason': 'explicit_cancel'}
                     data: dict[str, JsonValue] = {'state': 'disabled'}
+                elif (watch.operation_id in server.queue_watches
+                      and server.queue_watch_states[watch.operation_id].get('reason')
+                      == 'lease_expired'):
+                    server.queue_watches.pop(watch.operation_id)
+                    server.queue_watch_deadlines.pop(watch.operation_id, None)
+                    ready = getattr(service.backend, 'queue_watch_ready', None)
+                    if current.state != 'queued' or ready is None or not ready(current):
+                        raise ValueError('Automatic delivery requires a queued input and live tab')
+                    data = {'state': 'watching'}
+                    server.queue_watch_states[watch.operation_id] = data
+                    server.queue_watch_deadlines[watch.operation_id] = (
+                        time.monotonic() + watch.lease_seconds)
+                    server.queue_watches[watch.operation_id] = asyncio.create_task(
+                        watch_queue(watch.operation_id))
                 elif watch.operation_id in server.queue_watches:
                     data = server.queue_watch_states[watch.operation_id]
                 else:
@@ -315,6 +341,8 @@ def session(service: Subchats, *,
                         raise ValueError('Queue watch limit reached; disable an existing watch')
                     data = {'state': 'watching'}
                     server.queue_watch_states[watch.operation_id] = data
+                    server.queue_watch_deadlines[watch.operation_id] = (
+                        time.monotonic() + watch.lease_seconds)
                     server.queue_watches[watch.operation_id] = asyncio.create_task(
                         watch_queue(watch.operation_id))
                 return Reply(operation_id=request.operation_id, state='completed',

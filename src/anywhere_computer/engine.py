@@ -119,7 +119,7 @@ class Engine:
         self.downloads = Downloads(directory)
         self.sessions = Sessions()
         self.plugin_sessions = PluginSessions()
-        self.direct_mcp_sessions = DirectMCPSessions()
+        self.direct_mcp_sessions = DirectMCPSessions(journal=self.ledger.connection)
         self.gui_mcp = GUIMCP(self.direct_mcp_sessions)
         self.native_gui = NativeGUI()
         # Transport-owned identity, inherited by the durable execution task only.
@@ -246,6 +246,10 @@ class Engine:
         async def direct_status(args: DirectMCPSessionId) -> Result:
             return self.direct_mcp_sessions.status(args.session_id, owner=self._plugin_owner.get())
 
+        async def direct_watch_list(args: Contract) -> Result:
+            return {'watches': cast(JsonValue, self.direct_mcp_sessions.watch_history(
+                owner=self._plugin_owner.get()))}
+
         async def direct_close(args: DirectMCPSessionId) -> Result:
             return await self.direct_mcp_sessions.stop(
                 args.session_id, owner=self._plugin_owner.get(),
@@ -281,6 +285,9 @@ class Engine:
         )
         self.register('mcp_session_status', 'Inspect your direct MCP session state.',
                       DirectMCPSessionId, direct_status, read_only=True)
+        self.register('mcp_watch_list', 'List the latest 100 owned subchat queue watch leases '
+                      'and their saved stop reasons, including after engine restart.',
+                      Contract, direct_watch_list, read_only=True)
         self.register('mcp_session_close', 'Close your direct MCP session and its server process.',
                       DirectMCPSessionId, direct_close, destructive=True)
         self.register('mcp_tools', 'Read direct MCP tool names and argument schemas. '
@@ -946,9 +953,11 @@ class Engine:
         )
         searches = sum(entry.state == "running" for entry in self.searches.searches.values())
         direct_mcp = self.direct_mcp_sessions.active_count
+        subchat_watches = self.direct_mcp_sessions.active_watch_count
         resources: dict[str, JsonValue] = {
             "terminal_sessions": terminals, "plugin_sessions": plugins,
             "direct_mcp_sessions": direct_mcp,
+            "subchat_queue_watches": subchat_watches,
             "native_gui_sessions": len(self.native_gui.entries),
             "searches": searches, "operations": operations,
         }

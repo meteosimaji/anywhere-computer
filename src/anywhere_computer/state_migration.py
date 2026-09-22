@@ -14,7 +14,8 @@ from .state import Ledger, prepare_directory
 from .uploads import Uploads
 
 DATABASES = {
-    'operations.sqlite3': ('operation_results', 'operations', 'runtime_settings'),
+    'operations.sqlite3': ('operation_results', 'operations', 'runtime_settings',
+                           'subchat_queue_watch_leases'),
     'uploads/uploads.sqlite3': ('uploads', 'chunks'),
     'downloads/downloads.sqlite3': ('downloads', 'chunks'),
 }
@@ -27,6 +28,11 @@ def _normalize(directory: Path) -> None:
             'CREATE TABLE IF NOT EXISTS runtime_settings '
             '(id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL)',
         )
+        ledger.connection.execute('CREATE TABLE IF NOT EXISTS subchat_queue_watch_leases ('
+                                  'session_id TEXT NOT NULL, operation_id TEXT NOT NULL, '
+                                  'owner TEXT, state TEXT NOT NULL, reason TEXT, '
+                                  'expires_at REAL NOT NULL, '
+                                  'PRIMARY KEY(session_id, operation_id))')
         for (identity,) in ledger.connection.execute('SELECT id FROM operations'):
             ledger.get(identity)  # Check stored result hashes before accepting the snapshot.
         Uploads(directory, file_locks=directory / 'file-locks')
