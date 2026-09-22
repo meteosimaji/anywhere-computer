@@ -20,16 +20,24 @@ class Peer:
 
     async def tools(self, session_id, *, owner, **kwargs):
         self.status(session_id, owner=owner)
+        schemas = {
+            "see": {"window_id": "integer", "app_target": "string"},
+            "click": {"snapshot": "string", "on": "string"},
+            "type": {"snapshot": "string", "text": "string", "clear": "boolean", "on": "string"},
+            "press": {"snapshot": "string", "keys": "array"},
+        }
         return {
             "tools": [
                 {
-                    "name": "see",
+                    "name": name,
                     "inputSchema": {
                         "properties": {
-                            "window_id": {"type": "integer"},
+                            field: {"type": field_type}
+                            for field, field_type in fields.items()
                         }
                     },
                 }
+                for name, fields in schemas.items()
             ]
         }
 
@@ -46,7 +54,11 @@ class Peer:
         return {
             "content": [{"type": "text", "text": text}],
             "isError": False,
-            "_meta": self.metadata,
+            "_meta": ({
+                "snapshot_id": "snapshot-1",
+                "target_receipt": {"window_id": arguments["window_id"]},
+                **(self.metadata or {}),
+            } if name == "see" else self.metadata),
         }
 
 
@@ -119,8 +131,8 @@ async def test_coordinate_metadata_is_validated_and_unrelated_metadata_omitted()
     assert "omit" not in str(result)
     peer.metadata["coordinate_context"]["reference_id"] = "different"
     result = await gui.observe(args, owner="owner")
-    assert result["coordinate_status"] == "unsupported_or_invalid"
-    assert result["coordinate_context"] is None
+    assert result["action_ready"] is False
+    assert result["reason"] == "coordinate_reference_mismatch"
 
 
 @pytest.mark.parametrize(
@@ -334,7 +346,7 @@ async def test_exact_window_input_is_snapshot_bound_without_foreground_focus():
         "type",
         {"snapshot": "snapshot-1", "text": "日本語 🚀", "clear": True, "on": "elem_1"},
     )
-    assert result["focus_may_change_externally"] is False
+    assert result["focus_may_change_externally"] is None
     with pytest.raises(ValueError, match="missing"):
         await gui.act(GUIType(**common, text="replay"), owner="owner")
 
@@ -379,11 +391,67 @@ async def test_unsupported_exact_window_provider_never_falls_back():
 
     peer.tools = old_tools
     gui = GUIMCP(peer)
-    with pytest.raises(ValueError, match="does not support"):
+    with pytest.raises(ValueError, match="snapshot-bound see"):
         await gui.observe(
             GUIObserve(session_id="a" * 32, app="Editor", window_id=42), owner="owner"
         )
     assert not peer.calls and not gui.observations
+
+
+@pytest.mark.parametrize("missing", ["click", "type", "press"])
+async def test_observe_rejects_input_without_snapshot_contract(missing):
+    peer = Peer()
+    original = peer.tools
+
+    async def incomplete(*args, **kwargs):
+        page = await original(*args, **kwargs)
+        if kwargs.get("name") == missing:
+            for row in page["tools"]:
+                if row["name"] == missing:
+                    row["inputSchema"]["properties"].pop("snapshot")
+        return page
+
+    peer.tools = incomplete
+    with pytest.raises(ValueError, match=f"snapshot-bound {missing}"):
+        await GUIMCP(peer).observe(
+            GUIObserve(session_id="a" * 32, app="Editor", window_id=42), owner="owner")
+    assert not peer.calls
+
+
+async def test_duplicate_provider_input_contract_never_authorizes_observation():
+    peer = Peer()
+    original = peer.tools
+
+    async def duplicate(*args, **kwargs):
+        page = await original(*args, **kwargs)
+        if kwargs.get("name") == "type":
+            row = next(row for row in page["tools"] if row["name"] == "type")
+            page["tools"].append(row.copy())
+        return page
+
+    peer.tools = duplicate
+    with pytest.raises(ValueError, match="Duplicate type contract"):
+        await GUIMCP(peer).observe(
+            GUIObserve(session_id="a" * 32, app="Editor", window_id=42), owner="owner")
+    assert not peer.calls
+
+
+@pytest.mark.parametrize(("meta", "reason"), [
+    ({"snapshot_id": "different"}, "snapshot_reference_mismatch"),
+    ({"target_receipt": {}}, "observed_window_unavailable"),
+    ({"target_receipt": {"window_id": 43}}, "observed_window_mismatch"),
+    ({"target_receipt": {"window_id": True}}, "observed_window_unavailable"),
+])
+async def test_observation_requires_matching_provider_snapshot_and_window(meta, reason):
+    peer = Peer()
+    peer.metadata = meta
+    gui = GUIMCP(peer)
+    result = await gui.observe(
+        GUIObserve(session_id="a" * 32, app="Editor", window_id=42), owner="owner")
+    assert result["action_ready"] is False
+    assert result["reason"] == reason
+    assert not gui.observations
+    assert [name for name, _ in peer.calls] == ["see"]
 
 
 async def test_exact_window_change_invalidates_previous_window_and_refusal_clears_it():

@@ -165,6 +165,10 @@ async def verify(
                                                 "window_id": window_id,
                                             },
                                         )
+                                        assert result["data"].get("action_ready") is True, (
+                                            "Typed observation did not authorize input",
+                                            result["data"].get("reason"),
+                                        )
                                         observation_id = result["data"].get("observation_id")
                                     elif typed and name in {"type", "hotkey"}:
                                         assert observation_id is not None
