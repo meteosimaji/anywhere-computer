@@ -323,13 +323,19 @@ for line in sys.stdin:
             assert (await call("codex_plugin_session_close", psid))["cleanup_confirmed"]
             mcp = tmp_path / "peer.py"
             mcp.write_text(
-                "from mcp.server.fastmcp import FastMCP\nm=FastMCP('fixture')\nn=40\n"
+                "from mcp.server.fastmcp import FastMCP\n"
+                "from mcp.types import CallToolResult, TextContent\n"
+                "m=FastMCP('fixture')\nn=40\n"
                 "@m.tool()\ndef increment()->int:\n global n\n n+=1\n return n\n"
-                "@m.tool()\ndef see(app_target:str,window_id:int)->str:\n"
-                " return 'Snapshot ID: fixture-1\\nApplication: fixture\\n  elem_1 - button'\n"
+                "@m.tool()\ndef see(app_target:str,window_id:int)->CallToolResult:\n"
+                " return CallToolResult(content=[TextContent(type='text',"
+                "text='Snapshot ID: fixture-1\\nApplication: fixture\\n  elem_1 - button')],"
+                "_meta={'snapshot_id':'fixture-1',"
+                "'target_receipt':{'window_id':window_id}})\n"
                 "@m.tool()\ndef click(on:str,snapshot:str)->str:\n return 'clicked'\n"
                 "@m.tool()\ndef app(action:str,name:str)->str:\n return 'focused'\n"
-                "@m.tool()\ndef type(text:str,clear:bool,snapshot:str)->str:\n return text\n"
+                "@m.tool()\ndef type(text:str,clear:bool,snapshot:str,"
+                "on:str='')->str:\n return text\n"
                 "@m.tool()\ndef press(keys:list[str],snapshot:str)->str:\n return ','.join(keys)\n"
                 "m.run(transport='stdio')\n"
             )

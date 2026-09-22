@@ -105,26 +105,55 @@ class GUIMCP:
         self._interaction = asyncio.Lock()
 
     async def _require_exact_window(self, session_id: str, owner: str | None) -> None:
-        # Check the live contract before requesting a capture. Older providers may
-        # ignore unknown arguments, which must not silently select another window.
-        page = await self.sessions.tools(session_id, owner=owner, name='see')
-        for _ in range(16):
-            rows = page.get('tools')
-            if isinstance(rows, list):
+        # Peekaboo 4.3.4 accepts an explicit window for see and a snapshot for each
+        # input tool. Check all four schemas: older providers can ignore arguments.
+        fields = {
+            'see': {'window_id': 'integer', 'app_target': 'string'},
+            'click': {'snapshot': 'string', 'on': 'string'},
+            'type': {'snapshot': 'string', 'text': 'string', 'clear': 'boolean',
+                     'on': 'string'},
+            'press': {'snapshot': 'string', 'keys': 'array'},
+        }
+        def compatible(properties: JsonValue, required: dict[str, str]) -> bool:
+            if not isinstance(properties, dict):
+                return False
+            for key, expected in required.items():
+                field = properties.get(key)
+                if not isinstance(field, dict) or field.get('type') != expected:
+                    return False
+            return True
+
+        for tool_name, required in fields.items():
+            page = await self.sessions.tools(session_id, owner=owner, name=tool_name)
+            found = False
+            cursors: set[str] = set()
+            for _ in range(16):
+                rows = page.get('tools')
+                if not isinstance(rows, list):
+                    raise ValueError('Selected MCP catalog has no tools list')
                 for row in rows:
-                    if not isinstance(row, dict) or row.get('name') != 'see':
+                    if not isinstance(row, dict) or row.get('name') != tool_name:
                         continue
+                    if found:
+                        raise ValueError(f'Duplicate {tool_name} contract in selected MCP catalog')
                     schema = row.get('inputSchema')
                     properties = schema.get('properties') if isinstance(schema, dict) else None
-                    window = properties.get('window_id') if isinstance(properties, dict) else None
-                    if isinstance(window, dict) and window.get('type') == 'integer':
-                        return
-                    raise ValueError('Selected MCP server does not support exact-window capture')
-            cursor = page.get('nextCursor')
-            if not isinstance(cursor, str) or not cursor:
-                break
-            page = await self.sessions.tools(session_id, owner=owner, name='see', cursor=cursor)
-        raise ValueError('Exact-window capture contract unavailable in selected MCP catalog')
+                    if not compatible(properties, required):
+                        raise ValueError(
+                            f'Selected MCP server lacks snapshot-bound {tool_name}')
+                    found = True
+                cursor = page.get('nextCursor')
+                if not isinstance(cursor, str) or not cursor:
+                    break
+                if cursor in cursors:
+                    raise ValueError('Selected MCP catalog cursor repeated')
+                cursors.add(cursor)
+                page = await self.sessions.tools(
+                    session_id, owner=owner, name=tool_name, cursor=cursor)
+            else:
+                raise ValueError('Selected MCP catalog exceeded pagination limit')
+            if not found:
+                raise ValueError(f'Snapshot-bound {tool_name} contract unavailable')
 
     async def observe(self, args: GUIObserve, *, owner: str | None) -> dict[str, JsonValue]:
         if self._interaction.locked():
@@ -164,13 +193,30 @@ class GUIMCP:
         if len(snapshots) != 1:
             return {**result, 'action_ready': False, 'reason': 'snapshot_reference_ambiguous'}
         snapshot = snapshots[0]
+        metadata = raw.get('_meta')
+        if not isinstance(metadata, dict) or (
+            metadata.get('snapshot_id') is not None
+            and metadata.get('snapshot_id') != snapshot
+        ):
+            return {**result, 'action_ready': False,
+                    'reason': 'snapshot_reference_mismatch'}
+        # Peekaboo 4.3.4's MCP response projects its exact target into
+        # _meta.target_receipt. The CLI JSON's observation.target is a different
+        # envelope and must not be assumed to survive the MCP bridge.
+        target = metadata.get('target_receipt')
+        window_id = target.get('window_id') if isinstance(target, dict) else None
+        if type(window_id) is not int:
+            return {**result, 'action_ready': False,
+                    'reason': 'observed_window_unavailable'}
+        if window_id != args.window_id:
+            return {**result, 'action_ready': False,
+                    'reason': 'observed_window_mismatch'}
         element_ids = [match[1] for line in text.splitlines()
                        if '[not actionable]' not in line
                        and (match := re.match(r'^\s+([A-Za-z0-9_]+) - ', line))]
         if len(element_ids) != len(set(element_ids)):
             return {**result, 'action_ready': False, 'reason': 'element_reference_ambiguous'}
         context: JsonValue = None
-        metadata = raw.get('_meta')
         coordinate_status = 'unavailable'
         if isinstance(metadata, dict) and metadata.get('coordinate_context') is not None:
             try:
@@ -180,7 +226,8 @@ class GUIMCP:
                 context = parsed.model_dump(mode='json')
                 coordinate_status = 'validated'
             except ValueError:
-                coordinate_status = 'unsupported_or_invalid'
+                return {**result, 'action_ready': False,
+                        'reason': 'coordinate_reference_mismatch'}
         observation = Observation(
             owner, uuid.uuid4().hex, args.app, snapshot,
             frozenset(element_ids), time.monotonic(), args.window_id,
@@ -250,7 +297,7 @@ class GUIMCP:
         return {**normalized(raw), 'observation_consumed': True,
                 'app': observation.app, 'stage': 'action_result',
                 'window_id': observation.window_id,
-                'focus_may_change_externally': False,
+                'focus_may_change_externally': None,
                 'postcondition_verified': False,
                 'next_action': 'Observe the same window to verify the intended effect; '
                     'do not repeat input solely because the provider acknowledged it.'}
