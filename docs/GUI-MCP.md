@@ -296,6 +296,25 @@ MCP結果の `provider_diagnostics` は、提供元が返した既知の状態�
 未検証の提供元エラーと診断情報が保持されることも確認した。これはMacでの隔離試験であり、
 Windows、通常ChatGPT接続、製品全体のGUI受け入れの完了を意味しない。
 
+### Peekaboo 4.3.4のsnapshot・対象契約
+
+型付きGUIは観測前に選択済みMCP sessionの `see`, `click`, `type`, `press` の
+input schemaを確認する。`see` の `window_id` と各入力の `snapshot` が
+存在しなければ観測を始めない。観測結果では、本文の単一Snapshot ID、
+`_meta.target_receipt.window_id` と要求したwindow ID、および存在する場合は
+`_meta.coordinate_context.reference_id` とSnapshot IDの一致を要求する。
+不一致・欠落・重複した参照から入力用observation IDを発行しない。
+入力応答の `focus_may_change_externally` は `null` とし、OS上のfocus不変を
+wrapperの保証として表示しない。入力応答自体もpostconditionの証明ではない。
+
+2026-09-23に配布版Peekaboo 4.3.4のchecksumを照合し、既存のOS権限で
+TextEditの使い捨て文書を3窓開いて実測した。C窓を明示したauthenticated HTTP
+経由の置換と再観測は2回成功し、日本語・絵文字の本文を確認した。B窓をkeyにした
+ままC窓のsnapshotを取り、観測後にB窓へfocusを移した別試行では、提供元は入力を
+errorで返した。再送せずにC/B窓を観測すると、Cへの予定した変更はなく、Bの
+本文も元のままだった。この拒否を「任意のfocus変更でも必ず成功する」証拠には
+しない。試験用TextEditプロセスを終了し、MCP sessionの終了も確認した。
+
 
 ### 2026-09-14 cross-app input correction
 
