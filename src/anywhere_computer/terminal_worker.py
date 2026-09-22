@@ -5,6 +5,7 @@ POSIX commands inherit this worker's session/group; Windows commands inherit its
 """
 
 import ctypes
+import importlib
 import os
 import signal
 import struct
@@ -137,10 +138,10 @@ def main_conpty(shell: str, command: str, rows: int, columns: int) -> int:
     """Keep ConPTY and the process Job alive until its process family exits."""
     if os.name != "nt":
         raise RuntimeError("ConPTY requires Windows")
-    from winpty import PTY, Backend  # type: ignore[import-not-found]
+    winpty = importlib.import_module("winpty")
 
     job = WindowsJob()
-    pty = PTY(columns, rows, backend=Backend.ConPTY)
+    pty = winpty.PTY(columns, rows, backend=winpty.Backend.ConPTY)
     arguments = ["/c", command] if Path(shell).name.lower() == "cmd.exe" else ["-c", command]
     pty.spawn(shell, cmdline=" " + subprocess.list2cmdline(arguments), cwd=os.getcwd())
     threading.Thread(target=_conpty_input, args=(pty,), daemon=True).start()

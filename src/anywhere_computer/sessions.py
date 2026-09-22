@@ -24,6 +24,12 @@ if os.name != "nt":
     import pty
     import termios
 
+    # Windows mypy uses stdlib stubs without these POSIX attributes.
+    _ioctl = getattr(fcntl, "ioctl")  # noqa: B009
+    _openpty = getattr(pty, "openpty")  # noqa: B009
+    _TIOCSCTTY = getattr(termios, "TIOCSCTTY")  # noqa: B009
+    _TIOCSWINSZ = getattr(termios, "TIOCSWINSZ")  # noqa: B009
+
 OUTPUT_CAP = 8 * 1024 * 1024
 
 
@@ -58,7 +64,7 @@ class Session:
 
 def _make_controlling_terminal() -> None:
     """Called in the child after start_new_session and before exec."""
-    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+    _ioctl(0, _TIOCSCTTY, 0)
 
 
 async def _fd_ready(fd: int, *, writing: bool = False) -> None:
@@ -114,9 +120,9 @@ class Sessions:
                 stderr=asyncio.subprocess.STDOUT, env=with_tool_path(os.environ),
             )
         elif args.interactive:
-            master_fd, slave_fd = pty.openpty()
+            master_fd, slave_fd = _openpty()
             try:
-                fcntl.ioctl(slave_fd, termios.TIOCSWINSZ,
+                _ioctl(slave_fd, _TIOCSWINSZ,
                             struct.pack("HHHH", args.rows, args.columns, 0, 0))
                 process = await asyncio.create_subprocess_exec(
                     *command, cwd=cwd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
@@ -260,7 +266,7 @@ class Sessions:
                 await asyncio.wait_for(session.process.stdin.drain(), 10)
         else:
             assert session.master_fd is not None
-            fcntl.ioctl(session.master_fd, termios.TIOCSWINSZ,
+            _ioctl(session.master_fd, _TIOCSWINSZ,
                         struct.pack("HHHH", args.rows, args.columns, 0, 0))
         session.rows, session.columns = args.rows, args.columns
         return self.describe(session)
