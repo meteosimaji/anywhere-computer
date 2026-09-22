@@ -1,0 +1,9 @@
+{
+  "scope": "isolated synthetic core operation; no engine/Chat command dispatched",
+  "state_source": "src/anywhere_computer/state.py",
+  "state_source_sha256": "b1958df74b43da2307e29759b360f36ba8485fb41be988b191cff7a18930a058",
+  "first_before_second_open": "running",
+  "first_after_second_open": "unknown",
+  "second_view": "unknown",
+  "second_open_error_text": "Agent restarted before the outcome was recorded"
+}

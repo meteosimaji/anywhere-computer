@@ -1,0 +1,51 @@
+{
+  "observed_at": "2026-09-22T09:46:20.628034+00:00",
+  "run_id": 35710942533,
+  "status": "completed",
+  "conclusion": "success",
+  "head_sha": "3b53ef2805032b1169b51e1e46f461d8bedd6593",
+  "event": "push",
+  "url": "https://github.com/meteosimaji/anywhere-computer/actions/runs/35710942533",
+  "jobs": [
+    {
+      "name": "management-preview (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-09-22T09:32:22Z",
+      "completed_at": "2026-09-22T09:36:39Z",
+      "url": "https://github.com/meteosimaji/anywhere-computer/actions/runs/35710942533/job/106691103617"
+    },
+    {
+      "name": "shared-runtime (ubuntu-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-09-22T09:32:21Z",
+      "completed_at": "2026-09-22T09:38:23Z",
+      "url": "https://github.com/meteosimaji/anywhere-computer/actions/runs/35710942533/job/106691103833"
+    },
+    {
+      "name": "management-preview (macos-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-09-22T09:32:22Z",
+      "completed_at": "2026-09-22T09:34:04Z",
+      "url": "https://github.com/meteosimaji/anywhere-computer/actions/runs/35710942533/job/106691103870"
+    },
+    {
+      "name": "shared-runtime (macos-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-09-22T09:32:25Z",
+      "completed_at": "2026-09-22T09:40:16Z",
+      "url": "https://github.com/meteosimaji/anywhere-computer/actions/runs/35710942533/job/106691103895"
+    },
+    {
+      "name": "shared-runtime (windows-latest)",
+      "status": "completed",
+      "conclusion": "success",
+      "started_at": "2026-09-22T09:32:19Z",
+      "completed_at": "2026-09-22T09:45:36Z",
+      "url": "https://github.com/meteosimaji/anywhere-computer/actions/runs/35710942533/job/106691103968"
+    }
+  ]
+}

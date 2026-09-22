@@ -1,0 +1,209 @@
+{
+  "record_type": "dated_research_evidence_not_runtime_capabilities",
+  "research_date_jst": "2026-09-22",
+  "source_commit": "3b53ef2805032b1169b51e1e46f461d8bedd6593",
+  "scope": "HTTP-only ordinary-Chat creation, send, receive and recovery; child GUI work is outside non-interference acceptance",
+  "results_are_prior_runs_not_rerun_by_publication": true,
+  "new_http_generation_implemented": false,
+  "live_http_only_creation_verified": false,
+  "local_full_suite": {
+    "passed": 1652,
+    "skipped": 19,
+    "failed": 0,
+    "seconds": 894.47,
+    "exit_code": 0
+  },
+  "diagnostic_offline_tests": {
+    "passed": 8,
+    "failed": 0,
+    "seconds": 0.84,
+    "exit_code": 0,
+    "credential_access_code_published": false
+  },
+  "initial_targeted_runs": [
+    {
+      "source_commit": "e2100ebcac8e6e64b8b7a1a01b1feb5390105536",
+      "passed": 150,
+      "failed": 0,
+      "seconds": 22.43,
+      "exit_code": 0,
+      "log_sha256": "6976e1d66dda6007db1936c80fc8014d252842703900a729025e825a39da9f6d"
+    },
+    {
+      "source_commit": "3b53ef2805032b1169b51e1e46f461d8bedd6593",
+      "passed": 151,
+      "failed": 0,
+      "seconds": 19.74,
+      "exit_code": 0,
+      "log_sha256": "70da2bffc21c3211169879ddcd426630fd4cd2ad15d6c3f38e08680710763f4a"
+    }
+  ],
+  "audit_runs": [
+    {
+      "label": "initial_main",
+      "source_commit": "e2100ebcac8e6e64b8b7a1a01b1feb5390105536",
+      "passed": 0,
+      "failed": 5,
+      "exit_code": 1,
+      "original_log_name": "audit-main.log",
+      "original_log_sha256": "8a7b09349a92f6561671f7f6adb202e2c6ab80aafb0c7fdcaec1ac9a9eb2e315",
+      "observations": [
+        {
+          "case": "disarmed_watch",
+          "state": "queued",
+          "recovery_done": true,
+          "retained": true,
+          "sends": 1
+        },
+        {
+          "case": "late_pending_reads",
+          "retained": 8,
+          "all_done": true,
+          "ninth_state": "failed",
+          "ninth_data": {
+            "error_type": "RuntimeError"
+          }
+        },
+        {
+          "case": "capture_only_contract",
+          "refused": false,
+          "input_calls": [
+            "type"
+          ]
+        },
+        {
+          "case": "wrong_window",
+          "reported_window_id": 42,
+          "action_ready": true
+        },
+        {
+          "case": "active_watch_idle",
+          "outer_state": "expired",
+          "cleanup_confirmed": true,
+          "child_state": "queued",
+          "sends": 1,
+          "clock": "injected monotonic +301s; not elapsed wall time"
+        }
+      ]
+    },
+    {
+      "label": "pr152_head",
+      "source_commit": "3b53ef2805032b1169b51e1e46f461d8bedd6593",
+      "passed": 1,
+      "failed": 4,
+      "exit_code": 1,
+      "original_log_name": "audit-pr152.log",
+      "original_log_sha256": "c14b36a8f2b5f07d85c097a35d346dee9874285bcd17c6f6101de583f5aa50c6",
+      "observations": [
+        {
+          "case": "disarmed_watch",
+          "state": "queued",
+          "recovery_done": true,
+          "retained": false,
+          "sends": 1
+        },
+        {
+          "case": "late_pending_reads",
+          "retained": 8,
+          "all_done": true,
+          "ninth_state": "failed",
+          "ninth_data": {
+            "error_type": "RuntimeError"
+          }
+        },
+        {
+          "case": "capture_only_contract",
+          "refused": false,
+          "input_calls": [
+            "type"
+          ]
+        },
+        {
+          "case": "wrong_window",
+          "reported_window_id": 42,
+          "action_ready": true
+        },
+        {
+          "case": "active_watch_idle",
+          "outer_state": "expired",
+          "cleanup_confirmed": true,
+          "child_state": "queued",
+          "sends": 1,
+          "clock": "injected monotonic +301s; not elapsed wall time"
+        }
+      ]
+    },
+    {
+      "label": "post_push_transport_recheck",
+      "source_commit": "3b53ef2805032b1169b51e1e46f461d8bedd6593",
+      "passed": 0,
+      "failed": 2,
+      "exit_code": 1,
+      "original_log_name": "remaining-transport-regressions.log",
+      "original_log_sha256": "b370a71b29031c5cdde51cee201cab8771926eca162777b40d4ecfcba6d9183e",
+      "observations": [
+        {
+          "case": "late_pending_reads",
+          "retained": 8,
+          "all_done": true,
+          "ninth_state": "failed",
+          "ninth_data": {
+            "error_type": "RuntimeError"
+          }
+        },
+        {
+          "case": "active_watch_idle",
+          "outer_state": "expired",
+          "cleanup_confirmed": true,
+          "child_state": "queued",
+          "sends": 1,
+          "clock": "injected monotonic +301s; not elapsed wall time"
+        }
+      ]
+    }
+  ],
+  "product_http_only_cli": {
+    "capabilities": {
+      "queue_dispatch": "unavailable",
+      "background_dispatcher": false,
+      "native_steer": false,
+      "provider_stop": false,
+      "cancel_scope": "local_queued_or_prepared",
+      "state": "capabilities",
+      "transport": "http_read_only",
+      "browser_required": false,
+      "generation_transport": "unavailable",
+      "http_selection_send_supported": false,
+      "credential_refresh": false,
+      "independent_login": false,
+      "persistent_credentials": false,
+      "session_source": "explicit_in_memory_handoff",
+      "automatic_retry": false
+    },
+    "catalog_state": "http_session_required",
+    "send_state": "http_generation_unavailable",
+    "dispatched": false,
+    "saved_state": "prepared",
+    "conversation_id": null,
+    "user_message_id": null,
+    "answer_message_id": null,
+    "process_exit_code": 0,
+    "send_succeeded": false,
+    "original_log_sha256": "f77dcad2941988a7ab9ebbb7208c986047bd5bcd0414fed98d8f52bb696378e0",
+    "projection": "Prompt and local synthetic operation ID omitted; observed states retained."
+  },
+  "later_request_contract_probe": {
+    "cases_passed": 16,
+    "network_connect_attempts": 0,
+    "generation_posts": 0,
+    "provider_minimal_request_proven": false
+  },
+  "scope_limits": [
+    "8 diagnostic tests, 16 validator cases and the standard full suite are different test sets.",
+    "Historical browser-assisted live successes and 403 refusals are described in SUBCHAT-PROBE.md, not repeated here.",
+    "Keychain OSStatus -25293 stopped the separate creation probe before HTTP; it is not a provider 403.",
+    "The successful baseline CI does not establish the root cause of the previous Windows timeout.",
+    "Zero browser calls applies to each named diagnostic only, not to the entire historical standard test suite.",
+    "Synthetic GUI inconsistencies do not demonstrate a live Peekaboo misdirected input."
+  ]
+}

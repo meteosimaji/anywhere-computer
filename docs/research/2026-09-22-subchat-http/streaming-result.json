@@ -1,0 +1,28 @@
+{
+  "scope": "localhost HTTP/1.1 chunked SSE fixture only; not ChatGPT acceptance",
+  "versions": {
+    "playwright": "1.58.0",
+    "httpx": "0.28.1"
+  },
+  "playwright": {
+    "client": "Playwright APIRequestContext.post",
+    "server_sent_first_event": true,
+    "response_returned_before_tail_release": false,
+    "tail_was_withheld": true,
+    "observation_window_seconds": 1.0,
+    "status": 200,
+    "complete_body_matches": true,
+    "post_count": 1,
+    "server_errors": []
+  },
+  "httpx": {
+    "client": "HTTPX AsyncClient.stream",
+    "first_event_read_before_tail_release": true,
+    "stream_task_still_running": true,
+    "complete_body_matches": true,
+    "post_count": 1,
+    "server_errors": []
+  },
+  "browser_launch_calls": 0,
+  "real_chat_requests": 0
+}

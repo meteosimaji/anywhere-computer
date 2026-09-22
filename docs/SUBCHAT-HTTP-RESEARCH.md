@@ -5,6 +5,12 @@ identities without launching Chrome. New generation is not implemented. It reuse
 the existing ledger and HTTP projections; it does not implement independent login
 or credential refresh. See [live probe evidence](SUBCHAT-PROBE.md).
 
+The [2026-09-22 consolidated audit (Japanese)](SUBCHAT-HTTP-AUDIT-2026-09-22.ja.md)
+records request-contract findings, authentication blockers, transport regressions,
+and the proposed HTTP sender design, with [local evidence and reproduction
+instructions](research/2026-09-22-subchat-http/README.md). These are research results,
+not an enabled generation backend or a new live-send acceptance.
+
 ## Implemented behavior
 
 `HTTPOnlySubchatBackend` reuses `ChatHTTPReader`, existing receipt/final projections

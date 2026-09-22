@@ -16,6 +16,12 @@ For current use, start with the [CLI](#packaged-local-json-lines-controller),
 The chronological investigations below preserve earlier failures and superseded
 assumptions; they are not separate current feature inventories.
 
+For the 2026-09-22 findings, see the [consolidated HTTP/GUI audit and implementation
+plan (Japanese)](SUBCHAT-HTTP-AUDIT-2026-09-22.ja.md) and its
+[reproducible evidence](research/2026-09-22-subchat-http/README.md).
+That dated record does not claim independent HTTP generation is complete.
+Its non-interference target is subchat transport, not GUI work performed by a child.
+
 The requested subchat uses ordinary ChatGPT Chat, not a Codex task, ChatGPT
 Work task, or paid OpenAI API. Creating a new conversation and recovering its
 identity are required; appending to an existing conversation is insufficient.
