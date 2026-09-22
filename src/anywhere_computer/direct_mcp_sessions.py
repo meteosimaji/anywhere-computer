@@ -302,6 +302,9 @@ class DirectMCPSessions:
             raise
         except Exception:
             watch.state, watch.reason = 'stopped', 'observation_failed'
+            async with entry.lock:
+                if entry.state == 'open':
+                    await self._retire(entry, 'worker_failed', session_id=session_id)
         finally:
             self._record_watch(session_id, entry, identity, watch)
 
