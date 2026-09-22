@@ -2,8 +2,10 @@
 
 import asyncio
 import codecs
+import errno
 import os
 import signal
+import struct
 import sys
 import time
 import uuid
@@ -15,7 +17,12 @@ from pydantic import JsonValue
 
 from .execution_environment import with_tool_path
 from .files import absolute_path
-from .models import SessionInput, SessionOutput, StartSession
+from .models import SessionInput, SessionOutput, SessionResize, StartSession
+
+if os.name != "nt":
+    import fcntl
+    import pty
+    import termios
 
 OUTPUT_CAP = 8 * 1024 * 1024
 
@@ -43,6 +50,27 @@ class Session:
     reader: asyncio.Task[None] | None = None
     output_eof: bool = False
     input_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    master_fd: int | None = None
+    interactive: bool = False
+    rows: int | None = None
+    columns: int | None = None
+
+
+def _make_controlling_terminal() -> None:
+    """Called in the child after start_new_session and before exec."""
+    fcntl.ioctl(0, termios.TIOCSCTTY, 0)
+
+
+async def _fd_ready(fd: int, *, writing: bool = False) -> None:
+    loop = asyncio.get_running_loop()
+    ready: asyncio.Future[None] = loop.create_future()
+    register = loop.add_writer if writing else loop.add_reader
+    unregister = loop.remove_writer if writing else loop.remove_reader
+    register(fd, ready.set_result, None)
+    try:
+        await ready
+    finally:
+        unregister(fd)
 
 
 class Sessions:
@@ -75,28 +103,80 @@ class Sessions:
         if not Path(shell).is_absolute():
             raise ValueError("Shell must be an absolute executable path")
         # A persistent group/Job owner outlives short-lived shells and their children.
-        process = await asyncio.create_subprocess_exec(
-            sys.executable, "-I", str(Path(__file__).with_name("terminal_worker.py")),
-            shell, args.command, cwd=cwd,
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT, start_new_session=os.name != "nt",
-            env=with_tool_path(os.environ),
-        )
-        session = Session(uuid.uuid4().hex, process, time.time())
+        command = (sys.executable, "-I", str(Path(__file__).with_name("terminal_worker.py")),
+                   shell, args.command)
+        master_fd: int | None = None
+        if args.interactive and os.name == "nt":
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, "-I", str(Path(__file__).with_name("terminal_worker.py")),
+                "--conpty", shell, args.command, str(args.rows), str(args.columns),
+                cwd=cwd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT, env=with_tool_path(os.environ),
+            )
+        elif args.interactive:
+            master_fd, slave_fd = pty.openpty()
+            try:
+                fcntl.ioctl(slave_fd, termios.TIOCSWINSZ,
+                            struct.pack("HHHH", args.rows, args.columns, 0, 0))
+                process = await asyncio.create_subprocess_exec(
+                    *command, cwd=cwd, stdin=slave_fd, stdout=slave_fd, stderr=slave_fd,
+                    start_new_session=True, preexec_fn=_make_controlling_terminal,
+                    env=with_tool_path(os.environ),
+                )
+                os.set_blocking(master_fd, False)
+            except BaseException:
+                os.close(master_fd)
+                raise
+            finally:
+                os.close(slave_fd)
+        else:
+            process = await asyncio.create_subprocess_exec(
+                *command, cwd=cwd, stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+                start_new_session=os.name != "nt", env=with_tool_path(os.environ),
+            )
+        session = Session(uuid.uuid4().hex, process, time.time(), master_fd=master_fd,
+                          interactive=args.interactive,
+                          rows=args.rows if args.interactive else None,
+                          columns=args.columns if args.interactive else None)
         self.sessions[session.session_id] = session
         session.reader = asyncio.create_task(self._read(session))
         return self.describe(session)
 
     async def _read(self, session: Session) -> None:
-        assert session.process.stdout is not None
-        while chunk := await session.process.stdout.read(16384):
-            session.output.extend(chunk)
-            overflow = len(session.output) - OUTPUT_CAP
-            if overflow > 0:
-                del session.output[:overflow]
-                session.first_cursor += overflow
-        session.output_eof = True
-        await session.process.wait()
+        try:
+            if session.master_fd is None:
+                assert session.process.stdout is not None
+                while chunk := await session.process.stdout.read(16384):
+                    self._append_output(session, chunk)
+            else:
+                while True:
+                    await _fd_ready(session.master_fd)
+                    try:
+                        chunk = os.read(session.master_fd, 16384)
+                    except BlockingIOError:
+                        continue
+                    except OSError as error:
+                        if error.errno == errno.EIO:
+                            break  # Linux signals PTY EOF with EIO.
+                        raise
+                    if not chunk:
+                        break
+                    self._append_output(session, chunk)
+        finally:
+            session.output_eof = True
+            if session.master_fd is not None:
+                os.close(session.master_fd)
+                session.master_fd = None
+            await session.process.wait()
+
+    @staticmethod
+    def _append_output(session: Session, chunk: bytes) -> None:
+        session.output.extend(chunk)
+        overflow = len(session.output) - OUTPUT_CAP
+        if overflow > 0:
+            del session.output[:overflow]
+            session.first_cursor += overflow
 
     def get(self, session_id: str) -> Session:
         if session_id not in self.sessions:
@@ -113,6 +193,9 @@ class Sessions:
             "started": session.created,
             "first_cursor": session.first_cursor,
             "end_cursor": session.first_cursor + len(session.output),
+            "interactive": session.interactive,
+            "rows": session.rows,
+            "columns": session.columns,
         }
 
     async def send(self, args: SessionInput) -> dict[str, JsonValue]:
@@ -122,13 +205,22 @@ class Sessions:
         except TimeoutError as error:
             raise ValueError("Session input is busy; no input was sent") from error
         try:
-            if session.process.returncode is not None or session.process.stdin is None:
+            if session.process.returncode is not None or (session.process.stdin is None
+                                                        and session.master_fd is None):
                 raise ValueError("Session is not accepting input")
             cursor = session.first_cursor + len(session.output)
             encoded = args.text.encode()
             try:
-                session.process.stdin.write(encoded)
-                await asyncio.wait_for(session.process.stdin.drain(), 10)
+                if session.interactive and os.name == "nt":
+                    assert session.process.stdin is not None
+                    session.process.stdin.write(b"I" + len(encoded).to_bytes(4, "big") + encoded)
+                    await asyncio.wait_for(session.process.stdin.drain(), 10)
+                elif session.master_fd is None:
+                    assert session.process.stdin is not None
+                    session.process.stdin.write(encoded)
+                    await asyncio.wait_for(session.process.stdin.drain(), 10)
+                else:
+                    await asyncio.wait_for(self._write_pty(session.master_fd, encoded), 10)
                 sent: dict[str, JsonValue] = {
                     "session_id": args.session_id, "bytes_sent": len(encoded),
                 }
@@ -146,6 +238,32 @@ class Sessions:
                 ) from None
         finally:
             session.input_lock.release()
+
+    @staticmethod
+    async def _write_pty(fd: int, encoded: bytes) -> None:
+        offset = 0
+        while offset < len(encoded):
+            try:
+                offset += os.write(fd, encoded[offset:])
+            except BlockingIOError:
+                await _fd_ready(fd, writing=True)
+
+    async def resize(self, args: SessionResize) -> dict[str, JsonValue]:
+        session = self.get(args.session_id)
+        if not session.interactive or session.process.returncode is not None:
+            raise ValueError("Session is not an active interactive terminal")
+        if os.name == "nt":
+            assert session.process.stdin is not None
+            payload = struct.pack("!HH", args.rows, args.columns)
+            async with session.input_lock:
+                session.process.stdin.write(b"R" + len(payload).to_bytes(4, "big") + payload)
+                await asyncio.wait_for(session.process.stdin.drain(), 10)
+        else:
+            assert session.master_fd is not None
+            fcntl.ioctl(session.master_fd, termios.TIOCSWINSZ,
+                        struct.pack("HHHH", args.rows, args.columns, 0, 0))
+        session.rows, session.columns = args.rows, args.columns
+        return self.describe(session)
 
     async def _wait_response(
         self, session: Session, args: SessionInput, cursor: int,

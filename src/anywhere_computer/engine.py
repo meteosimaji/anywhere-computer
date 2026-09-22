@@ -64,6 +64,7 @@ from .models import (
     SessionId,
     SessionInput,
     SessionOutput,
+    SessionResize,
     StartSearch,
     StartSession,
     StopProcess,
@@ -705,6 +706,9 @@ class Engine:
         async def output(args: SessionOutput) -> Result:
             return await self.sessions.wait_output(args)
 
+        async def resize(args: SessionResize) -> Result:
+            return await self.sessions.resize(args)
+
         async def session_list(_: Empty) -> Result:
             return {
                 "sessions": [
@@ -922,6 +926,8 @@ class Engine:
         self.register(
             "terminal_start",
             "Start a shell command in an absolute working directory. "
+            "Set interactive=true for a POSIX PTY or Windows ConPTY with rows and columns; "
+            "the default retains pipes. "
             "It continues when an MCP client disconnects.",
             StartSession,
             start_terminal,
@@ -946,6 +952,13 @@ class Engine:
             SessionOutput,
             output,
             read_only=True,
+        )
+        self.register(
+            "terminal_resize",
+            "Resize a running interactive PTY. The child receives a size change notification.",
+            SessionResize,
+            resize,
+            destructive=True,
         )
         self.register(
             "terminal_list",

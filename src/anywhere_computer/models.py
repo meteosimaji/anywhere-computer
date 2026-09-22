@@ -236,6 +236,9 @@ class StartSession(Contract):
     command: str = Field(min_length=1, max_length=100000)
     cwd: str
     shell: str | None = None
+    interactive: bool = False
+    rows: int = Field(default=24, ge=1, le=500)
+    columns: int = Field(default=80, ge=1, le=500)
 
 
 class SessionId(Contract):
@@ -253,6 +256,11 @@ class SessionOutput(SessionId):
     cursor: int = 0
     limit: int = Field(default=16000, ge=1, le=100000)
     wait_ms: int = Field(default=0, ge=0, le=30000)
+
+
+class SessionResize(SessionId):
+    rows: int = Field(ge=1, le=500)
+    columns: int = Field(ge=1, le=500)
 
 
 class OperationId(Contract):
