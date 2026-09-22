@@ -282,7 +282,9 @@ class SubchatSubmissions:
 
     def begin_send(self, operation_id: str, *, owner: str | None,
                    conversation_id: str | None = None,
-                   baseline_message_ids: tuple[str, ...] = ()) -> SubchatSubmission:
+                   baseline_message_ids: tuple[str, ...] = (),
+                   user_message_id: str | None = None,
+                   provider_account_id: str | None = None) -> SubchatSubmission:
         old = self.get(operation_id, owner=owner)
         if old.state not in {'prepared', 'queued'}:
             raise ValueError('Submission may already have been sent; recover it without resending')
@@ -298,9 +300,26 @@ class SubchatSubmissions:
                 or len(set(baseline_message_ids)) != len(baseline_message_ids)
                 or any(not item.strip() or len(item) > 256 for item in baseline_message_ids)):
             raise ValueError('Invalid baseline message identities')
+        if (user_message_id is None) != (provider_account_id is None):
+            raise ValueError('Outgoing identity and account must be reserved together')
+        if user_message_id is not None:
+            if (not user_message_id.strip() or len(user_message_id) > 256
+                    or user_message_id in baseline_message_ids):
+                raise ValueError('Invalid outgoing submission identity')
+            assert provider_account_id is not None
+            if not provider_account_id.strip() or len(provider_account_id) > 256:
+                raise ValueError('Invalid provider account identity')
+            if old.after_operation_id is not None:
+                target = self.get(old.after_operation_id, owner=owner)
+                if (target.provider_account_id is not None
+                        and target.provider_account_id != provider_account_id):
+                    raise SubchatAccountMismatch(
+                        'Queued request belongs to a different Chat account')
         return self._replace(old, old.model_copy(update={
             'state': 'sending', 'conversation_id': old.conversation_id or conversation_id,
-            'baseline_message_ids': baseline_message_ids}), owner)
+            'baseline_message_ids': baseline_message_ids,
+            'user_message_id': user_message_id,
+            'provider_account_id': provider_account_id}), owner)
 
     def observe_request(self, operation_id: str, user_message_id: str,
                         *, owner: str | None, provider_account_id: str | None = None
