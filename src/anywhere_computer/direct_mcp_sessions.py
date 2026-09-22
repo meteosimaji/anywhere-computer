@@ -52,7 +52,9 @@ class DirectMCPSessions:
                                 'owner TEXT, state TEXT NOT NULL, reason TEXT, '
                                 'expires_at REAL NOT NULL, PRIMARY KEY(session_id, operation_id))')
                 journal.execute("UPDATE subchat_queue_watch_leases SET state='stopped', "
-                                "reason='engine_restart' WHERE state='watching'")
+                                "reason=CASE WHEN expires_at <= ? THEN 'lease_expired' "
+                                "ELSE 'engine_restart' END WHERE state='watching'",
+                                (time.time(),))
 
     def _record_watch(self, session_id: str, entry: _Entry, identity: str,
                       watch: _Watch) -> None:
