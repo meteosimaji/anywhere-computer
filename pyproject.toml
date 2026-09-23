@@ -8,7 +8,12 @@ dynamic = ["version"]
 description = "Your computer, available through a dependable MCP connection."
 requires-python = ">=3.12"
 license = "MIT"
-dependencies = ["pydantic>=2.11,<3", "psutil>=7,<8", "keyring>=25,<26"]
+dependencies = [
+    "pydantic>=2.11,<3",
+    "psutil>=7,<8",
+    "keyring>=25,<26",
+    "pywinpty==3.0.5 ; sys_platform == 'win32'",
+]
 
 [project.scripts]
 anywhere = "anywhere_computer.cli:main"

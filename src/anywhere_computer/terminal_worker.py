@@ -5,12 +5,21 @@ POSIX commands inherit this worker's session/group; Windows commands inherit its
 """
 
 import ctypes
+import importlib
 import os
 import signal
+import struct
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
+from typing import Protocol
+
+
+class _ConPTY(Protocol):
+    def write(self, text: str) -> int: ...
+    def set_size(self, columns: int, rows: int) -> None: ...
 
 if sys.platform == "win32":
     class WindowsJob:
@@ -101,7 +110,65 @@ def group_others_alive() -> bool:
     return False
 
 
+def _conpty_input(pty: _ConPTY) -> None:
+    """Relay framed input and resize requests to the Windows console."""
+    stream = sys.stdin.buffer
+    while header := stream.read(5):
+        if len(header) != 5:
+            break
+        kind, length = header[:1], int.from_bytes(header[1:], "big")
+        if length > 400000:
+            break
+        payload = stream.read(length)
+        if len(payload) != length:
+            break
+        try:
+            if kind == b"I":
+                pty.write(payload.decode("utf-8"))
+            elif kind == b"R" and length == 4:
+                rows, columns = struct.unpack("!HH", payload)
+                pty.set_size(columns, rows)
+            else:
+                break
+        except (OSError, RuntimeError):
+            break
+
+
+def main_conpty(shell: str, command: str, rows: int, columns: int) -> int:
+    """Keep ConPTY and the process Job alive until its process family exits."""
+    if os.name != "nt":
+        raise RuntimeError("ConPTY requires Windows")
+    winpty = importlib.import_module("winpty")
+
+    job = WindowsJob()
+    pty = winpty.PTY(columns, rows, backend=winpty.Backend.ConPTY)
+    arguments = ["/c", command] if Path(shell).name.lower() == "cmd.exe" else ["-c", command]
+    pty.spawn(shell, cmdline=" " + subprocess.list2cmdline(arguments), cwd=os.getcwd())
+    threading.Thread(target=_conpty_input, args=(pty,), daemon=True).start()
+    # Poll nonblocking so a dead command cannot leave the ownership worker stuck
+    # in a blocking read. ConPTY output is UTF-8 and uses the same byte cursor.
+    while True:
+        chunk = pty.read(blocking=False)
+        if chunk:
+            sys.stdout.buffer.write(chunk.encode("utf-8"))
+            sys.stdout.buffer.flush()
+        if not job.others_alive():
+            # Drain any output buffered during process teardown.
+            for _ in range(10):
+                chunk = pty.read(blocking=False)
+                if chunk:
+                    sys.stdout.buffer.write(chunk.encode("utf-8"))
+                    sys.stdout.buffer.flush()
+                time.sleep(0.01)
+            break
+        time.sleep(0.01)
+    return pty.get_exitstatus() or 0
+
+
 def main() -> int:
+    if sys.argv[1:2] == ["--conpty"]:
+        shell, command, rows, columns = sys.argv[2:]
+        return main_conpty(shell, command, int(rows), int(columns))
     shell, command = sys.argv[1:]
     job = WindowsJob() if os.name == "nt" else None
     if os.name != "nt":

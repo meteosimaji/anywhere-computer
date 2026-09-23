@@ -267,6 +267,14 @@ for line in sys.stdin:
             assert "acceptance-42" in str(output)
             await call("terminal_list")
             await call("terminal_stop", tid)
+            interactive = await call("terminal_start", {
+                "command": "/bin/cat", "shell": "/bin/sh", "cwd": str(tmp_path),
+                "interactive": True,
+            })
+            pty_id = {"session_id": interactive["session_id"]}
+            resized = await call("terminal_resize", {**pty_id, "rows": 40, "columns": 100})
+            assert resized["rows"] == 40 and resized["columns"] == 100
+            await call("terminal_stop", pty_id)
             process = await asyncio.create_subprocess_exec(
                 sys.executable, "-c", "import time;time.sleep(60)"
             )

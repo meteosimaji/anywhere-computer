@@ -61,7 +61,7 @@ async def test_ui_negotiation_resource_and_render_only_contract(ui_session, tmp_
     assert 'files_write' in output['_meta']['workspaceTools']
     assert 'terminal_start' not in output['_meta']['workspaceTools']
     assert 'devices_call' not in output['_meta']['workspaceTools']
-    assert len(engine.tools) == 69
+    assert len(engine.tools) == 70
 
 
 async def test_text_only_host_keeps_useful_tools_without_ui_metadata(ui_session):
