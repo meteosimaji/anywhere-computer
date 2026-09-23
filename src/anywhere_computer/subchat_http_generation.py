@@ -207,6 +207,28 @@ async def _post(client: APIRequestContext, url: str, *, body: bytes,
                              timeout=120_000, max_redirects=0, max_retries=0)
 
 
+async def _preparation_post(stage: str, *, plan: HTTPGenerationPlan,
+                            client: APIRequestContext, store: SubchatSubmissions,
+                            owner: str | None, origin: str, body: bytes,
+                            headers: dict[str, str]) -> dict[str, JsonValue]:
+    store.record_http_event(plan.operation_id, stage + '_request', owner=owner)
+    try:
+        response = await _post(client, _url(origin, _PATHS[stage]), body=body,
+                               headers=headers)
+        try:
+            store.record_http_event(plan.operation_id, stage + '_response', owner=owner,
+                                    status=response.status)
+            return await _json_response(response)
+        finally:
+            await response.dispose()
+    except SubchatAccessError:
+        store.record_http_event(plan.operation_id, stage + '_failed', owner=owner)
+        raise
+    except Exception:
+        store.record_http_event(plan.operation_id, stage + '_failed', owner=owner)
+        raise ConnectionError('Chat preparation failed; outcome is unknown') from None
+
+
 async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmission, *,
                               handoff: ObservedHTTPGeneration, client: APIRequestContext,
                               store: SubchatSubmissions, owner: str | None,
@@ -219,36 +241,51 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
     """
     if plan.account_id != handoff.headers['chatgpt-account-id']:
         raise SubchatAccountMismatch('HTTP generation account changed')
-    body = handoff.generation_body(plan, submission)
-    headers = {**handoff.headers, 'accept': 'application/json'}
-    sentinel = await _post(client, _url(origin, _PATHS['sentinel']),
-                           body=json.dumps({'p': handoff.sentinel_p}).encode(), headers=headers)
     try:
-        observed = await _json_response(sentinel)
-    finally:
-        await sentinel.dispose()
+        body = handoff.generation_body(plan, submission)
+    except Exception:
+        store.record_http_event(plan.operation_id, 'generation_failed', owner=owner)
+        raise ValueError('HTTP generation request is invalid') from None
+    headers = {**handoff.headers, 'accept': 'application/json'}
+    observed = await _preparation_post('sentinel', plan=plan, client=client, store=store,
+        owner=owner, origin=origin, body=json.dumps({'p': handoff.sentinel_p}).encode(),
+        headers=headers)
     token = observed.get('prepare_token')
     if not isinstance(token, str) or not token or len(token) > 16_384:
+        store.record_http_event(plan.operation_id, 'sentinel_failed', owner=owner)
         raise ValueError('Sentinel preparation token is unavailable')
     # Keep the exact successful Chrome header value. A fresh sentinel response
     # token with the handed-off proof and Turnstile values is not yet verified.
-    prepared = await _post(client, _url(origin, _PATHS['prepare']),
-                           body=handoff.prepare_body(plan), headers=headers)
     try:
-        await _json_response(prepared)
-    finally:
-        await prepared.dispose()
+        prepare_body = handoff.prepare_body(plan)
+    except Exception:
+        store.record_http_event(plan.operation_id, 'prepare_failed', owner=owner)
+        raise ValueError('Chat preparation request is invalid') from None
+    await _preparation_post('prepare', plan=plan, client=client, store=store,
+                            owner=owner, origin=origin, body=prepare_body, headers=headers)
     if plan.conversation_id is not None:
         if _CHAT.fullmatch(plan.conversation_id) is None:
+            store.record_http_event(plan.operation_id, 'branch_failed', owner=owner)
             raise ValueError('Invalid follow-up conversation identity')
-        branch = await client.get(_url(origin,
-            '/backend-api/conversation/' + plan.conversation_id), headers=headers,
-            timeout=15_000, max_redirects=0, max_retries=0)
+        store.record_http_event(plan.operation_id, 'branch_request', owner=owner)
         try:
-            current = await _json_response(branch)
-        finally:
-            await branch.dispose()
+            branch = await client.get(_url(origin,
+                '/backend-api/conversation/' + plan.conversation_id), headers=headers,
+                timeout=15_000, max_redirects=0, max_retries=0)
+            try:
+                store.record_http_event(plan.operation_id, 'branch_response', owner=owner,
+                                        status=branch.status)
+                current = await _json_response(branch)
+            finally:
+                await branch.dispose()
+        except SubchatAccessError:
+            store.record_http_event(plan.operation_id, 'branch_failed', owner=owner)
+            raise
+        except Exception:
+            store.record_http_event(plan.operation_id, 'branch_failed', owner=owner)
+            raise ConnectionError('Chat branch check failed; outcome is unknown') from None
         if current.get('current_node') != plan.predecessor_id:
+            store.record_http_event(plan.operation_id, 'branch_stale', owner=owner)
             raise SubchatStaleTarget('Provider conversation branch changed before dispatch')
     if not store.claim_http_dispatch(
             plan.operation_id, owner=owner, user_message_id=plan.user_message_id,
@@ -263,40 +300,54 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
 
     decoder = SSEDecoder()
     candidate = plan.conversation_id
-    async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=0),
-                                 follow_redirects=False, trust_env=False,
-                                 timeout=httpx.Timeout(120.0, connect=10.0)) as sender:
-        async with sender.stream('POST', _url(origin, _PATHS['generation']),
-                                 content=body, headers=handoff.headers) as response:
-            if response.status_code in (401, 403):
-                store.observe_rejection(plan.operation_id, plan.user_message_id,
-                                        response.status_code, owner=owner,
-                                        provider_account_id=plan.account_id)
-                raise SubchatAccessError(response.status_code)
-            if response.status_code != 200:
-                raise ConnectionError('Generation HTTP status was not successful')
-            if response.headers.get('content-type', '').split(';', 1)[0].strip() != (
-                    'text/event-stream'):
-                raise ValueError('Unexpected generation response format')
-            async for chunk in response.aiter_bytes():
-                for event in decoder.feed(chunk):
-                    if event.data == '[DONE]':
-                        continue
-                    try:
-                        data = json.loads(event.data)
-                    except json.JSONDecodeError:
-                        continue  # Candidate observation does not interpret other SSE data.
-                    if not isinstance(data, dict):
-                        continue
-                    observed_id = data.get('conversation_id')
-                    if observed_id is None:
-                        continue
-                    if not isinstance(observed_id, str) or _CHAT.fullmatch(observed_id) is None:
-                        raise ValueError('Invalid conversation candidate')
-                    if candidate is not None and candidate != observed_id:
-                        raise ValueError('Conflicting conversation candidates')
-                    if candidate is None:
-                        store.observe_conversation(plan.operation_id, plan.user_message_id,
-                            observed_id, owner=owner, provider_account_id=plan.account_id)
-                        candidate = observed_id
-            decoder.finish()
+    candidate_logged = False
+    store.record_http_event(plan.operation_id, 'generation_request', owner=owner)
+    try:
+        async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=0),
+                                     follow_redirects=False, trust_env=False,
+                                     timeout=httpx.Timeout(120.0, connect=10.0)) as sender:
+            async with sender.stream('POST', _url(origin, _PATHS['generation']),
+                                     content=body, headers=handoff.headers) as response:
+                store.record_http_event(plan.operation_id, 'generation_response', owner=owner,
+                                        status=response.status_code)
+                if response.status_code in (401, 403):
+                    store.observe_rejection(plan.operation_id, plan.user_message_id,
+                                            response.status_code, owner=owner,
+                                            provider_account_id=plan.account_id)
+                    raise SubchatAccessError(response.status_code)
+                if response.status_code != 200:
+                    raise ConnectionError('Generation HTTP status was not successful')
+                if response.headers.get('content-type', '').split(';', 1)[0].strip() != (
+                        'text/event-stream'):
+                    raise ValueError('Unexpected generation response format')
+                async for chunk in response.aiter_bytes():
+                    for event in decoder.feed(chunk):
+                        if event.data == '[DONE]':
+                            continue
+                        try:
+                            data = json.loads(event.data)
+                        except json.JSONDecodeError:
+                            continue  # Candidate observation does not interpret other SSE data.
+                        if not isinstance(data, dict):
+                            continue
+                        observed_id = data.get('conversation_id')
+                        if observed_id is None:
+                            continue
+                        if not isinstance(observed_id, str) or _CHAT.fullmatch(observed_id) is None:
+                            raise ValueError('Invalid conversation candidate')
+                        if candidate is not None and candidate != observed_id:
+                            raise ValueError('Conflicting conversation candidates')
+                        if candidate is None:
+                            store.observe_conversation(plan.operation_id, plan.user_message_id,
+                                observed_id, owner=owner, provider_account_id=plan.account_id)
+                            candidate = observed_id
+                        if not candidate_logged:
+                            store.record_http_event(plan.operation_id, 'sse_candidate', owner=owner)
+                            candidate_logged = True
+                decoder.finish()
+    except SubchatAccessError:
+        store.record_http_event(plan.operation_id, 'generation_failed', owner=owner)
+        raise
+    except Exception:
+        store.record_http_event(plan.operation_id, 'generation_failed', owner=owner)
+        raise ConnectionError('Generation outcome is unknown; recover without resending') from None

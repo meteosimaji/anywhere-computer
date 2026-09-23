@@ -5,6 +5,7 @@ may inspect the conversation, but may not dispatch the same submission again.
 """
 
 import sqlite3
+import time
 from typing import Literal
 
 from pydantic import Field
@@ -117,6 +118,54 @@ class SubchatSubmissions:
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_http_dispatch_claims ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, '
                                'user_message_id TEXT NOT NULL, account_id TEXT NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_http_events ('
+                               'id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, '
+                               'stage TEXT NOT NULL, status INTEGER, timestamp REAL NOT NULL)')
+            connection.execute('CREATE INDEX IF NOT EXISTS subchat_http_events_operation '
+                               'ON subchat_http_events(operation_id, id)')
+
+    _HTTP_STAGES = frozenset({
+        'sentinel_request', 'sentinel_response', 'sentinel_failed',
+        'prepare_request', 'prepare_response', 'prepare_failed',
+        'branch_request', 'branch_response', 'branch_stale', 'branch_failed',
+        'dispatch_claimed', 'generation_request', 'generation_response',
+        'generation_failed', 'sse_candidate', 'history_receipt',
+        'history_final', 'history_unknown', 'history_failed',
+    })
+    _HTTP_EVENT_LIMIT = 64
+
+    def _insert_http_event(self, operation_id: str, stage: str, status: int | None) -> None:
+        self.connection.execute(
+            'INSERT INTO subchat_http_events(operation_id,stage,status,timestamp) '
+            'VALUES (?,?,?,?)', (operation_id, stage, status, time.time()))
+        self.connection.execute(
+            'DELETE FROM subchat_http_events WHERE operation_id=? AND id NOT IN '
+            '(SELECT id FROM subchat_http_events WHERE operation_id=? '
+            'ORDER BY id DESC LIMIT ?)',
+            (operation_id, operation_id, self._HTTP_EVENT_LIMIT))
+
+    def record_http_event(self, operation_id: str, stage: str, *, owner: str | None,
+                          status: int | None = None) -> None:
+        """Persist only a fixed stage, numeric status, operation ID, and timestamp."""
+        if stage not in self._HTTP_STAGES or (status is not None and (
+                type(status) is not int or not 100 <= status <= 599)):
+            raise ValueError('Invalid HTTP diagnostic event')
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            self.get(operation_id, owner=owner)
+            self._insert_http_event(operation_id, stage, status)
+
+    def http_events(self, operation_id: str, *, owner: str | None,
+                    limit: int = 64) -> list[dict[str, str | int | float | None]]:
+        """Read bounded private diagnostics; never return request or response content."""
+        if type(limit) is not int or not 1 <= limit <= self._HTTP_EVENT_LIMIT:
+            raise ValueError('Invalid HTTP diagnostic limit')
+        self.get(operation_id, owner=owner)
+        rows = self.connection.execute(
+            'SELECT stage,status,timestamp FROM subchat_http_events '
+            'WHERE operation_id=? ORDER BY id DESC LIMIT ?', (operation_id, limit)).fetchall()
+        return [{'operation_id': operation_id, 'stage': stage, 'status': status,
+                 'timestamp': timestamp} for stage, status, timestamp in reversed(rows)]
 
     def claim_http_dispatch(self, operation_id: str, *, owner: str | None,
                             user_message_id: str, provider_account_id: str,
@@ -153,6 +202,8 @@ class SubchatSubmissions:
                 'INSERT OR IGNORE INTO subchat_http_dispatch_claims VALUES (?,?,?,?)',
                 (operation_id, owner, user_message_id, provider_account_id),
             )
+            if cursor.rowcount == 1:
+                self._insert_http_event(operation_id, 'dispatch_claimed', None)
             return cursor.rowcount == 1
 
     def get(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
@@ -252,7 +303,7 @@ class SubchatSubmissions:
         return existing
 
     def _replace(self, old: SubchatSubmission, new: SubchatSubmission,
-                 owner: str | None) -> SubchatSubmission:
+                 owner: str | None, *, http_event: str | None = None) -> SubchatSubmission:
         with self.connection:
             # Serialize identity validation and mutation across ledger connections.
             self.connection.execute('BEGIN IMMEDIATE')
@@ -300,6 +351,10 @@ class SubchatSubmissions:
                     (new.operation_id, owner, new.answer_message_id,
                      new.reported_settings.model_dump_json()),
                 )
+            if (http_event is not None and self.connection.execute(
+                    'SELECT 1 FROM subchat_http_dispatch_claims WHERE operation_id=?',
+                    (new.operation_id,)).fetchone() is not None):
+                self._insert_http_event(new.operation_id, http_event, None)
         return new
 
     def cancel(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
@@ -460,4 +515,4 @@ class SubchatSubmissions:
             raise ValueError('Submission identity must be observed before its answer')
         return self._replace(old, old.model_copy(update={
             'state': 'completed', 'answer_message_id': answer_message_id, 'answer': answer,
-            'reported_settings': reported_settings}), owner)
+            'reported_settings': reported_settings}), owner, http_event='history_final')
