@@ -33,7 +33,7 @@ class _Entry:
 
 
 class BrowserControl:
-    def __init__(self, *, channel: str | None = None) -> None:
+    def __init__(self, *, channel: str | None = "chrome") -> None:
         self.channel = channel
         self.entries: dict[str, _Entry] = {}
         self._lock = asyncio.Lock()

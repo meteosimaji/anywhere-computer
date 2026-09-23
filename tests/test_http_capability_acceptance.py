@@ -95,6 +95,17 @@ for line in sys.stdin:
     backend = AuthorizedDeviceMCP(authority, engine, owner="owner", device="fixture", client="chat")
     adapter = HTTPMCP(backend.authenticate, backend.session)
     port = await adapter.start()
+    async def browser_fixture(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        body = b"<html><head><title>Browser fixture</title></head><body>Ready</body></html>"
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+                     + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                     + body)
+        await writer.drain()
+        writer.close()
+
+    browser_server = await asyncio.start_server(browser_fixture, "127.0.0.1", 0)
+    browser_url = f"http://127.0.0.1:{browser_server.sockets[0].getsockname()[1]}/"
     covered = set()
     process = None
     try:
@@ -142,9 +153,10 @@ for line in sys.stdin:
             assert status["active_sessions"] == 0
             browser = await call("browser_open")
             browser_ids = {"session_id": browser["session_id"], "tab_id": browser["tab_id"]}
-            browser_url = f"http://127.0.0.1:{port}/browser-fixture"
             navigated = await call("browser_navigate", {**browser_ids, "url": browser_url})
             assert navigated["url"] == browser_url
+            assert navigated["http_status"] == 200
+            assert navigated["title"] == "Browser fixture"
             assert (await call("browser_observe", browser_ids))["tab_id"] == browser["tab_id"]
             assert (await call("browser_close", browser_ids))["state"] == "closed"
             audio = await call("audio_status")
@@ -419,6 +431,8 @@ for line in sys.stdin:
             await call('files_write', {'path': fresh_path, 'text': '新規チャット 🚀'})
             assert (await call('files_read', {'path': fresh_path}))['text'] == '新規チャット 🚀'
     finally:
+        browser_server.close()
+        await browser_server.wait_closed()
         if process is not None and process.returncode is None:
             process.kill()
             await process.wait()
