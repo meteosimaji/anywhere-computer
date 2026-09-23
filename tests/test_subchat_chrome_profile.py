@@ -2,6 +2,7 @@
 
 import sqlite3
 import sys
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -19,13 +20,14 @@ def profile_fixture(root: Path, name: str = "Profile 2") -> Path:
     (root / "Local State").write_text('{"profile":{}}')
     (profile / "Preferences").write_text('{"session":{}}')
     (profile / "Secure Preferences").write_text('{}')
-    with sqlite3.connect(profile / "Cookies") as database:
+    with closing(sqlite3.connect(profile / "Cookies")) as database:
         database.execute("CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT)")
         database.executemany("INSERT INTO cookies VALUES (?, ?, ?)", [
             (".chatgpt.com", "session", "private-chat"),
             ("chatgpt.com", "other", "private-chat-two"),
             ("other.example", "unrelated", "must-not-copy"),
         ])
+        database.commit()
     return profile
 
 
@@ -36,11 +38,11 @@ def test_snapshot_selects_exact_profile_and_filters_other_hosts(tmp_path):
     _snapshot_profile(source, clone)
     assert (clone / "Profile 2/Cookies").exists()
     assert not (clone / "Default").exists()
-    with sqlite3.connect(clone / "Profile 2/Cookies") as database:
+    with closing(sqlite3.connect(clone / "Profile 2/Cookies")) as database:
         assert database.execute("SELECT host_key FROM cookies ORDER BY host_key").fetchall() == [
             (".chatgpt.com",), ("chatgpt.com",),
         ]
-    with sqlite3.connect(source / "Cookies") as database:
+    with closing(sqlite3.connect(source / "Cookies")) as database:
         assert database.execute("SELECT COUNT(*) FROM cookies").fetchone()[0] == 3
     assert "must-not-copy" not in (clone / "Profile 2/Cookies").read_bytes().decode(
         "latin1")
@@ -48,8 +50,9 @@ def test_snapshot_selects_exact_profile_and_filters_other_hosts(tmp_path):
 
 def test_snapshot_requires_selected_login_and_valid_database(tmp_path):
     source = profile_fixture(tmp_path / "source", "Default")
-    with sqlite3.connect(source / "Cookies") as database:
+    with closing(sqlite3.connect(source / "Cookies")) as database:
         database.execute("DELETE FROM cookies WHERE host_key != 'other.example'")
+        database.commit()
     clone = tmp_path / "clone"
     clone.mkdir()
     with pytest.raises(SubchatAccessError) as error:
@@ -62,7 +65,7 @@ def test_snapshot_requires_selected_login_and_valid_database(tmp_path):
 
 def test_snapshot_includes_committed_wal_cookie_without_touching_live_database(tmp_path):
     source = profile_fixture(tmp_path / "source", "Default")
-    with sqlite3.connect(source / "Cookies") as live:
+    with closing(sqlite3.connect(source / "Cookies")) as live:
         live.execute("PRAGMA journal_mode=WAL")
         live.execute("INSERT INTO cookies VALUES (?, ?, ?)",
                      (".chatgpt.com", "recent", "wal-only"))
@@ -70,7 +73,7 @@ def test_snapshot_includes_committed_wal_cookie_without_touching_live_database(t
         clone = tmp_path / "clone"
         clone.mkdir()
         _snapshot_profile(source, clone)
-        with sqlite3.connect(tmp_path / "clone/Default/Cookies") as snapshot:
+        with closing(sqlite3.connect(tmp_path / "clone/Default/Cookies")) as snapshot:
             assert snapshot.execute(
                 "SELECT COUNT(*) FROM cookies WHERE name = 'recent'").fetchone()[0] == 1
         assert live.execute(
