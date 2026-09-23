@@ -61,8 +61,10 @@ owner verification. An optional cloudflared child adapter can use an owner-provi
 constant tunnel with native-keyring/OS-pipe credential handoff and bounded restarts;
 it does not provision the public route. Complete first-run onboarding, graphical
 desktop operations and standalone graphical installers remain unfinished.
-The direct-MCP prototype has exercised an isolated browser through Playwright MCP,
-but existing logged-in browser sessions and public browser tools remain unfinished.
+The direct-MCP prototype has exercised an isolated browser through Playwright MCP.
+The public browser tools can open, navigate, observe and close an isolated, ephemeral
+headless tab. They do not attach to existing logged-in browser sessions or provide
+clicking and typing.
 Explicit per-user service
 registration adapters exist for all three OSes; actual login/reboot remote recovery
 is not yet certified.

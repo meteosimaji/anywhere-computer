@@ -3,7 +3,7 @@
 [English](README.md) | 日本語
 
 ChatGPTやCodexなどのMCPクライアントから、自分のPCを操作するための実行エージェントです。
-接続したAIが作業を判断し、Anywhere Computerが指定されたPCでファイル・検索・文書・端末の操作を実行します。
+接続したAIが作業を判断し、Anywhere Computerが指定されたPCでファイル・検索・文書・端末・隔離されたヘッドレスブラウザの操作を実行します。
 ファイルや端末の基本機能にCodexのモデル実行は必要ありません。自作コードは[MIT License](LICENSE)です。
 
 [リリースを入手](https://github.com/meteosimaji/anywhere-computer/releases) ·

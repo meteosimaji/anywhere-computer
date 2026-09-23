@@ -521,7 +521,7 @@ async def test_literal_search_pagination(engine, tmp_path):
 async def test_registry_schemas_validation_and_duplicate_guard(engine):
     from anywhere_computer.models import Empty
 
-    assert len(engine.tools) == 71
+    assert len(engine.tools) == 75
     document_edit = engine.tools["documents_edit_paragraph"]
     assert document_edit.destructive and not document_edit.read_only
     capture = engine.tools["audio_capture"]

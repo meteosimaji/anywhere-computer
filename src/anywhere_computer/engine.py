@@ -17,6 +17,7 @@ from . import __version__, codex_context, codex_plugins, skills_context
 from .audio_capture import AudioCapture, AudioCaptureUnknown, capture_audio
 from .audio_status import inspect_audio, verified_audio_helper
 from .authorization import GrantIdentity, current_grant_read_only
+from .browser_control import BrowserControl, BrowserNavigationUnknown
 from .capability_contract import CAPABILITY_TOOLS
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
@@ -30,6 +31,8 @@ from .mcp_results import normalize_tool_result
 from .models import (
     BeginDownload,
     BeginUpload,
+    BrowserNavigate,
+    BrowserSession,
     CodexPluginCall,
     CodexPluginPage,
     CodexSkillRead,
@@ -210,6 +213,7 @@ class Engine:
         )
         self.gui_mcp = GUIMCP(self.direct_mcp_sessions)
         self.native_gui = NativeGUI()
+        self.browser = BrowserControl()
         # Transport-owned identity, inherited by the durable execution task only.
         # Tool arguments cannot set this value; None is the local execution scope.
         self._plugin_owner: ContextVar[str | None] = ContextVar("plugin_owner", default=None)
@@ -277,6 +281,31 @@ class Engine:
         )
 
     def _register_tools(self) -> None:
+        async def browser_open(_: Empty) -> Result:
+            return await self.browser.open(owner=self._plugin_owner.get())
+
+        async def browser_navigate(args: BrowserNavigate) -> Result:
+            return await self.browser.navigate(args, owner=self._plugin_owner.get())
+
+        async def browser_observe(args: BrowserSession) -> Result:
+            return await self.browser.observe(args, owner=self._plugin_owner.get())
+
+        async def browser_close(args: BrowserSession) -> Result:
+            return await self.browser.stop(args, owner=self._plugin_owner.get())
+
+        self.register("browser_open", "Open one isolated, ephemeral headless browser tab. "
+                      "Returns owner-bound session and tab IDs; no existing profile is attached.",
+                      Empty, browser_open, open_world=True)
+        self.register("browser_navigate", "Navigate the exact owned tab to an HTTP or HTTPS "
+                      "URL and return its observed URL, title and bounded visible text. "
+                      "Navigation may have web side effects; never replay an unknown outcome.",
+                      BrowserNavigate, browser_navigate, destructive=True, open_world=True)
+        self.register("browser_observe", "Observe the exact owned tab without navigating. "
+                      "Returns URL, title and bounded visible text.", BrowserSession,
+                      browser_observe, read_only=True, open_world=True)
+        self.register("browser_close", "Close the exact owned isolated browser session.",
+                      BrowserSession, browser_close)
+
         async def native_windows(args: NativeApp) -> Result:
             return await self.native_gui.windows(args, owner=self._plugin_owner.get())
 
@@ -1117,6 +1146,7 @@ class Engine:
         direct_mcp = self.direct_mcp_sessions.active_count
         subchat_watches = self.direct_mcp_sessions.active_watch_count
         global_resources: dict[str, int] = {
+            "browser_sessions": len(self.browser.entries),
             "terminal_sessions": terminals, "plugin_sessions": plugins,
             "direct_mcp_sessions": direct_mcp,
             "subchat_queue_watches": subchat_watches,
@@ -1127,6 +1157,8 @@ class Engine:
             resources = global_resources
         else:
             resources = {
+                "browser_sessions": sum(entry.owner == owner
+                                        for entry in self.browser.entries.values()),
                 "terminal_sessions": sum(
                     session.process.returncode is None
                     and self._terminal_owners.get(session_id) == owner
@@ -1160,6 +1192,11 @@ class Engine:
                 ),
             }
         capabilities: dict[str, JsonValue] = {
+            "browser_isolated_adapter": {
+                "available": True,
+                "requires": "Playwright with installed Chromium or Chrome",
+                "runtime_verified": False,
+            },
             "files": True,
             "terminal": True,
             "literal_search": True,
@@ -1200,7 +1237,8 @@ class Engine:
                 "os_permission": "not_checked",
                 "acceptance": "not_verified",
             }
-        for name in ("skills", "codex_skills", "audio_capture", "gui_native", "gui_mcp"):
+        for name in ("skills", "codex_skills", "audio_capture", "gui_native", "gui_mcp",
+                     "browser_isolated"):
             required_tools = CAPABILITY_TOOLS[name]
             capability_diagnostics[name] = {
                 "running_implementation": (
@@ -1208,7 +1246,7 @@ class Engine:
                 ),
                 "runtime_available": "unknown",
                 "connection_authorization": "not_observed",
-                "helper": "not_required",
+                "helper": "not_checked" if name == "browser_isolated" else "not_required",
                 "os_permission": ("not_checked" if name == "gui_mcp" else "not_required"),
                 "acceptance": "not_verified",
             }
@@ -1296,6 +1334,14 @@ class Engine:
                               else "busy" if busy else "running"),
                     "stop_tool": "gui_native_close", "stop_available": not busy,
                 })
+        for session_id, browser_entry in self.browser.entries.items():
+            if browser_entry.owner == owner:
+                blocker_details.append({
+                    "resource": "browser_session", "id": session_id,
+                    "state": ("running" if browser_entry.browser.is_connected() else "ended"),
+                    "stop_tool": "browser_close", "tab_id": browser_entry.tab_id,
+                    "stop_available": not browser_entry.lock.locked(),
+                })
         for search_id, search_entry in self.searches.searches.items():
             if (search_entry.state == "running"
                     and (owner is None or self._search_owners.get(search_id) == owner)):
@@ -1334,7 +1380,8 @@ class Engine:
             "runtime_id": self.runtime_id,
             "uptime_seconds": time.monotonic() - self.started,
             "platform": platform.system(),
-            "active_sessions": (resources["terminal_sessions"] + resources["plugin_sessions"]
+            "active_sessions": (resources["browser_sessions"]
+                                + resources["terminal_sessions"] + resources["plugin_sessions"]
                                 + resources["direct_mcp_sessions"]
                                 + resources["native_gui_sessions"]),
             "active_operations": resources["operations"],
@@ -1437,6 +1484,14 @@ class Engine:
                     data={"error_code": "native_gui_outcome_unknown", "dispatched": None,
                           "next_action": "Recover with operations_get and inspect the target; "
                                          "do not resend input"},
+                )
+            except BrowserNavigationUnknown as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state="unknown", error=str(error),
+                    data={"error_code": "browser_navigation_outcome_unknown",
+                          "execution_state": "unknown", "dispatched": None,
+                          "next_action": "Observe the same browser tab and inspect this operation "
+                                         "before navigating again."},
                 )
             except DirectMCPOutcomeUnknown as error:
                 reply = Reply(
@@ -1552,6 +1607,7 @@ class Engine:
         await self.plugin_sessions.close()
         await self.direct_mcp_sessions.close()
         await self.native_gui.close()
+        await self.browser.close()
         await self.searches.close()
         await self.sessions.close()
         self.ledger.close()

@@ -140,6 +140,13 @@ for line in sys.stdin:
 
             status = await call("computer_status")
             assert status["active_sessions"] == 0
+            browser = await call("browser_open")
+            browser_ids = {"session_id": browser["session_id"], "tab_id": browser["tab_id"]}
+            browser_url = f"http://127.0.0.1:{port}/browser-fixture"
+            navigated = await call("browser_navigate", {**browser_ids, "url": browser_url})
+            assert navigated["url"] == browser_url
+            assert (await call("browser_observe", browser_ids))["tab_id"] == browser["tab_id"]
+            assert (await call("browser_close", browser_ids))["state"] == "closed"
             audio = await call("audio_status")
             assert audio["state"] in {"available", "unavailable", "unsupported"}
             assert audio["capture_started"] is False

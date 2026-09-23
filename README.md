@@ -3,8 +3,9 @@
 English | [日本語](README.ja.md)
 
 Work with your computers from MCP clients such as ChatGPT and Codex. Your AI
-plans the work; Anywhere Computer executes file, search, document and terminal
-operations on the computer you select. Core file and terminal operations do not
+plans the work; Anywhere Computer executes file, search, document, terminal and
+isolated headless browser operations on the computer you select. Core file and
+terminal operations do not
 require a Codex model turn. Project code is [MIT licensed](LICENSE).
 
 [Download a release](https://github.com/meteosimaji/anywhere-computer/releases) ·

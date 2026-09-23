@@ -252,6 +252,15 @@ class SessionId(Contract):
     session_id: str
 
 
+class BrowserSession(Contract):
+    session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    tab_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class BrowserNavigate(BrowserSession):
+    url: str = Field(min_length=1, max_length=4096)
+
+
 class SessionInput(SessionId):
     text: str = Field(max_length=100000)
     wait_ms: int = Field(default=0, ge=0, le=30000)
