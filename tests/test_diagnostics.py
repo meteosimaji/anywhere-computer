@@ -5,6 +5,7 @@ import os
 import psutil
 import pytest
 
+from anywhere_computer import __version__
 from anywhere_computer.connection import serve
 from anywhere_computer.diagnostics import diagnose
 
@@ -78,7 +79,21 @@ async def test_live_diagnosis_does_not_restart_or_modify_agent(tmp_path, monkeyp
             "anywhere_computer.diagnostics.local_credential", lambda *a, **kw: secret
         )
         monkeypatch.setattr("anywhere_computer.diagnostics.runtime_identity", lambda: "new")
-        assert (await diagnose(tmp_path))["state"] == "different_build"
+        different = await diagnose(tmp_path)
+        assert different["state"] == "different_build"
+        assert different["runtime_comparison"] == {
+            "state": "different",
+            "version_matches": True,
+            "runtime_id_matches": False,
+            "source_implementation": "current_diagnostic_process",
+            "connection_authorization": "authenticated_status_only",
+            "feature_authorization": "unknown",
+            "helper_and_os_permissions": "not_checked",
+            "acceptance": "not_verified",
+        }
+        assert different["source_build"] == {
+            "version": __version__, "runtime_id": "new",
+        }
         assert not task.done()
     finally:
         shutdown.set()

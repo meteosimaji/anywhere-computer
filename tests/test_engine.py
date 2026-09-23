@@ -3,6 +3,7 @@ import os
 import shlex
 import sys
 import uuid
+from types import SimpleNamespace
 
 import pytest
 
@@ -35,6 +36,124 @@ def test_python_command_preserves_multiline_source_and_shell_characters():
     script = "import sys\nsys.stdout.reconfigure(encoding='utf-8')\n" + f"print({text!r})"
     output = subprocess.check_output(python_command(script), shell=True, timeout=5)
     assert output.decode("utf-8").replace("\r\n", "\n") == text + "\n"
+
+
+def test_status_separates_capability_evidence_without_claiming_acceptance(tmp_path):
+    engine = Engine(tmp_path / "state")
+    try:
+        status = engine.status()
+        diagnostics = status["capability_diagnostics"]
+        assert diagnostics["skills"] == {
+            "running_implementation": "present",
+            "runtime_available": "unknown",
+            "connection_authorization": "not_observed",
+            "helper": "not_required",
+            "os_permission": "not_required",
+            "acceptance": "not_verified",
+        }
+        assert diagnostics["gui_native"]["running_implementation"] == "present"
+        assert diagnostics["gui_native"]["helper"] in {
+            "verified_available", "unavailable", "unsupported_platform", "verification_failed",
+        }
+        assert diagnostics["gui_native"]["os_permission"] == "not_checked"
+        assert diagnostics["gui_native"]["acceptance"] == "not_verified"
+    finally:
+        asyncio.run(engine.close())
+
+
+async def test_status_lists_only_current_owners_update_blockers(engine):
+    current = "a" * 32
+    other = "b" * 32
+    own_operation = "c" * 32
+    other_operation = "d" * 32
+    busy_lock = asyncio.Lock()
+    await busy_lock.acquire()
+    engine.plugin_sessions.entries[current] = SimpleNamespace(
+        owner="owner-a", state="open", lock=busy_lock, cleanup_confirmed=False,
+    )
+    engine.plugin_sessions.entries[other] = SimpleNamespace(
+        owner="owner-b", state="open", lock=asyncio.Lock(), cleanup_confirmed=False,
+    )
+    release = asyncio.Event()
+    own_task = asyncio.create_task(release.wait(), name="files_write")
+    other_task = asyncio.create_task(release.wait(), name="terminal_input")
+    engine.inflight.update({own_operation: own_task, other_operation: other_task})
+    engine.inflight_owners.update({own_operation: "owner-a", other_operation: "owner-b"})
+    try:
+        result = engine.status(owner="owner-a")
+        assert result["update_blocked"] is True
+        assert result["update_blockers"] == ["plugin_sessions", "operations"]
+        assert result["update_blocker_details"] == [
+            {
+                "resource": "plugin_session", "id": current, "state": "busy",
+                "stop_tool": "codex_plugin_session_close", "stop_available": False,
+            },
+            {
+                "resource": "operation", "id": own_operation, "state": "running",
+                "inspect_tool": "operations_get", "stop_available": False,
+            },
+        ]
+        assert other not in repr(result["update_blocker_details"])
+        assert other_operation not in repr(result["update_blocker_details"])
+        assert engine.status(owner="owner-c")["update_blocker_details"] == []
+    finally:
+        release.set()
+        await asyncio.gather(own_task, other_task)
+        engine.inflight.clear()
+        engine.inflight_owners.clear()
+        busy_lock.release()
+        engine.plugin_sessions.entries.clear()
+
+
+async def test_capacity_failure_has_fixed_code_and_safe_action(engine, tmp_path, monkeypatch):
+    async def at_capacity(*args, **kwargs):
+        raise RuntimeError("Direct MCP capacity reached; close an existing session")
+
+    monkeypatch.setattr(engine.direct_mcp_sessions, "open", at_capacity)
+    reply = await engine.execute(request(
+        "mcp_session_open", command=[sys.executable], cwd=str(tmp_path),
+    ))
+    assert reply.state == "failed"
+    assert reply.error == "Operation was not dispatched."
+    assert reply.data["error_code"] == "session_capacity"
+    assert reply.data["dispatched"] is False
+    assert reply.data["next_action"]
+
+
+async def test_status_shows_owned_live_watch_stop_contract(engine, monkeypatch):
+    session_id = "e" * 32
+    operation_id = "f" * 32
+    context = SimpleNamespace(cleanup_confirmed=False)
+    watch = SimpleNamespace(state="watching")
+    engine.direct_mcp_sessions.entries[session_id] = SimpleNamespace(
+        owner="owner-a", context=context, lock=asyncio.Lock(), state="open",
+        watches={operation_id: watch},
+    )
+    monkeypatch.setattr(
+        engine.direct_mcp_sessions, "watch_history",
+        lambda *, owner: [{"session_id": session_id, "operation_id": operation_id,
+                           "state": "watching", "reason": None}] if owner == "owner-a" else [],
+    )
+    try:
+        status = engine.status(owner="owner-a")
+        assert status["active_resources"]["subchat_queue_watches"] == 1
+        detail = next(
+            row for row in status["update_blocker_details"]
+            if isinstance(row, dict) and row.get("resource") == "subchat_queue_watch"
+        )
+        assert detail == {
+            "resource": "subchat_queue_watch", "id": operation_id,
+            "session_id": session_id, "state": "watching", "reason": None,
+            "stop_tool": "mcp_call",
+            "stop_arguments": {
+                "session_id": session_id, "name": "subchat_queue_watch",
+                "arguments": {"operation_id": operation_id, "enabled": False},
+            },
+            "inspect_tool": "mcp_watch_list", "stop_available": True,
+        }
+        assert engine.status(owner="owner-b")["update_blocker_details"] == []
+    finally:
+        engine.direct_mcp_sessions.entries.clear()
 
 
 @pytest.fixture

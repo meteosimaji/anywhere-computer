@@ -12,6 +12,9 @@ def test_provider_outcome_survives_without_overriding_error():
     assert result['provider_diagnostics']['state'] == 'partial'
     assert result['provider_diagnostics']['retry_safe'] is False
     assert result['provider_diagnostics']['mutation_dispatched'] is True
+    assert result['error_diagnostic']['error_code'] == 'provider_rejected'
+    assert result['error_diagnostic']['execution_state'] == 'rejected'
+    assert result['error_diagnostic']['next_action']
 
 
 def test_private_unknown_and_wrong_typed_metadata_are_not_forwarded():
@@ -28,3 +31,5 @@ def test_private_unknown_and_wrong_typed_metadata_are_not_forwarded():
 def test_absent_metadata_does_not_imply_no_dispatch():
     result = normalize_tool_result({'content': [], 'isError': True})
     assert 'provider_diagnostics' not in result
+    assert result['error_diagnostic']['error_code'] == 'provider_rejected'
+    assert 'dispatched' not in result['error_diagnostic']

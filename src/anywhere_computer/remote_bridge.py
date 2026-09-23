@@ -24,6 +24,20 @@ from .models import OperationId, Reply, Request, TransferId
 from .remote_transport import remote_exchange
 from .uploads import UPLOAD_TOOLS
 
+_CAPABILITY_GRANT_TOOLS: dict[str, frozenset[str]] = {
+    "files": frozenset({"files_read", "files_write"}),
+    "terminal": frozenset({"terminal_start", "terminal_output", "terminal_input",
+                            "terminal_list", "terminal_stop"}),
+    "literal_search": frozenset({"search_start", "search_results", "search_list",
+                                  "search_stop"}),
+    "office_text_read": frozenset({"documents_read"}),
+    "audio_capture": frozenset({"audio_status", "audio_capture"}),
+    "gui_native": frozenset({"gui_native_windows", "gui_native_observe", "gui_native_close"}),
+    "gui_mcp": frozenset({"gui_observe", "gui_click", "gui_type", "gui_key"}),
+    "skills": frozenset({"skills_list", "skills_read"}),
+    "codex_skills": frozenset({"codex_skills_list", "codex_skill_read"}),
+}
+
 
 class RemoteAgent:
     def __init__(
@@ -90,7 +104,12 @@ class RemoteAgent:
         allowed = self._allowed(identity)
         if allowed is None:
             reply = Reply(operation_id=request.operation_id, state="failed",
-                          error="Peer authorization is absent, expired or revoked")
+                          error="Connection authorization is absent or expired",
+                          data={"error_code": "authentication_required",
+                                "dispatched": False,
+                                "execution_state": "not_dispatched",
+                                "next_action": "Use the separate connection authorization flow to "
+                                "review or renew this peer's grant; no permission was changed."})
         elif request.tool == "__catalog":
             reply = Reply(
                 operation_id=request.operation_id,
@@ -101,13 +120,19 @@ class RemoteAgent:
             reply = Reply(
                 operation_id=request.operation_id,
                 state="failed",
-                error="Tool is not granted to this peer",
+                error="This capability is not granted to the connection",
+                data={"error_code": "capability_not_authorized",
+                      "dispatched": False, "execution_state": "not_dispatched",
+                      "next_action": "Review this connection's tool grant in its separate "
+                      "authorization flow; no permission was changed."},
             )
         else:
-            reply = await self._execute(identity, request)
+            reply = await self._execute(identity, request, allowed=allowed)
         return reply.model_dump_json().encode()
 
-    async def _execute(self, identity: str, request: Request) -> Reply:
+    async def _execute(
+        self, identity: str, request: Request, *, allowed: frozenset[str],
+    ) -> Reply:
         internal = self.internal_id(identity, request.operation_id)
         arguments = dict(request.arguments)
         if request.tool in UPLOAD_TOOLS | DOWNLOAD_TOOLS:
@@ -145,6 +170,36 @@ class RemoteAgent:
             data["transport"] = self.transport
             # This establishes this channel, not NAT/internet reachability or HTTP MCP.
             data["remote_channel_authenticated"] = True
+            diagnostics = data.get("capability_diagnostics")
+            if isinstance(diagnostics, dict):
+                for capability, required in _CAPABILITY_GRANT_TOOLS.items():
+                    granted = required & allowed
+                    if not granted:
+                        state = "not_granted"
+                    elif granted == required:
+                        state = "authorized"
+                    else:
+                        state = "partial_grant"
+                    next_action = (
+                        "No grant change is indicated by this diagnostic."
+                        if state == "authorized" else
+                        "Review this connection's grant in its separate authorization flow; "
+                        "no permission was changed."
+                    )
+                    raw = diagnostics.get(capability)
+                    if isinstance(raw, dict):
+                        raw["connection_authorization"] = state
+                        raw["authorization_next_action"] = next_action
+                    else:
+                        diagnostics[capability] = {
+                            "running_implementation": "unknown",
+                            "runtime_available": "unknown",
+                            "connection_authorization": state,
+                            "authorization_next_action": next_action,
+                            "helper": "not_checked",
+                            "os_permission": "not_checked",
+                            "acceptance": "not_verified",
+                        }
         return result.model_copy(update={"operation_id": request.operation_id, "data": data})
 
 

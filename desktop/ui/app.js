@@ -12,18 +12,29 @@ function pairs(id, entries) {
 const engineNames = {ready:"エンジンが応答しています",stopped:"エンジンは停止しています",different_build:"別のビルドが稼働しています",stale_endpoint:"記録されたエンジンは終了しています",unresponsive:"エンジンの応答を確認できません",credential_unavailable:"認証情報を利用できません"};
 const engineActions = {ready:"",stopped:"起動ボタンで、このPCのエンジンを起動できます。",different_build:"稼働中の版と管理画面の版を確認してください。",stale_endpoint:"エンジンを起動してから、状態を更新してください。",unresponsive:"処理中の可能性があります。状態を再確認してください。",credential_unavailable:"このPCの認証情報を読み取れるか確認してください。"};
 const resourceNames = {terminal_sessions:"端末セッション",plugin_sessions:"Pluginセッション",direct_mcp_sessions:"直接MCPセッション",searches:"検索",operations:"操作"};
-const featureNames = {files:"ファイル",terminal:"端末",literal_search:"検索",office_text_read:"文書の読取",gui:"組込みGUI"};
+const featureNames = {files:"ファイル",terminal:"端末",literal_search:"検索",office_text_read:"文書の読取",gui:"組込みGUI",skills:"Skills",audio_capture:"音声取得",gui_native:"macOS GUI",gui_mcp:"MCP GUI"};
+const evidenceNames = {present:"実装あり",absent:"実装なし","true":"利用可能と報告","false":"非対応と報告",unknown:"未確認",not_observed:"未観測",not_checked:"未確認",not_verified:"未検証",authenticated_status_only:"状態照会の認証のみ",authorized:"認可済み",not_granted:"未認可",partial_grant:"一部のみ認可",not_required:"不要",verified_available:"署名済みhelperあり",unavailable:"helperなし",unsupported_platform:"非対応OS",verification_failed:"検証失敗"};
 function render(snapshot) {
   field("engine",engineNames[snapshot.engine_state] ?? `要確認：${snapshot.engine_state}`);
   field("action",engineActions[snapshot.engine_state] ?? "接続の診断が必要です。");
   const configuration = snapshot.setup.configuration;
   field("connection",snapshot.setup.phase === "configured" ? `設定済み：${configuration.client}（接続は未確認）` : snapshot.setup.phase === "new" ? "接続設定はまだありません" : `設定の確認が必要です：${snapshot.setup.phase}`);
-  pairs("features",Object.entries(snapshot.capabilities).filter(([k]) => k in featureNames).map(([k,v]) => [featureNames[k],v?"エンジンが利用可能と報告":"未対応"]));
-  pairs("work",Object.entries(snapshot.active_resources).map(([k,v]) => [resourceNames[k] ?? k,v]));
+  const capabilityRows = Object.entries(snapshot.capability_diagnostics ?? {}).filter(([k]) => k in featureNames).map(([key, raw]) => {
+    const value = raw && typeof raw === "object" ? raw : {};
+    const fields = [["実装",value.running_implementation],["稼働版",value.runtime_available],["接続認可",value.connection_authorization],["helper",value.helper],["OS権限",value.os_permission],["受入",value.acceptance],["次の操作（helper/権限）",value.next_action],["認可の次の操作",value.authorization_next_action]];
+    return [featureNames[key],fields.filter(([,item]) => item !== undefined).map(([label,item]) => `${label}：${evidenceNames[String(item)] ?? String(item)}`).join(" / ")];
+  });
+  if (capabilityRows.length) pairs("features",capabilityRows);
+  else pairs("features",Object.entries(snapshot.capabilities).filter(([k]) => k in featureNames).map(([k,v]) => [featureNames[k],v?"エンジンが利用可能と報告":"未対応"]));
+  const blockerRows = (snapshot.update_blocker_details ?? []).filter((item) => item && typeof item === "object").map((item) => [
+    `更新を阻む：${resourceNames[item.resource] ?? item.resource ?? "セッション"}`,
+    `${item.id ?? "ID未確認"}${item.session_id ? ` / session ${item.session_id}` : ""} / 状態 ${item.state ?? "未確認"}${item.reason ? ` / 理由 ${item.reason}` : ""} / ${item.stop_tool ? `${item.stop_tool}：停止${item.stop_available === true ? "可能" : "不可"}${item.stop_arguments ? ` ${JSON.stringify(item.stop_arguments)}` : ""}` : item.inspect_tool ? `${item.inspect_tool}で状態照会可能（停止操作なし）` : "停止操作未確認"}`,
+  ]);
+  pairs("work",[...Object.entries(snapshot.active_resources).map(([k,v]) => [resourceNames[k] ?? k,v]),...blockerRows]);
   if (!Object.keys(snapshot.active_resources).length) pairs("work",[["処理状態","未確認"]]);
   field("updates",snapshot.automatic_stable_updates ? "stableの自動更新：有効" : "手動更新（自動更新は無効）");
   field("observed",`確認時刻：${new Date(snapshot.observed_at).toLocaleString()}`);
-  pairs("identity",[["バージョン",snapshot.version],["runtime ID",snapshot.runtime_id],["instance ID",snapshot.instance_id]]);
+  pairs("identity",[["管理画面側バージョン",snapshot.source_build?.version],["管理画面側 runtime ID",snapshot.source_build?.runtime_id],["稼働版バージョン",snapshot.version],["稼働版 runtime ID",snapshot.runtime_id],["version一致",snapshot.runtime_comparison?.version_matches === true ? "はい" : snapshot.runtime_comparison?.version_matches === false ? "いいえ" : "未確認"],["runtime ID一致",snapshot.runtime_comparison?.runtime_id_matches === true ? "はい" : snapshot.runtime_comparison?.runtime_id_matches === false ? "いいえ" : "未確認"],["instance ID",snapshot.instance_id]]);
   const devices = document.getElementById("devices"); devices.replaceChildren();
   if (snapshot.device_registry_state === "unavailable") devices.textContent = "登録情報を読み取れません。保存データは変更していません。";
   else if (!snapshot.devices.length) devices.textContent = "追加の端末は登録されていません。";
