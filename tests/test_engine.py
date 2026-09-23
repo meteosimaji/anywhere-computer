@@ -65,6 +65,8 @@ def test_status_separates_capability_evidence_without_claiming_acceptance(tmp_pa
         }
         assert diagnostics["gui_native"]["os_permission"] == "not_checked"
         assert diagnostics["gui_native"]["acceptance"] == "not_verified"
+        assert diagnostics["gui_mcp"]["os_permission"] == "not_checked"
+        assert diagnostics["gui_mcp_adapter"]["os_permission"] == "not_checked"
     finally:
         asyncio.run(engine.close())
 

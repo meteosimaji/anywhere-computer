@@ -1204,7 +1204,7 @@ class Engine:
                 "runtime_available": "unknown",
                 "connection_authorization": "not_observed",
                 "helper": "not_required",
-                "os_permission": "not_required",
+                "os_permission": ("not_checked" if name == "gui_mcp" else "not_required"),
                 "acceptance": "not_verified",
             }
         for capability, check in (
