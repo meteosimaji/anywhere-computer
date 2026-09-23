@@ -293,10 +293,11 @@ async def test_chrome_login_closes_before_plugin_serves_tools(
 
     class Chromium:
         async def launch_persistent_context(self, profile, *, channel, headless,
-                                            ignore_default_args):
+                                            ignore_default_args, args):
             assert profile == str(tmp_path / 'login')
             assert channel == 'chrome' and headless is True
             assert ignore_default_args == ['--use-mock-keychain']
+            assert args == ['--restore-last-session']
             events.append('chrome_started')
             return Context()
 

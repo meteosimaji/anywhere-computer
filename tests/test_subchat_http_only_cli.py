@@ -225,7 +225,9 @@ async def test_read_only_plugin_starts_when_chrome_login_is_rejected(
 
     class PlaywrightManager:
         async def __aenter__(self):
-            async def launch(*_args, **_kwargs):
+            async def launch(*_args, **kwargs):
+                assert kwargs['headless'] is True
+                assert kwargs['args'] == ['--restore-last-session']
                 events.append('chrome_opened')
                 return Context()
 
