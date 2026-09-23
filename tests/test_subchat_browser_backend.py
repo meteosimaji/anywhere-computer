@@ -54,6 +54,53 @@ window.finish=()=>{
 </script>'''
 
 
+@pytest.mark.parametrize('late_element', ['composer', 'menu', 'model_rows', 'control'])
+async def test_prepare_waits_for_delayed_chat_ui_without_dispatch(tmp_path, late_element):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            if late_element == 'composer':
+                delayed = '''<script>
+                  const composer = document.querySelector('form');
+                  composer.remove();
+                  setTimeout(() => document.body.append(composer), 100);
+                </script>'''
+                html = HTML + delayed
+            elif late_element == 'menu':
+                html = HTML.replace('onclick="menu.hidden=false"',
+                                    'onclick="setTimeout(()=>menu.hidden=false, 100)"')
+            elif late_element == 'model_rows':
+                html = HTML + '''<script>
+                  models.hidden=true; control.hidden=false;
+                  document.querySelector('[data-model-picker-view-toggle]').onclick=()=>
+                    setTimeout(()=>{models.hidden=false; control.hidden=true}, 100);
+                </script>'''
+            else:
+                html = HTML + '''<script>
+                  models.hidden=true; control.hidden=true;
+                  setTimeout(()=>control.hidden=false, 100);
+                </script>'''
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=html))
+            store = SubchatSubmissions(ledger.connection)
+            draft = store.prepare('5' * 32, 'delayed input', 'Future model',
+                                  'Initial effort', owner=None)
+            backend = BrowserSubchatBackend(context)
+            assert await backend.prepare(draft) == ()
+            page = backend.pages[draft.operation_id]
+            assert await page.evaluate('window.sends') == 0
+            assert not (await page.get_by_role('textbox').inner_text()).strip()
+            assert store.get(draft.operation_id, owner=None).state == 'prepared'
+        finally:
+            ledger.close()
+            await browser.close()
+
+
 @pytest.mark.parametrize('followup', [False, True])
 @pytest.mark.parametrize('deferred_receipt', [False, True])
 async def test_browser_send_pending_completion_and_database_recovery(
@@ -190,7 +237,7 @@ async def test_browser_send_pending_completion_and_database_recovery(
             assert await recovered_page.evaluate('window.reuseMarker') == 42
             assert len(context.pages) == 2
             await recovered_page.locator('[role=textbox]').fill('user draft')
-            with pytest.raises(ValueError, match='idle empty composer'):
+            with pytest.raises(ValueError, match='contains a draft'):
                 await service.backend.prepare(follow)
             assert await recovered_page.locator('[role=textbox]').inner_text() == 'user draft'
             assert len(context.pages) == 2
@@ -200,7 +247,7 @@ async def test_browser_send_pending_completion_and_database_recovery(
                 button.id='generating'; button.setAttribute('aria-label','Stop');
                 document.body.append(button);
             }''')
-            with pytest.raises(ValueError, match='idle empty composer'):
+            with pytest.raises(ValueError, match='is generating'):
                 await service.backend.prepare(follow)
             assert len(context.pages) == 2
             await recovered_page.locator('#generating').evaluate('node=>node.remove()')

@@ -177,6 +177,61 @@ class BrowserSubchatBackend:
                 and await editor.count() == 1 and not (await editor.inner_text()).strip()
                 and await stop.filter(visible=True).count() == 0)
 
+    async def _wait_for_composer(self, page: Page, submission: SubchatSubmission) -> None:
+        """Wait for hydration, rejecting an occupied composer or active generation."""
+        editor = page.locator('[data-composer-markdown][role="textbox"]')
+        stop = page.get_by_role('button', name=re.compile(r'^(停止|Stop|Stop generating)$'))
+        try:
+            async with asyncio.timeout(10):
+                while True:
+                    if page.url.rstrip('/') != self._url(submission).rstrip('/'):
+                        raise ValueError('Ordinary Chat conversation changed')
+                    if await editor.count() == 1 and (await editor.inner_text()).strip():
+                        raise ValueError('Ordinary Chat composer contains a draft')
+                    if await stop.filter(visible=True).count():
+                        raise ValueError('Ordinary Chat is generating')
+                    if await self._ready(page, submission):
+                        return
+                    await asyncio.sleep(.1)
+        except TimeoutError as error:
+            raise ValueError(
+                'Ordinary Chat with an idle empty composer was not confirmed') from error
+
+    async def _wait_for_models(self, page: Page) -> dict[str, object]:
+        """Observe a complete menu after its view changes, without guessing a model."""
+        try:
+            async with asyncio.timeout(10):
+                while True:
+                    observed: dict[str, object] = await page.evaluate(
+                        SOURCE + '\nobserveSubchatModelMenu(document)')
+                    state = observed.get('state')
+                    if state == 'models_observed':
+                        return observed
+                    if state not in {'menu_unconfirmed', 'model_list_not_visible'}:
+                        raise ValueError('Model menu structure is unsupported or ambiguous')
+                    await asyncio.sleep(.1)
+        except TimeoutError as error:
+            raise ValueError('Model list did not become visible') from error
+
+    async def _open_model_list(self, page: Page) -> dict[str, object]:
+        """Distinguish a loading list from the observed effort view before toggling."""
+        try:
+            async with asyncio.timeout(10):
+                while True:
+                    observed: dict[str, object] = await page.evaluate(
+                        SOURCE + '\nobserveSubchatModelMenu(document)')
+                    state = observed.get('state')
+                    if state == 'models_observed':
+                        return observed
+                    if state == 'model_list_not_visible' and await page.locator(CONTROL).count():
+                        await page.locator(TOGGLE).click()
+                        return await self._wait_for_models(page)
+                    if state not in {'menu_unconfirmed', 'model_list_not_visible'}:
+                        raise ValueError('Model menu structure is unsupported or ambiguous')
+                    await asyncio.sleep(.1)
+        except TimeoutError as error:
+            raise ValueError('Model picker view did not become ready') from error
+
     def validate_send_selection(self, selection: SubchatHTTPSelection | None) -> None:
         """Check controller compatibility without opening a browser or saving a queue."""
         if self.http_read and selection is None:
@@ -209,15 +264,15 @@ class BrowserSubchatBackend:
                 raise ConnectionError('Authenticated ordinary Chat is unavailable')
         if not await picker_ready(page):
             raise ConnectionError('Authenticated ordinary Chat is unavailable')
-        if not await self._ready(page, submission):
-            raise ValueError('Ordinary Chat with an idle empty composer was not confirmed')
+        await self._wait_for_composer(page, submission)
         await page.locator(TRIGGER).click()
-        observed = await page.evaluate(SOURCE + '\nobserveSubchatModelMenu(document)')
-        if observed['state'] == 'model_list_not_visible':
-            await page.locator(TOGGLE).click()
-            observed = await page.evaluate(SOURCE + '\nobserveSubchatModelMenu(document)')
-        choices = [model for model in observed.get('models', [])
-                   if model['label'] == submission.model and not model['disabled']]
+        await page.get_by_role('menu').wait_for(state='visible', timeout=10_000)
+        observed = await self._open_model_list(page)
+        models = observed.get('models')
+        if not isinstance(models, list):
+            raise ValueError('Model list is unavailable')
+        choices = [model for model in models if isinstance(model, dict)
+                   and model.get('label') == submission.model and model.get('disabled') is False]
         if len(choices) != 1:
             raise ValueError('Requested model is not available in the observed menu')
         await page.get_by_role('menuitemradio', name=submission.model, exact=True).click()
@@ -239,14 +294,15 @@ class BrowserSubchatBackend:
         else:
             raise ValueError('Requested effort is not available in the observed menu')
         await page.locator(TOGGLE).click()
-        selected = await page.evaluate(SOURCE + '\nobserveSubchatModelMenu(document)')
-        if [model['label'] for model in selected.get('models', []) if model['selected']] != [
-            submission.model
-        ]:
+        selected = await self._wait_for_models(page)
+        selected_models = selected.get('models')
+        if (not isinstance(selected_models, list)
+                or [model.get('label') for model in selected_models
+                    if isinstance(model, dict) and model.get('selected') is True]
+                != [submission.model]):
             raise ValueError('Selected model changed')
         await page.get_by_role('menu').press('Escape')
-        if not await self._ready(page, submission):
-            raise ValueError('Chat changed before input')
+        await self._wait_for_composer(page, submission)
         baseline = await self._baseline(page)
         if (submission.expected_last_user_message_id is not None
                 and (not baseline or baseline[-1] != submission.expected_last_user_message_id)):

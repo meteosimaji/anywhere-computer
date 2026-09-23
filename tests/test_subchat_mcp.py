@@ -310,6 +310,29 @@ async def test_preparation_failure_is_unsent_and_same_request_can_retry(tmp_path
         ledger.close()
 
 
+async def test_preparation_failure_reports_only_a_known_local_reason(tmp_path):
+    from anywhere_computer.models import Request
+
+    class DraftBrowser(BrowserFixture):
+        async def prepare(self, submission):
+            raise ValueError('Ordinary Chat composer contains a draft')
+
+    ledger = Ledger(tmp_path)
+    backend = DraftBrowser()
+    server = session(Subchats(SubchatSubmissions(ledger.connection), backend))
+    try:
+        request = Request(operation_id='e' * 32, tool='subchat_send', arguments={
+            'prompt': 'work', 'model': 'model', 'effort': 'effort'})
+        failed = await server.execute(request)
+        assert failed.state == 'failed'
+        assert failed.data == {'error_code': 'preparation_failed',
+                               'dispatched': False, 'reason': 'composer_has_draft'}
+        assert backend.sends == 0
+    finally:
+        await server.close()
+        ledger.close()
+
+
 async def test_wait_drops_parent_observation_after_parent_completes(tmp_path):
     import asyncio
 

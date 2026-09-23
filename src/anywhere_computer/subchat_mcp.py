@@ -83,6 +83,18 @@ READ_ONLY_TOOLS = frozenset({
     'subchat_recover', 'subchat_status', 'subchat_wait', 'subchat_download_file',
 })
 
+_PREPARATION_REASONS = {
+    'Ordinary Chat composer contains a draft': 'composer_has_draft',
+    'Ordinary Chat is generating': 'generation_active',
+    'Ordinary Chat with an idle empty composer was not confirmed': 'composer_not_ready',
+    'Model list did not become visible': 'model_list_unavailable',
+    'Model picker view did not become ready': 'model_picker_unavailable',
+    'Model menu structure is unsupported or ambiguous': 'model_menu_unsupported',
+    'Requested model is not available in the observed menu': 'model_unavailable',
+    'Requested effort is not available in the observed menu': 'effort_unavailable',
+    'Ordinary Chat conversation changed': 'conversation_changed',
+}
+
 
 INSTRUCTIONS = (
     'Ordinary Chat subchats. Use an observed model and effort; never silently substitute. '
@@ -634,7 +646,10 @@ def session(service: Subchats, *,
                                    for item in error.errors(include_input=False,
                                                             include_context=False)],
                                'dispatched': False})
-        except SubchatPreparationFailed:
+        except SubchatPreparationFailed as error:
+            cause = error.__cause__
+            reason = (_PREPARATION_REASONS.get(str(cause))
+                      if isinstance(cause, ValueError) else None)
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Adapter preparation failed before dispatch. Check for an existing '
                                'draft, active generation, missing HTTP selection or unavailable '
@@ -643,7 +658,8 @@ def session(service: Subchats, *,
                                'a new queue also requires its parent selection to match this '
                                'controller. '
                                'For an existing queued message, recover its operation instead.',
-                         data={'error_code': 'preparation_failed', 'dispatched': False})
+                         data={'error_code': 'preparation_failed', 'dispatched': False,
+                               **({'reason': reason} if reason is not None else {})})
         except SubchatOutcomeUnknown as error:
             return Reply(operation_id=request.operation_id, state='unknown',
                          error='Submission unconfirmed. Use subchat_recover with '

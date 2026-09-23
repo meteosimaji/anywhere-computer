@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a14 / Plugin 0.2.0-alpha.14 — unpublished candidate (2026-09-23)
+
+- Wait up to ten seconds for an idle ordinary Chat composer and observed model
+  menu during browser-assisted Subchat preparation. Reject a visible draft,
+  active generation or changed conversation immediately. Surface allowlisted
+  preparation reasons without exposing provider error text.
+- A ChatGPT-side a13 MCP send reached the Plugin but stopped in `prepared` before
+  dispatch; the same saved operation passed preparation in a later direct probe.
+  The exact original failing stage was not retained, so this readiness repair
+  requires another ChatGPT-side live send check.
+
 ## 0.2.0a13 / Plugin 0.2.0-alpha.13 — unpublished candidate (2026-09-23)
 
 - Add an explicit `browser-send` mode to the bundled Subchat Plugin. It exposes
