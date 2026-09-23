@@ -385,7 +385,8 @@ async def test_computer_status_reports_only_this_peers_feature_grant(tmp_path):
 
     engine = Engine(tmp_path / "engine")
     bridge = RemoteAgent(engine, {
-        "peer": frozenset({"computer_status", "files_read", "files_write", "skills_list"}),
+        "peer": frozenset({"computer_status", "files_read", "files_write", "skills_list",
+                           "gui_native_windows", "gui_native_observe", "gui_native_close"}),
     })
     try:
         reply = Reply.model_validate_json(await bridge.dispatch(
@@ -402,6 +403,23 @@ async def test_computer_status_reports_only_this_peers_feature_grant(tmp_path):
         assert diagnostics["terminal"]["authorization_next_action"].endswith(
             "no permission was changed."
         )
+        assert diagnostics["gui_native"]["connection_authorization"] == "partial_grant"
+        assert diagnostics["gui_native"]["connection_publication"] == "partial"
+        denied = Reply.model_validate_json(await bridge.dispatch(
+            "peer", request("gui_native_set_value").model_dump_json().encode(),
+        ))
+        assert denied.state == "failed"
+        assert denied.data["error_code"] == "capability_not_authorized"
+        full = RemoteAgent(engine, {
+            "full": frozenset({"computer_status", "gui_native_windows", "gui_native_observe",
+                               "gui_native_close", "gui_native_set_value", "gui_native_press"}),
+        })
+        full_reply = Reply.model_validate_json(await full.dispatch(
+            "full", request("computer_status").model_dump_json().encode(),
+        ))
+        full_diagnostics = full_reply.data["capability_diagnostics"]["gui_native"]
+        assert full_diagnostics["connection_authorization"] == "authorized"
+        assert full_diagnostics["connection_publication"] == "published"
     finally:
         await engine.close()
 

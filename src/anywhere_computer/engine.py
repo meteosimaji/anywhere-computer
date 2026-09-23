@@ -119,6 +119,9 @@ _PREFLIGHT_FAILURES: dict[str, tuple[str, str]] = {
         "session_unavailable",
         "Use a session ID returned to this connection; no session was changed.",
     ),
+    "Search not found for this connection": (
+        "search_unavailable", "Use a search ID returned to this connection; no search was changed."
+    ),
     "GUI is busy; observe again after the current interaction finishes": (
         "session_busy", "Wait for the current GUI interaction, then observe again."
     ),
@@ -757,19 +760,26 @@ class Engine:
             self._search_owners[str(result["search_id"])] = self._plugin_owner.get()
             return result
 
+        def require_search_owner(search_id: str) -> None:
+            owner = self._plugin_owner.get()
+            if owner is not None and self._search_owners.get(search_id) != owner:
+                raise ValueError("Search not found for this connection")
+
         async def page(args: SearchPage) -> Result:
+            require_search_owner(args.search_id)
             return self.searches.page(args)
 
         async def search_stop(args: SearchId) -> Result:
-            result = await self.searches.stop(args.search_id)
-            self._search_owners.pop(args.search_id, None)
-            return result
+            require_search_owner(args.search_id)
+            return await self.searches.stop(args.search_id)
 
         async def search_list(_: Empty) -> Result:
+            owner = self._plugin_owner.get()
             return {
                 "searches": [
                     {"search_id": entry.search_id, "state": entry.state}
                     for entry in self.searches.searches.values()
+                    if owner is None or self._search_owners.get(entry.search_id) == owner
                 ]
             }
 
@@ -1285,6 +1295,13 @@ class Engine:
                     "state": ("exited" if gui_entry.process.returncode is not None
                               else "busy" if busy else "running"),
                     "stop_tool": "gui_native_close", "stop_available": not busy,
+                })
+        for search_id, search_entry in self.searches.searches.items():
+            if (search_entry.state == "running"
+                    and (owner is None or self._search_owners.get(search_id) == owner)):
+                blocker_details.append({
+                    "resource": "search", "id": search_id, "state": "running",
+                    "stop_tool": "search_stop", "stop_available": True,
                 })
         for session_id, session in self.sessions.sessions.items():
             if (session.process.returncode is None

@@ -217,16 +217,45 @@ async def test_remote_status_counts_only_owned_searches(engine, tmp_path, monkey
 
     monkeypatch.setattr(engine.searches, "_run_with_deadline", paused_search)
     try:
+        search_ids = []
         for owner in ("owner-a", "owner-b"):
             reply = await engine.execute(request(
                 "search_start", path=str(tmp_path), pattern="needle",
             ), peer=owner)
             assert reply.state == "completed"
+            search_ids.append(reply.data["search_id"])
         assert engine.status()["active_resources"]["searches"] == 2
-        assert engine.status(owner="owner-a")["active_resources"]["searches"] == 1
+        assert {item["id"] for item in engine.status()["update_blocker_details"]
+                if item["resource"] == "search"} == set(search_ids)
+        own_status = engine.status(owner="owner-a")
+        assert own_status["active_resources"]["searches"] == 1
+        assert own_status["update_blocker_details"] == [{
+            "resource": "search", "id": search_ids[0], "state": "running",
+            "stop_tool": "search_stop", "stop_available": True,
+        }]
+        assert search_ids[1] not in repr(own_status)
+        listed = await engine.execute(request("search_list"), peer="owner-a")
+        assert listed.data["searches"] == [{
+            "search_id": search_ids[0], "state": "running",
+        }]
+        for tool in ("search_results", "search_stop"):
+            refused = await engine.execute(request(tool, search_id=search_ids[1]),
+                                           peer="owner-a")
+            assert refused.state == "failed"
+            assert refused.data["error_code"] == "search_unavailable"
+            assert search_ids[1] not in repr(refused)
+            assert engine.searches.searches[search_ids[1]].state == "running"
         unrelated = engine.status(owner="owner-c")
         assert unrelated["active_resources"]["searches"] == 0
         assert unrelated["update_blockers"] == ["other_active_resources"]
+        assert unrelated["update_blocker_details"] == []
+        stopped = await engine.execute(request("search_stop", search_id=search_ids[0]),
+                                       peer="owner-a")
+        assert stopped.state == "completed"
+        recovered = await engine.execute(request("search_results", search_id=search_ids[0]),
+                                         peer="owner-a")
+        assert recovered.state == "completed"
+        assert recovered.data["state"] == "cancelled"
     finally:
         release.set()
         await engine.searches.close()
