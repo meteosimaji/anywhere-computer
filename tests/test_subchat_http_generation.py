@@ -112,7 +112,7 @@ class LocalChat:
                 payload = json.dumps(catalog()).encode()
             elif path == '/backend-api/sentinel/chat-requirements/prepare':
                 assert method == 'POST' and data == {'p': 'observed-p'}
-                assert headers['openai-sentinel-proof-token'] == PROOF
+                assert not any(key.startswith('openai-sentinel-') for key in headers)
                 assert headers['accept'] == 'application/json'
                 payload = json.dumps({'persona': 'fixture', 'prepare_token': 'fresh-token',
                     'turnstile': {'required': True, 'dx': 'fixture'},
@@ -128,18 +128,18 @@ class LocalChat:
                 assert data['partial_query']['id'] != 'old-input'
                 assert data['partial_query']['content']['parts'] != ['old prompt']
                 assert headers['accept'] == 'application/json'
-                assert ('openai-sentinel-chat-requirements-prepare-token' in headers
-                        ) is self.prepare_token_present
-                if self.prepare_token_present:
-                    assert headers['openai-sentinel-chat-requirements-prepare-token'] == 'fixture'
+                assert not any(key.startswith('openai-sentinel-') for key in headers)
                 payload = json.dumps({'status': 'ok', 'conduit_token': 'fixture'}).encode()
             elif path == '/backend-api/conversation/' + CHAT:
                 assert method == 'GET'
+                assert not any(key.startswith('openai-sentinel-') for key in headers)
                 payload = json.dumps({'current_node': 'wrong-node' if self.stale else
                                       self.current_node, 'mapping': {}}).encode()
             elif path == '/backend-api/f/conversation':
                 assert method == 'POST'
                 assert headers['accept'] == 'text/event-stream'
+                assert headers['openai-sentinel-proof-token'] == PROOF
+                assert headers['openai-sentinel-turnstile-token'] == PROOF
                 assert ('openai-sentinel-chat-requirements-prepare-token' in headers
                         ) is self.prepare_token_present
                 if self.prepare_token_present:
@@ -454,8 +454,10 @@ async def test_generation_forwards_observed_requirements_token_verbatim(tmp_path
                 post_headers = [headers for method, _, headers, _ in api.requests
                                 if method == 'POST']
                 assert len(post_headers) == 3
-                assert all(headers.get('openai-sentinel-chat-requirements-token') ==
-                           observed_token for headers in post_headers)
+                assert all(not any(key.startswith('openai-sentinel-') for key in headers)
+                           for headers in post_headers[:2])
+                assert post_headers[2]['openai-sentinel-chat-requirements-token'] == (
+                    observed_token)
                 assert all('openai-sentinel-chat-requirements-prepare-token' not in headers
                            for headers in post_headers)
                 assert observed_token.encode() not in (tmp_path / 'operations.sqlite3').read_bytes()

@@ -54,13 +54,16 @@ dispatches generation once. It does not substitute newly observed protection
 values into the handed-off headers.
 
 A current ChatGPT UI control sent `openai-sentinel-chat-requirements-token` on
-generation and completed Sentinel prepare/finalize while that generation was
-in flight; a later turn used the prior finalize response token. This controller
-accepts an explicitly observed header value but does not implement that token
-lifecycle or the finalize request. Its sequential Sentinel and conversation
-preparation requests have returned 200 while an independent HTTPX generation
-returned 403. Accepting the additional header is not evidence that this 403 is
-resolved or that HTTP-only generation is supported by the provider.
+generation, together with the proof and Turnstile headers. The observed Sentinel
+and conversation preparation requests carried no `openai-sentinel-*` request
+headers. This controller therefore sends those handed-off headers only on the
+generation request. The UI completed Sentinel prepare/finalize while generation
+was in flight; a later turn used the prior finalize response token. The
+controller does not implement that token lifecycle or the finalize request.
+Its sequential Sentinel and conversation preparation requests have returned 200
+while an independent HTTPX generation returned 403. This header correction does
+not establish that the 403 is resolved or that HTTP-only generation is supported
+by the provider.
 
 An HTTP success or streaming response alone does not prove completion. The
 controller correlates the saved input, final answer, and terminal markers in

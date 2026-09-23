@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a12 / Plugin 0.2.0-alpha.12 — unpublished candidate (2026-09-23)
+
+- Send observed Sentinel protection headers only on the generation POST. A
+  current successful UI control omitted them from Sentinel and conversation
+  preparation requests. HTTP-only generation remains unverified.
+
 ## 0.2.0a11 / Plugin 0.2.0-alpha.11 — unpublished candidate (2026-09-23)
 
 - Accept the current observed Chat requirements-token header in an explicit

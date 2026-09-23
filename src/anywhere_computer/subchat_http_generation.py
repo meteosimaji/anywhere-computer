@@ -256,8 +256,11 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
     request_headers = handoff.headers
     if use_client_cookies:
         request_headers.pop('cookie')
-    headers = {**request_headers, 'accept': 'application/json',
-               'accept-encoding': 'identity'}
+    # The observed UI sends protection headers on generation, not on preparation
+    # or the branch read. Keep their handed-off values only for generation.
+    headers = {key: value for key, value in request_headers.items()
+               if not key.startswith('openai-sentinel-')}
+    headers.update({'accept': 'application/json', 'accept-encoding': 'identity'})
     observed = await _preparation_post('sentinel', plan=plan, client=client, store=store,
         owner=owner, origin=origin, body=json.dumps({'p': handoff.sentinel_p}).encode(),
         headers=headers)
@@ -265,9 +268,7 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
     if not isinstance(token, str) or not token or len(token) > 16_384:
         store.record_http_event(plan.operation_id, 'sentinel_failed', owner=owner)
         raise ValueError('Sentinel preparation token is unavailable')
-    # Preserve whether the successful Chrome request sent a prepare-token header.
-    # A fresh sentinel response token with the handed-off proof and Turnstile
-    # values is not yet verified.
+    # A fresh sentinel response token is not substituted into this operation.
     try:
         prepare_body = handoff.prepare_body(plan)
     except Exception:
