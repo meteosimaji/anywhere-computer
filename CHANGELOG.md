@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a16 / Plugin 0.2.0-alpha.16 — unpublished candidate (2026-09-23)
+
+- Prevent the portable Python runtime and its supported child processes from
+  writing import bytecode into the verified payload. Discard build-time bytecode
+  before sealing the manifest so repeated verification remains valid.
+
 ## 0.2.0a15 / Plugin 0.2.0-alpha.15 — unpublished candidate (2026-09-23)
 
 - Redact malformed native GUI helper responses and accept only known helper

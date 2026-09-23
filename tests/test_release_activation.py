@@ -30,7 +30,7 @@ def test_activation_observes_engine_and_preserves_installation(tmp_path, monkeyp
         })
     def run(command, **kwargs):
         calls.append('start')
-        assert command[1:] == ['-I', '-m', 'anywhere_computer', 'start',
+        assert command[1:] == ['-B', '-I', '-m', 'anywhere_computer', 'start',
                                '--state-dir', str(control)]
         assert kwargs['timeout'] == 45 and 'shell' not in kwargs
         if scenario == 'timeout':

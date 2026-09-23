@@ -64,7 +64,7 @@ async def exercise(directory: Path) -> dict[str, bool]:
     assert (await rpc("files_read", {"path": str(path)}))["text"] == "portable-file"
     assert await regex_line_numbers("first\nneedle", "needle", ignore_case=False,
                                     whole_word=False, limit=1, timeout=5) == [2]
-    argv = [sys.executable, "-I", "-u", "-c",
+    argv = [sys.executable, "-B", "-I", "-u", "-c",
             "import sys; print('READY', flush=True); "
             "line=input(); print('RECONNECTED:'+line, flush=True)"]
     command = subprocess.list2cmdline(argv) if os.name == "nt" else shlex.join(argv)
@@ -123,7 +123,7 @@ def worker() -> None:
         try:
             local_credential(directory, create=True)
             process = subprocess.Popen(
-                [sys.executable, "-I", "-m", "anywhere_computer", "serve",
+                [sys.executable, "-B", "-I", "-m", "anywhere_computer", "serve",
                  "--state-dir", str(directory)], stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             )
@@ -167,7 +167,8 @@ def main() -> None:
     env["PATH"] = (str(Path(os.environ["SystemRoot"]) / "System32")
                    if os.name == "nt" else "/usr/bin:/bin")
     with tempfile.TemporaryDirectory(prefix="unrelated-cwd-") as cwd:
-        run = subprocess.run([str(interpreter), "-I", str(Path(__file__).resolve()), "--worker",
+        run = subprocess.run([str(interpreter), "-B", "-I",
+                              str(Path(__file__).resolve()), "--worker",
                               *(["--runtime-only"] if args.runtime_only else [])],
                              cwd=cwd, env=env, check=True, text=True, capture_output=True,
                              timeout=60)

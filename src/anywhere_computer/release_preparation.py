@@ -26,7 +26,7 @@ def probe_release_runtime(app: Path, expected_version: str) -> str:
         'print(json.dumps([__version__, ENGINE_API_VERSION, runtime_identity()]))'
     )
     result = subprocess.run(
-        [str(executable.absolute()), '-I', '-c', script], cwd=app,
+        [str(executable.absolute()), '-B', '-I', '-c', script], cwd=app,
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         timeout=30, check=False,
     )

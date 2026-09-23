@@ -74,6 +74,19 @@ def test_archive_publication_preserves_existing_file_and_survives_staging_cleanu
     assert published.read_bytes() == b"complete archive"
 
 
+def test_generated_bytecode_is_removed_before_manifest(tmp_path):
+    package = tmp_path / "runtime" / "site-packages" / "package"
+    cache = package / "__pycache__"
+    cache.mkdir(parents=True)
+    source = package / "module.py"
+    source.write_text("VALUE = 1\n")
+    compiled = cache / "module.cpython-312.pyc"
+    compiled.write_bytes(b"generated")
+    portable_builder.discard_bytecode(tmp_path)
+    assert source.read_text() == "VALUE = 1\n"
+    assert not compiled.exists()
+
+
 def test_failed_archive_publication_leaves_no_partial_output(tmp_path, monkeypatch):
     staged = tmp_path / "staged.zip"
     published = tmp_path / "published.zip"

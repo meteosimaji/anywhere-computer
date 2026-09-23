@@ -50,7 +50,7 @@ def test_connector_bootstraps_selected_interpreter_not_its_own(tmp_path, monkeyp
     monkeypatch.setattr('anywhere_computer.connection.subprocess.Popen',
                         lambda command, **kwargs: calls.append(command))
     assert ensure_agent(tmp_path)['runtime_id'] == selected.runtime_id
-    assert calls == [[str(interpreter), '-I', '-X', 'utf8', '-m',
+    assert calls == [[str(interpreter), '-B', '-I', '-X', 'utf8', '-m',
                       'anywhere_computer', 'serve', '--state-dir', str(tmp_path)]]
     assert load_runtime_selection(tmp_path) == selected
 

@@ -113,12 +113,12 @@ class Sessions:
         if not Path(shell).is_absolute():
             raise ValueError("Shell must be an absolute executable path")
         # A persistent group/Job owner outlives short-lived shells and their children.
-        command = (sys.executable, "-I", str(Path(__file__).with_name("terminal_worker.py")),
+        command = (sys.executable, "-B", "-I", str(Path(__file__).with_name("terminal_worker.py")),
                    shell, args.command)
         master_fd: int | None = None
         if args.interactive and os.name == "nt":
             process = await asyncio.create_subprocess_exec(
-                sys.executable, "-I", str(Path(__file__).with_name("terminal_worker.py")),
+                sys.executable, "-B", "-I", str(Path(__file__).with_name("terminal_worker.py")),
                 "--conpty", shell, args.command, str(args.rows), str(args.columns),
                 cwd=cwd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, env=with_tool_path(os.environ),

@@ -15,6 +15,7 @@ def python_module_command(
     # -I excludes cwd, PYTHON* settings and user-site packages. The package must
     # be installed in this interpreter/venv; never fall back to workspace imports.
     # Keep venv symlinks unresolved so the child retains the selected environment.
-    # Isolated children ignore PYTHONUTF8; carry the encoding contract explicitly.
+    # Isolated children ignore PYTHONUTF8 and PYTHONDONTWRITEBYTECODE. Keep the
+    # portable runtime byte-for-byte verifiable after its own child processes run.
     return [executable or os.path.abspath(sys.executable),
-            "-I", "-X", "utf8", "-m", module, *arguments]
+            "-B", "-I", "-X", "utf8", "-m", module, *arguments]

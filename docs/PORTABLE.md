@@ -16,8 +16,8 @@ Beta 1 freezes the existing features; its historical scope and acceptance record
 is retained in the local archive.
 When using the extracted interpreter to verify its own package, start the verifier
 with `-B -I` so Python does not rewrite timestamp-based bytecode before the manifest
-check. Always use a fresh extraction. A verifier running from an independent
-development environment does not modify the target before checking it.
+check. The verifier also starts its bundled worker with `-B`. A verifier running
+from an independent development environment does not modify the target before checking it.
 
 ## ビルドと利用
 
@@ -102,10 +102,12 @@ ZIP の公開は出力ディレクトリと同じファイルシステム内の 
 途中の ZIP を残さない。hard link 非対応のファイルシステムでは失敗を返すため、
 その場合は対応するローカルファイルシステム上でビルドする。
 
-検証は新しく展開した配布物へ、初回起動前に行う。manifest に載ったファイルのハッシュ
+検証は信頼できる配布物から展開したフォルダーで行う。manifest に載ったファイルのハッシュ
 だけでなく、実ファイル集合との完全一致を検査し、一覧外の Python/.pth/バイトコード等も
-拒否する。通常起動が生成した __pycache__ も一覧外なら拒否するため、再試験は新しい
-ディレクトリに ZIP を展開してから行う。検査は余分なファイルを自動削除しない。
+拒否する。同梱の起動スクリプト、内部 Python 子プロセス、検証ワーカーは `-B` で
+バイトコード生成を抑止するため、通常利用後も同じフォルダーで再検証できる。
+外部から Python を直接起動して __pycache__ を生成した場合は検証に失敗する。
+検査は余分なファイルを自動削除しない。
 manifest 自体は署名されておらず、信頼できる配布元から取得した ZIP の内部整合性検査で
 ある。配布元の真正性や、manifest とコードを一緒に差し替える攻撃への保証ではない。
 ビルダーは循環コピーを避けるため、ランタイム内のディレクトリ symlink を拒否する。

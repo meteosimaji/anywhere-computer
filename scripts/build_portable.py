@@ -46,7 +46,7 @@ def write_setup_launcher(app: Path, *, windows: bool) -> None:
     if windows:
         (app / "Setup ChatGPT.cmd").write_text(
             '@echo off\nsetlocal DisableDelayedExpansion\n'
-            '"%~dp0runtime\\python.exe" -I -X utf8 "%~dp0setup_chatgpt.py" %*\n',
+            '"%~dp0runtime\\python.exe" -B -I -X utf8 "%~dp0setup_chatgpt.py" %*\n',
             encoding="utf-8",
         )
     else:
@@ -54,7 +54,7 @@ def write_setup_launcher(app: Path, *, windows: bool) -> None:
         launcher.write_text(
             '#!/bin/sh\n'
             'base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1\n'
-            'exec "$base/runtime/bin/python3" -I "$base/setup_chatgpt.py" "$@"\n',
+            'exec "$base/runtime/bin/python3" -B -I "$base/setup_chatgpt.py" "$@"\n',
             encoding="utf-8",
         )
         launcher.chmod(0o755)
@@ -65,6 +65,12 @@ def publish_archive(staged: Path, output: Path) -> None:
     # file atomically and refuses an existing destination, including a symlink.
     # A copy into the final pathname would leave a partial release on interruption.
     os.link(staged, output)
+
+
+def discard_bytecode(app: Path) -> None:
+    """Keep generated import caches out of the immutable portable payload."""
+    for path in app.rglob("*.pyc"):
+        path.unlink()
 
 
 def include_manager(app: Path, manager: Path, *, platform: str) -> None:
@@ -133,7 +139,8 @@ def build_portable(
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         interpreter = copied / ("python.exe" if os.name == "nt" else "bin/python3")
         site = Path(subprocess.check_output(
-            [str(interpreter), "-I", "-c", "import sysconfig;print(sysconfig.get_path('purelib'))"],
+            [str(interpreter), "-B", "-I", "-c",
+             "import sysconfig;print(sysconfig.get_path('purelib'))"],
             text=True,
         ).strip())
         if not site.resolve().is_relative_to(copied.resolve()):
@@ -149,12 +156,14 @@ def build_portable(
                         "-r", str(requirements)], check=True)
         if os.name == "nt":
             (app / "anywhere.cmd").write_text(
-                '@echo off\r\n"%~dp0runtime\\python.exe" -I -X utf8 -m anywhere_computer %*\r\n')
+                '@echo off\r\n"%~dp0runtime\\python.exe" -B -I -X utf8 -m anywhere_computer %*\r\n')
         else:
             launcher = app / "anywhere"
-            launcher.write_text('#!/bin/sh\n'
-                                'base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1\n'
-                                'exec "$base/runtime/bin/python3" -I -m anywhere_computer "$@"\n')
+            launcher.write_text(
+                '#!/bin/sh\n'
+                'base=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 1\n'
+                'exec "$base/runtime/bin/python3" -B -I -m anywhere_computer "$@"\n'
+            )
             launcher.chmod(0o755)
         write_setup_launcher(app, windows=os.name == "nt")
         if manager is not None:
@@ -180,10 +189,11 @@ def build_portable(
             "Python and dependencies retain their own licenses under runtime/.\n"
             "Build provenance is recorded in manifest.json. No credentials are bundled.\n")
         runtime_info = json.loads(subprocess.check_output(
-            [str(interpreter), "-I", "-c", "import json,sys,sysconfig;"
+            [str(interpreter), "-B", "-I", "-c", "import json,sys,sysconfig;"
              "print(json.dumps({'platform':sysconfig.get_platform(),"
              "'python':sys.version.split()[0]}))"], text=True,
         ))
+        discard_bytecode(app)
         manifest = {**runtime_info,
                     "release": release,
                     "runtime_build": (runtime / "BUILD").read_text().strip(),

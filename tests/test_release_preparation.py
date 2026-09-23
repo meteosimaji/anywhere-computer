@@ -104,8 +104,8 @@ def test_runtime_probe_checks_identity_without_starting_engine(tmp_path, monkeyp
     executable.write_bytes(b'fixture')
     executable.chmod(0o700)
     def run(command, **options):
-        assert command[:3] == [str(executable), '-I', '-c']
-        assert 'ensure_agent' not in command[3] and 'serve(' not in command[3]
+        assert command[:4] == [str(executable), '-B', '-I', '-c']
+        assert 'ensure_agent' not in command[4] and 'serve(' not in command[4]
         assert options['timeout'] == 30 and options['cwd'] == tmp_path
         return subprocess.CompletedProcess(command, 0, json.dumps(report).encode())
     monkeypatch.setattr('anywhere_computer.release_preparation.subprocess.run', run)
