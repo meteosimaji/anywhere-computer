@@ -48,14 +48,18 @@ class GrantedRequest(Contract):
 
     identity: str = Field(min_length=1, max_length=128, pattern=r"^[\x21-\x7e]+$")
     tools: list[str] = Field(max_length=MAX_TOOL_SCOPES)
+    authorization_database: str | None = Field(default=None, max_length=4096)
     request: Request
 
 
 async def exchange_remote(
     directory: Path, identity: str, allowed: frozenset[str], request: Request,
-    *, credential: str | None = None,
+    *, credential: str | None = None, authorization_database: Path | None = None,
 ) -> Reply:
-    envelope = GrantedRequest(identity=identity, tools=sorted(allowed), request=request)
+    envelope = GrantedRequest(
+        identity=identity, tools=sorted(allowed), request=request,
+        authorization_database=str(authorization_database) if authorization_database else None,
+    )
     return await exchange(
         directory, "__remote", cast(dict[str, JsonValue], envelope.model_dump(mode="json")),
         operation_id=request.operation_id, credential=credential,
@@ -156,6 +160,11 @@ async def serve(
                 if granted.request.operation_id != request.operation_id:
                     raise ValueError("Forwarded operation ID differs from envelope")
                 try:
+                    if (granted.request.tool == 'mcp_session_open'
+                            and granted.authorization_database is not None):
+                        engine.bind_http_watch_grant(
+                            granted.identity, Path(granted.authorization_database),
+                        )
                     bridge = RemoteAgent(
                         engine, {granted.identity: frozenset(granted.tools)}, transport="http",
                     )

@@ -79,9 +79,13 @@ class AuthorizedDeviceMCP:
             if self.agent_directory is not None:
                 return await exchange_remote(
                     self.agent_directory, grant.grant_id, grant.tools - ROUTER_TOOLS, request,
+                    authorization_database=(self.store.database
+                                            if request.tool == 'mcp_session_open' else None),
                 )
             if self.engine is None:
                 raise RuntimeError("No engine was configured")
+            if request.tool == 'mcp_session_open':
+                self.engine.bind_http_watch_grant(grant.grant_id, self.store.database)
             # Reuse the peer namespace and lookup checks; grants are reloaded per dispatch.
             bridge = RemoteAgent(
                 self.engine, {grant.grant_id: grant.tools - ROUTER_TOOLS}, transport="http",

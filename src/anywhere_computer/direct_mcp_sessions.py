@@ -14,6 +14,8 @@ from pydantic import JsonValue
 
 from .direct_mcp import DirectMCPContext
 
+WATCH_POLL_SECONDS = 5
+
 
 @dataclass
 class _Entry:
@@ -39,12 +41,14 @@ class DirectMCPSessions:
     """Reserve capacity before spawning and retain unconfirmed cleanup failures."""
 
     def __init__(self, *, clock: Callable[[], float] = time.monotonic,
-                 journal: sqlite3.Connection | None = None) -> None:
+                 journal: sqlite3.Connection | None = None,
+                 owner_active: Callable[[str | None], bool] | None = None) -> None:
         self.entries: dict[str, _Entry] = {}
         self._closed = False
         self.clock = clock
         self._reaper: asyncio.Task[None] | None = None
         self.journal = journal
+        self.owner_active = owner_active
         if journal is not None:
             with journal:
                 journal.execute('CREATE TABLE IF NOT EXISTS subchat_queue_watch_leases ('
@@ -268,6 +272,10 @@ class DirectMCPSessions:
                           watch: _Watch) -> None:
         try:
             while watch.state == 'watching' and entry.state == 'open':
+                if self.owner_active is not None and not self.owner_active(entry.owner):
+                    async with entry.lock:
+                        await self._retire(entry, 'authorization_lost', session_id=session_id)
+                    return
                 remaining = watch.deadline - self.clock()
                 if remaining <= 0:
                     watch.state, watch.reason = 'stopped', 'lease_expired'
@@ -277,12 +285,16 @@ class DirectMCPSessions:
                                 'operation_id': identity, 'enabled': False})
                     return
                 try:
-                    await asyncio.wait_for(watch.stop.wait(), timeout=min(5, remaining))
+                    await asyncio.wait_for(watch.stop.wait(),
+                                           timeout=min(WATCH_POLL_SECONDS, remaining))
                     return
                 except TimeoutError:
                     pass
                 async with entry.lock:
                     if entry.state != 'open' or watch.state != 'watching':
+                        return
+                    if self.owner_active is not None and not self.owner_active(entry.owner):
+                        await self._retire(entry, 'authorization_lost', session_id=session_id)
                         return
                     result = await entry.context.call('subchat_status', {
                         'operation_id': identity})
