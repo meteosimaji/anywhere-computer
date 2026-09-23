@@ -149,10 +149,16 @@ class OfficePackage:
         return matches[0]
 
 
-def text_runs(element: ET.Element, namespace: str, budget: ExtractionBudget) -> str:
+def text_runs(element: ET.Element, namespace: str, budget: ExtractionBudget, *,
+              exclude_nested_paragraphs: bool = False) -> str:
     pieces = []
-    for child in element.iter():
+    pending = [element]
+    while pending:
+        child = pending.pop()
         budget.visit()
+        if (exclude_nested_paragraphs and child is not element
+                and child.tag == namespace + "p"):
+            continue
         if child.tag == namespace + "t":
             piece = child.text or ""
         elif child.tag == namespace + "tab":
@@ -160,9 +166,11 @@ def text_runs(element: ET.Element, namespace: str, budget: ExtractionBudget) -> 
         elif child.tag in (namespace + "br", namespace + "cr"):
             piece = "\n"
         else:
-            continue
-        budget.text(piece)
-        pieces.append(piece)
+            piece = None
+        if piece is not None:
+            budget.text(piece)
+            pieces.append(piece)
+        pending.extend(reversed(child))
     return "".join(pieces)
 
 
@@ -179,7 +187,9 @@ def word_paragraphs(body: ET.Element, budget: ExtractionBudget) -> list[JsonValu
             location = {"table": table_count}
         if element.tag == WORD + "p":
             budget.append(entries, {"paragraph": len(entries) + 1,
-                                    "text": text_runs(element, WORD, budget), **location})
+                                    "text": text_runs(element, WORD, budget,
+                                                      exclude_nested_paragraphs=True),
+                                    **location})
         children = []
         row_index = cell_index = 0
         for child in element:

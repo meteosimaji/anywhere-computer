@@ -130,6 +130,36 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
         engine.plugin_sessions.entries.clear()
 
 
+async def test_status_explains_owned_exited_native_gui_blocker(engine):
+    owned = "e" * 32
+    foreign = "f" * 32
+    engine.native_gui.entries[owned] = SimpleNamespace(
+        owner="owner-a", process=SimpleNamespace(returncode=1),
+    )
+    engine.native_gui.entries[foreign] = SimpleNamespace(
+        owner="owner-b", process=SimpleNamespace(returncode=1),
+    )
+    try:
+        status = engine.status(owner="owner-a")
+        assert status["update_blocked"] is True
+        assert status["active_resources"]["native_gui_sessions"] == 1
+        assert status["update_blockers"] == [
+            "native_gui_sessions", "other_active_resources",
+        ]
+        assert status["update_blocker_details"] == [{
+            "resource": "native_gui_session", "id": owned, "state": "exited",
+            "stop_tool": "gui_native_close", "stop_available": True,
+        }]
+        assert foreign not in repr(status)
+        await engine.native_gui.lock.acquire()
+        assert engine.status(owner="owner-a")["update_blocker_details"][0][
+            "stop_available"] is False
+    finally:
+        if engine.native_gui.lock.locked():
+            engine.native_gui.lock.release()
+        engine.native_gui.entries.clear()
+
+
 async def test_remote_terminal_status_lists_only_owned_live_blockers(engine, tmp_path):
     started = []
     try:

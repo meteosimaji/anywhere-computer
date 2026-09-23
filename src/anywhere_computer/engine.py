@@ -1283,11 +1283,12 @@ class Engine:
                 "inspect_tool": "mcp_watch_list", "stop_available": stop_available,
             })
         for session_id, gui_entry in self.native_gui.entries.items():
-            if gui_entry.owner == owner and gui_entry.process.returncode is None:
+            if gui_entry.owner == owner:
                 busy = self.native_gui.lock.locked()
                 blocker_details.append({
                     "resource": "native_gui_session", "id": session_id,
-                    "state": "busy" if busy else "running",
+                    "state": ("exited" if gui_entry.process.returncode is not None
+                              else "busy" if busy else "running"),
                     "stop_tool": "gui_native_close", "stop_available": not busy,
                 })
         for session_id, session in self.sessions.sessions.items():

@@ -262,6 +262,38 @@ def test_targeted_docx_edit_rejects_mismatch_and_rich_paragraph(tmp_path):
     assert rich.read_bytes() == rich_original
 
 
+def test_targeted_docx_edit_selects_nested_text_box_paragraph(tmp_path):
+    path = tmp_path / "textbox.docx"
+    vml = "urn:schemas-microsoft-com:vml"
+    document = (
+        f'<w:document xmlns:w="{WORD[1:-1]}" xmlns:v="{vml}"><w:body>'
+        '<w:p><w:r><w:t>Outer</w:t></w:r><w:r><w:pict><v:shape>'
+        '<v:textbox><w:txbxContent><w:p><w:r><w:t>Inner</w:t></w:r></w:p>'
+        '</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>'
+        '</w:body></w:document>'
+    ).encode()
+    with zipfile.ZipFile(io.BytesIO(create_word("placeholder"))) as source:
+        with zipfile.ZipFile(path, "w") as destination:
+            for info in source.infolist():
+                destination.writestr(info, document if info.filename == "word/document.xml"
+                                     else source.read(info))
+    original = path.read_bytes()
+    (tmp_path / "state").mkdir()
+    files = Files(tmp_path / "state")
+    result = edit_document_paragraph(files, EditDocumentParagraph(
+        path=str(path), paragraph=2, expected_sha256=sha256(original),
+        expected_text="Inner", new_text="Changed",
+    ))
+    assert result["diff"] == {"paragraph": 2, "before": "Inner", "after": "Changed"}
+    assert [entry["text"] for entry in read_document(ReadDocument(path=str(path)))["entries"]] == [
+        "Outer", "Changed",
+    ]
+    with zipfile.ZipFile(io.BytesIO(original)) as before, zipfile.ZipFile(path) as after:
+        for name in before.namelist():
+            if name != "word/document.xml":
+                assert after.read(name) == before.read(name)
+
+
 def test_targeted_docx_edit_refuses_signed_package(tmp_path):
     path = tmp_path / "signed.docx"
     with zipfile.ZipFile(io.BytesIO(create_word("original"))) as source:
