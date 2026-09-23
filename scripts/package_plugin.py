@@ -54,8 +54,9 @@ def package_plugin(root: Path) -> Path:
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     config_path = plugin / ".mcp.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    arguments = config["mcpServers"]["anywhere-computer"]["args"]
-    arguments[arguments.index("--from") + 1] = "./bundled/" + wheel.name
+    for server_name in ("anywhere-computer", "anywhere-subchat"):
+        arguments = config["mcpServers"][server_name]["args"]
+        arguments[arguments.index("--from") + 1] = "./bundled/" + wheel.name
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     subprocess.run(
         [

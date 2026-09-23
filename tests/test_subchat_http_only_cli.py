@@ -4,10 +4,8 @@ import json
 import os
 import subprocess
 import sys
-from contextlib import asynccontextmanager
 from io import StringIO
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from test_subchat_http_catalog import catalog
@@ -95,7 +93,9 @@ def test_cli_invalid_session_redacted_before_any_operation(tmp_path):
 @pytest.mark.parametrize('concurrent', [False, True])
 async def test_http_only_cli_owns_only_request_client_and_disposes_it(
         tmp_path, monkeypatch, fail, concurrent):
-    import playwright.async_api
+    import builtins
+
+    import httpx
 
     from anywhere_computer import subchat_cli
 
@@ -106,27 +106,32 @@ async def test_http_only_cli_owns_only_request_client_and_disposes_it(
     client = Client(payload)
     events = []
 
-    async def dispose():
-        events.append('client_closed')
+    class ManagedClient:
+        async def __aenter__(self):
+            events.append('client')
+            return client
 
-    client.dispose = dispose
+        async def __aexit__(self, *_):
+            events.append('client_closed')
 
-    async def new_context(**kwargs):
-        assert kwargs == {}  # No browser profile, cookies or storage_state imported.
-        events.append('client')
-        await asyncio.sleep(0)  # Allow simultaneous first-use initialization to race.
-        return client
+        async def get(self, url, **kwargs):
+            return await client.get(url, **kwargs)
 
-    @asynccontextmanager
-    async def runtime():
-        events.append('runtime')
-        try:
-            # No chromium attribute: any attempt to launch a browser fails this test.
-            yield SimpleNamespace(request=SimpleNamespace(new_context=new_context))
-        finally:
-            events.append('runtime_closed')
+    def new_client(**kwargs):
+        assert kwargs['trust_env'] is False
+        assert kwargs['follow_redirects'] is False
+        assert kwargs['transport']._pool._retries == 0
+        return ManagedClient()
 
-    monkeypatch.setattr(playwright.async_api, 'async_playwright', runtime)
+    monkeypatch.setattr(httpx, 'AsyncClient', new_client)
+    original_import = builtins.__import__
+
+    def forbid_playwright(name, *args, **kwargs):
+        if name == 'playwright' or name.startswith('playwright.'):
+            raise AssertionError('HTTP-only run imported Playwright')
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, '__import__', forbid_playwright)
     commands = [{'action': 'catalog'},
                 {'action': 'recover', 'operation_id': submission.operation_id}]
     output = StringIO()
@@ -155,7 +160,7 @@ async def test_http_only_cli_owns_only_request_client_and_disposes_it(
             assert replies[0]['generation_transport'] == 'unavailable'
             assert replies[1]['state'] == 'completed'
             assert replies[1]['answer'] == '日本語 result'
-    assert events == ['runtime', 'client', 'client_closed', 'runtime_closed']
+    assert events == ['client', 'client_closed']
     assert SECRET not in output.getvalue()
 
 
@@ -176,7 +181,8 @@ async def test_http_only_real_stdio_mcp_without_browser_or_credentials(tmp_path)
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as client:
                 initialized = await client.initialize()
-                assert 'Browser-free ordinary Chat recovery' in initialized.instructions
+                assert ('Ordinary Chat recovery and explicit deletion over HTTPX'
+                        in initialized.instructions)
                 tools = await client.list_tools()
                 assert 'subchat_capabilities' in {tool.name for tool in tools.tools}
                 caps = await client.call_tool('subchat_capabilities', {})
@@ -201,11 +207,11 @@ async def test_http_only_real_stdio_mcp_without_browser_or_credentials(tmp_path)
                 assert saved.structuredContent['data']['answer'] == 'saved answer'
 
 
-async def test_http_only_real_api_request_context_uses_no_browser(tmp_path, monkeypatch):
+async def test_http_only_real_httpx_request_uses_no_browser(tmp_path, monkeypatch):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
 
-    from playwright.async_api import BrowserType, async_playwright
+    import httpx
 
     from anywhere_computer.subchat import SubchatAccessError
     from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
@@ -217,6 +223,9 @@ async def test_http_only_real_api_request_context_uses_no_browser(tmp_path, monk
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             calls.append((self.path, self.headers.get('Authorization'), self.headers.get('Cookie')))
+            if response_status[0] == 0:
+                self.connection.close()
+                return
             self.send_response(response_status[0])
             self.send_header('Content-Type', 'application/json')
             self.send_header('Location', '/must-not-follow')
@@ -227,52 +236,53 @@ async def test_http_only_real_api_request_context_uses_no_browser(tmp_path, monk
         def log_message(self, *_):
             pass
 
-    async def forbidden(*args, **kwargs):
-        pytest.fail('Browser-free HTTP transport tried to launch a browser')
-
-    monkeypatch.setattr(BrowserType, 'launch', forbidden)
-    monkeypatch.setattr(BrowserType, 'launch_persistent_context', forbidden)
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     worker = Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
-        async with async_playwright() as driver:
-            client = await driver.request.new_context()
-            try:
-                real_get = client.get
+        client = httpx.AsyncClient(
+            trust_env=False, follow_redirects=False,
+            transport=httpx.AsyncHTTPTransport(retries=0))
+        try:
+            real_get = client.get
 
-                async def local_get(url, **kwargs):
-                    # Test-only routing. Production exposes no host/proxy override.
-                    assert url in {CATALOG_URL, 'https://chatgpt.com/backend-api/conversations/'
-                                   + submission.conversation_id}
-                    assert kwargs['max_redirects'] == kwargs['max_retries'] == 0
-                    return await real_get(f'http://127.0.0.1:{server.server_port}' +
-                                          url.removeprefix('https://chatgpt.com'), **kwargs)
+            async def local_get(url, **kwargs):
+                # Test-only routing. Production exposes no host/proxy override.
+                assert url in {CATALOG_URL, 'https://chatgpt.com/backend-api/conversations/'
+                               + submission.conversation_id}
+                assert kwargs['follow_redirects'] is False
+                return await real_get(f'http://127.0.0.1:{server.server_port}' +
+                                      url.removeprefix('https://chatgpt.com'), **kwargs)
 
-                monkeypatch.setattr(client, 'get', local_get)
+            monkeypatch.setattr(client, 'get', local_get)
 
-                async def factory():
-                    return client
+            async def factory():
+                return client
 
-                adapter = HTTPOnlySubchatBackend(factory, credentials())
-                assert (await adapter.http_catalog())['source'] == 'preauthenticated_http'
-                assert (await adapter.read_answer(submission)).text == '日本語 result'
-                for status in (302, 429, 500):
-                    response_status[0] = status
-                    before = len(calls)
-                    with pytest.raises(ConnectionError):
-                        await adapter.read_answer(submission)
-                    assert len(calls) == before + 1
-                response_status[0] = 403
+            adapter = HTTPOnlySubchatBackend(factory, credentials())
+            assert (await adapter.http_catalog())['source'] == 'preauthenticated_http'
+            assert (await adapter.read_answer(submission)).text == '日本語 result'
+            for status in (302, 429, 500):
+                response_status[0] = status
                 before = len(calls)
-                for _ in range(3):
-                    with pytest.raises(SubchatAccessError):
-                        await adapter.read_answer(submission)
+                with pytest.raises(ConnectionError):
+                    await adapter.read_answer(submission)
                 assert len(calls) == before + 1
-                assert all(auth == SECRET and cookie is None for _, auth, cookie in calls)
-                assert not any(path == '/must-not-follow' for path, _, _ in calls)
-            finally:
-                await client.dispose()
+            response_status[0] = 0
+            before = len(calls)
+            with pytest.raises(httpx.RemoteProtocolError):
+                await adapter.read_answer(submission)
+            assert len(calls) == before + 1
+            response_status[0] = 403
+            before = len(calls)
+            for _ in range(3):
+                with pytest.raises(SubchatAccessError):
+                    await adapter.read_answer(submission)
+            assert len(calls) == before + 1
+            assert all(auth == SECRET and cookie is None for _, auth, cookie in calls)
+            assert not any(path == '/must-not-follow' for path, _, _ in calls)
+        finally:
+            await client.aclose()
     finally:
         await asyncio.to_thread(server.shutdown)
         server.server_close()
@@ -291,5 +301,6 @@ def test_mcp_session_prefix_preserves_buffered_initialize_packet(tmp_path):
     assert result.returncode == 0, result.stderr
     reply, = map(json.loads, result.stdout.splitlines())
     assert reply['id'] == 1 and 'error' not in reply
-    assert 'Browser-free ordinary Chat recovery' in reply['result']['instructions']
+    assert ('Ordinary Chat recovery and explicit deletion over HTTPX'
+            in reply['result']['instructions'])
     assert SECRET.encode() not in result.stdout + result.stderr

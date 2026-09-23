@@ -4,7 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlsplit
 
 from ..subchat import (
@@ -19,7 +19,9 @@ from .catalog import observe_http_catalog, project_http_catalog
 from .history import matched_input, observe_history, project_observation, project_receipt
 
 if TYPE_CHECKING:
-    from playwright.async_api import APIRequestContext, BrowserContext, Page, Response
+    from httpx import AsyncClient
+    from httpx import Response as HTTPXResponse
+    from playwright.async_api import APIRequestContext, APIResponse, BrowserContext, Page, Response
 
     from ..subchat_http_session import ObservedHTTPSession
 
@@ -27,13 +29,14 @@ if TYPE_CHECKING:
 class ChatHTTPReader:
     """Keep observed auth/account/language in memory; never export credentials.
 
-    Only history and the observed model-catalog URL are requested. Cookies stay
-    with the browser context; an injected standalone client receives no copied cookies.
-    Its owner manages disposal. No generation, redirects or automatic retries.
-    Browser-free mode cannot create a page, acquire credentials or repair access.
+    Only history and the observed model-catalog URL are requested. Browser-assisted
+    reads use the existing Playwright request context; browser-free reads use the
+    supplied standalone HTTPX client. No cookies are copied. No generation, redirects
+    or automatic retries. Browser-free mode cannot acquire credentials or repair access.
     """
 
-    def __init__(self, request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None,
+    def __init__(self, request_factory: Callable[
+                 [], Awaitable[APIRequestContext | AsyncClient]] | None = None,
                  *, browser_free: bool = False, session: ObservedHTTPSession | None = None,
                  test_origin: str | None = None) -> None:
         if (browser_free and request_factory is None) or (session is not None and not browser_free):
@@ -112,26 +115,43 @@ class ChatHTTPReader:
         if url in self._denied_urls:
             raise SubchatAccessError(403)
         self._check_account(expected_account)
-        response_http = await request.get(
-            url, headers=self._headers, timeout=15_000, max_redirects=0, max_retries=0)
+        if self._browser_free:
+            # Browser-free readers accept an HTTPX factory; the browser mode above
+            # retains its Playwright APIRequestContext contract.
+            httpx_request = cast('AsyncClient', request)
+            response_httpx: HTTPXResponse = await httpx_request.get(
+                url, headers=self._headers, timeout=15.0, follow_redirects=False)
+            status = response_httpx.status_code
+            content_type = response_httpx.headers.get('content-type', '')
+        else:
+            playwright_request = cast('APIRequestContext', request)
+            response_browser: APIResponse = await playwright_request.get(
+                url, headers=self._headers, timeout=15_000, max_redirects=0, max_retries=0)
+            status = response_browser.status
+            content_type = response_browser.headers.get('content-type', '')
         try:
-            if response_http.status in (401, 403):
-                if response_http.status == 401:
+            if status in (401, 403):
+                if status == 401:
                     self._headers = {}
                     self._access_status = 401
                 else:
                     # A forbidden resource does not invalidate unrelated reads.
                     # Keep this URL rejected without retries or login fallback.
                     self._denied_urls.add(url)
-                raise SubchatAccessError(response_http.status)
-            if response_http.status != 200:
+                raise SubchatAccessError(status)
+            if status != 200:
                 raise ConnectionError('Chat read request did not succeed')
-            if response_http.headers.get('content-type', '').split(';', 1)[0].strip() != (
+            if content_type.split(';', 1)[0].strip() != (
                     'application/json'):
                 raise ValueError('Unexpected Chat response format')
-            return await response_http.body()
+            if self._browser_free:
+                return response_httpx.content
+            return await response_browser.body()
         finally:
-            await response_http.dispose()
+            if self._browser_free:
+                await response_httpx.aclose()
+            else:
+                await response_browser.dispose()
 
     def check_generation_account(self, account: str) -> None:
         """A bound reader must be able to recover a request before it is forwarded."""
@@ -186,14 +206,12 @@ class ChatHTTPReader:
 
     async def verify_delete_target(self, context: BrowserContext | None,
                                    submission: SubchatSubmission) -> None:
-        """Check the exact saved conversation and user input before a delete claim."""
         payload = await self._history_payload(context, submission)
         if matched_input(payload, submission) is None:
             raise ValueError('Remote conversation does not match the saved input')
 
     async def patch_delete(self, context: BrowserContext | None,
                            submission: SubchatSubmission) -> bool:
-        """Send one exact authenticated visibility change, with no redirect or retry."""
         self._check_account(submission.provider_account_id)
         if not self._headers:
             raise ValueError('Deletion needs an observed authenticated session')
@@ -205,34 +223,56 @@ class ChatHTTPReader:
             assert context is not None
             request = context.request
         self._check_account(submission.provider_account_id)
-        response = await request.patch(
-            self._origin + '/backend-api/conversation/' + str(submission.conversation_id),
-            data='{"is_visible":false}',
-            headers={**self._headers, 'content-type': 'application/json'},
-            timeout=15_000, max_redirects=0, max_retries=0)
-        try:
-            if response.status in (401, 403):
-                raise SubchatAccessError(response.status)
-            if response.status != 200:
-                return False
-            if response.headers.get('content-type', '').split(';', 1)[0].strip() != (
-                    'application/json'):
-                return False
-            body = await response.body()
-            if len(body) > 65_536:
-                return False
+        url = self._origin + '/backend-api/conversation/' + str(submission.conversation_id)
+        headers = {**self._headers, 'content-type': 'application/json'}
+        if self._browser_free:
+            httpx_request = cast('AsyncClient', request)
+            response_httpx = await httpx_request.patch(
+                url, content=b'{"is_visible":false}', headers=headers,
+                timeout=15.0, follow_redirects=False)
             try:
-                data = json.loads(body)
-            except (ValueError, UnicodeDecodeError):
-                return False
-            if not isinstance(data, dict) or data.get('success') is not True:
-                return False
-        finally:
-            await response.dispose()
-        visibility = await request.get(
-            self._origin + '/backend-api/conversations/' + str(submission.conversation_id),
-            headers=self._headers, timeout=15_000, max_redirects=0, max_retries=0)
+                status = response_httpx.status_code
+                content_type = response_httpx.headers.get('content-type', '')
+                body = response_httpx.content
+            finally:
+                await response_httpx.aclose()
+        else:
+            playwright_request = cast('APIRequestContext', request)
+            response_browser = await playwright_request.patch(
+                url, data='{"is_visible":false}', headers=headers,
+                timeout=15_000, max_redirects=0, max_retries=0)
+            try:
+                status = response_browser.status
+                content_type = response_browser.headers.get('content-type', '')
+                body = await response_browser.body() if status == 200 else b''
+            finally:
+                await response_browser.dispose()
+        if status in (401, 403):
+            raise SubchatAccessError(status)
+        if status != 200 or content_type.split(';', 1)[0].strip() != 'application/json':
+            return False
+        if len(body) > 65_536:
+            return False
         try:
-            return visibility.status == 404
+            data = json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            return False
+        if not isinstance(data, dict) or data.get('success') is not True:
+            return False
+        history_url = self._origin + '/backend-api/conversations/' + str(
+            submission.conversation_id)
+        if self._browser_free:
+            response_httpx = await httpx_request.get(
+                history_url, headers=self._headers, timeout=15.0,
+                follow_redirects=False)
+            try:
+                return response_httpx.status_code == 404
+            finally:
+                await response_httpx.aclose()
+        response_browser = await playwright_request.get(
+            history_url, headers=self._headers, timeout=15_000,
+            max_redirects=0, max_retries=0)
+        try:
+            return response_browser.status == 404
         finally:
-            await visibility.dispose()
+            await response_browser.dispose()

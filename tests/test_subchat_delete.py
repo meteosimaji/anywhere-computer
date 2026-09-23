@@ -3,8 +3,8 @@ import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
+import httpx
 import pytest
-from playwright.async_api import async_playwright
 
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import Subchats
@@ -103,57 +103,53 @@ async def test_loopback_delete_identity_status_and_no_replay(tmp_path, mode):
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        async with async_playwright() as playwright:
-            request = await playwright.request.new_context()
+        async with httpx.AsyncClient(follow_redirects=False, trust_env=False) as request:
+            async def request_factory():
+                return request
+            ledger, service = saved_service(tmp_path, server, request_factory,
+                session_account='other-account' if mode == 'account' else ACCOUNT)
             try:
-                async def request_factory():
-                    return request
-                ledger, service = saved_service(tmp_path, server, request_factory,
-                    session_account='other-account' if mode == 'account' else ACCOUNT)
-                try:
-                    target = DeleteRequest(operation_id=OP, conversation_id=CHAT)
-                    if mode == 'account':
-                        with pytest.raises(SubchatAccountMismatch):
-                            await delete_saved(service, target, owner=None)
-                        assert server.calls == []
-                    elif mode in {'active', 'cross_owner'}:
-                        peer_owner = 'other-owner' if mode == 'cross_owner' else None
-                        service.store.prepare('b' * 32, 'queued follow-up',
-                            'fixture model', 'fixture effort', owner=peer_owner,
-                            conversation_id=CHAT,
-                            after_operation_id=OP if peer_owner is None else None)
-                        with pytest.raises(ValueError, match='active saved submission'):
-                            await delete_saved(service, target, owner=None)
-                        assert server.calls == []
-                    elif mode == 'prompt':
-                        with pytest.raises(ValueError, match='does not match'):
-                            await delete_saved(service, target, owner=None)
-                        assert [method for method, _ in server.calls] == ['GET']
-                    elif mode == 'success':
-                        first = await delete_saved(service, target, owner=None)
-                        assert first.state == 'deleted' and first.automatic_retry is False
-                        assert ACCOUNT not in first.model_dump_json()
-                        assert [method for method, _ in server.calls] == ['GET', 'PATCH', 'GET']
-                        assert (await delete_saved(service, target, owner=None)) == first
-                        assert len(server.calls) == 3
-                        assert DeletionLedger(ledger.connection).get(
-                            target, account_id=ACCOUNT, owner=None) == first
-                        service.store.prepare('c' * 32, 'later', 'fixture model',
-                            'fixture effort', owner=None, conversation_id=CHAT)
-                        with pytest.raises(ValueError, match='pending or confirmed deletion'):
-                            service.store.begin_send('c' * 32, owner=None,
-                                user_message_id='later-input', provider_account_id=ACCOUNT)
-                    else:
-                        with pytest.raises(SubchatDeletionUnknown):
-                            await delete_saved(service, target, owner=None)
-                        assert [method for method, _ in server.calls] == (
-                            ['GET', 'PATCH'] if mode == 'patch_403' else ['GET', 'PATCH', 'GET'])
-                        assert (await delete_saved(service, target, owner=None)).state == 'unknown'
-                        assert len(server.calls) == (2 if mode == 'patch_403' else 3)
-                finally:
-                    ledger.close()
+                target = DeleteRequest(operation_id=OP, conversation_id=CHAT)
+                if mode == 'account':
+                    with pytest.raises(SubchatAccountMismatch):
+                        await delete_saved(service, target, owner=None)
+                    assert server.calls == []
+                elif mode in {'active', 'cross_owner'}:
+                    peer_owner = 'other-owner' if mode == 'cross_owner' else None
+                    service.store.prepare('b' * 32, 'queued follow-up',
+                        'fixture model', 'fixture effort', owner=peer_owner,
+                        conversation_id=CHAT,
+                        after_operation_id=OP if peer_owner is None else None)
+                    with pytest.raises(ValueError, match='active saved submission'):
+                        await delete_saved(service, target, owner=None)
+                    assert server.calls == []
+                elif mode == 'prompt':
+                    with pytest.raises(ValueError, match='does not match'):
+                        await delete_saved(service, target, owner=None)
+                    assert [method for method, _ in server.calls] == ['GET']
+                elif mode == 'success':
+                    first = await delete_saved(service, target, owner=None)
+                    assert first.state == 'deleted' and first.automatic_retry is False
+                    assert ACCOUNT not in first.model_dump_json()
+                    assert [method for method, _ in server.calls] == ['GET', 'PATCH', 'GET']
+                    assert (await delete_saved(service, target, owner=None)) == first
+                    assert len(server.calls) == 3
+                    assert DeletionLedger(ledger.connection).get(
+                        target, account_id=ACCOUNT, owner=None) == first
+                    service.store.prepare('c' * 32, 'later', 'fixture model',
+                        'fixture effort', owner=None, conversation_id=CHAT)
+                    with pytest.raises(ValueError, match='pending or confirmed deletion'):
+                        service.store.begin_send('c' * 32, owner=None,
+                            user_message_id='later-input', provider_account_id=ACCOUNT)
+                else:
+                    with pytest.raises(SubchatDeletionUnknown):
+                        await delete_saved(service, target, owner=None)
+                    assert [method for method, _ in server.calls] == (
+                        ['GET', 'PATCH'] if mode == 'patch_403' else ['GET', 'PATCH', 'GET'])
+                    assert (await delete_saved(service, target, owner=None)).state == 'unknown'
+                    assert len(server.calls) == (2 if mode == 'patch_403' else 3)
             finally:
-                await request.dispose()
+                ledger.close()
     finally:
         server.shutdown()
         server.server_close()
@@ -165,39 +161,35 @@ async def test_cli_and_mcp_delete_entrypoints_use_bound_service(tmp_path):
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        async with async_playwright() as playwright:
-            request = await playwright.request.new_context()
+        async with httpx.AsyncClient(follow_redirects=False, trust_env=False) as request:
+            async def request_factory():
+                return request
+            ledger, service = saved_service(tmp_path, server, request_factory)
             try:
-                async def request_factory():
-                    return request
-                ledger, service = saved_service(tmp_path, server, request_factory)
+                command = DeleteCommand(action='delete', operation_id=OP,
+                    conversation_id=CHAT)
+                result = json.loads(await dispatch(service, command))
+                assert result == {'operation_id': OP, 'conversation_id': CHAT,
+                                  'state': 'deleted', 'automatic_retry': False}
+                mcp = mcp_session(service)
                 try:
-                    command = DeleteCommand(action='delete', operation_id=OP,
-                        conversation_id=CHAT)
-                    result = json.loads(await dispatch(service, command))
-                    assert result == {'operation_id': OP, 'conversation_id': CHAT,
-                                      'state': 'deleted', 'automatic_retry': False}
-                    mcp = mcp_session(service)
-                    try:
-                        names = {item['name'] for item in await mcp.catalog()}
-                        assert 'subchat_delete' in names
-                        tool = next(item for item in await mcp.catalog()
-                                    if item['name'] == 'subchat_delete')
-                        assert tool['annotations']['destructiveHint'] is True
-                        from anywhere_computer.models import Request
+                    names = {item['name'] for item in await mcp.catalog()}
+                    assert 'subchat_delete' in names
+                    tool = next(item for item in await mcp.catalog()
+                                if item['name'] == 'subchat_delete')
+                    assert tool['annotations']['destructiveHint'] is True
+                    from anywhere_computer.models import Request
 
-                        reply = await mcp.execute(Request(operation_id='b' * 32,
-                            tool='subchat_delete', arguments={
-                                'operation_id': OP, 'conversation_id': CHAT}))
-                        assert reply.state == 'completed'
-                        assert reply.data == result
-                        assert len(server.calls) == 3
-                    finally:
-                        await mcp.close()
+                    reply = await mcp.execute(Request(operation_id='b' * 32,
+                        tool='subchat_delete', arguments={
+                            'operation_id': OP, 'conversation_id': CHAT}))
+                    assert reply.state == 'completed'
+                    assert reply.data == result
+                    assert len(server.calls) == 3
                 finally:
-                    ledger.close()
+                    await mcp.close()
             finally:
-                await request.dispose()
+                ledger.close()
     finally:
         server.shutdown()
         server.server_close()
@@ -211,46 +203,42 @@ async def test_delete_receipt_survives_ledger_restart_without_http_replay(
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        async with async_playwright() as playwright:
-            request = await playwright.request.new_context()
+        async with httpx.AsyncClient(follow_redirects=False, trust_env=False) as request:
+            async def request_factory():
+                return request
+
+            ledger, service = saved_service(tmp_path, server, request_factory)
+            target = DeleteRequest(operation_id=OP, conversation_id=CHAT)
             try:
-                async def request_factory():
-                    return request
-
-                ledger, service = saved_service(tmp_path, server, request_factory)
-                target = DeleteRequest(operation_id=OP, conversation_id=CHAT)
-                try:
-                    if patch_status == 200:
-                        result = await delete_saved(service, target, owner=None)
-                        assert result.state == 'deleted'
-                    else:
-                        with pytest.raises(SubchatDeletionUnknown):
-                            await delete_saved(service, target, owner=None)
-                        result = DeletionLedger(ledger.connection).get(
-                            target, account_id=ACCOUNT, owner=None)
-                        assert result is not None and result.state == 'unknown'
-                    methods = [method for method, _ in server.calls]
-                    assert methods == (['GET', 'PATCH', 'GET'] if patch_status == 200
-                                       else ['GET', 'PATCH'])
-                finally:
-                    ledger.close()
-
-                reopened = Ledger(tmp_path)
-                try:
-                    store = SubchatSubmissions(reopened.connection)
-                    session = ObservedHTTPSession(authorization=SECRET, account_id=ACCOUNT,
-                        catalog_url='https://chatgpt.com/backend-api/models')
-                    backend = HTTPOnlySubchatBackend(request_factory, session)
-                    backend._http_reader = ChatHTTPReader(request_factory, browser_free=True,
-                        session=session, test_origin=f'http://127.0.0.1:{server.server_port}')
-                    reopened_result = await delete_saved(Subchats(store, backend), target,
-                                                         owner=None)
-                    assert reopened_result == result
-                    assert [method for method, _ in server.calls] == methods
-                finally:
-                    reopened.close()
+                if patch_status == 200:
+                    result = await delete_saved(service, target, owner=None)
+                    assert result.state == 'deleted'
+                else:
+                    with pytest.raises(SubchatDeletionUnknown):
+                        await delete_saved(service, target, owner=None)
+                    result = DeletionLedger(ledger.connection).get(
+                        target, account_id=ACCOUNT, owner=None)
+                    assert result is not None and result.state == 'unknown'
+                methods = [method for method, _ in server.calls]
+                assert methods == (['GET', 'PATCH', 'GET'] if patch_status == 200
+                                   else ['GET', 'PATCH'])
             finally:
-                await request.dispose()
+                ledger.close()
+
+            reopened = Ledger(tmp_path)
+            try:
+                store = SubchatSubmissions(reopened.connection)
+                session = ObservedHTTPSession(authorization=SECRET, account_id=ACCOUNT,
+                    catalog_url='https://chatgpt.com/backend-api/models')
+                backend = HTTPOnlySubchatBackend(request_factory, session)
+                backend._http_reader = ChatHTTPReader(request_factory, browser_free=True,
+                    session=session, test_origin=f'http://127.0.0.1:{server.server_port}')
+                reopened_result = await delete_saved(Subchats(store, backend), target,
+                                                     owner=None)
+                assert reopened_result == result
+                assert [method for method, _ in server.calls] == methods
+            finally:
+                reopened.close()
     finally:
         server.shutdown()
         server.server_close()

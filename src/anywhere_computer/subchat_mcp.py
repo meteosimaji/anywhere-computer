@@ -6,7 +6,7 @@ from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
 from typing import Literal, cast
 
-from pydantic import Field, JsonValue, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
 from .mcp_server import Catalog as ToolCatalog
 from .mcp_server import Execute, MCPSession
@@ -28,6 +28,7 @@ from .subchat_state import (
     SubchatAccountMismatch,
     SubchatHTTPSelection,
     SubchatList,
+    SubchatSelectionError,
     SubchatSubmission,
     SubchatWorkContext,
 )
@@ -65,6 +66,10 @@ class QueueWatch(OperationId):
 
 
 QUEUE_WATCH_INTERVAL = 5.0
+READ_ONLY_TOOLS = frozenset({
+    'subchat_capabilities', 'subchat_catalog', 'subchat_list',
+    'subchat_recover', 'subchat_status', 'subchat_wait',
+})
 
 
 INSTRUCTIONS = (
@@ -77,8 +82,10 @@ INSTRUCTIONS = (
     'subchat_catalog source=http with http_selection_send_supported=true. A false flag '
     'allows catalog inspection only; restart with --http-read before constrained sends. '
     'The flag validates HTTP model selection, not standalone HTTP generation. '
-    'generation_transport=browser_prepared still requires the dedicated browser for sends, '
-    'including with --http-read. Independent HTTP generation is not supported. '
+    'generation_transport=browser_prepared requires the dedicated browser for sends, '
+    'including with --http-read. generation_transport=explicit_handoff_http uses HTTPX '
+    'after an explicitly supplied, account-matched generation handoff; ordinary Plugin '
+    'startup does not acquire that handoff and exposes read-only tools. '
     'Keep its version_id, preset_id, model_slug and explicit '
     'thinking_effort (including null); still provide observed UI model/effort labels. '
     'The adapter rechecks availability and rejects a different wire model or effort before '
@@ -122,7 +129,12 @@ INSTRUCTIONS = (
     'the prompt: explicitly describe relevant work in the exact prompt you send. '
     'resources accepts already-uploaded Chat file references and @ plugin URI/hint '
     'pairs observed in this account; it does not upload local paths or grant access. '
-    'Resource sends require the HTTP-read browser adapter. A queue follow-up does '
+    'Resource sends require the HTTP-read browser adapter. For a file created in '
+    'another Chat sandbox, provide its source conversation URL and exact file name '
+    'in the target prompt. The target Chat can be asked to find it in Library and '
+    'materialize it into its own sandbox; verify that it actually read the expected bytes. '
+    'A sandbox path alone does not grant cross-Chat access, and Library materialization '
+    'is Chat-driven rather than a Subchat HTTP file-transfer tool. A queue follow-up does '
     'not implicitly reattach resources. Reference local files with device ID and '
     'absolute path in the prompt and use the selected computer plugin to read them.'
 )
@@ -173,6 +185,7 @@ def session(service: Subchats, *,
             observe_http_catalog: Callable[[], Awaitable[dict[str, object]]] | None = None,
             instructions: str | None = None,
             serialize_recovery: bool = False,
+            read_only: bool = False,
             ) -> SubchatSession:
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
@@ -312,6 +325,10 @@ def session(service: Subchats, *,
             'Uses the configured transport; inspect subchat_capabilities when available. '
             'An HTTP catalog does not establish independent login or generation support.')
 
+    if read_only:
+        definitions = {name: definition for name, definition in definitions.items()
+                       if name in READ_ONLY_TOOLS}
+
     async def catalog() -> list[JsonValue]:
         return [cast(JsonValue, {
             'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
@@ -320,6 +337,10 @@ def session(service: Subchats, *,
         }) for name, (schema, description) in definitions.items()]
 
     async def execute(request: Request) -> Reply:
+        if read_only and request.tool not in READ_ONLY_TOOLS:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='This Subchat session permits observation only.',
+                         data={'error_code': 'read_only', 'dispatched': False})
         try:
             if request.tool == 'subchat_queue_watch':
                 watch = QueueWatch.model_validate(request.arguments)
@@ -517,6 +538,24 @@ def session(service: Subchats, *,
                          data={'error_code': error.code, 'automatic_retry': False,
                                **({'dispatched': False}
                                   if error.code == 'http_generation_unavailable' else {})})
+        except SubchatSelectionError as error:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='The selected Chat model parameter is invalid or unavailable. '
+                               'Inspect subchat_catalog source=http, then use a new request ID '
+                               'for corrected input. The saved original remains unsent.',
+                         data={'error_code': error.code, 'field': error.field,
+                               'reason': error.reason, 'dispatched': False,
+                               'corrected_request_requires_new_operation_id': True})
+        except ValidationError as error:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='Subchat input has invalid fields. Correct them before sending.',
+                         data={'error_code': 'invalid_parameter',
+                               'invalid_params': [
+                                   {'path': [str(part) for part in item['loc']],
+                                    'code': item['type']}
+                                   for item in error.errors(include_input=False,
+                                                            include_context=False)],
+                               'dispatched': False})
         except SubchatPreparationFailed:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Adapter preparation failed before dispatch. Check for an existing '

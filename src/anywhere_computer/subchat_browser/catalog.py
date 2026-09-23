@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..subchat import SubchatAccessError
-from ..subchat_state import SubchatHTTPSelection
+from ..subchat_state import SubchatHTTPSelection, SubchatSelectionError
 from .efforts import collect_efforts
 
 if TYPE_CHECKING:
@@ -98,15 +98,34 @@ def require_http_selection(catalog: dict[str, object], selected: SubchatHTTPSele
     versions = catalog.get('versions')
     if catalog.get('state') != 'http_catalog_observed' or not isinstance(versions, list):
         raise ValueError('HTTP model catalog is unavailable')
-    matches = 0
+    version_matches: list[dict[str, object]] = []
     for version in versions:
         if not isinstance(version, dict) or not isinstance(version.get('choices'), list):
             raise ValueError('HTTP model catalog shape changed')
-        matches += sum(1 for choice in version['choices']
-                       if isinstance(choice, dict) and choice.get('available') is True
-                       and choice.get('http_selection') == selected.model_dump())
-    if matches != 1:
-        raise ValueError('Selected HTTP model or effort is unavailable or changed')
+        if version.get('id') == selected.version_id:
+            version_matches.append(version)
+    if not version_matches:
+        raise SubchatSelectionError('version_id', 'not_found')
+    if len(version_matches) != 1:
+        raise SubchatSelectionError('version_id', 'ambiguous')
+    choices = version_matches[0]['choices']
+    assert isinstance(choices, list)
+    matches = [choice for choice in choices
+               if isinstance(choice, dict) and isinstance(choice.get('http_selection'), dict)
+               and choice['http_selection'].get('preset_id') == selected.preset_id]
+    if not matches:
+        raise SubchatSelectionError('preset_id', 'not_found')
+    if len(matches) != 1:
+        raise SubchatSelectionError('preset_id', 'ambiguous')
+    choice = matches[0]
+    if choice.get('available') is not True:
+        raise SubchatSelectionError('preset_id', 'unavailable')
+    identity = choice['http_selection']
+    assert isinstance(identity, dict)
+    if identity.get('model_slug') != selected.model_slug:
+        raise SubchatSelectionError('model_slug', 'mismatch')
+    if identity.get('thinking_effort') != selected.thinking_effort:
+        raise SubchatSelectionError('thinking_effort', 'mismatch')
 
 
 async def observe_http_catalog(page: Page) -> Response:

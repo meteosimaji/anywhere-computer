@@ -11,6 +11,7 @@ from .subchat_content import SubchatResources
 from .subchat_state import (
     SubchatHTTPSelection,
     SubchatReportedSettings,
+    SubchatSelectionError,
     SubchatSubmission,
     SubchatSubmissions,
     SubchatWorkContext,
@@ -159,7 +160,8 @@ class Subchats:
             return submission
         try:
             prepared = await self.backend.prepare(submission)
-        except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError, SubchatUnsupported):
+        except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError,
+                SubchatUnsupported, SubchatSelectionError):
             raise
         except Exception as error:
             raise SubchatPreparationFailed(str(error)) from error

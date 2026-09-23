@@ -195,6 +195,8 @@ class Engine:
         self.tools: dict[str, Tool] = {}
         self.inflight: dict[str, asyncio.Task[Reply]] = {}
         self.inflight_owners: dict[str, str | None] = {}
+        self._terminal_owners: dict[str, str | None] = {}
+        self._search_owners: dict[str, str | None] = {}
         self._register_tools()
 
     def bind_http_watch_grant(self, grant_id: str, database: Path) -> None:
@@ -724,13 +726,19 @@ class Engine:
             return await asyncio.to_thread(self.files.move, args)
 
         async def search(args: StartSearch) -> Result:
-            return self.searches.start(args)
+            result = self.searches.start(args)
+            self._search_owners = {key: owner for key, owner in self._search_owners.items()
+                                   if key in self.searches.searches}
+            self._search_owners[str(result["search_id"])] = self._plugin_owner.get()
+            return result
 
         async def page(args: SearchPage) -> Result:
             return self.searches.page(args)
 
         async def search_stop(args: SearchId) -> Result:
-            return await self.searches.stop(args.search_id)
+            result = await self.searches.stop(args.search_id)
+            self._search_owners.pop(args.search_id, None)
+            return result
 
         async def search_list(_: Empty) -> Result:
             return {
@@ -754,12 +762,18 @@ class Engine:
             }
 
         async def stop(args: SessionId) -> Result:
-            return await self.sessions.stop(args.session_id)
+            result = await self.sessions.stop(args.session_id)
+            self._terminal_owners.pop(args.session_id, None)
+            return result
 
         async def start_terminal(args: StartSession) -> Result:
             if args.shell is None:
                 args = args.model_copy(update={"shell": self.settings().default_shell})
-            return await self.sessions.start(args)
+            result = await self.sessions.start(args)
+            self._terminal_owners = {key: owner for key, owner in self._terminal_owners.items()
+                                     if key in self.sessions.sessions}
+            self._terminal_owners[str(result["session_id"])] = self._plugin_owner.get()
+            return result
 
         async def operation(args: OperationId) -> Result:
             return cast(Result, self.ledger.get(args.operation_id).model_dump(mode="json"))
@@ -1061,13 +1075,49 @@ class Engine:
         searches = sum(entry.state == "running" for entry in self.searches.searches.values())
         direct_mcp = self.direct_mcp_sessions.active_count
         subchat_watches = self.direct_mcp_sessions.active_watch_count
-        resources: dict[str, JsonValue] = {
+        global_resources: dict[str, int] = {
             "terminal_sessions": terminals, "plugin_sessions": plugins,
             "direct_mcp_sessions": direct_mcp,
             "subchat_queue_watches": subchat_watches,
             "native_gui_sessions": len(self.native_gui.entries),
             "searches": searches, "operations": operations,
         }
+        if owner is None:
+            resources = global_resources
+        else:
+            resources = {
+                "terminal_sessions": sum(
+                    session.process.returncode is None
+                    and self._terminal_owners.get(session_id) == owner
+                    for session_id, session in self.sessions.sessions.items()
+                ),
+                "plugin_sessions": sum(
+                    entry.owner == owner and not entry.cleanup_confirmed
+                    for entry in self.plugin_sessions.entries.values()
+                ),
+                "direct_mcp_sessions": sum(
+                    entry.owner == owner and (entry.state == "opening"
+                                              or not entry.context.cleanup_confirmed)
+                    for entry in self.direct_mcp_sessions.entries.values()
+                ),
+                "subchat_queue_watches": sum(
+                    entry.owner == owner and watch.state == "watching"
+                    for entry in self.direct_mcp_sessions.entries.values()
+                    for watch in entry.watches.values()
+                ),
+                "native_gui_sessions": sum(
+                    entry.owner == owner for entry in self.native_gui.entries.values()
+                ),
+                "searches": sum(
+                    entry.state == "running" and self._search_owners.get(search_id) == owner
+                    for search_id, entry in self.searches.searches.items()
+                ),
+                "operations": sum(
+                    not task.done() and task.get_name() not in {"computer_status", "operations_get"}
+                    and self.inflight_owners.get(operation_id) == owner
+                    for operation_id, task in self.inflight.items()
+                ),
+            }
         capabilities: dict[str, JsonValue] = {
             "files": True,
             "terminal": True,
@@ -1209,14 +1259,14 @@ class Engine:
                     "state": "busy" if busy else "running",
                     "stop_tool": "gui_native_close", "stop_available": not busy,
                 })
-        if owner is None:
-            for session_id, session in self.sessions.sessions.items():
-                if session.process.returncode is None:
-                    blocker_details.append({
-                        "resource": "terminal_session", "id": session_id,
-                        "state": "running", "stop_tool": "terminal_stop",
-                        "stop_available": not session.input_lock.locked(),
-                    })
+        for session_id, session in self.sessions.sessions.items():
+            if (session.process.returncode is None
+                    and (owner is None or self._terminal_owners.get(session_id) == owner)):
+                blocker_details.append({
+                    "resource": "terminal_session", "id": session_id,
+                    "state": "running", "stop_tool": "terminal_stop",
+                    "stop_available": not session.input_lock.locked(),
+                })
         for operation_id, task in self.inflight.items():
             if (not task.done() and task.get_name() not in {"computer_status", "operations_get"}
                     and self.inflight_owners.get(operation_id) == owner):
@@ -1225,6 +1275,13 @@ class Engine:
                     "state": "running", "inspect_tool": "operations_get",
                     "stop_available": False,
                 })
+        active_resources: dict[str, JsonValue] = {
+            name: count for name, count in resources.items()
+        }
+        blocker_names: list[JsonValue] = [name for name, count in resources.items() if count]
+        if owner is not None and any(global_resources[name] > resources[name]
+                                     for name in global_resources):
+            blocker_names.append("other_active_resources")
         return {
             "state": "ready",
             "version": __version__,
@@ -1233,11 +1290,13 @@ class Engine:
             "runtime_id": self.runtime_id,
             "uptime_seconds": time.monotonic() - self.started,
             "platform": platform.system(),
-            "active_sessions": terminals + plugins + direct_mcp + len(self.native_gui.entries),
-            "active_operations": operations,
-            "active_resources": resources,
-            "update_blocked": any(bool(count) for count in resources.values()),
-            "update_blockers": [name for name, count in resources.items() if count],
+            "active_sessions": (resources["terminal_sessions"] + resources["plugin_sessions"]
+                                + resources["direct_mcp_sessions"]
+                                + resources["native_gui_sessions"]),
+            "active_operations": resources["operations"],
+            "active_resources": active_resources,
+            "update_blocked": any(global_resources.values()),
+            "update_blockers": blocker_names,
             "update_blocker_details": blocker_details,
             "tools": len(self.tools),
             "transport": "authenticated-loopback",

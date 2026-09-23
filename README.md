@@ -20,8 +20,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a1` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.1` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a2` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.2` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -80,6 +80,13 @@ attachments, plugin selection, parallel-work evidence and remaining limitations.
 Do not infer browser-free generation, native steering, child permission isolation
 or automatic replay from the word "subchat". A Mac path is useful only when the
 selected device and connected tools can access it; it is not an attachment or a grant.
+
+Use personal Chat HTTP access only within the permission and account scope granted
+to you. Misuse, including extracting Chat output at scale for model distillation
+or selling access to others, is prohibited. This experimental path is not a
+documented OpenAI API. Your account may be restricted or banned for use outside
+the permitted scope; the Plugin author cannot assume responsibility for such
+account actions. Review the exact permission and applicable terms before use.
 
 ## Develop and verify
 

@@ -264,7 +264,9 @@ async def test_wait_rejects_transport_exceeding_budget_before_observation(tmp_pa
             reply = await server.execute(Request(operation_id='e' * 32, tool='subchat_wait',
                 arguments={'operation_id': 'a' * 32, 'wait_ms': duration}))
             assert reply.state == 'failed'
-            assert reply.data['error_type'] == 'ValidationError'
+            assert reply.data['error_code'] == 'invalid_parameter'
+            assert any('wait_ms' in item['path'] for item in reply.data['invalid_params'])
+            assert reply.data['dispatched'] is False
         assert backend.sends == 0
     finally:
         ledger.close()

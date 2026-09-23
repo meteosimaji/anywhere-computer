@@ -528,6 +528,86 @@ remain separate unfinished work.
 
 ## Stdio MCP entry
 
+The Codex Plugin registers a separate `anywhere-subchat` MCP server beside the
+existing `anywhere-computer` server. Its default launcher reads an already logged-in
+dedicated Chrome profile headlessly at startup, then uses HTTPX for catalog and
+history reads. On each OS, its profile and ledger default to the `subchat/chrome-login`
+and `subchat/ledger` directories beneath Anywhere Computer's local state directory;
+they are not the existing experimental profile or the main engine ledger. Before
+starting this Plugin server, log in to ChatGPT using that dedicated profile in a
+separate Chrome session and close that Chrome session. The profile cannot be open
+in two processes at once. To choose other locations, set absolute
+`ANYWHERE_SUBCHAT_CHROME_LOGIN_PROFILE` and `ANYWHERE_SUBCHAT_STATE_DIR` paths in
+the Plugin server's process environment. These variables carry paths only, never
+credentials.
+
+For the macOS default path, stop the Subchat MCP server, launch the dedicated
+profile once in a visible Chrome window, complete login, then close that Chrome
+process before reconnecting the Plugin server:
+
+```sh
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --user-data-dir="$HOME/Library/Application Support/Anywhere Computer/subchat/chrome-login" \
+  https://chatgpt.com
+```
+
+This one-time login window is separate from normal Plugin operation. On Windows
+and Linux, use the OS state directory reported by Anywhere Computer's
+`state_directory()` rule or set the two absolute overrides explicitly.
+
+This Plugin server advertises `subchat_capabilities`, `subchat_catalog`,
+`subchat_list`, `subchat_status`, `subchat_recover` and `subchat_wait`. Check
+`subchat_capabilities`: `generation_transport=unavailable` is the expected default.
+The Plugin server does not expose send, queue, cancel or delete operations. The
+separate `anywhere-subchat --mcp` CLI remains available for explicitly configured
+generation experiments; it requires its own observed transport and does not gain
+independent HTTP generation from Plugin installation. A login failure at startup
+means the Subchat server is unavailable until its dedicated profile is authenticated;
+the main Anywhere server is independent.
+
+On 2026-09-23, the rebuilt bundled wheel was launched through the Plugin's
+actual `uv tool run ... anywhere-subchat-plugin` command with the owner's
+already logged-in dedicated Chrome profile selected by an environment path.
+The stdio MCP handshake succeeded. `tools/list` returned exactly the six
+read-only Subchat tools named above; `subchat_capabilities` reported generation
+unavailable; the live HTTP catalog returned model choices; and an attempted
+`subchat_send` call was rejected as an unknown tool. The temporary test ledger
+contained no pasted credentials. The server was then stopped and no dedicated
+Chrome process remained. This is live Plugin read-only acceptance, not Plugin
+generation acceptance or an authentication-renewal test.
+
+A later 2026-09-23 live run of the source `anywhere-subchat-plugin` entry point
+used the same logged-in Chrome profile. The MCP handshake, capabilities call,
+and HTTP catalog call succeeded. While the MCP session remained active, a
+process listing found zero Chrome processes with that dedicated profile's
+`--user-data-dir`. Startup now closes headless Chrome immediately after the
+authentication and catalog GETs. The bundled Plugin was then rebuilt as
+`0.2.0-alpha.2` and invoked with its exact `.mcp.json` command and dependency
+file. Its MCP handshake and live HTTP catalog succeeded, `tools/list` exposed
+six read-only tools, and a process listing during the active MCP session again
+found zero dedicated Chrome processes. Reusing the previous `0.2.0-alpha.1`
+wheel name had loaded stale code from the local uv cache despite different
+wheel bytes, which prompted the version increment. These observations do not
+prove credential renewal or HTTP generation.
+
+In a separate 2026-09-23 ordinary Chat UI trial, the owner asked a parent Chat
+to create two independent ordinary Chats, send separate arithmetic prompts,
+and return both URLs and answers. The parent opened two fresh Chat pages but
+reported that both remained unsent. It found no ordinary-Chat creation/send
+tool in its available Plugin surface. Its attempted Chrome JavaScript and GUI
+fallbacks also stopped at local browser/permission limitations. The final
+answer explicitly reported no child conversation IDs or recovered answers.
+Opening blank pages is not a Subchat creation result. This live trial confirms
+that the currently installed ChatGPT integration cannot autonomously summon
+two ordinary-Chat Subchats through its available tools.
+
+The same account's ChatGPT Plugin page showed Anywhere Computer installed and
+one connected account. A separate Chat started from its "Try in Chat" control
+requested only `computer_status`; the final reply reported `state=ready`,
+`version=0.2.0a1`, and a runtime ID, consistent with a separate direct MCP
+status read of the installed engine. This verifies basic read access through
+that connected ChatGPT app, not the new local `0.2.0-alpha.2` Subchat Plugin.
+
 Add `--mcp` to the same `anywhere-subchat` invocation to use MCP framing instead
 of the JSON-lines command format. This reuses Anywhere's MCP session and stdio
 transport. A configured direct-MCP session can launch that executable with its

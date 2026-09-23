@@ -8,7 +8,7 @@ import sqlite3
 import time
 from typing import Literal
 
-from pydantic import Field, JsonValue
+from pydantic import ConfigDict, Field, JsonValue
 
 from .models import Contract
 from .subchat_content import SubchatResources
@@ -18,6 +18,20 @@ class SubchatAccountMismatch(ValueError):
     """The observed account does not match a saved operation or active reader."""
 
     code = 'account_mismatch'
+
+
+class SubchatSelectionError(ValueError):
+    """Safe, field-specific local catalog validation failure before dispatch."""
+
+    code = 'invalid_parameter'
+
+    def __init__(self, field: Literal['http_selection', 'version_id', 'preset_id',
+                                     'model_slug', 'thinking_effort', 'model', 'effort'],
+                 reason: Literal['required', 'not_found', 'unavailable', 'mismatch',
+                                 'ambiguous']) -> None:
+        self.field = field
+        self.reason = reason
+        super().__init__(f'{field}: {reason}')
 
 
 class SubchatInputReference(Contract):
@@ -37,6 +51,8 @@ class SubchatWorkContext(Contract):
 
 class SubchatHTTPSelection(Contract):
     """Exact observed catalog choice; null effort is an explicit value, not a wildcard."""
+
+    model_config = ConfigDict(extra='forbid', strict=True)
 
     version_id: str = Field(min_length=1, max_length=256)
     preset_id: int

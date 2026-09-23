@@ -19,6 +19,7 @@ dependencies = [
 [project.scripts]
 anywhere = "anywhere_computer.cli:main"
 anywhere-subchat = "anywhere_computer.subchat_cli:main"
+anywhere-subchat-plugin = "anywhere_computer.subchat_plugin:main"
 
 [project.optional-dependencies]
 relay = [

@@ -54,7 +54,7 @@ async def test_json_lines_continue_after_invalid_input_and_keep_unknown_identity
         await process_lines(service, source, destination)
         replies = [json.loads(line) for line in destination.getvalue().splitlines()]
         assert len(replies) == 4
-        assert replies[0]['state'] == 'command_failed'
+        assert replies[0]['state'] == 'invalid_parameter'
         assert replies[0]['operation_id'] is None
         assert 'secret' not in json.dumps(replies[0])
         assert replies[1] == {'state': 'submission_unconfirmed', 'operation_id': op,
@@ -118,7 +118,8 @@ async def test_saved_commands_do_not_start_chrome(tmp_path, monkeypatch):
     assert replies[4]['state'] == 'queued'
     assert replies[4]['after_operation_id'] == completed
     assert replies[4]['model'] == 'model'
-    assert replies[6]['state'] == replies[7]['state'] == 'command_failed'
+    assert replies[6]['state'] == 'command_failed'
+    assert replies[7]['state'] == 'invalid_parameter'
     assert replies[6]['operation_id'] == queued['operation_id']
     ledger = Ledger(tmp_path)
     try:

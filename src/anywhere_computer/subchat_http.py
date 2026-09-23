@@ -19,10 +19,17 @@ from .subchat_browser.http_reader import ChatHTTPReader
 from .subchat_http_generation import ObservedHTTPGeneration, dispatch_generation
 from .subchat_http_sender import HTTPFollowupParent, HTTPGenerationPlan
 from .subchat_http_session import ObservedHTTPSession
-from .subchat_state import SubchatHTTPSelection, SubchatSubmission, SubchatSubmissions
+from .subchat_state import (
+    SubchatHTTPSelection,
+    SubchatSelectionError,
+    SubchatSubmission,
+    SubchatSubmissions,
+)
 
 if TYPE_CHECKING:
-    from playwright.async_api import APIRequestContext
+    from httpx import AsyncClient
+
+    from .subchat_http_download import SandboxDownload
 
 CONVERSATION_ID = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
 
@@ -34,14 +41,22 @@ class HTTPOnlySubchatBackend:
     A supplied read session is not an independent authentication implementation.
     """
 
-    def __init__(self, request_factory: Callable[[], Awaitable[APIRequestContext]],
+    def __init__(self, request_factory: Callable[[], Awaitable[AsyncClient]],
                  session: ObservedHTTPSession | None = None, *,
                  generation: ObservedHTTPGeneration | None = None,
                  store: SubchatSubmissions | None = None,
                  owner: str | None = None,
-                 generation_origin: str = 'https://chatgpt.com') -> None:
+                 generation_origin: str = 'https://chatgpt.com',
+                 chrome_login: bool = False) -> None:
         if generation is not None and (session is None or store is None):
             raise ValueError('HTTP generation requires a session and durable store')
+        if generation is not None and session is not None:
+            generation_headers = generation.headers
+            if (generation_headers['authorization'] != session.authorization.get_secret_value()
+                    or generation_headers['chatgpt-account-id'] != session.account_id
+                    or (session.cookie is not None and generation_headers['cookie']
+                        != session.cookie.get_secret_value())):
+                raise ValueError('HTTP generation handoff does not match login session')
         self._http_reader = ChatHTTPReader(request_factory, browser_free=True, session=session)
         self._request_factory = request_factory
         self._session = session
@@ -50,6 +65,7 @@ class HTTPOnlySubchatBackend:
         self._owner = owner
         self._generation_origin = generation_origin
         self._delete_session_available = session is not None
+        self._chrome_login = chrome_login
 
     def capabilities(self) -> dict[str, object]:
         enabled = self._generation is not None
@@ -63,7 +79,14 @@ class HTTPOnlySubchatBackend:
                 'generation_transport': 'explicit_handoff_http' if enabled else 'unavailable',
                 'http_selection_send_supported': enabled, 'credential_refresh': False,
                 'independent_login': False, 'persistent_credentials': False,
-                'session_source': 'explicit_in_memory_handoff', 'automatic_retry': False,
+                'session_source': ('chrome_profile_http_get' if self._chrome_login
+                                   else 'explicit_in_memory_handoff'),
+                'authenticated_account_id': (self._session.account_id
+                                             if self._session is not None else None),
+                'authenticated_user_email': (self._session.user_email
+                                              if self._chrome_login and self._session is not None
+                                              else None),
+                'automatic_retry': False,
                 'http_delete_supported': self._delete_session_available,
                 'deletion_transport': 'authenticated_http'}
 
@@ -71,7 +94,7 @@ class HTTPOnlySubchatBackend:
         if self._generation is None:
             raise SubchatUnsupported('http_generation_unavailable')
         if selection is None:
-            raise ValueError('HTTP generation requires an exact observed selection')
+            raise SubchatSelectionError('http_selection', 'required')
 
     async def prepare(self, submission: SubchatSubmission
                       ) -> tuple[str, ...] | SubchatPreparedSend:
@@ -87,9 +110,12 @@ class HTTPOnlySubchatBackend:
         choices = [choice for version in versions if isinstance(version, dict)
                    for choice in version['choices'] if isinstance(choice, dict)
                    and choice.get('http_selection') == submission.http_selection.model_dump()]
-        if (len(choices) != 1 or choices[0].get('model_title') != submission.model
-                or choices[0].get('title') != submission.effort):
-            raise ValueError('HTTP model labels do not match the reserved selection')
+        if len(choices) != 1:
+            raise SubchatSelectionError('preset_id', 'ambiguous')
+        if choices[0].get('model_title') != submission.model:
+            raise SubchatSelectionError('model', 'mismatch')
+        if choices[0].get('title') != submission.effort:
+            raise SubchatSelectionError('effort', 'mismatch')
         baseline: tuple[str, ...] = ()
         if submission.after_operation_id is not None:
             assert self._store is not None
@@ -189,3 +215,21 @@ class HTTPOnlySubchatBackend:
     async def patch_delete(self, submission: SubchatSubmission) -> bool:
         async with asyncio.timeout(20):
             return await self._http_reader.patch_delete(None, submission)
+
+    async def download_sandbox_file(self, operation_id: str,
+                                    sandbox_link: str) -> SandboxDownload:
+        """Download one file from a saved, history-verified final answer."""
+        from .subchat_http_download import download_verified_sandbox_file
+
+        if self._store is None or self._session is None:
+            raise SubchatUnsupported('http_session_required')
+        saved = self._store.get(operation_id, owner=self._owner)
+        if saved.state != 'completed':
+            raise ValueError('File download requires a completed operation')
+        async with asyncio.timeout(20):
+            answer = await self._http_reader.history(None, saved)
+        if not isinstance(answer, SubchatAnswer):
+            raise ValueError('A verified final answer is required for file download')
+        return await download_verified_sandbox_file(
+            saved, answer, sandbox_link, session=self._session,
+            client=await self._request_factory())

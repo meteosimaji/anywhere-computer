@@ -16,10 +16,15 @@ def test_packaged_runtime_matches_current_source_and_checksums():
     plugin = ROOT / "plugins/anywhere-computer"
     manifest = json.loads((plugin / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
     assert manifest["name"] == plugin.name
-    config = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"][
-        "anywhere-computer"
-    ]
+    servers = json.loads((plugin / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
+    assert set(servers) == {"anywhere-computer", "anywhere-subchat"}
+    config = servers["anywhere-computer"]
     assert config["command"] == "uv" and config["cwd"] == "."
+    subchat = servers["anywhere-subchat"]
+    assert subchat["command"] == "uv" and subchat["cwd"] == "."
+    assert subchat["args"][:-1] == config["args"][:-2]
+    assert subchat["args"][-1] == "anywhere-subchat-plugin"
+    assert not any("/Users/" in arg or "\\\\Users\\\\" in arg for arg in subchat["args"])
     checksums = json.loads((plugin / "bundled/checksums.json").read_text(encoding="utf-8"))
     dependencies = (plugin / "bundled/dependencies.txt").read_text(encoding="utf-8")
     assert re.search(r'^mcp==1\.30\.0\s', dependencies, re.MULTILINE)
@@ -58,6 +63,8 @@ def test_packaged_runtime_matches_current_source_and_checksums():
                        if name.endswith(".dist-info/entry_points.txt")]
         assert len(entrypoints) == 1
         assert ("anywhere-subchat = anywhere_computer.subchat_cli:main"
+                in archive.read(entrypoints[0]).decode())
+        assert ("anywhere-subchat-plugin = anywhere_computer.subchat_plugin:main"
                 in archive.read(entrypoints[0]).decode())
         metadata_files = [name for name in archive.namelist()
                           if name.endswith(".dist-info/METADATA")]

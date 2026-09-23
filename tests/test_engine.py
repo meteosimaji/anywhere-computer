@@ -82,7 +82,9 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
     try:
         result = engine.status(owner="owner-a")
         assert result["update_blocked"] is True
-        assert result["update_blockers"] == ["plugin_sessions", "operations"]
+        assert result["update_blockers"] == [
+            "plugin_sessions", "operations", "other_active_resources",
+        ]
         assert result["update_blocker_details"] == [
             {
                 "resource": "plugin_session", "id": current, "state": "busy",
@@ -95,7 +97,18 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
         ]
         assert other not in repr(result["update_blocker_details"])
         assert other_operation not in repr(result["update_blocker_details"])
-        assert engine.status(owner="owner-c")["update_blocker_details"] == []
+        unrelated = engine.status(owner="owner-c")
+        assert unrelated["update_blocker_details"] == []
+        assert unrelated["active_resources"] == {
+            name: 0 for name in result["active_resources"]
+        }
+        assert unrelated["active_sessions"] == 0
+        assert unrelated["active_operations"] == 0
+        assert unrelated["update_blocked"] is True
+        assert unrelated["update_blockers"] == ["other_active_resources"]
+        assert result["active_resources"]["plugin_sessions"] == 1
+        assert result["active_resources"]["operations"] == 1
+        assert "other_active_resources" in result["update_blockers"]
     finally:
         release.set()
         await asyncio.gather(own_task, other_task)
@@ -103,6 +116,62 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
         engine.inflight_owners.clear()
         busy_lock.release()
         engine.plugin_sessions.entries.clear()
+
+
+async def test_remote_terminal_status_lists_only_owned_live_blockers(engine, tmp_path):
+    started = []
+    try:
+        for owner in ("owner-a", "owner-b"):
+            reply = await engine.execute(request(
+                "terminal_start", command=python_command("import time; time.sleep(30)"),
+                cwd=str(tmp_path),
+            ), peer=owner)
+            assert reply.state == "completed"
+            started.append(reply.data["session_id"])
+
+        owned = await engine.execute(request("computer_status"), peer="owner-a")
+        assert owned.state == "completed"
+        assert owned.data["active_resources"]["terminal_sessions"] == 1
+        assert owned.data["active_sessions"] == 1
+        assert owned.data["update_blocked"] is True
+        assert owned.data["update_blocker_details"] == [{
+            "resource": "terminal_session", "id": started[0], "state": "running",
+            "stop_tool": "terminal_stop", "stop_available": True,
+        }]
+        assert started[1] not in repr(owned.data)
+        assert engine.status()["active_resources"]["terminal_sessions"] == 2
+
+        await engine.sessions.stop(started[0])
+        unrelated = await engine.execute(request("computer_status"), peer="owner-a")
+        assert unrelated.data["active_resources"]["terminal_sessions"] == 0
+        assert unrelated.data["update_blockers"] == ["other_active_resources"]
+        assert unrelated.data["update_blocker_details"] == []
+    finally:
+        for session_id in started:
+            await engine.sessions.stop(session_id)
+
+
+async def test_remote_status_counts_only_owned_searches(engine, tmp_path, monkeypatch):
+    release = asyncio.Event()
+
+    async def paused_search(*_args):
+        await release.wait()
+
+    monkeypatch.setattr(engine.searches, "_run_with_deadline", paused_search)
+    try:
+        for owner in ("owner-a", "owner-b"):
+            reply = await engine.execute(request(
+                "search_start", path=str(tmp_path), pattern="needle",
+            ), peer=owner)
+            assert reply.state == "completed"
+        assert engine.status()["active_resources"]["searches"] == 2
+        assert engine.status(owner="owner-a")["active_resources"]["searches"] == 1
+        unrelated = engine.status(owner="owner-c")
+        assert unrelated["active_resources"]["searches"] == 0
+        assert unrelated["update_blockers"] == ["other_active_resources"]
+    finally:
+        release.set()
+        await engine.searches.close()
 
 
 async def test_capacity_failure_has_fixed_code_and_safe_action(engine, tmp_path, monkeypatch):

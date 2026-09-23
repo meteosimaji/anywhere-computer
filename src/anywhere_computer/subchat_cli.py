@@ -10,7 +10,8 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TextIO
 
-from pydantic import Field, TypeAdapter
+import httpx
+from pydantic import Field, TypeAdapter, ValidationError
 
 from .models import Contract, OperationId
 from .state import Ledger
@@ -28,6 +29,7 @@ from .subchat_state import (
     SubchatAccountMismatch,
     SubchatHTTPSelection,
     SubchatList,
+    SubchatSelectionError,
     SubchatSubmissions,
     SubchatWorkContext,
 )
@@ -97,7 +99,12 @@ async def dispatch(service: Subchats,
             exclude={'action'})), owner=None)).model_dump_json()
     if command.action == 'send':
         if command.prompt is None or command.model is None or command.effort is None:
-            raise ValueError('send requires prompt, model and effort')
+            if command.prompt is None:
+                raise ValueError('send requires prompt')
+            if command.model is None:
+                raise SubchatSelectionError('model', 'required')
+            if command.effort is None:
+                raise SubchatSelectionError('effort', 'required')
         result = await service.send(command.operation_id, command.prompt, command.model,
                                     command.effort, owner=None,
                                     conversation_id=command.conversation_id,
@@ -137,9 +144,9 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         except Exception as error:
             # Do not print provider errors or invalid input: both can contain secrets.
             output = json.dumps({
-                'state': (error.code
+                'state': ('invalid_parameter' if isinstance(error, ValidationError) else error.code
                           if isinstance(error, SubchatAccessError | SubchatAccountMismatch
-                                        | SubchatUnsupported)
+                                        | SubchatUnsupported | SubchatSelectionError)
                           else 'browser_closed' if isinstance(error, SubchatBrowserClosed)
                           else 'submission_unconfirmed'
                           if isinstance(error, SubchatOutcomeUnknown) else 'reply_interrupted'
@@ -150,6 +157,14 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
                                  else None),
                 'error_type': type(error).__name__,
                 'automatic_retry': False,
+                **({'field': error.field, 'reason': error.reason,
+                    'dispatched': False, 'corrected_request_requires_new_operation_id': True}
+                   if isinstance(error, SubchatSelectionError) else {}),
+                **({'invalid_params': [
+                    {'path': [str(part) for part in item['loc']], 'code': item['type']}
+                    for item in error.errors(include_input=False, include_context=False)],
+                    'dispatched': False}
+                   if isinstance(error, ValidationError) else {}),
                 **({'dispatched': False} if isinstance(error, SubchatUnsupported)
                    and error.code == 'http_generation_unavailable' else {}),
             })
@@ -160,19 +175,31 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
 async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read: bool = False,
               minimized: bool = False, http_only: bool = False,
               http_session: ObservedHTTPSession | None = None,
-              http_generation: ObservedHTTPGeneration | None = None) -> None:
+              http_generation: ObservedHTTPGeneration | None = None,
+              chrome_login_profile: Path | None = None,
+              chrome_generation_stdin: bool = False,
+              expected_account_id: str | None = None,
+              read_only_mcp: bool = False) -> None:
+    if read_only_mcp and (not mcp or not http_only or http_generation is not None
+                          or chrome_generation_stdin):
+        raise ValueError('Read-only MCP requires HTTP-only mode without generation')
     if http_only and (profile is not None or http_read or minimized):
         raise ValueError('HTTP-only mode cannot use browser options')
     if not http_only and (profile is None or http_session is not None):
         raise ValueError('Browser mode requires a profile and cannot import an HTTP session')
     if http_generation is not None and (not http_only or http_session is None):
         raise ValueError('HTTP generation requires an explicit browser-free session')
+    if chrome_login_profile is not None and (not http_only or http_session is not None):
+        raise ValueError('Chrome login requires HTTP-only mode without a supplied session')
+    if expected_account_id is not None and chrome_login_profile is None:
+        raise ValueError('Expected account requires Chrome login')
 
     ledger = Ledger(state)
     try:
         async with AsyncExitStack() as resources:
             driver: Playwright | None = None
             http_client: APIRequestContext | None = None
+            standalone_http_client: httpx.AsyncClient | None = None
             http_init_lock = asyncio.Lock()
 
             async def runtime() -> Playwright:
@@ -191,6 +218,18 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         resources.push_async_callback(http_client.dispose)
                     return http_client
 
+            async def open_standalone_http() -> httpx.AsyncClient:
+                nonlocal standalone_http_client
+                async with http_init_lock:
+                    if standalone_http_client is None:
+                        standalone_http_client = await resources.enter_async_context(
+                            httpx.AsyncClient(
+                                trust_env=False,
+                                follow_redirects=False,
+                                transport=httpx.AsyncHTTPTransport(retries=0),
+                            ))
+                    return standalone_http_client
+
             async def open_browser() -> BrowserContext:
                 context = await (await runtime()).chromium.launch_persistent_context(
                     str(profile), channel='chrome', headless=False,
@@ -208,6 +247,31 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     finally:
                         await cdp.detach()
                 return context
+
+            if chrome_login_profile is not None:
+                from .subchat_chrome_login import chrome_http_session
+
+                chrome_context = await (await runtime()).chromium.launch_persistent_context(
+                    str(chrome_login_profile), channel='chrome', headless=True)
+                try:
+                    http_session = await chrome_http_session(
+                        chrome_context, await open_standalone_http())
+                finally:
+                    # Authentication is now held in memory by HTTPX. Do not leave a
+                    # Chrome process open for the lifetime of the MCP controller.
+                    await chrome_context.close()
+                if (expected_account_id is not None
+                        and http_session.account_id != expected_account_id):
+                    raise SubchatAccountMismatch('Chrome login selected another Chat account')
+                if chrome_generation_stdin:
+                    from .subchat_http_generation import read_http_generation_handoff
+
+                    http_generation = read_http_generation_handoff(
+                        sys.stdin.buffer,
+                        authorization=http_session.authorization.get_secret_value(),
+                        account_id=http_session.account_id,
+                        cookie=(http_session.cookie.get_secret_value()
+                                if http_session.cookie is not None else None))
 
             store = SubchatSubmissions(ledger.connection)
 
@@ -230,8 +294,9 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 from .subchat_http import HTTPOnlySubchatBackend
 
                 backend = HTTPOnlySubchatBackend(
-                    open_http, http_session, generation=http_generation,
-                    store=store if http_generation is not None else None)
+                    open_standalone_http, http_session, generation=http_generation,
+                    store=store,
+                    chrome_login=chrome_login_profile is not None)
             else:
                 from .subchat_browser.backend import BrowserSubchatBackend
 
@@ -250,15 +315,16 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 instructions = None
                 if http_only:
                     instructions = (
-                        'Browser-free ordinary Chat recovery and explicit deletion. No browser '
+                        'Ordinary Chat recovery and explicit deletion over HTTPX. A configured '
+                        'Chrome login profile is read headlessly at startup only. No browser '
                         'fallback, '
                         'independent login, credential refresh or generation is implemented. '
                         'Use subchat_catalog source=http, saved status/list and recover/wait '
                         'with the original operation ID. UI catalog is unsupported. '
                         'Send and queue dispatch return http_generation_unavailable. '
                         'Never resend an uncertain submission or supply credentials in tools. '
-                        'Recovery requires known conversation/input identity and an explicit '
-                        'in-memory session supplied by the operator at startup. Missing or '
+                        'Recovery requires known conversation/input identity and a session '
+                        'obtained at startup from Chrome login or an explicit handoff. Missing or '
                         'expired authorization requires operator action, not a retry loop. '
                         'A pending observation is not proof of Thinking. Interruption is not '
                         'a completed answer. Queued work is never sent by this adapter. '
@@ -266,8 +332,9 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'delete outcome is never replayed automatically.')
                     if http_generation is not None:
                         instructions = (
-                            'Browser-free ordinary Chat with an explicit in-memory generation '
-                            'handoff. No login, credential refresh or Chrome fallback. Send '
+                            'Ordinary Chat over HTTPX with an explicit in-memory generation '
+                            'handoff. Chrome login may initialize the session; no automatic '
+                            'credential refresh or Chrome fallback. Send '
                             'requires an exact HTTP catalog selection. Queued follow-ups use '
                             'the saved final assistant parent and check current_node before '
                             'generation. A pending or unknown result is never resent. HTTP '
@@ -276,9 +343,20 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                             'must be supplied again by the operator in a new process. '
                             'Deletion checks the saved conversation and bound account; an '
                             'unknown delete outcome is never replayed automatically.')
+                if read_only_mcp:
+                    instructions = (
+                        'This Plugin Subchat session observes saved submissions and Chat HTTP '
+                        'history. Its dedicated Chrome profile is read headlessly at startup '
+                        'for login; HTTPX performs later reads. No generation or remote '
+                        'mutation is exposed here. subchat_capabilities reports '
+                        'generation_transport=unavailable. Use subchat_catalog source=http, '
+                        'subchat_list, subchat_status, subchat_recover and subchat_wait. '
+                        'Recover only the original operation ID; an unconfirmed or pending '
+                        'state never permits resending. Login failure requires operator action.')
                 server = session(service, observe_catalog=backend.catalog,
                                  observe_http_catalog=backend.http_catalog,
-                                 instructions=instructions, serialize_recovery=not http_only)
+                                 instructions=instructions, serialize_recovery=not http_only,
+                                 read_only=read_only_mcp)
                 try:
                     await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
                 finally:
@@ -301,7 +379,12 @@ def main() -> None:
     parser.add_argument('--minimized', action='store_true',
                         help='Verify the dedicated Chrome window is minimized before page work')
     parser.add_argument('--http-only', action='store_true',
-                        help='Browser-free HTTP; sends require an explicit generation handoff')
+                        help='HTTPX transport; sends require an explicit generation handoff')
+    parser.add_argument('--chrome-login-profile', type=Path,
+                        help='Use a logged-in dedicated Chrome profile headlessly to GET an '
+                             'HTTP session at startup; no login UI or automatic renewal')
+    parser.add_argument('--expected-account-id',
+                        help='Pin the selected Chat account ID before sending from Chrome login')
     parser.add_argument('--http-session-stdin', action='store_true',
                         help='Consume one bounded observed-session JSON line before the protocol; '
                              'HTTP-only mode only. No login, cookies or protection tokens.')
@@ -312,10 +395,19 @@ def main() -> None:
     if args.http_only:
         if args.browser_profile is not None or args.http_read or args.minimized:
             parser.error('--http-only cannot be combined with browser options')
+        if args.chrome_login_profile is not None and args.http_session_stdin:
+            parser.error('Choose Chrome login or an explicit HTTP session')
     elif args.browser_profile is None or args.http_session_stdin or args.http_generation_stdin:
         parser.error('Browser mode requires --browser-profile; session handoff needs --http-only')
-    if args.http_generation_stdin and not args.http_session_stdin:
-        parser.error('--http-generation-stdin requires --http-session-stdin')
+    if args.chrome_login_profile is not None and not args.http_only:
+        parser.error('--chrome-login-profile requires --http-only')
+    if args.expected_account_id is not None and args.chrome_login_profile is None:
+        parser.error('--expected-account-id requires --chrome-login-profile')
+    if (args.chrome_login_profile is not None and args.http_generation_stdin
+            and args.expected_account_id is None):
+        parser.error('Chrome-login generation requires --expected-account-id')
+    if args.http_generation_stdin and not (args.http_session_stdin or args.chrome_login_profile):
+        parser.error('--http-generation-stdin requires a session source')
     observed_session = None
     if args.http_session_stdin:
         from .subchat_http_session import read_http_session
@@ -327,7 +419,7 @@ def main() -> None:
                   file=sys.stderr)
             raise SystemExit(2) from None
     observed_generation = None
-    if args.http_generation_stdin:
+    if args.http_generation_stdin and observed_session is not None:
         from .subchat_http_generation import read_http_generation_handoff
 
         assert observed_session is not None
@@ -343,4 +435,9 @@ def main() -> None:
     asyncio.run(run(args.browser_profile.resolve() if args.browser_profile is not None else None,
                     args.state_dir.resolve(), mcp=args.mcp, http_read=args.http_read,
                     minimized=args.minimized, http_only=args.http_only,
-                    http_session=observed_session, http_generation=observed_generation))
+                    http_session=observed_session, http_generation=observed_generation,
+                    chrome_login_profile=(args.chrome_login_profile.resolve()
+                                          if args.chrome_login_profile is not None else None),
+                    chrome_generation_stdin=bool(args.chrome_login_profile
+                                                 and args.http_generation_stdin),
+                    expected_account_id=args.expected_account_id))

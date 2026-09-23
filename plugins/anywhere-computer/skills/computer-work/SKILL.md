@@ -98,6 +98,20 @@ capabilities.gui=false refers to the absent built-in GUI backend; an external MC
 availability must be checked separately. Existing HTTP connections may need the local
 http-add-tools upgrade before newly introduced direct-MCP tools become discoverable.
 
+This Plugin also registers `anywhere-subchat` as a separate local MCP server. It
+uses a dedicated Chrome login profile headlessly at startup, then HTTPX for Chat
+history and catalog reads. It closes Chrome before serving MCP tools. The
+profile must already be logged in and must not be
+open in another Chrome process. Check `subchat_capabilities` before use:
+`generation_transport=unavailable` means this Plugin server cannot send or queue
+Chat messages. Its read-only tool catalog exposes capabilities, HTTP catalog,
+saved list/status, recovery and wait. Recover only an existing operation's exact
+ID; a missing or pending answer does not authorize a new send. The local profile
+and ledger are separate from the main Anywhere engine. Set absolute paths in
+`ANYWHERE_SUBCHAT_CHROME_LOGIN_PROFILE` and `ANYWHERE_SUBCHAT_STATE_DIR` to
+choose other dedicated locations before starting the server. No account secrets
+belong in tool calls, Plugin files or environment variables.
+
 Codex Computer Use currently exposes a discoverable MCP catalog, but direct execution
 has returned "Sender process is not authenticated" in local verification. Catalog
 discovery does not establish GUI operation support. Report the actual failure and use
