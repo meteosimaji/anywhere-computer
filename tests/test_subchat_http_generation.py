@@ -22,8 +22,13 @@ from anywhere_computer.subchat_http_generation import (
     _json_response,
     read_http_generation_handoff,
 )
+from anywhere_computer.subchat_http_sender import HTTPGenerationPlan
 from anywhere_computer.subchat_mcp import session as mcp_session
-from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmissions
+from anywhere_computer.subchat_state import (
+    SubchatHTTPSelection,
+    SubchatSubmission,
+    SubchatSubmissions,
+)
 
 CHAT = '00000000-0000-0000-0000-000000000001'
 SELECTION = SubchatHTTPSelection(version_id='future', preset_id=7,
@@ -527,6 +532,68 @@ async def test_oversized_preparation_never_reaches_generation(tmp_path, monkeypa
                                in api.requests)
             finally:
                 ledger.close()
+
+
+@pytest.mark.parametrize(('template_name', 'failed_stage'), [
+    ('prepare_template', 'prepare_failed'),
+    ('generation_template', 'generation_failed'),
+])
+async def test_multibyte_outgoing_body_is_bounded_before_any_post(
+        tmp_path, template_name, failed_stage):
+    data = handoff_data()
+    data[template_name]['padding'] = 'x' * 900_000
+    generation = ObservedHTTPGeneration.from_data(
+        data, authorization=SECRET, account_id='fixture-account')
+    async with LocalChat() as api:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            ledger, store, service = await setup(tmp_path, api, client,
+                                                  generation=generation)
+            try:
+                with pytest.raises(SubchatOutcomeUnknown):
+                    await service.send('d' * 32, '界' * 100_000, 'Future Chat',
+                                       'Future effort', owner=None,
+                                       http_selection=SELECTION)
+                assert store.get('d' * 32, owner=None).state == 'sending'
+                assert [event['stage'] for event in store.http_events(
+                    'd' * 32, owner=None)] == [failed_stage]
+                assert all(method != 'POST' for method, _, _, _ in api.requests)
+            finally:
+                ledger.close()
+
+
+@pytest.mark.parametrize('template_name', ['prepare_template', 'generation_template'])
+def test_completed_outgoing_body_accepts_exact_byte_limit(template_name, monkeypatch):
+    monkeypatch.setattr('anywhere_computer.subchat_http_generation.time.time', lambda: 1.0)
+    operation_id, message_id = 'e' * 32, 'f' * 32
+    submission = SubchatSubmission(
+        operation_id=operation_id, prompt='界', model='Future Chat',
+        effort='Future effort', state='sending', user_message_id=message_id,
+        provider_account_id='fixture-account', http_selection=SELECTION)
+    plan = HTTPGenerationPlan.from_reserved(submission)
+    data = handoff_data()
+    data[template_name]['padding'] = ''
+    baseline = ObservedHTTPGeneration.from_data(
+        data, authorization=SECRET, account_id='fixture-account')
+    def body_for(handoff):
+        return (handoff.prepare_body(plan) if template_name == 'prepare_template'
+                else handoff.generation_body(plan, submission))
+    padding = 1_048_576 - len(body_for(baseline))
+    assert padding > 0
+    data[template_name]['padding'] = 'x' * padding
+    # Exercise the completed-body boundary directly; the handoff's separate
+    # template limit counts its less compact input serialization.
+    def with_templates() -> ObservedHTTPGeneration:
+        return ObservedHTTPGeneration(
+            json.dumps(data['headers']).encode(), data['sentinel_p'],
+            json.dumps(data['prepare_template']).encode(),
+            json.dumps(data['generation_template']).encode())
+
+    handoff = with_templates()
+    assert len(body_for(handoff)) == 1_048_576
+    data[template_name]['padding'] += 'x'
+    oversized = with_templates()
+    with pytest.raises(ValueError, match='bounded request|too large'):
+        body_for(oversized)
 
 
 async def test_compressed_generation_is_not_decoded_or_replayed(tmp_path):

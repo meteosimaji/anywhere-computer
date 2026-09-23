@@ -54,6 +54,11 @@ session before starting the server. Do not use a normal profile that is open
 elsewhere. A login failure leaves this Subchat server unavailable; the main
 Anywhere Computer server is independent.
 
+If Google sign-in rejects a browser controlled by test automation, use the
+ordinary Chrome process shown below for this one-time interactive login. Do
+not retry sign-in in an automation-controlled Chrome window. Close the ordinary
+Chrome process after login so the Plugin can open the profile without a lock.
+
 For the default macOS profile, stop the Subchat MCP server, open the profile
 once to log in, and close that Chrome process before reconnecting:
 

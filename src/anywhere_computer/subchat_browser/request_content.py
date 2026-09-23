@@ -27,7 +27,7 @@ def matches_prompt(content: JsonValue, prompt: str) -> bool:
 
 
 def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, JsonValue]:
-    if len(payload) > 1_048_576:
+    if len(payload.encode('utf-8')) > 1_048_576:
         raise ValueError('A bounded request is required')
     body = TypeAdapter(dict[str, JsonValue]).validate_json(payload)
     messages = body.get('messages')

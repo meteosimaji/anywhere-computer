@@ -138,7 +138,10 @@ class ObservedHTTPGeneration:
         else:
             body['conversation_id'] = plan.conversation_id
             body['parent_message_id'] = plan.predecessor_id
-        return json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode()
+        encoded = json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        if len(encoded) > 1_048_576:
+            raise ValueError('Chat preparation request is too large')
+        return encoded
 
     def generation_body(self, plan: HTTPGenerationPlan,
                         submission: SubchatSubmission) -> bytes:
@@ -253,6 +256,11 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
     except Exception:
         store.record_http_event(plan.operation_id, 'generation_failed', owner=owner)
         raise ValueError('HTTP generation request is invalid') from None
+    try:
+        prepare_body = handoff.prepare_body(plan)
+    except Exception:
+        store.record_http_event(plan.operation_id, 'prepare_failed', owner=owner)
+        raise ValueError('Chat preparation request is invalid') from None
     request_headers = handoff.headers
     if use_client_cookies:
         request_headers.pop('cookie')
@@ -269,11 +277,6 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
         store.record_http_event(plan.operation_id, 'sentinel_failed', owner=owner)
         raise ValueError('Sentinel preparation token is unavailable')
     # A fresh sentinel response token is not substituted into this operation.
-    try:
-        prepare_body = handoff.prepare_body(plan)
-    except Exception:
-        store.record_http_event(plan.operation_id, 'prepare_failed', owner=owner)
-        raise ValueError('Chat preparation request is invalid') from None
     await _preparation_post('prepare', plan=plan, client=client, store=store,
                             owner=owner, origin=origin, body=prepare_body, headers=headers)
     if plan.conversation_id is not None:
