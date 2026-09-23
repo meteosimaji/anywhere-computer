@@ -106,6 +106,13 @@ async def test_edit_shared_string_keeps_table_and_cell_style(tmp_path):
     members["xl/sharedStrings.xml"] = (
         f'<sst xmlns="{SHEET[1:-1]}"><si><t>old</t></si></sst>'.encode()
     )
+    content_types = ET.fromstring(members["[Content_Types].xml"])
+    types_namespace = "http://schemas.openxmlformats.org/package/2006/content-types"
+    ET.SubElement(content_types, f"{{{types_namespace}}}Override",
+                  PartName="/xl/sharedStrings.xml",
+                  ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml."
+                              "sharedStrings+xml")
+    members["[Content_Types].xml"] = ET.tostring(content_types)
     output = io.BytesIO()
     with zipfile.ZipFile(output, "w") as archive:
         for name, data in members.items():

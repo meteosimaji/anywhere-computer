@@ -26,14 +26,14 @@ def _plain_text(cell: ET.Element, shared: list[str | None]) -> str:
             raise ValueError("Only plain string cells can be edited")
         try:
             index = int(value.text or "")
-            if not 0 <= index < len(shared):
-                raise ValueError("Invalid shared string reference")
-            text = shared[index]
-            if text is None:
-                raise ValueError("Only plain string cells can be edited")
-            return text
         except ValueError as error:
             raise ValueError("Invalid shared string reference") from error
+        if not 0 <= index < len(shared):
+            raise ValueError("Invalid shared string reference")
+        text = shared[index]
+        if text is None:
+            raise ValueError("Only plain string cells can be edited")
+        return text
     raise ValueError("Only existing plain string cells can be edited")
 
 
