@@ -1,7 +1,9 @@
 """Browser-free controller acceptance with synthetic sessions, never live generation."""
 import json
+from contextlib import asynccontextmanager
 from io import BytesIO, StringIO
 
+import httpx
 import pytest
 from test_subchat_http_catalog import catalog
 from test_subchat_http_history import sample
@@ -35,7 +37,9 @@ class Client:
         self.status = {}
         self.disposed = 0
 
-    async def get(self, url, **kwargs):
+    @asynccontextmanager
+    async def stream(self, method, url, **kwargs):
+        assert method == 'GET'
         self.calls.append((url, kwargs))
         assert kwargs == {'headers': {'authorization': SECRET,
                                      'chatgpt-account-id': 'fixture-account',
@@ -50,15 +54,20 @@ class Client:
             status_code = response_status
             headers = {'content-type': 'application/json'}
 
-            @property
-            def content(self):
+            async def aiter_bytes(self, *, chunk_size):
                 assert self.status_code == 200, 'Never read a refusal body'
-                return json.dumps(catalog() if url == CATALOG_URL else payload_value).encode()
+                body = json.dumps(catalog() if url == CATALOG_URL else payload_value).encode()
+                for offset in range(0, len(body), chunk_size):
+                    yield body[offset:offset + chunk_size]
 
             async def aclose(inner_self):
                 owner.disposed += 1
 
-        return Response()
+        response = Response()
+        try:
+            yield response
+        finally:
+            await response.aclose()
 
 
 def backend(client, *, authenticated=True):
@@ -68,6 +77,48 @@ def backend(client, *, authenticated=True):
         return client
 
     return HTTPOnlySubchatBackend(factory, credentials() if authenticated else None)
+
+
+@pytest.mark.parametrize(('resource', 'limit', 'error'), [
+    ('catalog', 1_048_576, 'Model catalog is too large'),
+    ('history', 4_194_304, 'Conversation response is too large'),
+])
+async def test_http_reader_stops_stream_at_resource_limit(resource, limit, error):
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+
+    class Stream(httpx.AsyncByteStream):
+        chunks = 0
+        closed = False
+
+        async def __aiter__(self):
+            for _ in range(limit // 65_536 + 10):
+                self.chunks += 1
+                yield b'x' * 65_536
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = Stream()
+
+    def serve(_request):
+        return httpx.Response(200, stream=stream,
+                              headers={'content-type': 'application/json'})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+        async def factory():
+            return client
+
+        reader = ChatHTTPReader(factory, browser_free=True, session=credentials())
+        url = CATALOG_URL if resource == 'catalog' else (
+            'https://chatgpt.com/backend-api/conversations/fixture')
+
+        async def no_browser(_page):
+            raise AssertionError('Browser was opened')
+
+        with pytest.raises(ValueError, match=error):
+            await reader._read(None, url, no_browser)
+    assert stream.chunks == limit // 65_536 + 1
+    assert stream.closed
 
 
 def seed(store, *, receipt=True, account='fixture-account'):

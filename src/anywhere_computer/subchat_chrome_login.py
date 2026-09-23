@@ -1,6 +1,7 @@
 """Bootstrap personal Chat HTTP access from an owned, logged-in Chrome profile."""
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable, Mapping
 from http.cookiejar import Cookie
 
@@ -9,6 +10,7 @@ from playwright.async_api import BrowserContext
 
 from .subchat import SubchatAccessError
 from .subchat_browser.catalog import project_http_catalog
+from .subchat_browser.http_reader import bounded_httpx_body
 from .subchat_http_session import ObservedHTTPSession
 from .subchat_state import SubchatAccountMismatch
 
@@ -74,19 +76,17 @@ async def chrome_http_session(context: BrowserContext, client: httpx.AsyncClient
                     'referer': 'https://chatgpt.com/', 'user-agent': user_agent,
                     'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors',
                     'sec-fetch-dest': 'empty'}
-    response = await client.get(AUTH_URL,
-                                headers=auth_headers, timeout=15.0,
-                                follow_redirects=False)
-    try:
+    async with client.stream('GET', AUTH_URL, headers=auth_headers,
+                             timeout=15.0, follow_redirects=False) as response:
         if response.status_code in (401, 403):
             raise SubchatAccessError(response.status_code)
         if response.status_code != 200:
             raise ConnectionError('Chrome login session GET failed')
         if response.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/json':
             raise ValueError('Unexpected Chrome login response')
-        if len(response.content) > 131_072:
-            raise ValueError('Chrome login response is too large')
-        data = response.json()
+        body = await bounded_httpx_body(response, 131_072,
+                                        'Chrome login response is too large')
+        data = json.loads(body)
         if not isinstance(data, dict) or not isinstance(data.get('account'), dict):
             raise ValueError('Chrome login response has no account')
         account_id = data['account'].get('id')
@@ -104,20 +104,16 @@ async def chrome_http_session(context: BrowserContext, client: httpx.AsyncClient
             'user_agent': user_agent,
             'user_email': email,
         })
-    finally:
-        await response.aclose()
     if expected_account_id is not None and session.account_id != expected_account_id:
         raise SubchatAccountMismatch('Chrome login selected another Chat account')
-    catalog = await client.get(CATALOG_URL, headers=session.headers(),
-                               timeout=15.0, follow_redirects=False)
-    try:
+    async with client.stream('GET', CATALOG_URL, headers=session.headers(),
+                             timeout=15.0, follow_redirects=False) as catalog:
         if catalog.status_code in (401, 403):
             raise SubchatAccessError(catalog.status_code)
         if catalog.status_code != 200:
             raise ConnectionError('Chrome login catalog GET failed')
         if catalog.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/json':
             raise ValueError('Unexpected Chrome login catalog response')
-        project_http_catalog(catalog.content)
-    finally:
-        await catalog.aclose()
+        project_http_catalog(await bounded_httpx_body(
+            catalog, 1_048_576, 'Model catalog is too large'))
     return session

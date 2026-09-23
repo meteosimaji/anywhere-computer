@@ -126,6 +126,44 @@ async def test_chrome_login_stops_on_denied_get():
     assert paths == ['/api/auth/session']
 
 
+@pytest.mark.parametrize(('resource', 'limit', 'error'), [
+    ('auth', 131_072, 'Chrome login response is too large'),
+    ('catalog', 1_048_576, 'Model catalog is too large'),
+])
+async def test_chrome_login_stops_stream_at_response_limit(resource, limit, error):
+    class Stream(httpx.AsyncByteStream):
+        chunks = 0
+        closed = False
+
+        async def __aiter__(self):
+            for _ in range(limit // 65_536 + 10):
+                self.chunks += 1
+                yield b'x' * 65_536
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = Stream()
+    paths = []
+
+    def serve(request):
+        paths.append(request.url.path)
+        if request.url.path == '/api/auth/session' and resource == 'catalog':
+            return httpx.Response(200, json={
+                'accessToken': 'private-token', 'account': {'id': 'account'},
+                'user': {'email': 'owner@example.com'}})
+        return httpx.Response(200, stream=stream,
+                              headers={'content-type': 'application/json'})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+        with pytest.raises(ValueError, match=error):
+            await chrome_http_session(Context(), client)
+    assert paths == (['/api/auth/session'] if resource == 'auth' else
+                     ['/api/auth/session', '/backend-api/models'])
+    assert stream.chunks == limit // 65_536 + 1
+    assert stream.closed
+
+
 async def test_chrome_login_rejects_wrong_account_before_catalog_get():
     paths = []
 

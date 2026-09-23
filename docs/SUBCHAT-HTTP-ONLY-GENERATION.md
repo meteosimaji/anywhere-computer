@@ -71,11 +71,22 @@ No token, Cookie, request body, or answer content was retained by this check.
 That Sentinel prepare response marked Turnstile, proof of work, and the extra
 collector as required. These observations show a concrete previous-turn
 protection dependency, but do not establish a browser-free way to produce or
-renew its values or prove the cause of HTTPX's 403 response.
-Its sequential Sentinel and conversation preparation requests have returned 200
-while an independent HTTPX generation returned 403. This header correction does
-not establish that the 403 is resolved or that HTTP-only generation is supported
-by the provider.
+renew its values or prove the cause of a later HTTPX 403 response.
+
+An earlier live acceptance on 2026-09-23 used an explicit in-memory handoff
+from a successful Chrome generation, then closed Chrome. The controller used
+Playwright's APIRequestContext for Sentinel and conversation preparation and
+HTTPX for the generation POST. With the observed headers and request templates,
+it sent one new Chat and one queued follow-up. Both generation POSTs returned
+200, and independent HTTP history checks verified each saved input and final
+answer. This establishes acceptance for that particular session and request
+shape. It does not establish independent acquisition or renewal of the handoff.
+In a separate experiment, sequential HTTPX Sentinel and conversation
+preparation POSTs returned 200 while the HTTPX generation POST returned 403.
+Successful preparation responses and authenticated GETs do not guarantee
+generation acceptance. Several session and request conditions differed between
+the accepted handoff and rejected attempts, so the cause of the 403 is
+unisolated.
 
 An HTTP success or streaming response alone does not prove completion. The
 controller correlates the saved input, final answer, and terminal markers in

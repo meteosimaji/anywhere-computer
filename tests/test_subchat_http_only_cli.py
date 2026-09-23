@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import asynccontextmanager
 from io import StringIO
 from pathlib import Path
 
@@ -244,17 +245,21 @@ async def test_http_only_real_httpx_request_uses_no_browser(tmp_path, monkeypatc
             trust_env=False, follow_redirects=False,
             transport=httpx.AsyncHTTPTransport(retries=0))
         try:
-            real_get = client.get
+            real_stream = client.stream
 
-            async def local_get(url, **kwargs):
+            @asynccontextmanager
+            async def local_stream(method, url, **kwargs):
                 # Test-only routing. Production exposes no host/proxy override.
+                assert method == 'GET'
                 assert url in {CATALOG_URL, 'https://chatgpt.com/backend-api/conversations/'
                                + submission.conversation_id}
                 assert kwargs['follow_redirects'] is False
-                return await real_get(f'http://127.0.0.1:{server.server_port}' +
-                                      url.removeprefix('https://chatgpt.com'), **kwargs)
+                async with real_stream(
+                        method, f'http://127.0.0.1:{server.server_port}' +
+                        url.removeprefix('https://chatgpt.com'), **kwargs) as response:
+                    yield response
 
-            monkeypatch.setattr(client, 'get', local_get)
+            monkeypatch.setattr(client, 'stream', local_stream)
 
             async def factory():
                 return client

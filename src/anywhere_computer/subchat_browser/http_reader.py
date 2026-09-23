@@ -29,6 +29,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+async def bounded_httpx_body(response: HTTPXResponse, limit: int, error: str) -> bytes:
+    """Read decoded HTTPX bytes without retaining a response above its schema limit."""
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in response.aiter_bytes(chunk_size=65_536):
+        size += len(chunk)
+        if size > limit:
+            raise ValueError(error)
+        chunks.append(chunk)
+    return b''.join(chunks)
+
+
 class ChatHTTPReader:
     """Keep observed auth/account/language in memory; never export credentials.
 
@@ -138,39 +150,43 @@ class ChatHTTPReader:
             # Browser-free readers accept an HTTPX factory; the browser mode above
             # retains its Playwright APIRequestContext contract.
             httpx_request = cast('AsyncClient', request)
-            response_httpx: HTTPXResponse = await httpx_request.get(
-                url, headers=self._headers, timeout=15.0, follow_redirects=False)
-            status = response_httpx.status_code
-            content_type = response_httpx.headers.get('content-type', '')
-        else:
-            playwright_request = cast('APIRequestContext', request)
-            response_browser: APIResponse = await playwright_request.get(
-                url, headers=self._headers, timeout=15_000, max_redirects=0, max_retries=0)
-            status = response_browser.status
-            content_type = response_browser.headers.get('content-type', '')
+            async with httpx_request.stream(
+                    'GET', url, headers=self._headers, timeout=15.0,
+                    follow_redirects=False) as response_httpx:
+                status = response_httpx.status_code
+                content_type = response_httpx.headers.get('content-type', '')
+                self._check_read_response(url, status, content_type)
+                catalog = url == self._catalog_url
+                return await bounded_httpx_body(
+                    response_httpx, 1_048_576 if catalog else 4_194_304,
+                    'Model catalog is too large' if catalog else
+                    'Conversation response is too large')
+        playwright_request = cast('APIRequestContext', request)
+        response_browser: APIResponse = await playwright_request.get(
+            url, headers=self._headers, timeout=15_000, max_redirects=0, max_retries=0)
         try:
-            if status in (401, 403):
-                if status == 401:
-                    self._headers = {}
-                    self._access_status = 401
-                else:
-                    # A forbidden resource does not invalidate unrelated reads.
-                    # Keep this URL rejected without retries or login fallback.
-                    self._denied_urls.add(url)
-                raise SubchatAccessError(status)
-            if status != 200:
-                raise ConnectionError('Chat read request did not succeed')
-            if content_type.split(';', 1)[0].strip() != (
-                    'application/json'):
-                raise ValueError('Unexpected Chat response format')
-            if self._browser_free:
-                return response_httpx.content
+            self._check_read_response(url, response_browser.status,
+                                      response_browser.headers.get('content-type', ''))
             return await response_browser.body()
         finally:
-            if self._browser_free:
-                await response_httpx.aclose()
+            await response_browser.dispose()
+
+    def _check_read_response(self, url: str | None, status: int,
+                             content_type: str) -> None:
+        if status in (401, 403):
+            if status == 401:
+                self._headers = {}
+                self._access_status = 401
             else:
-                await response_browser.dispose()
+                # A forbidden resource does not invalidate unrelated reads.
+                # Keep this URL rejected without retries or login fallback.
+                if url is not None:
+                    self._denied_urls.add(url)
+            raise SubchatAccessError(status)
+        if status != 200:
+            raise ConnectionError('Chat read request did not succeed')
+        if content_type.split(';', 1)[0].strip() != 'application/json':
+            raise ValueError('Unexpected Chat response format')
 
     def check_generation_account(self, account: str) -> None:
         """A bound reader must be able to recover a request before it is forwarded."""
@@ -281,13 +297,10 @@ class ChatHTTPReader:
         history_url = self._origin + '/backend-api/conversations/' + str(
             submission.conversation_id)
         if self._browser_free:
-            response_httpx = await httpx_request.get(
-                history_url, headers=self._headers, timeout=15.0,
-                follow_redirects=False)
-            try:
+            async with httpx_request.stream(
+                    'GET', history_url, headers=self._headers, timeout=15.0,
+                    follow_redirects=False) as response_httpx:
                 return response_httpx.status_code == 404
-            finally:
-                await response_httpx.aclose()
         response_browser = await playwright_request.get(
             history_url, headers=self._headers, timeout=15_000,
             max_redirects=0, max_retries=0)

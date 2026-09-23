@@ -865,9 +865,13 @@ async def test_cancelled_preparation_keeps_original_operation_unknown(tmp_path, 
         try:
             @asynccontextmanager
             async def cancelled_stream(self, method, url, **kwargs):
-                raise asyncio.CancelledError
-                yield
+                if method == 'POST' and url.endswith(
+                        '/backend-api/sentinel/chat-requirements/prepare'):
+                    raise asyncio.CancelledError
+                async with original_stream(self, method, url, **kwargs) as response:
+                    yield response
 
+            original_stream = LocalRequests.stream
             monkeypatch.setattr(LocalRequests, 'stream', cancelled_stream)
             operation = '9' * 32
             with pytest.raises(asyncio.CancelledError):

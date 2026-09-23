@@ -8,6 +8,7 @@ from pathlib import Path
 from playwright.async_api import Error, async_playwright
 from probe_subchat_catalog import minimize_window
 
+from anywhere_computer.subchat_browser import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
 from anywhere_computer.subchat_browser.backend import COPY as COPY_SOURCE
 
 SOURCE = Path(__file__).with_name('subchat_submission.js').read_text(encoding="utf-8")
@@ -23,7 +24,8 @@ async def probe(profile: Path, url: str, prompt: str, previous_ids: list[str],
         raise ValueError('A persisted ordinary Chat URL is required')
     async with async_playwright() as driver:
         context = await driver.chromium.launch_persistent_context(
-            str(profile), channel='chrome', headless=False, args=['--start-minimized'])
+            str(profile), channel='chrome', headless=False, args=['--start-minimized'],
+            ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS))
         try:
             page = context.pages[0] if context.pages else await context.new_page()
             page.set_default_timeout(10_000)
