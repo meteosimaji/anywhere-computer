@@ -34,6 +34,7 @@ from .subchat_state import (
 if TYPE_CHECKING:
     from playwright.async_api import APIRequestContext, BrowserContext, Playwright
 
+    from .subchat_http_generation import ObservedHTTPGeneration
     from .subchat_http_session import ObservedHTTPSession
 
 
@@ -144,11 +145,14 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
 
 async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read: bool = False,
               minimized: bool = False, http_only: bool = False,
-              http_session: ObservedHTTPSession | None = None) -> None:
+              http_session: ObservedHTTPSession | None = None,
+              http_generation: ObservedHTTPGeneration | None = None) -> None:
     if http_only and (profile is not None or http_read or minimized):
         raise ValueError('HTTP-only mode cannot use browser options')
     if not http_only and (profile is None or http_session is not None):
         raise ValueError('Browser mode requires a profile and cannot import an HTTP session')
+    if http_generation is not None and (not http_only or http_session is None):
+        raise ValueError('HTTP generation requires an explicit browser-free session')
 
     ledger = Ledger(state)
     try:
@@ -211,7 +215,9 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
             if http_only:
                 from .subchat_http import HTTPOnlySubchatBackend
 
-                backend = HTTPOnlySubchatBackend(open_http, http_session)
+                backend = HTTPOnlySubchatBackend(
+                    open_http, http_session, generation=http_generation,
+                    store=store if http_generation is not None else None)
             else:
                 from .subchat_browser.backend import BrowserSubchatBackend
 
@@ -241,6 +247,16 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'expired authorization requires operator action, not a retry loop. '
                         'A pending observation is not proof of Thinking. Interruption is not '
                         'a completed answer. Queued work is never sent by this adapter.')
+                    if http_generation is not None:
+                        instructions = (
+                            'Browser-free ordinary Chat with an explicit in-memory generation '
+                            'handoff. No login, credential refresh or Chrome fallback. Send '
+                            'requires an exact HTTP catalog selection. Queued follow-ups use '
+                            'the saved final assistant parent and check current_node before '
+                            'generation. A pending or unknown result is never resent. HTTP '
+                            'status and SSE are not final-answer proof; recover the original '
+                            'operation through HTTP history. Handoff headers may expire and '
+                            'must be supplied again by the operator in a new process.')
                 server = session(service, observe_catalog=backend.catalog,
                                  observe_http_catalog=backend.http_catalog,
                                  instructions=instructions, serialize_recovery=not http_only)
@@ -266,16 +282,21 @@ def main() -> None:
     parser.add_argument('--minimized', action='store_true',
                         help='Verify the dedicated Chrome window is minimized before page work')
     parser.add_argument('--http-only', action='store_true',
-                        help='Browser-free recovery only; never send or fall back to Chrome')
+                        help='Browser-free HTTP; sends require an explicit generation handoff')
     parser.add_argument('--http-session-stdin', action='store_true',
                         help='Consume one bounded observed-session JSON line before the protocol; '
                              'HTTP-only mode only. No login, cookies or protection tokens.')
+    parser.add_argument('--http-generation-stdin', action='store_true',
+                        help='Consume a second in-memory line of observed generation headers '
+                             'and body templates. Requires --http-only --http-session-stdin.')
     args = parser.parse_args()
     if args.http_only:
         if args.browser_profile is not None or args.http_read or args.minimized:
             parser.error('--http-only cannot be combined with browser options')
-    elif args.browser_profile is None or args.http_session_stdin:
+    elif args.browser_profile is None or args.http_session_stdin or args.http_generation_stdin:
         parser.error('Browser mode requires --browser-profile; session handoff needs --http-only')
+    if args.http_generation_stdin and not args.http_session_stdin:
+        parser.error('--http-generation-stdin requires --http-session-stdin')
     observed_session = None
     if args.http_session_stdin:
         from .subchat_http_session import read_http_session
@@ -286,7 +307,21 @@ def main() -> None:
             print(json.dumps({'state': 'invalid_http_session', 'automatic_retry': False}),
                   file=sys.stderr)
             raise SystemExit(2) from None
+    observed_generation = None
+    if args.http_generation_stdin:
+        from .subchat_http_generation import read_http_generation_handoff
+
+        assert observed_session is not None
+        try:
+            observed_generation = read_http_generation_handoff(
+                sys.stdin.buffer,
+                authorization=observed_session.authorization.get_secret_value(),
+                account_id=observed_session.account_id)
+        except ValueError:
+            print(json.dumps({'state': 'invalid_http_generation_handoff',
+                              'automatic_retry': False}), file=sys.stderr)
+            raise SystemExit(2) from None
     asyncio.run(run(args.browser_profile.resolve() if args.browser_profile is not None else None,
                     args.state_dir.resolve(), mcp=args.mcp, http_read=args.http_read,
                     minimized=args.minimized, http_only=args.http_only,
-                    http_session=observed_session))
+                    http_session=observed_session, http_generation=observed_generation))

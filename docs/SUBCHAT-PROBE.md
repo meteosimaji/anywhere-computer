@@ -11,6 +11,7 @@ Historical `AC_CHAT_WORKER_...` test markers below are retained as evidence.
 For current use, start with the [CLI](#packaged-local-json-lines-controller),
 [MCP entry](#stdio-mcp-entry), [HTTP answer recovery](#experimental-saved-http-answer-recovery),
 [browser-free recovery mode](SUBCHAT-HTTP-RESEARCH.md),
+[opt-in HTTP-only generation handoff](SUBCHAT-HTTP-ONLY-GENERATION.md),
 [explicit resources](#explicit-send-resources-experimental), and
 [capability boundaries](#coverage-boundary-for-the-next-http-increments).
 The chronological investigations below preserve earlier failures and superseded
