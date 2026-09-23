@@ -13,6 +13,21 @@ from anywhere_computer.sessions import Sessions
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows ConPTY")
 
 
+async def _until(sessions: Sessions, identity: str, marker: str) -> dict:
+    cursor = 0
+    seen = ""
+    async with asyncio.timeout(10):
+        while marker not in seen:
+            page = await sessions.wait_output(SessionOutput(
+                session_id=identity, cursor=cursor, wait_ms=250,
+            ))
+            seen += str(page["text"])
+            cursor = int(page["next_cursor"])
+            if page["output_eof"]:
+                raise AssertionError(f"ConPTY closed before {marker!r}: {seen!r}")
+    return {"text": seen, "next_cursor": cursor}
+
+
 async def test_conpty_console_unicode_resize_and_cursor(tmp_path):
     script = tmp_path / "console.py"
     script.write_text('''import ctypes, msvcrt, os, shutil, sys
@@ -34,7 +49,7 @@ for line in sys.stdin:
     ))
     identity = started["session_id"]
     try:
-        ready = await sessions.wait_output(SessionOutput(session_id=identity, wait_ms=10000))
+        ready = await _until(sessions, identity, "CONSOLE=True")
         assert "CONSOLE=True" in ready["text"]
         echo = await sessions.send(SessionInput(
             session_id=identity, text="日本語🙂\r", wait_ms=10000,
@@ -73,7 +88,7 @@ except KeyboardInterrupt:
     ))
     identity = started["session_id"]
     try:
-        ready = await sessions.wait_output(SessionOutput(session_id=identity, wait_ms=10000))
+        ready = await _until(sessions, identity, "READY")
         assert "READY" in ready["text"]
         interrupted = await sessions.send(SessionInput(
             session_id=identity, text="\x03", wait_ms=10000,
