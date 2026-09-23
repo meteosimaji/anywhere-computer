@@ -8,7 +8,7 @@
         "--python",
         "3.12",
         "--from",
-        "./bundled/anywhere_computer-0.2.0a6-py3-none-any.whl",
+        "./bundled/anywhere_computer-0.2.0a7-py3-none-any.whl",
         "--with-requirements",
         "./bundled/dependencies.txt",
         "anywhere",
@@ -24,7 +24,7 @@
         "--python",
         "3.12",
         "--from",
-        "./bundled/anywhere_computer-0.2.0a6-py3-none-any.whl",
+        "./bundled/anywhere_computer-0.2.0a7-py3-none-any.whl",
         "--with-requirements",
         "./bundled/dependencies.txt",
         "anywhere-subchat-plugin"
