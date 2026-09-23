@@ -1282,9 +1282,11 @@ class Engine:
                     "permission request or recording was made."
                 )
         blocker_details: list[JsonValue] = []
-        # Owner-scoped resources are disclosed only to their authenticated owner.
+        # Local status can explain every update blocker; remote peers see only
+        # resources owned by their authenticated connection.
         for session_id, plugin_entry in self.plugin_sessions.entries.items():
-            if plugin_entry.owner == owner and not plugin_entry.cleanup_confirmed:
+            if ((owner is None or plugin_entry.owner == owner)
+                    and not plugin_entry.cleanup_confirmed):
                 busy = plugin_entry.lock.locked()
                 blocker_details.append({
                     "resource": "plugin_session", "id": session_id,
@@ -1294,14 +1296,18 @@ class Engine:
                     "stop_available": not busy,
                 })
         for session_id, direct_entry in self.direct_mcp_sessions.entries.items():
-            if direct_entry.owner == owner and not direct_entry.context.cleanup_confirmed:
+            if ((owner is None or direct_entry.owner == owner)
+                    and not direct_entry.context.cleanup_confirmed):
                 busy = direct_entry.lock.locked()
                 blocker_details.append({
                     "resource": "direct_mcp_session", "id": session_id,
                     "state": direct_entry.state, "stop_tool": "mcp_session_close",
                     "stop_available": not busy,
                 })
-        for watch in self.direct_mcp_sessions.watch_history(owner=owner):
+        watch_owners = ({entry.owner for entry in self.direct_mcp_sessions.entries.values()}
+                        if owner is None else {owner})
+        for watch in (watch for watch_owner in watch_owners
+                      for watch in self.direct_mcp_sessions.watch_history(owner=watch_owner)):
             if watch.get("state") != "watching":
                 continue
             watch_session_raw = watch.get("session_id")
@@ -1312,7 +1318,7 @@ class Engine:
             watch_operation_id = watch_operation_raw
             watch_direct_entry = self.direct_mcp_sessions.entries.get(watch_session_id)
             stop_available = (watch_direct_entry is not None
-                              and watch_direct_entry.owner == owner
+                              and (owner is None or watch_direct_entry.owner == owner)
                               and watch_direct_entry.state == "open"
                               and not watch_direct_entry.lock.locked())
             blocker_details.append({
@@ -1326,7 +1332,7 @@ class Engine:
                 "inspect_tool": "mcp_watch_list", "stop_available": stop_available,
             })
         for session_id, gui_entry in self.native_gui.entries.items():
-            if gui_entry.owner == owner:
+            if owner is None or gui_entry.owner == owner:
                 busy = self.native_gui.lock.locked()
                 blocker_details.append({
                     "resource": "native_gui_session", "id": session_id,
@@ -1335,7 +1341,7 @@ class Engine:
                     "stop_tool": "gui_native_close", "stop_available": not busy,
                 })
         for session_id, browser_entry in self.browser.entries.items():
-            if browser_entry.owner == owner:
+            if owner is None or browser_entry.owner == owner:
                 blocker_details.append({
                     "resource": "browser_session", "id": session_id,
                     "state": ("running" if browser_entry.browser.is_connected() else "ended"),
@@ -1359,7 +1365,7 @@ class Engine:
                 })
         for operation_id, task in self.inflight.items():
             if (not task.done() and task.get_name() not in {"computer_status", "operations_get"}
-                    and self.inflight_owners.get(operation_id) == owner):
+                    and (owner is None or self.inflight_owners.get(operation_id) == owner)):
                 blocker_details.append({
                     "resource": "operation", "id": operation_id,
                     "state": "running", "inspect_tool": "operations_get",
