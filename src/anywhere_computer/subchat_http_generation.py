@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, BinaryIO
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import JsonValue, TypeAdapter
 
 from .subchat import SubchatAccessError, SubchatStaleTarget
@@ -23,7 +24,7 @@ from .subchat_sse import SSEDecoder
 from .subchat_state import SubchatAccountMismatch, SubchatSubmission, SubchatSubmissions
 
 if TYPE_CHECKING:
-    from playwright.async_api import APIRequestContext, APIResponse
+    from httpx import Response
 
 
 _HEADERS = frozenset({
@@ -188,27 +189,28 @@ def _url(origin: str, path: str) -> str:
     return origin + path
 
 
-async def _json_response(response: APIResponse) -> dict[str, JsonValue]:
-    if response.status in (401, 403):
-        raise SubchatAccessError(response.status)
-    if response.status != 200:
+async def _json_response(response: Response) -> dict[str, JsonValue]:
+    if response.status_code in (401, 403):
+        raise SubchatAccessError(response.status_code)
+    if response.status_code != 200:
         raise ConnectionError('Chat preparation was not accepted')
     if response.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/json':
         raise ValueError('Unexpected Chat preparation response')
-    raw = await response.body()
+    raw = response.content
     if len(raw) > 1_048_576:
         raise ValueError('Chat preparation response is too large')
     return TypeAdapter(dict[str, JsonValue]).validate_json(raw)
 
 
-async def _post(client: APIRequestContext, url: str, *, body: bytes,
-                headers: dict[str, str]) -> APIResponse:
-    return await client.post(url, data=body, headers=headers,
-                             timeout=120_000, max_redirects=0, max_retries=0)
+async def _post(client: httpx.AsyncClient, url: str, *, body: bytes,
+                headers: dict[str, str]) -> Response:
+    return await client.post(url, content=body, headers=headers,
+                             timeout=httpx.Timeout(120.0, connect=10.0),
+                             follow_redirects=False)
 
 
 async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmission, *,
-                              handoff: ObservedHTTPGeneration, client: APIRequestContext,
+                              handoff: ObservedHTTPGeneration, client: httpx.AsyncClient,
                               store: SubchatSubmissions, owner: str | None,
                               origin: str = 'https://chatgpt.com') -> None:
     """Prepare once, inspect branch, claim once, then POST once.
@@ -226,7 +228,7 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
     try:
         observed = await _json_response(sentinel)
     finally:
-        await sentinel.dispose()
+        await sentinel.aclose()
     token = observed.get('prepare_token')
     if not isinstance(token, str) or not token or len(token) > 16_384:
         raise ValueError('Sentinel preparation token is unavailable')
@@ -237,17 +239,17 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
     try:
         await _json_response(prepared)
     finally:
-        await prepared.dispose()
+        await prepared.aclose()
     if plan.conversation_id is not None:
         if _CHAT.fullmatch(plan.conversation_id) is None:
             raise ValueError('Invalid follow-up conversation identity')
         branch = await client.get(_url(origin,
             '/backend-api/conversation/' + plan.conversation_id), headers=headers,
-            timeout=15_000, max_redirects=0, max_retries=0)
+            timeout=15.0, follow_redirects=False)
         try:
             current = await _json_response(branch)
         finally:
-            await branch.dispose()
+            await branch.aclose()
         if current.get('current_node') != plan.predecessor_id:
             raise SubchatStaleTarget('Provider conversation branch changed before dispatch')
     if not store.claim_http_dispatch(
@@ -256,47 +258,44 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
             model_slug=plan.model_slug, thinking_effort=plan.thinking_effort,
             conversation_id=plan.conversation_id, predecessor_id=plan.predecessor_id):
         raise ValueError('HTTP generation was already claimed; recover without resending')
-    # HTTPX exposes the candidate before the response ends. The operator's
-    # observed generation headers are forwarded unchanged, including the copied
-    # prepare token. HTTPX does not acquire or fabricate protection values.
-    import httpx
-
+    # The same HTTPX client/transport used for preparation and branch reads streams
+    # generation. Observed request headers are forwarded unchanged; HTTPX does not
+    # acquire or fabricate protection values.
     decoder = SSEDecoder()
     candidate = plan.conversation_id
-    async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=0),
-                                 follow_redirects=False, trust_env=False,
-                                 timeout=httpx.Timeout(120.0, connect=10.0)) as sender:
-        async with sender.stream('POST', _url(origin, _PATHS['generation']),
-                                 content=body, headers=handoff.headers) as response:
-            if response.status_code in (401, 403):
-                store.observe_rejection(plan.operation_id, plan.user_message_id,
-                                        response.status_code, owner=owner,
-                                        provider_account_id=plan.account_id)
-                raise SubchatAccessError(response.status_code)
-            if response.status_code != 200:
-                raise ConnectionError('Generation HTTP status was not successful')
-            if response.headers.get('content-type', '').split(';', 1)[0].strip() != (
-                    'text/event-stream'):
-                raise ValueError('Unexpected generation response format')
-            async for chunk in response.aiter_bytes():
-                for event in decoder.feed(chunk):
-                    if event.data == '[DONE]':
-                        continue
-                    try:
-                        data = json.loads(event.data)
-                    except json.JSONDecodeError:
-                        continue  # Candidate observation does not interpret other SSE data.
-                    if not isinstance(data, dict):
-                        continue
-                    observed_id = data.get('conversation_id')
-                    if observed_id is None:
-                        continue
-                    if not isinstance(observed_id, str) or _CHAT.fullmatch(observed_id) is None:
-                        raise ValueError('Invalid conversation candidate')
-                    if candidate is not None and candidate != observed_id:
-                        raise ValueError('Conflicting conversation candidates')
-                    if candidate is None:
-                        store.observe_conversation(plan.operation_id, plan.user_message_id,
-                            observed_id, owner=owner, provider_account_id=plan.account_id)
-                        candidate = observed_id
-            decoder.finish()
+    async with client.stream('POST', _url(origin, _PATHS['generation']),
+                             content=body, headers=handoff.headers,
+                             timeout=httpx.Timeout(120.0, connect=10.0),
+                             follow_redirects=False) as response:
+        if response.status_code in (401, 403):
+            store.observe_rejection(plan.operation_id, plan.user_message_id,
+                                    response.status_code, owner=owner,
+                                    provider_account_id=plan.account_id)
+            raise SubchatAccessError(response.status_code)
+        if response.status_code != 200:
+            raise ConnectionError('Generation HTTP status was not successful')
+        if response.headers.get('content-type', '').split(';', 1)[0].strip() != (
+                'text/event-stream'):
+            raise ValueError('Unexpected generation response format')
+        async for chunk in response.aiter_bytes():
+            for event in decoder.feed(chunk):
+                if event.data == '[DONE]':
+                    continue
+                try:
+                    data = json.loads(event.data)
+                except json.JSONDecodeError:
+                    continue  # Candidate observation does not interpret other SSE data.
+                if not isinstance(data, dict):
+                    continue
+                observed_id = data.get('conversation_id')
+                if observed_id is None:
+                    continue
+                if not isinstance(observed_id, str) or _CHAT.fullmatch(observed_id) is None:
+                    raise ValueError('Invalid conversation candidate')
+                if candidate is not None and candidate != observed_id:
+                    raise ValueError('Conflicting conversation candidates')
+                if candidate is None:
+                    store.observe_conversation(plan.operation_id, plan.user_message_id,
+                        observed_id, owner=owner, provider_account_id=plan.account_id)
+                    candidate = observed_id
+        decoder.finish()

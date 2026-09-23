@@ -22,19 +22,20 @@ from .subchat_http_session import ObservedHTTPSession
 from .subchat_state import SubchatHTTPSelection, SubchatSubmission, SubchatSubmissions
 
 if TYPE_CHECKING:
-    from playwright.async_api import APIRequestContext
+    from httpx import AsyncClient
 
 CONVERSATION_ID = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
 
 
 class HTTPOnlySubchatBackend:
-    """No BrowserContext, DOM adapter, generation method or credential discovery.
+    """No BrowserContext, DOM adapter, credential discovery or browser fallback.
 
-    Reuses the existing GET transport, projections and durable operation store.
-    A supplied read session is not an independent authentication implementation.
+    Reuses one HTTPX transport for GET reads and, when explicitly configured, the
+    request-specific generation handoff and durable operation store. A supplied read
+    session is not an independent authentication implementation.
     """
 
-    def __init__(self, request_factory: Callable[[], Awaitable[APIRequestContext]],
+    def __init__(self, request_factory: Callable[[], Awaitable[AsyncClient]],
                  session: ObservedHTTPSession | None = None, *,
                  generation: ObservedHTTPGeneration | None = None,
                  store: SubchatSubmissions | None = None,
