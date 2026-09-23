@@ -97,7 +97,7 @@ async def test_engine_router_setup_catalog_and_workspace_metadata(tmp_path):
     router = DeviceRouter(tmp_path / "registry", catalog, engine.execute)
     setup = SetupConnector(tmp_path / "registry", router.catalog, router.execute)
     try:
-        assert len(engine.catalog()) == 70
+        assert len(engine.catalog()) == 71
         session = MCPSession(setup.catalog, setup.execute)
         await session.handle({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -112,7 +112,7 @@ async def test_engine_router_setup_catalog_and_workspace_metadata(tmp_path):
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
         })
         tools = result["result"]["tools"]
-        assert len(tools) == 76
+        assert len(tools) == 77
         assert {tool["name"] for tool in tools} >= set({
             "connection_setup_status", "connection_setup_plan", "connection_setup_confirm",
         })
@@ -137,7 +137,7 @@ async def test_engine_router_setup_catalog_and_workspace_metadata(tmp_path):
 async def test_bare_engine_catalog_has_no_setup_tools(tmp_path):
     engine = Engine(tmp_path)
     try:
-        assert len(engine.catalog()) == 70
+        assert len(engine.catalog()) == 71
         assert not {tool["name"] for tool in engine.catalog()} & {
             "connection_setup_status", "connection_setup_plan", "connection_setup_confirm",
         }
