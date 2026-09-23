@@ -86,14 +86,17 @@ async def download_verified_sandbox_file(
                  'download_intent': 'true', 'message_id': saved.answer_message_id,
                  'sandbox_path': path}))
     metadata_bytes = bytearray()
-    async with client.stream('GET', route, headers=session.headers(), timeout=15.0,
+    headers = {**session.headers(), 'accept-encoding': 'identity'}
+    async with client.stream('GET', route, headers=headers, timeout=15.0,
                              follow_redirects=False) as response:
         if response.status_code in (401, 403):
             raise SubchatAccessError(response.status_code)
         content_type = response.headers.get('content-type', '').split(';', 1)[0].strip()
         if response.status_code != 200 or content_type != 'application/json':
             raise ConnectionError('Chat file metadata was not accepted')
-        async for chunk in response.aiter_bytes():
+        if response.headers.get('content-encoding', 'identity').lower() != 'identity':
+            raise ValueError('Compressed Chat file metadata is unsupported')
+        async for chunk in response.aiter_raw():
             if len(metadata_bytes) + len(chunk) > 65_536:
                 raise ValueError('Chat file metadata is too large')
             metadata_bytes.extend(chunk)
@@ -106,7 +109,7 @@ async def download_verified_sandbox_file(
         raise ValueError('Invalid Chat file metadata')
     content_url = _content_url(metadata.download_url)
     content = bytearray()
-    async with client.stream('GET', content_url, headers=session.headers(),
+    async with client.stream('GET', content_url, headers=headers,
                              timeout=httpx.Timeout(120.0, connect=10.0),
                              follow_redirects=False) as file_response:
         if file_response.status_code in (401, 403):
@@ -116,8 +119,10 @@ async def download_verified_sandbox_file(
         received_type = file_response.headers.get('content-type', '').split(';', 1)[0].strip()
         if received_type in {'text/html', 'application/json'}:
             raise ValueError('Chat file response has an unexpected content type')
+        if file_response.headers.get('content-encoding', 'identity').lower() != 'identity':
+            raise ValueError('Compressed Chat file response is unsupported')
         for_chunk_limit = max_bytes + 1
-        async for chunk in file_response.aiter_bytes():
+        async for chunk in file_response.aiter_raw():
             if len(content) + len(chunk) >= for_chunk_limit:
                 raise SandboxFileTooLarge('Chat file exceeds the size limit')
             content.extend(chunk)

@@ -3,6 +3,11 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a8 / Plugin 0.2.0-alpha.8 — unpublished candidate (2026-09-23)
+
+- Reject compressed sandbox download responses and inspect raw response chunks,
+  preserving the byte limit before any HTTP content decoding could expand them.
+
 ## 0.2.0a7 / Plugin 0.2.0-alpha.7 — unpublished candidate (2026-09-23)
 
 - Bound sandbox download metadata while receiving it, so an oversized response

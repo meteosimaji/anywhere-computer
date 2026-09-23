@@ -1,5 +1,7 @@
 """A sandbox download is bound to a saved, history-verified final answer."""
 import base64
+import gzip
+import json
 
 import httpx
 import pytest
@@ -14,6 +16,24 @@ from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatSubmi
 
 LINK = 'sandbox:/mnt/data/report.csv'
 CONTENT_URL = 'https://chatgpt.com/backend-api/estuary/content?file=fixture'
+
+
+class FixtureStream(httpx.AsyncByteStream):
+    def __init__(self, content: bytes):
+        self.content = content
+
+    async def __aiter__(self):
+        yield self.content
+
+
+def streamed_json(body):
+    return httpx.Response(200, stream=FixtureStream(json.dumps(body).encode()),
+                          headers={'content-type': 'application/json'})
+
+
+def streamed_content(content: bytes, *, content_type: str | None = None):
+    headers = {'content-type': content_type} if content_type else {}
+    return httpx.Response(200, stream=FixtureStream(content), headers=headers)
 
 
 def completed(store: SubchatSubmissions, *, account: str = 'fixture-account'):
@@ -55,12 +75,11 @@ async def _case(tmp_path, *, bad_url=None, size=3, link=LINK,
                 assert request.url.params['message_id'] == 'answer'
                 assert request.url.params['sandbox_path'] == '/mnt/data/report.csv'
                 assert request.url.params['download_intent'] == 'true'
-                return httpx.Response(200, json={
+                return streamed_json({
                     'download_url': bad_url or CONTENT_URL, 'file_name': 'report.csv',
                     'file_size_bytes': size, 'mime_type': 'text/csv', 'status': 'ready'})
             assert str(request.url) == CONTENT_URL
-            return httpx.Response(200, content=b'abc',
-                                  headers={'content-type': content_type} if content_type else {})
+            return streamed_content(b'abc', content_type=content_type)
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(serve),
                                      follow_redirects=False) as client:
@@ -113,10 +132,10 @@ async def test_streamed_content_exceeding_declared_size_is_rejected(tmp_path):
             if request.url.path.startswith('/backend-api/conversations/'):
                 return httpx.Response(200, json=payload)
             if request.url.path.endswith('/interpreter/download'):
-                return httpx.Response(200, json={
+                return streamed_json({
                     'download_url': CONTENT_URL, 'file_name': 'report.csv',
                     'file_size_bytes': 2, 'mime_type': 'text/csv', 'status': 'ready'})
-            return httpx.Response(200, content=b'abc')
+            return streamed_content(b'abc')
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
             async def factory():
@@ -167,6 +186,43 @@ async def test_oversized_metadata_stops_reading_before_file_request(tmp_path):
         ledger.close()
 
 
+@pytest.mark.parametrize('compressed_stage', ['metadata', 'file'])
+async def test_compressed_http_response_is_rejected_without_decoding(tmp_path,
+                                                                    compressed_stage):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, payload = completed(store)
+        requests = []
+        compressed = gzip.compress(b'x' * (8 * 1024 * 1024))
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            assert request.headers['accept-encoding'] == 'identity'
+            if request.url.path.endswith('/interpreter/download'):
+                if compressed_stage == 'metadata':
+                    return httpx.Response(200, content=compressed, headers={
+                        'content-type': 'application/json', 'content-encoding': 'gzip'})
+                return streamed_json({
+                    'download_url': CONTENT_URL, 'file_name': 'report.csv',
+                    'file_size_bytes': 3, 'mime_type': 'text/csv', 'status': 'ready'})
+            return httpx.Response(200, content=compressed, headers={
+                'content-type': 'text/csv', 'content-encoding': 'gzip'})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            with pytest.raises(ValueError, match='Compressed Chat file'):
+                await backend.download_sandbox_file(submission.operation_id, LINK)
+        assert len(requests) == (2 if compressed_stage == 'metadata' else 3)
+    finally:
+        ledger.close()
+
+
 async def test_read_only_mcp_exposes_one_verified_file_without_local_storage(tmp_path):
     ledger = Ledger(tmp_path)
     try:
@@ -179,11 +235,11 @@ async def test_read_only_mcp_exposes_one_verified_file_without_local_storage(tmp
             if request.url.path.startswith('/backend-api/conversations/'):
                 return httpx.Response(200, json=payload)
             if request.url.path.endswith('/interpreter/download'):
-                return httpx.Response(200, json={
+                return streamed_json({
                     'download_url': CONTENT_URL, 'file_name': 'report.csv',
                     'file_size_bytes': 3, 'mime_type': 'text/csv', 'status': 'ready'})
             assert str(request.url) == CONTENT_URL
-            return httpx.Response(200, content=b'abc')
+            return streamed_content(b'abc')
 
         async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
             async def factory():
