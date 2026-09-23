@@ -14,7 +14,10 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.request
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from anywhere_computer.cloudflare_tunnel import cloudflared_executable
@@ -33,6 +36,24 @@ DIGESTS = {
         "b3279f2186a1c3c438ad5865e802bbbec26090c5d3fdb4ac1113f1143a94837a"
     ),
 }
+
+
+@contextmanager
+def temporary_verification_directory() -> Iterator[Path]:
+    directory = Path(tempfile.mkdtemp(prefix="anywhere-pipe-verification-"))
+    try:
+        yield directory
+    finally:
+        # Windows may briefly keep a terminated executable mapped. Retry only
+        # that specific sharing violation, and still fail if cleanup never works.
+        for attempt in range(20):
+            try:
+                shutil.rmtree(directory)
+                break
+            except PermissionError as error:
+                if getattr(error, "winerror", None) != 32 or attempt == 19:
+                    raise
+                time.sleep(0.1)
 
 
 def download_binary(directory):
@@ -72,8 +93,7 @@ def download_binary(directory):
 
 
 def verify(download_for_test):
-    with tempfile.TemporaryDirectory(prefix="anywhere-pipe-verification-") as raw:
-        directory = Path(raw)
+    with temporary_verification_directory() as directory:
         if download_for_test:
             executable, asset, digest = download_binary(directory)
         else:
