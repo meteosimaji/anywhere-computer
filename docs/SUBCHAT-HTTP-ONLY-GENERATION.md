@@ -1,5 +1,23 @@
 # Explicit HTTP-only ordinary Chat generation
 
+## Provider terms and session limits
+
+OpenAI's [Terms of Use](https://openai.com/policies/terms-of-use/)
+restrict reverse engineering of the service, automatic or programmatic extraction
+of data or Output, and circumvention of rate limits or protective measures. This
+experimental handoff uses ordinary Chat's private endpoints; a successful HTTP
+response does not establish that this is a supported integration. Do not treat
+copied browser headers or a challenge response as a supported way to obtain or
+renew long-lived access. As of 2026-09-23, further private-endpoint header-parity
+work and live generation tests are paused pending a supported path; see
+[issue #155](https://github.com/meteosimaji/anywhere-computer/issues/155).
+
+The [active-session](https://help.openai.com/en/articles/20001257) and
+[CAPTCHA](https://help.openai.com/en/articles/8184038) help articles do not
+specify a lifetime for these private request headers. A successful reuse after
+30 minutes is one observation, not a validity guarantee. This controller has no
+independent login or credential renewal, as described below.
+
 `anywhere-subchat --http-only` remains read-only by default. Generation is an
 opt-in process mode. Start it with `--http-session-stdin --http-generation-stdin`
 and supply two bounded JSON lines through a trusted anonymous stdin pipe before
