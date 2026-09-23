@@ -81,6 +81,8 @@ async def test_live_diagnosis_does_not_restart_or_modify_agent(tmp_path, monkeyp
         monkeypatch.setattr("anywhere_computer.diagnostics.runtime_identity", lambda: "new")
         different = await diagnose(tmp_path)
         assert different["state"] == "different_build"
+        assert different["update_readiness"]["state"] == "idle"
+        assert "run anywhere start" in different["update_readiness"]["action"]
         assert different["runtime_comparison"] == {
             "state": "different",
             "version_matches": True,
@@ -118,6 +120,12 @@ async def test_same_version_different_runtime_reports_source_runtime_and_catalog
             return Reply(operation_id="a" * 32, state="completed", data={
                 "state": "ready", "instance_id": "fixture-instance",
                 "version": __version__, "runtime_id": "running-runtime",
+                "update_blocked": True,
+                "update_blockers": ["terminal_sessions", "other_active_resources"],
+                "update_blocker_details": [{
+                    "resource": "terminal_session", "id": "owned-session",
+                    "state": "running", "stop_available": True,
+                }],
                 "capability_diagnostics": {
                     "skills": {"running_implementation": "absent", "acceptance": "not_verified"},
                     "audio_capture": {"running_implementation": "present", "helper": "unavailable"},
@@ -131,6 +139,10 @@ async def test_same_version_different_runtime_reports_source_runtime_and_catalog
     monkeypatch.setattr(diagnostics, "exchange", fixture_exchange)
     result = await diagnostics.diagnose(tmp_path)
     assert result["state"] == "different_build"
+    assert result["update_readiness"]["state"] == "blocked"
+    assert "update_blocker_details" in result["update_readiness"]["action"]
+    assert "owned-session" in json.dumps(result["agent"]["update_blocker_details"])
+    assert "other_active_resources" in result["agent"]["update_blockers"]
     assert result["runtime_comparison"]["version_matches"] is True
     skills = result["agent"]["capability_diagnostics"]["skills"]
     assert skills["source_implementation"] == "present"
@@ -176,6 +188,8 @@ async def test_filtered_catalog_does_not_imply_missing_running_implementation(
     monkeypatch.setattr(diagnostics, "exchange", fixture_exchange)
     result = await diagnostics.diagnose(tmp_path)
     assert result["state"] == "different_build"
+    assert result["update_readiness"]["state"] == "unknown"
+    assert "did not report" in result["update_readiness"]["action"]
     assert result["runtime_comparison"]["version_matches"] is True
     skills = result["agent"]["capability_diagnostics"]["skills"]
     assert skills["source_implementation"] == "present"

@@ -190,12 +190,31 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
         "acceptance": "not_verified",
     }
     if not same_runtime:
+        update_blocked = agent.get("update_blocked")
+        if update_blocked is True:
+            update_state = "blocked"
+            update_action = (
+                "Inspect the reported update_blocker_details and finish active work "
+                "before running anywhere start. Other owners' resources may also block the "
+                "switch; no session was stopped."
+            )
+        elif update_blocked is False:
+            update_state = "idle"
+            update_action = (
+                "If the agent is still idle, run anywhere start to switch it to this build."
+            )
+        else:
+            update_state = "unknown"
+            update_action = (
+                "Inspect active sessions and operations before running anywhere start; "
+                "this runtime did not report whether an update is blocked."
+            )
         return report(
             "different_build",
-            "Finish active work with the previous installation, then run anywhere start "
-            "to switch an idle agent to this build. Feature authorization, helper permissions, "
-            "and acceptance were not checked.",
-            runtime_comparison=runtime_comparison, agent=agent,
+            update_action + " Feature authorization, helper permissions, and acceptance "
+            "were not checked.",
+            runtime_comparison=runtime_comparison,
+            update_readiness={"state": update_state, "action": update_action}, agent=agent,
         )
     return report("ready", "No action required.",
                   runtime_comparison=runtime_comparison, agent=agent)
