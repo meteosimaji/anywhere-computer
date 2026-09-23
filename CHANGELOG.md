@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a10 / Plugin 0.2.0-alpha.10 — unpublished candidate (2026-09-23)
+
+- Write the standard default namespaces in OOXML package metadata. The prior
+  DOCX could be read internally but LibreOffice rejected it. Verify generated
+  DOCX with an isolated LibreOffice PDF conversion when available.
+- Ordinary Chat HTTP-only generation remains unverified.
+
 ## 0.2.0a9 / Plugin 0.2.0-alpha.9 — unpublished candidate (2026-09-23)
 
 - Keep Chrome-profile cookies in HTTPX's scoped, in-memory cookie jar so

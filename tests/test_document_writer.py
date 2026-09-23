@@ -1,4 +1,8 @@
+import io
+import shutil
+import subprocess
 import uuid
+import zipfile
 
 import pytest
 
@@ -6,6 +10,42 @@ from anywhere_computer.document_writer import create_word, create_workbook, crea
 from anywhere_computer.documents import read_document
 from anywhere_computer.engine import Engine
 from anywhere_computer.models import FormulaCell, ReadDocument, Request
+
+
+def test_generated_office_packages_use_default_opc_namespaces():
+    for content in (create_word("hello"), create_workbook([["hello"]])):
+        with zipfile.ZipFile(io.BytesIO(content)) as package:
+            types = package.read("[Content_Types].xml")
+            relationships = package.read("_rels/.rels")
+        assert (b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/'
+                b'content-types"') in types
+        assert (b'<Relationships xmlns="http://schemas.openxmlformats.org/'
+                b'package/2006/relationships"') in relationships
+
+
+def test_generated_word_opens_in_libreoffice(tmp_path):
+    office = shutil.which("soffice")
+    if office is None:
+        pytest.skip("LibreOffice is not installed")
+    source = tmp_path / "document.docx"
+    source.write_bytes(create_word("日本語 & <text>\nsecond"))
+    output = tmp_path / "rendered"
+    output.mkdir()
+    profile = (tmp_path / "libreoffice-profile").as_uri()
+    completed = subprocess.run(
+        [office, f"-env:UserInstallation={profile}", "--headless", "--convert-to", "pdf",
+         "--outdir", str(output), str(source)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    pdf = output / "document.pdf"
+    assert pdf.stat().st_size > 0
+    extract = shutil.which("pdftotext")
+    if extract is not None:
+        rendered = subprocess.run([extract, str(pdf), "-"], capture_output=True,
+                                  text=True, timeout=30, check=True)
+        assert "日本語 & <text>" in rendered.stdout
+        assert "second" in rendered.stdout
 
 
 def test_generated_word_and_workbook_roundtrip(tmp_path):

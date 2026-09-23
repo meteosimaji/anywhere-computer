@@ -36,32 +36,34 @@ def xml_bytes(root: ET.Element) -> bytes:
 
 
 def package_document(main: str, content_type: str, parts: dict[str, bytes]) -> bytes:
-    types = ET.Element(f"{{{CONTENT_TYPES}}}Types")
+    # OPC package metadata uses default namespaces. Prefixing these roots as
+    # ns0 produces files that LibreOffice cannot open, despite valid XML.
+    types = ET.Element("Types", xmlns=CONTENT_TYPES)
     ET.SubElement(
         types,
-        f"{{{CONTENT_TYPES}}}Default",
+        "Default",
         Extension="rels",
         ContentType="application/vnd.openxmlformats-package.relationships+xml",
     )
     ET.SubElement(
-        types, f"{{{CONTENT_TYPES}}}Default", Extension="xml", ContentType="application/xml"
+        types, "Default", Extension="xml", ContentType="application/xml"
     )
     ET.SubElement(
-        types, f"{{{CONTENT_TYPES}}}Override", PartName="/" + main, ContentType=content_type
+        types, "Override", PartName="/" + main, ContentType=content_type
     )
     for name in parts:
         if name.startswith("xl/worksheets/"):
             ET.SubElement(
                 types,
-                f"{{{CONTENT_TYPES}}}Override",
+                "Override",
                 PartName="/" + name,
                 ContentType="application/vnd.openxmlformats-officedocument."
                 "spreadsheetml.worksheet+xml",
             )
-    relationships = ET.Element(f"{{{REL}}}Relationships")
+    relationships = ET.Element("Relationships", xmlns=REL)
     ET.SubElement(
         relationships,
-        f"{{{REL}}}Relationship",
+        "Relationship",
         Id="document",
         Type=OFFICE_REL + "/officeDocument",
         Target=main,
