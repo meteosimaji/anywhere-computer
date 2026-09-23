@@ -8,7 +8,7 @@ import sqlite3
 import time
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, JsonValue
 
 from .models import Contract
 from .subchat_content import SubchatResources
@@ -166,6 +166,20 @@ class SubchatSubmissions:
             'WHERE operation_id=? ORDER BY id DESC LIMIT ?', (operation_id, limit)).fetchall()
         return [{'operation_id': operation_id, 'stage': stage, 'status': status,
                  'timestamp': timestamp} for stage, status, timestamp in reversed(rows)]
+
+    def http_progress(self, operation_id: str, *, owner: str | None
+                      ) -> dict[str, JsonValue] | None:
+        """Return the latest durable transport checkpoint for an owned submission."""
+        self.get(operation_id, owner=owner)
+        row = self.connection.execute(
+            'SELECT stage,status,timestamp FROM subchat_http_events '
+            'WHERE operation_id=? ORDER BY id DESC LIMIT 1', (operation_id,)).fetchone()
+        if row is None:
+            return None
+        stage, status, timestamp = row
+        if stage not in self._HTTP_STAGES:
+            raise ValueError('Invalid saved HTTP diagnostic event')
+        return {'stage': stage, 'status': status, 'timestamp': timestamp}
 
     def claim_http_dispatch(self, operation_id: str, *, owner: str | None,
                             user_message_id: str, provider_account_id: str,

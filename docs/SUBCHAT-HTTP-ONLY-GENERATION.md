@@ -1,5 +1,8 @@
 # Explicit HTTP-only ordinary Chat generation
 
+For a dated, evidence-scoped inventory of observable fields and progress
+signals, see [HTTP-only subchat observables (2026-09-23)](SUBCHAT-HTTP-OBSERVABLES-2026-09-23.md).
+
 ## Provider terms and session limits
 
 OpenAI's [Terms of Use](https://openai.com/policies/terms-of-use/)
@@ -86,8 +89,14 @@ the durable generation claim, generation HTTP status, SSE conversation candidate
 and history receipt, final, or unknown observations. It does not store headers,
 cookies, proof values, prompts, answers, account IDs, URLs, or response bodies.
 `SubchatSubmissions.http_events(operation_id, owner=...)` reads the bounded
-events after checking ledger ownership. There is no MCP or CLI command that
-exposes these private diagnostics.
+events after checking ledger ownership. CLI `status` and MCP `subchat_status`,
+`subchat_wait`, and `subchat_recover` expose only the latest event as
+`http_progress` with `stage`, `status`, and `timestamp`. The snapshot survives
+controller restart. It contains no request or response content and does not
+change the submission's saved state.
+Cancellation during a preparation, follow-up branch check, or generation
+request records the corresponding `*_failed` checkpoint while leaving the
+saved operation uncertain; it does not authorize another generation POST.
 
 A `*_request` event records a local attempt and is not evidence that the
 provider received a request. `dispatch_claimed` is committed atomically with

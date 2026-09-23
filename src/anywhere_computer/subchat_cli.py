@@ -114,7 +114,11 @@ async def dispatch(service: Subchats,
                   else service.store.cancel(command.operation_id, owner=None)
                   if command.action == 'cancel'
                   else service.store.get(command.operation_id, owner=None))
-    return result.model_dump_json()
+    data = result.model_dump(mode='json')
+    progress = service.store.http_progress(result.operation_id, owner=None)
+    if progress is not None:
+        data['http_progress'] = progress
+    return json.dumps(data, ensure_ascii=False, separators=(',', ':'))
 
 
 async def process_lines(service: Subchats, source: TextIO, destination: TextIO) -> None:
