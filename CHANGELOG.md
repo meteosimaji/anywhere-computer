@@ -8,6 +8,9 @@
 - Preserve exact pre-a16 autostart definitions when inspecting and upgrading
   existing registrations. New registrations disable Python bytecode writes;
   existing receipts remain verifiable until an explicit upgrade.
+- Include Sentinel finalize in the value-free transport probe so its request
+  ordering and response status can be compared without recording credentials,
+  token values or message bodies. This does not establish HTTP-only generation.
 
 ## 0.2.0a16 / Plugin 0.2.0-alpha.16 — unpublished candidate (2026-09-23)
 
