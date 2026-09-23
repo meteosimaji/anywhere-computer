@@ -3,6 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a15 / Plugin 0.2.0-alpha.15 — unpublished candidate (2026-09-23)
+
+- Redact malformed native GUI helper responses and accept only known helper
+  error codes. Invalid helper output can no longer appear in a returned error.
+- ChatGPT retried an a13 pre-dispatch Subchat operation with a14's readiness
+  checks and recovered a saved final answer. This confirms browser-assisted
+  Plugin sending, while independent HTTPX generation remains unverified.
+
 ## 0.2.0a14 / Plugin 0.2.0-alpha.14 — unpublished candidate (2026-09-23)
 
 - Wait up to ten seconds for an idle ordinary Chat composer and observed model
@@ -12,7 +20,7 @@
 - A ChatGPT-side a13 MCP send reached the Plugin but stopped in `prepared` before
   dispatch; the same saved operation passed preparation in a later direct probe.
   The exact original failing stage was not retained, so this readiness repair
-  requires another ChatGPT-side live send check.
+  later passed a ChatGPT-side live send check using the same operation ID.
 
 ## 0.2.0a13 / Plugin 0.2.0-alpha.13 — unpublished candidate (2026-09-23)
 

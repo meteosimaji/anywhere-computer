@@ -19,6 +19,13 @@ for line in sys.stdin:
     if method == 'windows':
         result = {'windows': [{'window_id': 1}]}
     elif method == 'observe':
+        if mode == 'malformed_observe':
+            print('{synthetic_secret_ABC123}', flush=True)
+            continue
+        if mode == 'private_error_code':
+            print(json.dumps({'id': req['id'], 'error': {
+                'code': 'synthetic_secret_ABC123'}}), flush=True)
+            continue
         result = {'observation_id': 'fixture-observation', 'tree': {}}
     else:
         if mode in ('changed', 'press_changed'):
@@ -129,3 +136,26 @@ def test_manifest_mismatch_rejected_before_helper_launch(tmp_path, monkeypatch):
         platform="darwin", prefix=str(tmp_path / "runtime")))
     with pytest.raises(ValueError, match="manifest"):
         native_gui.installed_helper()
+
+
+@pytest.mark.parametrize("mode", ["malformed_observe", "private_error_code"])
+async def test_native_helper_errors_do_not_expose_response_content(
+        tmp_path, helper_process, mode):
+    helper_process[0][0] = mode
+    engine = Engine(tmp_path / "state")
+    try:
+        opened = await engine.execute(Request(operation_id="4" * 32,
+            tool="gui_native_windows", arguments={"app": "test"}), peer="one")
+        assert opened.state == "completed"
+        observed = await engine.execute(Request(operation_id="5" * 32,
+            tool="gui_native_observe", arguments={
+                "session_id": opened.data["session_id"], "app": "test", "window_id": 1,
+            }), peer="one")
+        assert observed.state == "failed"
+        assert "synthetic_secret_ABC123" not in observed.model_dump_json()
+        expected = ("Invalid native GUI response JSON" if mode == "malformed_observe"
+                    else "invalid_response")
+        assert expected in observed.error
+        assert not engine.native_gui.entries
+    finally:
+        await engine.close()

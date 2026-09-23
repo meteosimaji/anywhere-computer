@@ -16,6 +16,16 @@ from .models import Contract
 LIMIT = 64 * 1024
 TIMEOUT = 5.0
 JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
+HELPER_ERROR_CODES = frozenset({
+    "accessibility_required", "ambiguous_process", "ax_error", "deadline_exceeded",
+    "element_not_enabled", "element_unavailable", "input_too_large", "internal_error",
+    "internal_state", "invalid_input", "invalid_json", "observation_limit_exceeded",
+    "observation_mismatch", "observation_unavailable", "press_target_changed",
+    "process_identity_changed", "process_identity_unavailable", "process_not_found",
+    "response_too_large", "stdin_error", "tree_limit_exceeded", "unknown_method",
+    "value_changed", "value_not_comparable", "value_not_settable",
+    "window_limit_exceeded", "window_unavailable",
+})
 
 
 class NativeApp(Contract):
@@ -122,7 +132,11 @@ class NativeGUI:
                 raw = await process.stdout.readline()
                 if not raw.endswith(b"\n") or len(raw) > LIMIT:
                     raise ValueError("Invalid native GUI response framing")
-                response = JSON_OBJECT.validate_json(raw)
+                try:
+                    response = JSON_OBJECT.validate_json(raw)
+                except ValueError:
+                    # Pydantic's error includes input_value, which is untrusted helper output.
+                    raise ValueError("Invalid native GUI response JSON") from None
                 if response.get("id") != request_id:
                     raise ValueError("Native GUI response identity mismatch")
                 result = response.get("result")
@@ -135,8 +149,8 @@ class NativeGUI:
                             "Native GUI target changed since observation; input was not attempted")
                     # Never expose arbitrary helper diagnostics or exception text.
                     raise ValueError("Native GUI helper rejected request: " + (
-                        code if isinstance(code, str) and code.replace("_", "").isalnum()
-                        and len(code) <= 64 else "invalid_response"))
+                        code if isinstance(code, str) and code in HELPER_ERROR_CODES
+                        else "invalid_response"))
                 return result
         except BaseException as error:
             await self._retire(session_id)
