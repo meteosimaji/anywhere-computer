@@ -74,6 +74,9 @@ The marketplace entry is in `.agents/plugins/marketplace.json`; the Plugin runs
 its bundled wheel through `uv`. Restart the Plugin session, then check that
 `anywhere-computer` and `anywhere-subchat` appear as separate MCP servers. Call
 `subchat_capabilities` to confirm the Subchat server's actual mode and version.
+If a prior manual `codex mcp` registration uses the same server name, its stale
+wheel path can shadow the Plugin; see the [Subchat guide](docs/SUBCHAT-PROBE.md)
+before diagnosing a zero-tool runtime as a Plugin packaging failure.
 For a published version, use a checkout of its matching release tag rather than
 assuming that this development checkout matches the release asset.
 

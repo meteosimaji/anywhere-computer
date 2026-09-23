@@ -17,6 +17,15 @@ read-only tools by default: `subchat_capabilities`,
 `generation_transport=unavailable` means this server cannot create or send a
 Chat. Plugin installation does not configure generation for the separate CLI.
 
+An older manual `codex mcp` registration with the same server name can shadow
+the installed Plugin and keep pointing to a removed wheel. Check `codex mcp
+list` when a newly installed Plugin reports `runtime_status=failed` and zero
+tools. If `anywhere-computer` or `anywhere-subchat` is a stale manual entry,
+remove that entry with `codex mcp remove NAME` and let the installed Plugin
+provide the server. Keep the Plugin enabled and reopen its MCP session before
+checking `subchat_capabilities` again. Plugin updates do not rewrite unrelated
+manual MCP registrations.
+
 To enable actual sends through the dedicated Chrome profile, set
 `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process and restart
 its MCP session. This exposes `subchat_send`, `subchat_message` and related
