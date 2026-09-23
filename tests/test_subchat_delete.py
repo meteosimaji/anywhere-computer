@@ -202,3 +202,56 @@ async def test_cli_and_mcp_delete_entrypoints_use_bound_service(tmp_path):
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+@pytest.mark.parametrize('patch_status', [200, 403])
+async def test_delete_receipt_survives_ledger_restart_without_http_replay(
+        tmp_path, patch_status):
+    server = Server(patch_status=patch_status)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        async with async_playwright() as playwright:
+            request = await playwright.request.new_context()
+            try:
+                async def request_factory():
+                    return request
+
+                ledger, service = saved_service(tmp_path, server, request_factory)
+                target = DeleteRequest(operation_id=OP, conversation_id=CHAT)
+                try:
+                    if patch_status == 200:
+                        result = await delete_saved(service, target, owner=None)
+                        assert result.state == 'deleted'
+                    else:
+                        with pytest.raises(SubchatDeletionUnknown):
+                            await delete_saved(service, target, owner=None)
+                        result = DeletionLedger(ledger.connection).get(
+                            target, account_id=ACCOUNT, owner=None)
+                        assert result is not None and result.state == 'unknown'
+                    methods = [method for method, _ in server.calls]
+                    assert methods == (['GET', 'PATCH', 'GET'] if patch_status == 200
+                                       else ['GET', 'PATCH'])
+                finally:
+                    ledger.close()
+
+                reopened = Ledger(tmp_path)
+                try:
+                    store = SubchatSubmissions(reopened.connection)
+                    session = ObservedHTTPSession(authorization=SECRET, account_id=ACCOUNT,
+                        catalog_url='https://chatgpt.com/backend-api/models')
+                    backend = HTTPOnlySubchatBackend(request_factory, session)
+                    backend._http_reader = ChatHTTPReader(request_factory, browser_free=True,
+                        session=session, test_origin=f'http://127.0.0.1:{server.server_port}')
+                    reopened_result = await delete_saved(Subchats(store, backend), target,
+                                                         owner=None)
+                    assert reopened_result == result
+                    assert [method for method, _ in server.calls] == methods
+                finally:
+                    reopened.close()
+            finally:
+                await request.dispose()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
