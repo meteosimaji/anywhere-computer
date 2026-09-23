@@ -13,6 +13,7 @@ import re
 import secrets
 import sqlite3
 import time
+from contextlib import closing
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -112,7 +113,8 @@ class AuthorizationStore:
         self.resource = resource
         self.known_tools = known_tools - LOCAL_ONLY_TOOLS
         prepare_directory(directory)
-        self.db = sqlite3.connect(directory / "authorization.sqlite3", timeout=10)
+        self.database = directory.absolute() / "authorization.sqlite3"
+        self.db = sqlite3.connect(self.database, timeout=10)
         self.db.execute("PRAGMA foreign_keys=ON")
         try:
             with self.db:
@@ -406,6 +408,7 @@ class AuthorizationStore:
         """Internal grant metadata lookup; this does not authenticate a request."""
         return self._grant(grant, time.time())
 
+
     def retain_active_grants(self, *, owner: str, device: str, client: str) -> int:
         """Local owner administration: remove deadlines only from still-valid grants.
 
@@ -483,3 +486,24 @@ class AuthorizationStore:
 
     def close(self) -> None:
         self.db.close()
+
+
+def current_grant_read_only(database: Path, grant_id: str) -> GrantIdentity | None:
+    """Check an existing grant from an Engine worker without opening a writable store."""
+    if database.is_symlink() or not database.is_file():
+        return None
+    with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro", uri=True)) as db:
+        resource_row = db.execute("SELECT resource FROM settings").fetchone()
+        row = db.execute(
+            "SELECT g.owner,g.device,g.client,g.tools,g.expires,g.revoked,"
+            "d.owner,d.tools,d.active FROM grants g JOIN authorized_devices d "
+            "ON g.device=d.id WHERE g.id=?", (grant_id,),
+        ).fetchone()
+    if (resource_row is None or row is None or row[5] or not row[8]
+            or row[0] != row[6] or row[4] != 0 and row[4] <= time.time()):
+        return None
+    tools = frozenset(json.loads(row[3]))
+    if tools - frozenset(json.loads(row[7])):
+        return None
+    return GrantIdentity(grant_id, str(row[0]), str(row[1]), str(row[2]),
+                         str(resource_row[0]), tools)

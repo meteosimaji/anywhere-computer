@@ -1,9 +1,160 @@
+import asyncio
 import sqlite3
 import sys
 
 import pytest
 
 from anywhere_computer.engine import Engine
+
+
+@pytest.mark.parametrize('revoke_device', [False, True])
+async def test_revoked_http_grant_stops_engine_owned_watch(
+    tmp_path, monkeypatch, revoke_device,
+):
+    from anywhere_computer import direct_mcp_sessions
+    from anywhere_computer.authorization import (
+        AuthorizationStore,
+        current_grant_read_only,
+        pkce_s256,
+    )
+
+    class Peer:
+        cleanup_confirmed = False
+
+        def __init__(self, command, cwd):
+            pass
+
+        async def open(self):
+            pass
+
+        async def close(self):
+            self.cleanup_confirmed = True
+
+        async def call(self, name, arguments):
+            assert name in {'subchat_queue_watch', 'subchat_status'}
+            data = ({'submission_operation_id': arguments['operation_id'], 'state': 'watching'}
+                    if name == 'subchat_queue_watch' else
+                    {'state': 'queued', 'queue_watch': {'state': 'watching'}})
+            return {'isError': False, 'structuredContent': {'state': 'completed', 'data': data}}
+
+    monkeypatch.setattr(direct_mcp_sessions, 'DirectMCPContext', Peer)
+    monkeypatch.setattr(direct_mcp_sessions, 'WATCH_POLL_SECONDS', .01)
+    resource = 'https://computer.example/mcp'
+    store = AuthorizationStore(tmp_path / 'authority', resource=resource,
+                               known_tools=frozenset({'mcp_session_open', 'mcp_call'}))
+    store.register_client('client', frozenset({'https://client.example/callback'}))
+    store.enroll_device('owner', 'device', frozenset({'mcp_session_open', 'mcp_call'}))
+    code = store.approve(owner='owner', device='device', client='client',
+                         redirect='https://client.example/callback', resource=resource,
+                         tools=frozenset({'mcp_session_open', 'mcp_call'}),
+                         challenge=pkce_s256('x' * 43))
+    token = store.exchange_code(code=code, verifier='x' * 43, client='client',
+                                redirect='https://client.example/callback', resource=resource)
+    grant = store.verify(token.value, resource=resource)
+    assert grant is not None
+    engine = Engine(tmp_path / 'engine')
+    try:
+        engine.bind_http_watch_grant(grant.grant_id, store.database)
+        assert current_grant_read_only(store.database, grant.grant_id) == grant
+        opened = await engine.direct_mcp_sessions.open([sys.executable], tmp_path,
+                                                       owner=grant.grant_id)
+        sid = opened['session_id']
+        other = await engine.direct_mcp_sessions.open([sys.executable], tmp_path,
+                                                      owner=grant.grant_id)
+        await engine.direct_mcp_sessions.stop(other['session_id'], owner=grant.grant_id)
+        assert grant.grant_id in engine._http_watch_grants
+        await engine.direct_mcp_sessions.call(sid, 'subchat_queue_watch',
+            {'operation_id': 'a' * 32}, owner=grant.grant_id)
+        assert engine.direct_mcp_sessions.active_watch_count == 1
+        if revoke_device:
+            store.revoke_device(owner='owner', device='device')
+        else:
+            store.revoke(owner='owner', grant=grant.grant_id)
+        assert current_grant_read_only(store.database, grant.grant_id) is None
+        async with asyncio.timeout(2):
+            while engine.direct_mcp_sessions.active_watch_count:
+                await asyncio.sleep(.01)
+        assert engine.direct_mcp_sessions.status(sid, owner=grant.grant_id)['state'] == (
+            'authorization_lost')
+        assert engine.direct_mcp_sessions.watch_history(owner=grant.grant_id)[0]['reason'] == (
+            'authorization_lost')
+        assert engine.direct_mcp_sessions.active_count == 0
+        assert grant.grant_id not in engine._http_watch_grants
+    finally:
+        await engine.close()
+        store.close()
+
+
+async def test_shared_agent_receives_http_watch_authority(tmp_path, monkeypatch):
+    from anywhere_computer import direct_mcp_sessions
+    from anywhere_computer.authorization import AuthorizationStore, pkce_s256
+    from anywhere_computer.connection import exchange, exchange_remote, serve
+    from anywhere_computer.models import Request
+
+    class Peer:
+        cleanup_confirmed = False
+
+        def __init__(self, command, cwd):
+            pass
+
+        async def open(self):
+            pass
+
+        async def close(self):
+            self.cleanup_confirmed = True
+
+        async def call(self, name, arguments):
+            data = ({'submission_operation_id': arguments['operation_id'], 'state': 'watching'}
+                    if name == 'subchat_queue_watch' else
+                    {'state': 'queued', 'queue_watch': {'state': 'watching'}})
+            return {'isError': False, 'structuredContent': {'state': 'completed', 'data': data}}
+
+    monkeypatch.setattr(direct_mcp_sessions, 'DirectMCPContext', Peer)
+    monkeypatch.setattr(direct_mcp_sessions, 'WATCH_POLL_SECONDS', .01)
+    monkeypatch.setattr('anywhere_computer.connection.local_credential', lambda _: 'fixture')
+    resource = 'https://computer.example/mcp'
+    authority = AuthorizationStore(tmp_path / 'auth', resource=resource,
+                                   known_tools=frozenset({'mcp_session_open', 'mcp_call'}))
+    authority.register_client('client', frozenset({'https://client.example/callback'}))
+    authority.enroll_device('owner', 'device', frozenset({'mcp_session_open', 'mcp_call'}))
+    code = authority.approve(owner='owner', device='device', client='client',
+                             redirect='https://client.example/callback', resource=resource,
+                             tools=frozenset({'mcp_session_open', 'mcp_call'}),
+                             challenge=pkce_s256('x' * 43))
+    token = authority.exchange_code(code=code, verifier='x' * 43, client='client',
+                                    redirect='https://client.example/callback', resource=resource)
+    grant = authority.verify(token.value, resource=resource)
+    assert grant is not None
+    directory = tmp_path / 'agent'
+    shutdown = asyncio.Event()
+    server = asyncio.create_task(serve(directory, credential='fixture', shutdown=shutdown))
+    try:
+        async with asyncio.timeout(5):
+            while not (directory / 'agent.json').exists():
+                await asyncio.sleep(.01)
+        allowed = frozenset({'mcp_session_open', 'mcp_call'})
+        opened = await exchange_remote(directory, grant.grant_id, allowed,
+            Request(operation_id='1' * 32, tool='mcp_session_open',
+                    arguments={'command': [sys.executable], 'cwd': str(tmp_path)}),
+            authorization_database=authority.database)
+        assert opened.state == 'completed'
+        armed = await exchange_remote(directory, grant.grant_id, allowed,
+            Request(operation_id='2' * 32, tool='mcp_call', arguments={
+                'session_id': opened.data['session_id'], 'name': 'subchat_queue_watch',
+                'arguments': {'operation_id': 'a' * 32}}),
+            authorization_database=authority.database)
+        assert armed.state == 'completed'
+        assert (await exchange(directory, '__status')).data['active_resources'][
+            'subchat_queue_watches'] == 1
+        authority.revoke(owner='owner', grant=grant.grant_id)
+        async with asyncio.timeout(2):
+            while (await exchange(directory, '__status')).data['active_resources'][
+                    'subchat_queue_watches']:
+                await asyncio.sleep(.01)
+    finally:
+        shutdown.set()
+        await asyncio.wait_for(server, 10)
+        authority.close()
 
 
 async def test_bounded_subchat_watch_owns_outer_session_and_records_stop(tmp_path, monkeypatch):

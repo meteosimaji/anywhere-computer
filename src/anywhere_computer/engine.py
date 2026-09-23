@@ -2,6 +2,7 @@
 
 import asyncio
 import platform
+import sqlite3
 import time
 import uuid
 from collections.abc import Awaitable, Callable
@@ -15,6 +16,7 @@ from pydantic import JsonValue
 from . import __version__, codex_context, codex_plugins, skills_context
 from .audio_capture import AudioCapture, AudioCaptureUnknown, capture_audio
 from .audio_status import inspect_audio, verified_audio_helper
+from .authorization import GrantIdentity, current_grant_read_only
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
@@ -176,7 +178,11 @@ class Engine:
         self.downloads = Downloads(directory)
         self.sessions = Sessions()
         self.plugin_sessions = PluginSessions()
-        self.direct_mcp_sessions = DirectMCPSessions(journal=self.ledger.connection)
+        self._http_watch_grants: dict[str, tuple[Path, GrantIdentity]] = {}
+        self.direct_mcp_sessions = DirectMCPSessions(
+            journal=self.ledger.connection, owner_active=self._watch_owner_active,
+            owner_released=self._release_watch_owner,
+        )
         self.gui_mcp = GUIMCP(self.direct_mcp_sessions)
         self.native_gui = NativeGUI()
         # Transport-owned identity, inherited by the durable execution task only.
@@ -190,6 +196,37 @@ class Engine:
         self.inflight: dict[str, asyncio.Task[Reply]] = {}
         self.inflight_owners: dict[str, str | None] = {}
         self._register_tools()
+
+    def bind_http_watch_grant(self, grant_id: str, database: Path) -> None:
+        """Bind a trusted local HTTP gateway grant to its current authority database."""
+        active = set(self.inflight_owners.values())
+        active.update(entry.owner for entry in self.direct_mcp_sessions.entries.values()
+                      if entry.state in {'open', 'opening'} or not entry.context.cleanup_confirmed
+                      or any(watch.state == 'watching' for watch in entry.watches.values()))
+        for stale in self._http_watch_grants.keys() - active - {grant_id}:
+            self._http_watch_grants.pop(stale)
+        if not database.is_absolute():
+            raise ValueError('HTTP authority database must be absolute')
+        current = current_grant_read_only(database, grant_id)
+        if current is None:
+            raise ValueError('HTTP grant is no longer available')
+        prior = self._http_watch_grants.get(grant_id)
+        if prior is not None and (prior[0] != database or prior[1] != current):
+            raise ValueError('HTTP grant authority changed')
+        self._http_watch_grants[grant_id] = (database, current)
+
+    def _watch_owner_active(self, owner: str | None) -> bool:
+        if owner is None or owner not in self._http_watch_grants:
+            return True
+        database, initial = self._http_watch_grants[owner]
+        try:
+            return current_grant_read_only(database, owner) == initial
+        except (OSError, ValueError, sqlite3.Error):
+            return False
+
+    def _release_watch_owner(self, owner: str | None) -> None:
+        if owner is not None:
+            self._http_watch_grants.pop(owner, None)
 
     def register(
         self,
