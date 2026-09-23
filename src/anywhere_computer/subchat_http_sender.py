@@ -10,6 +10,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import urlsplit
 
 from .subchat import SubchatAccessError
@@ -17,6 +18,16 @@ from .subchat_sse import SSEDecoder
 from .subchat_state import SubchatAccountMismatch, SubchatSubmission
 
 CONVERSATION_ID = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
+
+
+@dataclass(frozen=True)
+class HTTPFollowupParent:
+    """A caller's explicit branch observation; this module cannot discover it."""
+
+    conversation_id: str
+    last_user_message_id: str
+    parent_message_id: str
+    source: Literal['verified_history'] = 'verified_history'
 
 
 @dataclass(frozen=True)
@@ -33,21 +44,34 @@ class HTTPGenerationPlan:
     predecessor_id: str | None
 
     @classmethod
-    def from_reserved(cls, submission: SubchatSubmission) -> HTTPGenerationPlan:
+    def from_reserved(cls, submission: SubchatSubmission, *,
+                      followup_parent: HTTPFollowupParent | None = None) -> HTTPGenerationPlan:
         if (submission.state != 'sending' or submission.user_message_id is None
                 or submission.provider_account_id is None or submission.http_selection is None):
             raise ValueError('An exact HTTP input, account and selection must be reserved')
         if submission.resources is not None:
             raise ValueError('HTTP generation resources are not implemented')
-        if (submission.requested_conversation_id is None) != (
-                submission.expected_last_user_message_id is None):
+        conversation = submission.requested_conversation_id
+        expected_user = submission.expected_last_user_message_id
+        if (conversation is None) != (expected_user is None):
             raise ValueError('Follow-up conversation and predecessor must be paired')
+        if conversation is None and followup_parent is not None:
+            raise ValueError('New Chat cannot have a follow-up parent')
+        if conversation is not None:
+            if (followup_parent is None or followup_parent.source != 'verified_history'
+                    or followup_parent.conversation_id != conversation
+                    or followup_parent.last_user_message_id != expected_user
+                    or not followup_parent.parent_message_id.strip()
+                    or len(followup_parent.parent_message_id) > 256
+                    or followup_parent.parent_message_id == expected_user
+                    or followup_parent.parent_message_id == submission.user_message_id):
+                raise ValueError('A matching history-verified branch parent is required')
         return cls(submission.operation_id, submission.provider_account_id,
                    submission.user_message_id, submission.prompt,
                    submission.http_selection.model_slug,
                    submission.http_selection.thinking_effort,
-                   submission.requested_conversation_id,
-                   submission.expected_last_user_message_id)
+                   conversation,
+                   followup_parent.parent_message_id if followup_parent else None)
 
     def body(self) -> bytes:
         # This local fixture shape is not a claim about the provider's current

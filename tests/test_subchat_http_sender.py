@@ -7,7 +7,11 @@ import pytest
 
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatAccessError
-from anywhere_computer.subchat_http_sender import HTTPGenerationPlan, post_once
+from anywhere_computer.subchat_http_sender import (
+    HTTPFollowupParent,
+    HTTPGenerationPlan,
+    post_once,
+)
 from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmissions
 
 CHAT = '00000000-0000-0000-0000-000000000001'
@@ -81,7 +85,19 @@ async def test_one_post_preserves_reserved_input_account_and_candidate(tmp_path,
                                     baseline_message_ids=('parent-input',))
         else:
             saved = reserved(store, operation, prompt)
-        plan = HTTPGenerationPlan.from_reserved(saved)
+        if followup:
+            with pytest.raises(ValueError, match='history-verified'):
+                HTTPGenerationPlan.from_reserved(saved)
+            with pytest.raises(ValueError, match='history-verified'):
+                HTTPGenerationPlan.from_reserved(saved, followup_parent=HTTPFollowupParent(
+                    CHAT, 'other-user', 'parent-answer'))
+            with pytest.raises(ValueError, match='history-verified'):
+                HTTPGenerationPlan.from_reserved(saved, followup_parent=HTTPFollowupParent(
+                    CHAT, 'parent-input', 'parent-input'))
+            plan = HTTPGenerationPlan.from_reserved(saved, followup_parent=HTTPFollowupParent(
+                CHAT, 'parent-input', 'parent-answer'))
+        else:
+            plan = HTTPGenerationPlan.from_reserved(saved)
         payload = (f'data: {{"conversation_id":"{CHAT}"}}\r\n\r\n'
                    'data: [DONE]\n\n').encode()
         async with LocalGeneration(('200 OK', [payload[:7], payload[7:]], len(payload))) as api:
@@ -98,7 +114,7 @@ async def test_one_post_preserves_reserved_input_account_and_candidate(tmp_path,
             assert body['model'] == SELECTION.model_slug
             assert body['thinking_effort'] == SELECTION.thinking_effort
             assert body.get('conversation_id') == (CHAT if followup else None)
-            assert body.get('parent_message_id') == ('parent-input' if followup else None)
+            assert body.get('parent_message_id') == ('parent-answer' if followup else None)
             if not followup:
                 assert 'conversation_id' not in body and 'parent_message_id' not in body
         assert observed.conversation_id == CHAT and observed.done_marker
