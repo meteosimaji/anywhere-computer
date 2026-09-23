@@ -236,8 +236,11 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     return standalone_http_client
 
             async def open_browser() -> BrowserContext:
+                from .subchat_browser import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
+
                 context = await (await runtime()).chromium.launch_persistent_context(
                     str(profile), channel='chrome', headless=False,
+                    ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
                     args=['--start-minimized'] if minimized else [])
                 resources.push_async_callback(context.close)
                 if minimized:
@@ -254,10 +257,12 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 return context
 
             if chrome_login_profile is not None:
+                from .subchat_browser import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
                 from .subchat_chrome_login import chrome_generation_cookie, chrome_http_session
 
                 chrome_context = await (await runtime()).chromium.launch_persistent_context(
-                    str(chrome_login_profile), channel='chrome', headless=True)
+                    str(chrome_login_profile), channel='chrome', headless=True,
+                    ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS))
                 try:
                     http_session = await chrome_http_session(
                         chrome_context, await open_standalone_http(),

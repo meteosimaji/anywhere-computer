@@ -257,9 +257,12 @@ async def minimize_window(
 async def probe(profile: Path, headed: bool, minimized: bool = False) -> dict[str, object]:
     from playwright.async_api import async_playwright
 
+    from . import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
+
     async with async_playwright() as driver:
         context = await driver.chromium.launch_persistent_context(
             str(profile), channel="chrome", headless=not (headed or minimized),
+            ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
             args=["--start-minimized"] if minimized else [])
         try:
             page = context.pages[0] if minimized and context.pages else await context.new_page()
