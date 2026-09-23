@@ -44,6 +44,7 @@ class StartupRecord(BaseModel):
     codex_executable: str | None = None
     utf8_python: bool = False  # Missing field preserves pre-UTF-8 startup definitions.
     isolated_python: bool = False  # Missing field identifies a pre-isolation receipt.
+    bytecode_python: bool = False  # Missing field preserves pre-bytecode launch arguments.
 
     @model_validator(mode="after")
     def check_connection_mode(self) -> Self:
@@ -105,6 +106,7 @@ def _record(directory: Path) -> StartupRecord | None:
 def _definition(directory: Path, record: StartupRecord) -> StartupDefinition:
     return current_definition(directory, connector=record.connector, startup_id=record.startup_id,
                               executable=record.interpreter, isolated_python=record.isolated_python,
+                              bytecode_python=record.bytecode_python,
                               codex_executable=record.codex_executable,
                               utf8_python=record.utf8_python,
                               policy_version=record.policy_version, mode=record.mode)
@@ -216,7 +218,7 @@ def _install_startup_locked(
             directory=str(directory),
             interpreter=startup_interpreter(selected_mode), connector=executable,
             startup_id=secrets.token_hex(16),
-            isolated_python=True, utf8_python=True,
+            isolated_python=True, bytecode_python=True, utf8_python=True,
             codex_executable=pinned_codex, policy_version=2, mode=selected_mode,
         )
         definition = _definition(directory, record)

@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a17 / Plugin 0.2.0-alpha.17 — unpublished candidate (2026-09-23)
+
+- Preserve exact pre-a16 autostart definitions when inspecting and upgrading
+  existing registrations. New registrations disable Python bytecode writes;
+  existing receipts remain verifiable until an explicit upgrade.
+
 ## 0.2.0a16 / Plugin 0.2.0-alpha.16 — unpublished candidate (2026-09-23)
 
 - Prevent the portable Python runtime and its supported child processes from

@@ -325,6 +325,28 @@ def test_policy_one_receipt_can_be_inspected_and_upgraded(registration):
     assert calls == ['install', 'uninstall', 'files_removed', 'install']
 
 
+def test_pre_bytecode_receipt_can_be_inspected_and_upgraded(registration):
+    import json
+
+    directory, native, calls, _ = registration
+    service.install_startup(directory)
+    receipt = directory / 'autostart.json'
+    value = json.loads(receipt.read_text())
+    value.pop('bytecode_python')
+    receipt.write_text(json.dumps(value))
+    old = service._record(directory)
+    assert old is not None and not old.bytecode_python
+    definition = service._definition(directory, old)
+    assert b'-B' not in definition.content
+    definition.path.write_bytes(definition.content)
+    assert service.startup_status(directory)['native_running'] is True
+    service.upgrade_startup(directory)
+    current = service._record(directory)
+    assert current is not None and current.bytecode_python
+    assert b'-B' in service._definition(directory, current).content
+    assert calls == ['install', 'uninstall', 'files_removed', 'install']
+
+
 def test_upgrade_failure_restores_verified_prior_registration(registration, monkeypatch):
     directory, native, calls, _ = registration
     service.install_startup(directory)
