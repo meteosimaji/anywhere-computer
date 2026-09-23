@@ -292,11 +292,14 @@ async def test_literal_search_pagination(engine, tmp_path):
 async def test_registry_schemas_validation_and_duplicate_guard(engine):
     from anywhere_computer.models import Empty
 
-    assert len(engine.tools) == 70
+    assert len(engine.tools) == 71
     capture = engine.tools["audio_capture"]
     assert capture.destructive and capture.open_world and not capture.read_only
     press = engine.tools["gui_native_press"]
     assert press.destructive and press.open_world and not press.read_only
+    cell_edit = engine.tools["documents_edit_cell"]
+    assert cell_edit.destructive and not cell_edit.read_only and not cell_edit.open_world
+    assert "expected_sha256" in cell_edit.schema.model_json_schema()["required"]
     for name, tool in engine.tools.items():
         assert name == tool.name
         assert tool.schema.model_json_schema()["additionalProperties"] is False

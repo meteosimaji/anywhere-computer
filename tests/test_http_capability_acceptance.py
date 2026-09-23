@@ -245,6 +245,18 @@ for line in sys.stdin:
                 await call("documents_write", {"path": document, "format": format_, **content})
                 result = await call("documents_read", {"path": document})
                 assert "Document" in str(result) if format_ == "docx" else "42" in str(result)
+            edit_path = str(tmp_path / "cell-edit.xlsx")
+            await call("documents_write", {"path": edit_path, "format": "xlsx",
+                                           "rows": [["before", "keep"]]})
+            snapshot = await call("documents_read", {"path": edit_path})
+            cell_edit = {"path": edit_path, "sheet": "Sheet1", "cell": "A1",
+                         "old_text": "before", "new_text": "after",
+                         "expected_sha256": snapshot["sha256"]}
+            preview = await call("documents_edit_cell", {**cell_edit, "preview": True})
+            edited = await call("documents_edit_cell", cell_edit)
+            assert preview["sha256"] == edited["sha256"]
+            cells = await call("documents_read", {"path": edit_path})
+            assert [item["value"] for item in cells["entries"]] == ["after", "keep"]
             search = await call(
                 "search_start",
                 {"path": str(tmp_path / "work"), "pattern": "日本語", "kind": "text"},

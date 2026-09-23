@@ -170,6 +170,15 @@ class WriteDocument(FilePath):
     expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
+class EditSpreadsheetCell(FilePath):
+    sheet: str = Field(min_length=1, max_length=31)
+    cell: str = Field(pattern=r"^[A-Za-z]{1,3}[1-9][0-9]{0,6}$")
+    old_text: str = Field(max_length=32768)
+    new_text: str = Field(max_length=32768)
+    expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    preview: bool = False
+
+
 class ReadFiles(Contract):
     paths: list[str] = Field(min_length=1, max_length=20)
     limit: int = Field(default=200, ge=1, le=1000)
