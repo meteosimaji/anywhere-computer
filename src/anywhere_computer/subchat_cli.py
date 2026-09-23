@@ -10,6 +10,7 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TextIO
 
+import httpx
 from pydantic import Field, TypeAdapter
 
 from .models import Contract, OperationId
@@ -159,6 +160,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
         async with AsyncExitStack() as resources:
             driver: Playwright | None = None
             http_client: APIRequestContext | None = None
+            standalone_http_client: httpx.AsyncClient | None = None
             http_init_lock = asyncio.Lock()
 
             async def runtime() -> Playwright:
@@ -176,6 +178,18 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         http_client = await (await runtime()).request.new_context()
                         resources.push_async_callback(http_client.dispose)
                     return http_client
+
+            async def open_standalone_http() -> httpx.AsyncClient:
+                nonlocal standalone_http_client
+                async with http_init_lock:
+                    if standalone_http_client is None:
+                        standalone_http_client = await resources.enter_async_context(
+                            httpx.AsyncClient(
+                                trust_env=False,
+                                follow_redirects=False,
+                                transport=httpx.AsyncHTTPTransport(retries=0),
+                            ))
+                    return standalone_http_client
 
             async def open_browser() -> BrowserContext:
                 context = await (await runtime()).chromium.launch_persistent_context(
@@ -216,7 +230,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 from .subchat_http import HTTPOnlySubchatBackend
 
                 backend = HTTPOnlySubchatBackend(
-                    open_http, http_session, generation=http_generation,
+                    open_standalone_http, http_session, generation=http_generation,
                     store=store if http_generation is not None else None)
             else:
                 from .subchat_browser.backend import BrowserSubchatBackend

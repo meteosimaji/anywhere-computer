@@ -2,8 +2,10 @@
 import asyncio
 import json
 import subprocess
+from contextlib import asynccontextmanager
 from io import BytesIO
 
+import httpx
 import pytest
 from test_subchat_http_catalog import catalog
 from test_subchat_http_only import CATALOG_URL, SECRET, credentials, session_payload
@@ -187,7 +189,18 @@ class LocalRequests:
         return await self.client.get(url, **kwargs)
 
     async def post(self, url, **kwargs):
+        if url.startswith('https://chatgpt.com/'):
+            url = self.origin + url.removeprefix('https://chatgpt.com')
+        assert url.startswith(self.origin + '/')
         return await self.client.post(url, **kwargs)
+
+    @asynccontextmanager
+    async def stream(self, method, url, **kwargs):
+        if url.startswith('https://chatgpt.com/'):
+            url = self.origin + url.removeprefix('https://chatgpt.com')
+        assert url.startswith(self.origin + '/')
+        async with self.client.stream(method, url, **kwargs) as response:
+            yield response
 
 
 async def setup(tmp_path, api, client):
@@ -204,80 +217,81 @@ async def setup(tmp_path, api, client):
 
 
 async def test_new_and_followup_use_http_only_and_history_final(tmp_path):
-    from playwright.async_api import async_playwright
-
-    async with LocalChat() as api, async_playwright() as playwright:
-        client = await playwright.request.new_context()
-        try:
-            ledger, store, service = await setup(tmp_path, api, client)
+    async with LocalChat() as api:
+        async with httpx.AsyncClient(
+                trust_env=False, follow_redirects=False,
+                transport=httpx.AsyncHTTPTransport(retries=0)) as client:
             try:
-                first = await service.send('a' * 32, 'new prompt', 'Future Chat',
-                    'Future effort', owner=None, http_selection=SELECTION)
-                assert first.state == 'sending' and first.conversation_id == CHAT
-                assert first.user_message_id is not None
-                assert (await service.recover(first.operation_id, owner=None)).state == 'completed'
-                parent = store.get(first.operation_id, owner=None)
-                queued = service.queue('b' * 32, first.operation_id, 'follow-up', owner=None)
-                assert queued.state == 'queued'
-                second = await service.recover(queued.operation_id, owner=None)
-                assert second.state == 'sending' and second.conversation_id == CHAT
-                final = await service.recover(queued.operation_id, owner=None)
-                assert final.state == 'completed' and final.answer == 'answer: follow-up'
-                posts = [(path, body) for method, path, _, body in api.requests
-                         if method == 'POST']
-                assert [path for path, _ in posts] == [
-                    '/backend-api/sentinel/chat-requirements/prepare',
-                    '/backend-api/f/conversation/prepare', '/backend-api/f/conversation'] * 2
-                assert posts[1][1]['partial_query']['id'] == first.user_message_id
-                assert 'conversation_id' not in posts[2][1]
-                assert posts[4][1]['parent_message_id'] == parent.answer_message_id
-                assert posts[5][1]['parent_message_id'] == parent.answer_message_id
-                assert posts[5][1]['messages'][0]['id'] == final.user_message_id
-                assert sum(path.startswith('/backend-api/conversation/') for _, path, _, _
-                           in api.requests) == 1
-                assert store.connection.execute(
-                    'SELECT COUNT(*) FROM subchat_http_dispatch_claims').fetchone()[0] == 2
-                assert PROOF.encode() not in (tmp_path / 'operations.sqlite3').read_bytes()
+                ledger, store, service = await setup(tmp_path, api, client)
+                try:
+                    first = await service.send('a' * 32, 'new prompt', 'Future Chat',
+                        'Future effort', owner=None, http_selection=SELECTION)
+                    assert first.state == 'sending' and first.conversation_id == CHAT
+                    assert first.user_message_id is not None
+                    recovered = await service.recover(first.operation_id, owner=None)
+                    assert recovered.state == 'completed'
+                    parent = store.get(first.operation_id, owner=None)
+                    queued = service.queue('b' * 32, first.operation_id, 'follow-up', owner=None)
+                    assert queued.state == 'queued'
+                    second = await service.recover(queued.operation_id, owner=None)
+                    assert second.state == 'sending' and second.conversation_id == CHAT
+                    final = await service.recover(queued.operation_id, owner=None)
+                    assert final.state == 'completed' and final.answer == 'answer: follow-up'
+                    posts = [(path, body) for method, path, _, body in api.requests
+                             if method == 'POST']
+                    assert [path for path, _ in posts] == [
+                        '/backend-api/sentinel/chat-requirements/prepare',
+                        '/backend-api/f/conversation/prepare', '/backend-api/f/conversation'] * 2
+                    assert posts[1][1]['partial_query']['id'] == first.user_message_id
+                    assert 'conversation_id' not in posts[2][1]
+                    assert posts[4][1]['parent_message_id'] == parent.answer_message_id
+                    assert posts[5][1]['parent_message_id'] == parent.answer_message_id
+                    assert posts[5][1]['messages'][0]['id'] == final.user_message_id
+                    assert sum(path.startswith('/backend-api/conversation/') for _, path, _, _
+                               in api.requests) == 1
+                    assert store.connection.execute(
+                        'SELECT COUNT(*) FROM subchat_http_dispatch_claims').fetchone()[0] == 2
+                    assert PROOF.encode() not in (tmp_path / 'operations.sqlite3').read_bytes()
+                finally:
+                    ledger.close()
             finally:
-                ledger.close()
-        finally:
-            await client.dispose()
+                await client.aclose()
 
 
 async def test_stale_branch_and_lost_post_do_not_replay(tmp_path):
-    from playwright.async_api import async_playwright
-
-    async with LocalChat() as api, async_playwright() as playwright:
-        client = await playwright.request.new_context()
-        try:
-            ledger, store, service = await setup(tmp_path, api, client)
+    async with LocalChat() as api:
+        async with httpx.AsyncClient(
+                trust_env=False, follow_redirects=False,
+                transport=httpx.AsyncHTTPTransport(retries=0)) as client:
             try:
-                first = await service.send('c' * 32, 'parent', 'Future Chat',
-                    'Future effort', owner=None, http_selection=SELECTION)
-                await service.recover(first.operation_id, owner=None)
-                api.stale = True
-                queued = service.queue('d' * 32, first.operation_id, 'stale', owner=None)
-                with pytest.raises(SubchatOutcomeUnknown):
-                    await service.recover(queued.operation_id, owner=None)
-                assert store.get(queued.operation_id, owner=None).state == 'sending'
-                assert sum(path == '/backend-api/f/conversation' for _, path, _, _
-                           in api.requests) == 1
-                assert store.connection.execute('SELECT COUNT(*) FROM '
-                    'subchat_http_dispatch_claims').fetchone()[0] == 1
-                api.lost_generation = True
-                with pytest.raises(SubchatOutcomeUnknown):
-                    await service.send('e' * 32, 'lost', 'Future Chat',
+                ledger, store, service = await setup(tmp_path, api, client)
+                try:
+                    first = await service.send('c' * 32, 'parent', 'Future Chat',
                         'Future effort', owner=None, http_selection=SELECTION)
-                count = len(api.requests)
-                repeated = await service.send('e' * 32, 'lost', 'Future Chat',
-                    'Future effort', owner=None, http_selection=SELECTION)
-                assert repeated.state == 'sending' and len(api.requests) == count
-                assert store.connection.execute('SELECT COUNT(*) FROM '
-                    'subchat_http_dispatch_claims').fetchone()[0] == 2
+                    await service.recover(first.operation_id, owner=None)
+                    api.stale = True
+                    queued = service.queue('d' * 32, first.operation_id, 'stale', owner=None)
+                    with pytest.raises(SubchatOutcomeUnknown):
+                        await service.recover(queued.operation_id, owner=None)
+                    assert store.get(queued.operation_id, owner=None).state == 'sending'
+                    assert sum(path == '/backend-api/f/conversation' for _, path, _, _
+                               in api.requests) == 1
+                    assert store.connection.execute('SELECT COUNT(*) FROM '
+                        'subchat_http_dispatch_claims').fetchone()[0] == 1
+                    api.lost_generation = True
+                    with pytest.raises(SubchatOutcomeUnknown):
+                        await service.send('e' * 32, 'lost', 'Future Chat',
+                            'Future effort', owner=None, http_selection=SELECTION)
+                    count = len(api.requests)
+                    repeated = await service.send('e' * 32, 'lost', 'Future Chat',
+                        'Future effort', owner=None, http_selection=SELECTION)
+                    assert repeated.state == 'sending' and len(api.requests) == count
+                    assert store.connection.execute('SELECT COUNT(*) FROM '
+                        'subchat_http_dispatch_claims').fetchone()[0] == 2
+                finally:
+                    ledger.close()
             finally:
-                ledger.close()
-        finally:
-            await client.dispose()
+                await client.aclose()
 
 
 @pytest.mark.parametrize('stage', [
@@ -285,89 +299,89 @@ async def test_stale_branch_and_lost_post_do_not_replay(tmp_path):
     '/backend-api/f/conversation/prepare',
 ])
 async def test_failed_preparation_keeps_unknown_without_claim_or_retry(tmp_path, stage):
-    from playwright.async_api import async_playwright
-
-    async with LocalChat() as api, async_playwright() as playwright:
+    async with LocalChat() as api:
         api.fail_stage = stage
-        client = await playwright.request.new_context()
-        try:
-            ledger, store, service = await setup(tmp_path, api, client)
+        async with httpx.AsyncClient(
+                trust_env=False, follow_redirects=False,
+                transport=httpx.AsyncHTTPTransport(retries=0)) as client:
             try:
-                with pytest.raises(SubchatOutcomeUnknown):
-                    await service.send('f' * 32, 'unknown preparation', 'Future Chat',
+                ledger, store, service = await setup(tmp_path, api, client)
+                try:
+                    with pytest.raises(SubchatOutcomeUnknown):
+                        await service.send('f' * 32, 'unknown preparation', 'Future Chat',
+                            'Future effort', owner=None, http_selection=SELECTION)
+                    count = len(api.requests)
+                    saved = await service.send('f' * 32, 'unknown preparation', 'Future Chat',
                         'Future effort', owner=None, http_selection=SELECTION)
-                count = len(api.requests)
-                saved = await service.send('f' * 32, 'unknown preparation', 'Future Chat',
-                    'Future effort', owner=None, http_selection=SELECTION)
-                assert saved.state == 'sending' and len(api.requests) == count
-                assert store.connection.execute('SELECT COUNT(*) FROM '
-                    'subchat_http_dispatch_claims').fetchone()[0] == 0
-                assert not any(path == '/backend-api/f/conversation' for _, path, _, _
-                               in api.requests)
+                    assert saved.state == 'sending' and len(api.requests) == count
+                    assert store.connection.execute('SELECT COUNT(*) FROM '
+                        'subchat_http_dispatch_claims').fetchone()[0] == 0
+                    assert not any(path == '/backend-api/f/conversation' for _, path, _, _
+                                   in api.requests)
+                finally:
+                    ledger.close()
             finally:
-                ledger.close()
-        finally:
-            await client.dispose()
+                await client.aclose()
 
 
 async def test_lost_stream_checkpoints_candidate_but_not_receipt(tmp_path):
-    from playwright.async_api import async_playwright
-
-    async with LocalChat() as api, async_playwright() as playwright:
+    async with LocalChat() as api:
         api.lost_after_candidate = True
-        client = await playwright.request.new_context()
-        try:
-            ledger, store, service = await setup(tmp_path, api, client)
+        async with httpx.AsyncClient(
+                trust_env=False, follow_redirects=False,
+                transport=httpx.AsyncHTTPTransport(retries=0)) as client:
             try:
-                with pytest.raises(SubchatOutcomeUnknown):
-                    await service.send('1' * 32, 'candidate only', 'Future Chat',
-                        'Future effort', owner=None, http_selection=SELECTION)
-                saved = store.get('1' * 32, owner=None)
-                assert saved.state == 'sending' and saved.conversation_id == CHAT
-                assert saved.answer is None
-                recovered = await service.recover('1' * 32, owner=None)
-                assert recovered.state == 'sending' and recovered.answer is None
-                assert sum(path == '/backend-api/f/conversation' for _, path, _, _
-                           in api.requests) == 1
+                ledger, store, service = await setup(tmp_path, api, client)
+                try:
+                    with pytest.raises(SubchatOutcomeUnknown):
+                        await service.send('1' * 32, 'candidate only', 'Future Chat',
+                            'Future effort', owner=None, http_selection=SELECTION)
+                    saved = store.get('1' * 32, owner=None)
+                    assert saved.state == 'sending' and saved.conversation_id == CHAT
+                    assert saved.answer is None
+                    recovered = await service.recover('1' * 32, owner=None)
+                    assert recovered.state == 'sending' and recovered.answer is None
+                    assert sum(path == '/backend-api/f/conversation' for _, path, _, _
+                               in api.requests) == 1
+                finally:
+                    ledger.close()
             finally:
-                ledger.close()
-        finally:
-            await client.dispose()
+                await client.aclose()
 
 
 async def test_generation_403_is_claimed_recorded_and_never_reposted(tmp_path):
-    from playwright.async_api import async_playwright
-
-    async with LocalChat() as api, async_playwright() as playwright:
+    async with LocalChat() as api:
         api.fail_stage = '/backend-api/f/conversation'
-        client = await playwright.request.new_context()
-        try:
-            ledger, store, service = await setup(tmp_path, api, client)
+        async with httpx.AsyncClient(
+                trust_env=False, follow_redirects=False,
+                transport=httpx.AsyncHTTPTransport(retries=0)) as client:
             try:
-                with pytest.raises(SubchatOutcomeUnknown) as caught:
-                    await service.send('2' * 32, 'rejected prompt', 'Future Chat',
+                ledger, store, service = await setup(tmp_path, api, client)
+                try:
+                    with pytest.raises(SubchatOutcomeUnknown) as caught:
+                        await service.send('2' * 32, 'rejected prompt', 'Future Chat',
+                            'Future effort', owner=None, http_selection=SELECTION)
+                    assert PROOF not in str(caught.value) and SECRET not in str(caught.value)
+                    saved = store.get('2' * 32, owner=None)
+                    assert saved.state == 'sending'
+                    assert saved.generation_http_status == 403
+                    assert store.connection.execute('SELECT COUNT(*) FROM '
+                        'subchat_http_dispatch_claims').fetchone()[0] == 1
+                    posts = [path for method, path, _, _ in api.requests if method == 'POST']
+                    assert posts == [
+                        '/backend-api/sentinel/chat-requirements/prepare',
+                        '/backend-api/f/conversation/prepare',
+                        '/backend-api/f/conversation',
+                    ]
+                    request_count = len(api.requests)
+                    repeated = await service.send('2' * 32, 'rejected prompt', 'Future Chat',
                         'Future effort', owner=None, http_selection=SELECTION)
-                assert PROOF not in str(caught.value) and SECRET not in str(caught.value)
-                saved = store.get('2' * 32, owner=None)
-                assert saved.state == 'sending'
-                assert saved.generation_http_status == 403
-                assert store.connection.execute('SELECT COUNT(*) FROM '
-                    'subchat_http_dispatch_claims').fetchone()[0] == 1
-                posts = [path for method, path, _, _ in api.requests if method == 'POST']
-                assert posts == [
-                    '/backend-api/sentinel/chat-requirements/prepare',
-                    '/backend-api/f/conversation/prepare',
-                    '/backend-api/f/conversation',
-                ]
-                request_count = len(api.requests)
-                repeated = await service.send('2' * 32, 'rejected prompt', 'Future Chat',
-                    'Future effort', owner=None, http_selection=SELECTION)
-                assert repeated.state == 'sending' and len(api.requests) == request_count
-                assert PROOF.encode() not in (tmp_path / 'operations.sqlite3').read_bytes()
+                    assert repeated.state == 'sending' and len(api.requests) == request_count
+                    assert PROOF.encode() not in (tmp_path / 'operations.sqlite3').read_bytes()
+                finally:
+                    ledger.close()
             finally:
-                ledger.close()
-        finally:
-            await client.dispose()
+                await client.aclose()
 
 
 def test_handoff_parser_redacts_secrets_and_requires_exact_session():

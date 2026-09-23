@@ -1,7 +1,6 @@
 """Browser-free controller acceptance with synthetic sessions, never live generation."""
 import json
 from io import BytesIO, StringIO
-from types import SimpleNamespace
 
 import pytest
 from test_subchat_http_catalog import catalog
@@ -41,18 +40,25 @@ class Client:
         assert kwargs == {'headers': {'authorization': SECRET,
                                      'chatgpt-account-id': 'fixture-account',
                                      'oai-language': 'ja'},
-                          'timeout': 15000, 'max_redirects': 0, 'max_retries': 0}
+                          'timeout': 15.0, 'follow_redirects': False}
 
-        async def body():
-            assert self.status.get(url, 200) == 200, 'Never read a refusal body'
-            return json.dumps(catalog() if url == CATALOG_URL else self.payload).encode()
+        payload_value = self.payload
+        response_status = self.status.get(url, 200)
+        owner = self
 
-        async def dispose():
-            self.disposed += 1
+        class Response:
+            status_code = response_status
+            headers = {'content-type': 'application/json'}
 
-        return SimpleNamespace(status=self.status.get(url, 200),
-                               headers={'content-type': 'application/json'},
-                               body=body, dispose=dispose)
+            @property
+            def content(self):
+                assert self.status_code == 200, 'Never read a refusal body'
+                return json.dumps(catalog() if url == CATALOG_URL else payload_value).encode()
+
+            async def aclose(inner_self):
+                owner.disposed += 1
+
+        return Response()
 
 
 def backend(client, *, authenticated=True):

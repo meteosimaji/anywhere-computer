@@ -1,15 +1,15 @@
 # Browser-free subchat recovery
 
 The HTTP-only adapter retrieves model catalogs and results for known conversation/input
-identities without launching Chrome. New generation is not implemented. It reuses
-the existing ledger and HTTP projections; it does not implement independent login
-or credential refresh. See [live probe evidence](SUBCHAT-PROBE.md).
+identities without launching Chrome and can optionally send ordinary Chat requests
+from an explicit in-memory generation handoff. It reuses the existing ledger and
+HTTP projections; it does not implement independent login or credential refresh.
+See [live probe evidence](SUBCHAT-PROBE.md) and the [generation contract](SUBCHAT-HTTP-ONLY-GENERATION.md).
 
 The [2026-09-22 consolidated audit (Japanese)](SUBCHAT-HTTP-AUDIT-2026-09-22.ja.md)
 records request-contract findings, authentication blockers, transport regressions,
-and the proposed HTTP sender design, with [local evidence and reproduction
-instructions](research/2026-09-22-subchat-http/README.md). These are research results,
-not an enabled generation backend or a new live-send acceptance.
+and the sender design before the explicit handoff implementation. Historical conclusions
+there should be read with the later generation contract and acceptance below.
 
 The follow-up [HTTP/Codex mechanism study](SUBCHAT-HTTP-MECHANISMS-2026-09-22.ja.md)
 traces selected third-party implementations and reports isolated characterization
@@ -19,11 +19,17 @@ do not enable a production sender or establish live ChatGPT acceptance.
 ## Implemented behavior
 
 `HTTPOnlySubchatBackend` reuses `ChatHTTPReader`, existing receipt/final projections
-and the existing SQLite submission store. It has no browser factory and no generation
-request implementation. The original operation, owner namespace, account binding,
+and the existing SQLite submission store. With an explicit in-memory generation
+handoff it supports one-shot ordinary Chat dispatch; it has no browser factory. The
+original operation, owner namespace, account binding,
 prompt/resources, correlation IDs, final-completion and interruption checks remain
 in effect. CLI/MCP use the existing local `owner=None` namespace; this does not grant
 access to a different owner's records or implement multi-account authentication.
+All HTTP-only catalog/history GETs, Sentinel and conversation preparation POSTs,
+current-node checks, and generation SSE use one process-owned HTTPX `AsyncClient`. It
+disables environment proxy discovery and redirects, configures zero transport retries,
+and is closed when the CLI/MCP process exits. The separate browser-assisted mode keeps
+its Playwright request context.
 
 `--http-only` needs no `--browser-profile`. It rejects browser-profile, minimized and
 `--http-read` options instead of silently changing transport. Status/list/cancel and
@@ -47,8 +53,8 @@ local parent and stdin channel; it is not inter-process caller authentication.
 Startup waits for the supplying process's line; it has a size limit, not a promised
 startup-time deadline.
 
-GETs retain `max_redirects=0`, `max_retries=0` and a 15-second transport timeout,
-within the adapter's 20-second read deadline. A 401 is latched for the session;
+GETs use `follow_redirects=False`, zero HTTPX transport retries and a 15-second
+request timeout, within the adapter's 20-second read deadline. A 401 is latched for the session;
 a 403 is latched for that exact URL. Error response bodies are not read by the
 reader. Credentials are not refreshed and failures cannot fall back to a browser.
 A fresh controller/session is an explicit operator decision, not an automatic
@@ -61,11 +67,12 @@ when its parent completes. Repeating an already reserved/completed operation ret
 the saved record under the existing idempotency contract. No new ledger, state value
 or credential table was added.
 
-The CLI `capabilities` action and MCP `subchat_capabilities` report the configured
-transport without network activity. HTTP-only mode reports `generation_transport:
-unavailable`, `http_selection_send_supported: false`, and no independent login or
-credential refresh. Its catalog can expose dynamic choices for inspection, not as
-permission to send. MCP `source=ui` reports `ui_unavailable`, without changing source.
+The CLI `capabilities` action and MCP `subchat_capabilities` report configured
+transport without network activity. HTTP-only mode with no generation handoff reports
+`generation_transport: unavailable`; with a valid handoff it reports
+`explicit_handoff_http`. Neither mode supports independent login or credential refresh.
+The catalog exposes exact dynamic selections required for sending. MCP `source=ui`
+reports `ui_unavailable`, without changing source.
 
 ## Usage
 
@@ -94,15 +101,17 @@ conversation through a fresh APIRequestContext. It returned the same final ID
 independently read through Codex and 8,570 characters. That code constructed no
 BrowserContext and launched no Chrome process; existing user browsers were left
 untouched. Authorization came from the already established in-memory session.
-This establishes live recovery, not cold-start authentication or new generation.
+This establishes live recovery, not cold-start authentication or authentication renewal.
 
-Tests cover CLI and stdio MCP subprocesses, a real HTTP client against a local
+Tests cover CLI and stdio MCP subprocesses, real HTTPX requests against a local
 fixture server, identity/account boundaries, unavailable operations, credential
-redaction and disposal. Browser launch is forbidden in the HTTP-only client fixture.
+redaction and client disposal. The HTTP-only CLI path does not start Playwright;
+Chrome is not required for saved-state recovery, authenticated history GETs or catalog GETs.
 
-New-chat sending, follow-ups, stop and authentication renewal remain separate
-work. The earlier constructed generation POST returned 403 even with an
-associated browser request client. This mode does not retry or replace that send.
+The earlier constructed generation POST returned 403 even with an associated browser
+request client. It predates the explicit successful Chrome handoff tested below. The
+current dispatcher never retries or replaces an uncertain send. Authentication renewal
+and provider-side stop remain unsupported.
 The browser-assisted sending path also retains its failed fullscreen interference
 acceptance; minimized windows are not a guarantee of non-interference.
 
