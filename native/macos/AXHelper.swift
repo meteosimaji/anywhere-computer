@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// Experimental native AX provider helper. See docs/GUI-RELIABILITY-2026-09-14.md.
+// Experimental native AX provider helper. See docs/GUI-MCP.md.
 import AppKit
 import ApplicationServices
 import CryptoKit

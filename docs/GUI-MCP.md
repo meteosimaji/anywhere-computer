@@ -30,7 +30,7 @@ containing the manifest-verified native helper. It does not provide coordinate
 clicks, screenshots, keyboard simulation or Windows UI Automation. It does not
 deliberately activate the app as a fallback; the app's own action can still affect
 focus or open windows. Build prerequisites and scoped live/packaged evidence are
-in [the native reliability record](GUI-RELIABILITY-2026-09-14.md).
+in the local historical archive's native reliability record.
 
 ### Peekaboo MCP adapter: target a window, then verify the effect
 
@@ -178,7 +178,7 @@ Anywhere Computerに独自の毎回承認を追加したものではなく、こ
 
 alpha8の型付きツールでは、更新後のGPT-5.6 Sol（中程度）で観測・Escape・入力・42の再観測・
 セッション終了が実成功しました。キー表記の手戻りも修正して再試験済みです。
-詳細は[更新検証記録](UPDATE-VERIFICATION-ALPHA8-2026-09-13.md)を参照してください。
+詳細な更新検証記録はローカルの履歴資料に保管しています。
 この一試験の成功が、ホスト側の判定を将来含めて保証するものではありません。
 
 ## 再現可能な実機試験

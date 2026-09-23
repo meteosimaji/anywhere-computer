@@ -7,12 +7,13 @@ GitHubのソースZIPには実行用Pythonは含まれません。以下は同�
 公開alpha 6のQuality CI run 34693834133はmacOS・Windows・Ubuntuすべて成功し、
 ZIP生成・展開後のruntime-only試験・出所証明の生成と検証を通過しました。
 この結果は各OSでの資格情報ストアやChatGPT接続の実機受け入れを代替しません。
-macOSの常駐更新は[更新検証記録](UPDATE-VERIFICATION-2026-09-12.md)、更新手順は
-[更新ガイド](UPDATING.md)を参照してください。日付付きの記録はその時点の検証範囲です。
+macOSの常駐更新手順は[更新ガイド](UPDATING.md)を参照してください。
+日付付きの実機検証記録はローカルの履歴資料に保管しています。
 
 ## Beta 1 verification note
 
-Beta 1 freezes the existing features; see [scope and acceptance](BETA1.md).
+Beta 1 freezes the existing features; its historical scope and acceptance record
+is retained in the local archive.
 When using the extracted interpreter to verify its own package, start the verifier
 with `-B -I` so Python does not rewrite timestamp-based bytecode before the manifest
 check. Always use a fresh extraction. A verifier running from an independent
@@ -50,8 +51,7 @@ macOS は実行権限を保つ標準のアーカイブユーティリティま�
 別ディレクトリへ ZIP から展開。PATH を /usr/bin:/bin に限定し、PYTHONHOME と
 PYTHONPATH を無効な場所に向けても CLI 起動・依存 import・日本語ファイルの書込/読込・
 別 Python プロセスを使う正規表現検索が成功した。Linux ARM64 同梱版も Ubuntu の隔離
-ゲストで生成・検証済み（詳細は `research/2026-09-09-linux-guest-verification.md`）。
-Windowsのalpha9同梱配布物はWindows VMで起動・Plugin接続・ファイル/端末操作を検証済みです。詳細は[Windows受け入れ記録](research/2026-09-13-windows-owner-pipe-acceptance.md)を参照してください。
+ゲストで生成・検証済み。Windowsのalpha9同梱配布物はWindows VMで起動・Plugin接続・ファイル/端末操作を検証済みです。
 
 配布物自体のエージェント試験は次で再実行できる。信頼済み ZIP を展開したディレクトリを
 指定する。実行時に OS 資格情報ストアへのアクセスが必要で、試験専用の一時資格情報を
@@ -72,7 +72,7 @@ uv run --offline python scripts/verify_portable.py '/path/to/Anywhere Computer'
 開発ツリーなどからの混入を拒否する。トンネル監督の子 Python も `-I` で起動する。
 公開試験には別途 cloudflared と試験専用トンネルが必要で、これらは ZIP に含まれない。
 
-公開試験の結果は `docs/research/2026-09-09-portable-internet-verification.json` に記録する。
+当時の公開試験の結果はローカルの履歴資料に保管しています。
 同一 Mac から公開エッジを経由した試験であり、別端末や ChatGPT UI からの接続ではない。
 通常の常用プロフィールを試験へ流用せず、専用マーカー付きの試験プロフィールだけを使う。
 
@@ -118,7 +118,7 @@ uv もこのダウンロード設定も不要。三 OS の CI では新しい環
 
 Linux ARM64 でも通常モードの実エージェント試験が成功した。Ubuntu 24.04.4 の隔離
 ゲストで GNOME Secret Service を使い、認証付き起動・端末再接続・停止・試験用資格情報の
-削除を確認した。詳細は `research/2026-09-09-linux-native-vault-verification.md`。
+削除を確認した。詳細な記録はローカルの履歴資料に保管しています。
 利用可能で解錠済みの OS 資格情報サービスが必要で、Windows や ChatGPT UI の実測ではない。
 
 対話セットアップ完了時には、同じ状態保存先を指定した再開・起動・診断のコマンドを
@@ -135,7 +135,7 @@ Linux ARM64 でも通常モードの実エージェント試験が成功した�
 含む新規展開先で通常の認証付きエージェント試験が成功し、試験用 Keychain 資格情報の
 削除まで確認した。制限した PATH と無効な PYTHONHOME/PYTHONPATH の環境でも
 `Setup ChatGPT.command --help` が成功。一時展開先は除去済み。ハッシュと検証結果は
-`research/2026-09-09-portable-setup-verification.json`。これは署名・公証、Finder からの
+ローカルの履歴資料に保管しています。これは署名・公証、Finder からの
 起動、公開 HTTPS、ChatGPT UI、Windows の受け入れ試験ではない。
 
 ## CI trigger policy

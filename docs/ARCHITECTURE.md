@@ -55,7 +55,7 @@ problem, distinct from network reachability.
 Authenticated TLS and HTTP MCP adapters, OAuth grant/rotation endpoints and an
 OS-keyring client renewal manager are implemented. macOS checks include public
 HTTPS roundtrips, credential renewal, shared-engine migration and reconnection
-after actual native-service upgrades. See the dated [update receipts](UPDATE-VERIFICATION-2026-09-12.md).
+after actual native-service upgrades. The dated receipts are in the local historical archive.
 An embedded browser password/consent route is implemented with native-keyring
 owner verification. An optional cloudflared child adapter can use an owner-provisioned
 constant tunnel with native-keyring/OS-pipe credential handoff and bounded restarts;

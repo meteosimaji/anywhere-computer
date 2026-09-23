@@ -1,7 +1,7 @@
 # 変更履歴
 
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
-詳しい実機結果は[更新・再接続の検証記録](docs/UPDATE-VERIFICATION-2026-09-12.md)を参照してください。
+日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
 ## 0.1.0b1 / Plugin 0.1.0-beta.1 — published prerelease (2026-09-14)
 
@@ -16,7 +16,6 @@
 - These changes are integrated through PR #36. They are not included in the
   published alpha 9 ZIP. Beta 1 freezes existing features; remaining roadmap
   features are explicitly outside its supported scope.
-  See [implementation status](docs/IMPLEMENTATION-STATUS.md).
 
 ## 0.1.0a9 / Plugin 0.1.0-alpha.9 — published prerelease (2026-09-13)
 

@@ -74,7 +74,7 @@ write/read across MCP sessions and rejection after device revocation through
 Cloudflare's public addresses. The first attempt timed out because the OS
 resolver did not resolve the new hostname even when a separate DNS query did;
 the runner now waits for DNS publication and records its fallback explicitly.
-See the sanitized [verification receipt](research/2026-09-09-internet-verification.json).
+See the sanitized verification receipt.
 
 The requesting client and agent ran on the **same Mac**, with requests leaving
 through the public HTTPS edge and returning through the outbound tunnel. This
@@ -131,7 +131,7 @@ The final run recorded **17 MiB / 68 chunks in 17.64 seconds**, full SHA-256
 agreement, and **6.60 seconds** from connector termination to the successful
 same-session read. It also verified no-store response headers for metadata,
 consent, token exchange/refresh and MCP responses. See the
-[constant-route receipt](research/2026-09-09-constant-internet-verification.json)
+constant-route receipt
 for the exact runtime/script hashes and individual checks. These timings are one
 macOS observation, not a throughput or recovery-time guarantee.
 
@@ -147,23 +147,23 @@ are retained** for subsequent work. The probe server and connector are stopped
 after the test, so this receipt is not evidence of a currently online production
 endpoint. OS autostart, health monitoring, full browser onboarding, two physical
 devices and live Windows/Linux internet paths remain unverified.
-The separate [post-test route readback](research/2026-09-09-constant-route-setup.json)
+The separate post-test route readback
 confirms the retained DNS/ingress/native credential binding, zero provider
 connections, released loopback port, and absence of a permanent HTTP owner password.
 
-The subsequent [refresh verification receipt](research/2026-09-09-internet-refresh-verification.json)
+The subsequent refresh verification receipt
 also records public token rotation and continuing the same MCP session. Each
 receipt retains its tested implementation and script hashes; older receipts
 remain historical evidence and are not claims about newer revisions.
 
-The [client credential verification receipt](research/2026-09-09-internet-client-credentials-verification.json)
+The client credential verification receipt
 records the native macOS keyring save/reopen, automatic client renewal over public
 HTTPS, continued MCP session, and deletion of the disposable credential. This
 probe supplies its DNS-resolved, hostname-verified HTTPS callback to the client;
 the default client HTTPS transport is exercised separately against a local TLS
 server. Neither test establishes a production connector or browser login.
 
-The [native login receipt](research/2026-09-09-internet-native-login-verification.json)
+The native login receipt
 uses `native_login.login` to obtain and install the credentials used by `HTTPBackend`.
 It records the owner-password consent flow and closure of the dynamically assigned
 loopback callback. Browser rendering remains explicitly false. The injected code
@@ -172,14 +172,14 @@ the default code exchange transport separately has real TLS tests for hostname
 verification, bounded responses, and no redirects or retries. On success, the
 same probe continues through file operations, refresh, reconnect and revocation.
 
-The [HTTP client verification receipt](research/2026-09-09-internet-http-client-verification.json)
+The HTTP client verification receipt
 uses `HTTPBackend` itself for tool calls. Its injected lost write response is
 recovered by operation ID without replay (one write POST); automatic token renewal
 and explicit HTTP-session-expiry recovery are also verified. This test does not
 claim a naturally occurring network outage or a browser authorization flow.
 
 
-The [public download receipt](research/2026-09-09-internet-download-verification.json)
+The public download receipt
 adds a complete 17 MiB transfer and midpoint client recreation through the same
 public edge. Download time includes range retrieval, client recreation and close,
 not initial authorization or copy preparation. It verifies Engine operation

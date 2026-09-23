@@ -54,7 +54,7 @@ OS 資格情報ストア内の検証用データを新しい salt で更新し�
 行ってください。現在のパスワードを忘れた場合の復旧・リセット機能は未提供です。
 
 macOS の実際の Keychain で変更後の新パスワードの検証と旧パスワードの拒否を確認し、
-[試験記録](research/2026-09-09-owner-password-rotation-verification.json)を保存しています。
+試験記録をローカルの履歴資料に保存しています。
 この記録のパスワード変更部分は Python API 経由です。CLI の非表示入力と確認不一致は
 自動テストで検証しています。
 
@@ -138,9 +138,9 @@ DB が消失・不一致の場合は起動を拒否し、失効済みの権限�
 実行中の失効、再有効化後の古い接続の拒否と新規ログイン、再起動後の状態保持を確認します。
 認可 DB の旧バージョンからの移行と、失効前の認可画面の拒否も回帰テストに含みます。
 CLI プロセス試験は現在 POSIX 用で、macOS での
-実行記録を [保存しています](research/2026-09-09-http-service-verification.json)。
+実行記録をローカルの履歴資料に保存しています。
 再有効化コマンド・繰り返し実行・再起動後の状態確認の
-[実行記録](research/2026-09-09-http-service-reauthorization-verification.json)も保存しています。
+実行記録も同じ履歴資料に保存しています。
 Windows/Linux の実機上の資格情報ストアとサービス管理、自動起動、公開 HTTPS との一体化、
 スリープ復帰・長時間運用は別の検証項目です。
 
@@ -191,5 +191,5 @@ Ctrl+C、またはPOSIXのSIGTERMで監視を止めると、自分が起動し�
 [scripts/verify_http_watch.py](../scripts/verify_http_watch.py) はPOSIXの使い捨て環境で
 native keyringと実http-watchを使い、子の強制終了後の同一ポート復帰、重複監視拒否、
 監視中断後の子終了とクリーンアップを確認します。
-[2026-09-09の実行記録](research/2026-09-09-http-watch-verification.json) は当該Macの結果です。
+2026-09-09の実行記録（ローカルの履歴資料）は当該Macの結果です。
 Windowsの実対話コンソールや公開HTTPS経路での障害復旧は、この記録の検証範囲に含みません。

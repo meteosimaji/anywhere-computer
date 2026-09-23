@@ -32,8 +32,7 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 - [更新と復旧](docs/UPDATING.md)
 - [複数PCの操作](docs/DEVICE-ROUTING.md)
 - [GUIの導入条件と制限](docs/GUI-MCP.md)
-- [subchatの契約と検証記録](docs/SUBCHAT-PROBE.md)
-- [公開ベータの対応範囲と証拠](docs/BETA1.md)
+- [subchatの使い方と制限](docs/SUBCHAT-PROBE.md)
 - [今後の開発方針](docs/PRODUCT-ROADMAP.md)
 - [文書の正本と更新方法](docs/DOCUMENTATION.md)
 <!-- END GENERATED: project-reference -->

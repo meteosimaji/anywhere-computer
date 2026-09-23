@@ -168,8 +168,8 @@ Validation of this preset/issuer update (2026-09-09):
 - Public HTTPS integration verified matching issuer metadata/response, native login,
   one-dispatch lost-write recovery, 17 MiB hash-checked download, refresh rotation,
   grant revocation and a 6.67-second owned tunnel-child recovery retaining its MCP session.
-  [Public receipt](research/2026-09-09-internet-issuer-verification.json) matches the current
-  verifier script and runtime. This was a disposable engine through the public edge,
+  The archived public receipt records the tested verifier script and runtime.
+  This was a disposable engine through the public edge,
   not a ChatGPT app UI test or a production hosting setup.
 - The fixture listener, owned connector children, temporary files and temporary
   keyring records were removed. The dedicated tunnel's retained token/route were preserved.

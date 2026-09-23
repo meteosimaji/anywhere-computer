@@ -33,8 +33,7 @@ Canonical guides:
 - [Updates and recovery](docs/UPDATING.md)
 - [Multiple computers](docs/DEVICE-ROUTING.md)
 - [GUI provider setup and limits](docs/GUI-MCP.md)
-- [Subchat contract and scoped evidence](docs/SUBCHAT-PROBE.md)
-- [Published beta scope and evidence](docs/BETA1.md)
+- [Subchat usage and limits](docs/SUBCHAT-PROBE.md)
 - [Future milestones](docs/PRODUCT-ROADMAP.md)
 - [Documentation ownership and checks](docs/DOCUMENTATION.md)
 <!-- END GENERATED: project-reference -->
