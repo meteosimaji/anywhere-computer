@@ -23,7 +23,7 @@ class LocalGeneration:
     async def __aenter__(self):
         self.server = await asyncio.start_server(self.handle, '127.0.0.1', 0)
         self.url = ('http://127.0.0.1:' + str(self.server.sockets[0].getsockname()[1])
-                    + '/backend-api/conversation')
+                    + '/backend-api/f/conversation')
         return self
 
     async def __aexit__(self, *_):
@@ -34,7 +34,7 @@ class LocalGeneration:
         try:
             head = await reader.readuntil(b'\r\n\r\n')
             lines = head.decode('ascii').split('\r\n')
-            assert lines[0] == 'POST /backend-api/conversation HTTP/1.1'
+            assert lines[0] == 'POST /backend-api/f/conversation HTTP/1.1'
             headers = dict(line.lower().split(': ', 1) for line in lines[1:] if ': ' in line)
             body = await reader.readexactly(int(headers['content-length']))
             self.requests.append((headers, json.loads(body)))

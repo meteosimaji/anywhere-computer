@@ -79,7 +79,7 @@ def _localhost_url(url: str) -> None:
     if (parsed.scheme != 'http' or parsed.hostname != '127.0.0.1'
             or parsed.port is None or parsed.username is not None
             or parsed.password is not None or parsed.fragment or parsed.query
-            or parsed.path != '/backend-api/conversation'):
+            or parsed.path != '/backend-api/f/conversation'):
         raise ValueError('Only the exact loopback generation test path is supported')
 
 
