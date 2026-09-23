@@ -215,7 +215,9 @@ async def test_cli_read_only_mode_wires_filtered_stdio_session(tmp_path, monkeyp
 async def test_plugin_capabilities_describe_exposed_read_only_tools(tmp_path):
     from test_subchat_http_only import credentials
 
+    from anywhere_computer import __version__
     from anywhere_computer.models import Request
+    from anywhere_computer.runtime_identity import runtime_identity
     from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
 
     ledger = Ledger(tmp_path)
@@ -237,6 +239,8 @@ async def test_plugin_capabilities_describe_exposed_read_only_tools(tmp_path):
         assert reply.data['http_selection_send_supported'] is False
         assert reply.data['queue_dispatch'] == 'unavailable'
         assert reply.data['queue_watch_supported'] is False
+        assert reply.data['implementation_version'] == __version__
+        assert reply.data['implementation_runtime_id'] == runtime_identity()
         assert 'subchat_delete' not in {tool['name'] for tool in await server.catalog()}
     finally:
         await server.close()

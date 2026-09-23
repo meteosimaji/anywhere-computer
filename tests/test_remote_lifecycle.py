@@ -139,7 +139,8 @@ for stage in ("remote-watch", "remote-serve", "tunnel-run"):
                 },
             }
             async with httpx.AsyncClient(
-                base_url=f"http://127.0.0.1:{unused_tcp_port}", trust_env=False
+                base_url=f"http://127.0.0.1:{unused_tcp_port}", trust_env=False,
+                timeout=httpx.Timeout(5.0, read=30.0),
             ) as client:
                 token = await authenticate(client)
                 headers = await initialize(client, token)
@@ -164,7 +165,8 @@ for stage in ("remote-watch", "remote-serve", "tunnel-run"):
                 assert (await diagnose_http(state))["state"] == "metadata_reachable"
                 target_file.write_text("external change after crash")
                 async with httpx.AsyncClient(
-                    base_url=f"http://127.0.0.1:{unused_tcp_port}", trust_env=False
+                    base_url=f"http://127.0.0.1:{unused_tcp_port}", trust_env=False,
+                    timeout=httpx.Timeout(5.0, read=30.0),
                 ) as client:
                     # The persisted grant survives; the runtime's MCP session is new.
                     headers = await initialize(client, token)

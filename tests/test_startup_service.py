@@ -337,13 +337,14 @@ def test_pre_bytecode_receipt_can_be_inspected_and_upgraded(registration):
     old = service._record(directory)
     assert old is not None and not old.bytecode_python
     definition = service._definition(directory, old)
-    assert b'-B' not in definition.content
+    encoding = 'utf-16' if definition.platform == 'win32' else 'utf-8'
+    assert '-B' not in definition.content.decode(encoding)
     definition.path.write_bytes(definition.content)
     assert service.startup_status(directory)['native_running'] is True
     service.upgrade_startup(directory)
     current = service._record(directory)
     assert current is not None and current.bytecode_python
-    assert b'-B' in service._definition(directory, current).content
+    assert '-B' in service._definition(directory, current).content.decode(encoding)
     assert calls == ['install', 'uninstall', 'files_removed', 'install']
 
 

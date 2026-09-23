@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -28,16 +29,17 @@ def test_manifest_rejects_changed_payload(tmp_path):
 
 
 def test_repeated_verification_does_not_write_bytecode(tmp_path, monkeypatch, capsys):
-    runtime = tmp_path / "runtime" / "bin"
+    runtime = tmp_path / "runtime" / ("" if os.name == "nt" else "bin")
     runtime.mkdir(parents=True)
-    interpreter = runtime / "python3"
+    interpreter = runtime / ("python.exe" if os.name == "nt" else "python3")
     interpreter.write_bytes(b"fixture")
     package = tmp_path / "package"
     package.mkdir()
     module = package / "worker_module.py"
     module.write_text("VALUE = 42\n")
     (tmp_path / "manifest.json").write_text(json.dumps({"files": {
-        "runtime/bin/python3": hashlib.sha256(interpreter.read_bytes()).hexdigest(),
+        interpreter.relative_to(tmp_path).as_posix():
+            hashlib.sha256(interpreter.read_bytes()).hexdigest(),
         "package/worker_module.py": hashlib.sha256(module.read_bytes()).hexdigest(),
     }}))
     commands = []

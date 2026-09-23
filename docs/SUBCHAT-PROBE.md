@@ -29,6 +29,11 @@ operation ID for `subchat_wait` or `subchat_recover`. Keep the controller alive
 until a pending send reaches a confirmed result. This mode uses Chrome to send;
 it does not prove independent HTTP-only generation.
 
+`subchat_capabilities` also returns `implementation_version` and
+`implementation_runtime_id` for the Subchat server that answered this call.
+Check these separately from the common engine version and runtime ID returned
+by `computer_status`; an existing Plugin session may retain an older wheel.
+
 `subchat_download_file` takes a saved completed operation ID and an exact
 `sandbox:/mnt/data/...` link from its final answer. It rechecks the bound
 account and answer, then returns file metadata and at most 512 KiB of base64

@@ -9,9 +9,11 @@ from typing import Literal, cast
 
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
+from . import __version__
 from .mcp_server import Catalog as ToolCatalog
 from .mcp_server import Execute, MCPSession
 from .models import Contract, OperationId, Reply, Request
+from .runtime_identity import runtime_identity
 from .subchat import (
     SubchatAccessError,
     SubchatBrowserClosed,
@@ -464,6 +466,8 @@ def session(service: Subchats, *,
                                 'deletion_transport': 'unavailable'}
                 data = TypeAdapter(dict[str, JsonValue]).validate_python({
                     **reported,
+                    'implementation_version': __version__,
+                    'implementation_runtime_id': runtime_identity(),
                     'queue_watch_supported': (not read_only
                                               and hasattr(service.backend, 'queue_watch_ready')),
                 })
