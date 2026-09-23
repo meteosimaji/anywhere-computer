@@ -1,6 +1,7 @@
 """Local stdio adapter, reusable through Anywhere's existing direct-MCP sessions."""
 
 import asyncio
+import base64
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
@@ -24,6 +25,7 @@ from .subchat import (
 )
 from .subchat_content import SubchatResources
 from .subchat_delete import DeleteRequest, SubchatDeletionUnknown, delete_saved
+from .subchat_http_download import SandboxFileTooLarge
 from .subchat_state import (
     SubchatAccountMismatch,
     SubchatHTTPSelection,
@@ -70,10 +72,15 @@ class QueueWatch(OperationId):
     lease_seconds: int = Field(default=900, ge=30, le=1800)
 
 
+class SandboxFile(OperationId):
+    sandbox_link: str = Field(min_length=1, max_length=1024)
+    max_bytes: int = Field(default=512 * 1024, ge=1, le=512 * 1024)
+
+
 QUEUE_WATCH_INTERVAL = 5.0
 READ_ONLY_TOOLS = frozenset({
     'subchat_capabilities', 'subchat_catalog', 'subchat_list',
-    'subchat_recover', 'subchat_status', 'subchat_wait',
+    'subchat_recover', 'subchat_status', 'subchat_wait', 'subchat_download_file',
 })
 
 
@@ -138,8 +145,10 @@ INSTRUCTIONS = (
     'another Chat sandbox, provide its source conversation URL and exact file name '
     'in the target prompt. The target Chat can be asked to find it in Library and '
     'materialize it into its own sandbox; verify that it actually read the expected bytes. '
-    'A sandbox path alone does not grant cross-Chat access, and Library materialization '
-    'is Chat-driven rather than a Subchat HTTP file-transfer tool. A queue follow-up does '
+    'A sandbox path alone does not grant cross-Chat access. HTTP-only sessions expose '
+    'subchat_download_file for one exact saved final-answer link, returning at most 512 KiB '
+    'of base64 bytes without local storage or a Library upload. Library materialization '
+    'remains Chat-driven. A queue follow-up does '
     'not implicitly reattach resources. Reference local files with device ID and '
     'absolute path in the prompt and use the selected computer plugin to read them.'
 )
@@ -323,6 +332,15 @@ def session(service: Subchats, *,
         definitions['subchat_capabilities'] = (
             Contract, 'Read configured transport capabilities without network or browser work.')
 
+    download_sandbox_file = getattr(service.backend, 'download_sandbox_file', None)
+    if download_sandbox_file is not None:
+        definitions['subchat_download_file'] = (
+            SandboxFile, 'Retrieve one exact sandbox link from a saved, completed ordinary Chat '
+            'answer through the authenticated HTTP session. The server rechecks the account, '
+            'conversation and final answer, then returns base64 bytes and metadata without '
+            'writing a local file. Each call is limited to 512 KiB. '
+            'This does not upload the file to another Chat or Library.')
+
     if read_only and observe_http_catalog is not None:
         definitions['subchat_catalog'] = (
             ReadOnlyHTTPCatalog,
@@ -347,7 +365,8 @@ def session(service: Subchats, *,
         return [cast(JsonValue, {
             'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
             'annotations': {'readOnlyHint': name in {
-                'subchat_capabilities', 'subchat_catalog', 'subchat_status', 'subchat_list'},
+                'subchat_capabilities', 'subchat_catalog', 'subchat_status', 'subchat_list',
+                'subchat_download_file'},
                             'destructiveHint': name == 'subchat_delete', 'openWorldHint': True},
         }) for name, (schema, description) in definitions.items()]
 
@@ -357,6 +376,26 @@ def session(service: Subchats, *,
                          error='This Subchat session permits observation only.',
                          data={'error_code': 'read_only', 'dispatched': False})
         try:
+            if request.tool == 'subchat_download_file' and download_sandbox_file is not None:
+                target_file = SandboxFile.model_validate(request.arguments)
+                try:
+                    downloaded = await download_sandbox_file(
+                        target_file.operation_id, target_file.sandbox_link,
+                        max_bytes=target_file.max_bytes)
+                except SandboxFileTooLarge:
+                    return Reply(operation_id=request.operation_id, state='failed',
+                                 error='The Chat file exceeds the requested byte limit.',
+                                 data={'error_code': 'file_too_large',
+                                       'max_bytes': target_file.max_bytes,
+                                       'automatic_retry': False})
+                return Reply(operation_id=request.operation_id, state='completed', data={
+                    'submission_operation_id': target_file.operation_id,
+                    'sandbox_link': target_file.sandbox_link,
+                    'file_name': downloaded.file_name,
+                    'mime_type': downloaded.mime_type,
+                    'file_size_bytes': downloaded.file_size_bytes,
+                    'content_base64': base64.b64encode(downloaded.content).decode('ascii'),
+                })
             if request.tool == 'subchat_queue_watch':
                 watch = QueueWatch.model_validate(request.arguments)
                 current = service.store.get(watch.operation_id, owner=None)

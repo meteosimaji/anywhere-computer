@@ -107,7 +107,9 @@ profile must already be logged in and must not be
 open in another Chrome process. Check `subchat_capabilities` before use:
 `generation_transport=unavailable` means this Plugin server cannot send or queue
 Chat messages. Its read-only tool catalog exposes capabilities, HTTP catalog,
-saved list/status, recovery and wait. Recover only an existing operation's exact
+saved list/status, recovery, wait, and `subchat_download_file` for one exact
+saved final-answer sandbox link (up to 512 KiB of base64). This does not write
+locally or upload into another Chat or Library. Recover only an existing operation's exact
 ID; a missing or pending answer does not authorize a new send. The local profile
 and ledger are separate from the main Anywhere engine. Set absolute paths in
 `ANYWHERE_SUBCHAT_CHROME_LOGIN_PROFILE` and `ANYWHERE_SUBCHAT_STATE_DIR` to

@@ -3,6 +3,15 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a6 / Plugin 0.2.0-alpha.6 — unpublished candidate (2026-09-23)
+
+- A temporary Chat catalog tab close timeout no longer replaces the completed
+  read or its original error; one bounded cleanup retry is logged if needed.
+- Expose a saved final-answer sandbox file as a bounded, account-checked,
+  read-only MCP download. Cross-Chat Library upload remains unsupported.
+- Windows CI exercised the ConPTY resize acknowledgement; macOS CI exposed the
+  tab-close race being corrected in this candidate.
+
 ## 0.2.0a5 / Plugin 0.2.0-alpha.5 — unpublished candidate (2026-09-23)
 
 - Windows ConPTY resize now waits for a worker acknowledgement before reporting

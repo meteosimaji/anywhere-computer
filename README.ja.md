@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a5` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.5` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a6` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.6` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -52,7 +52,8 @@ ChatGPT接続には公開HTTPS URL・認証・ChatGPT側の登録も必要です
 subchatは、役割を分担した通常のChatGPT Chatです。ChatGPT Workタスクとは別です。
 親が作業範囲を指定し、複数の子から根拠付きの結果を集め、検証して統合する用途を目指します。
 このチェックアウトのCodex Pluginは、能力・モデル一覧・保存済み操作・結果回収を扱う
-読み取り専用の6ツールを、別のSubchat MCPサーバーとして追加します。このサーバーは
+保存済み回答のsandboxファイル1件を上限付きで取得する機能を含む、読み取り専用の
+7ツールを別のSubchat MCPサーバーとして追加します。このサーバーは
 subchatの作成・送信を行えません。生成は、別途設定する`anywhere-subchat` CLI/MCPの
 ブラウザー補助モード、または観測済みリクエストを明示的に引き継ぐHTTP専用モードで扱います。
 Pluginの導入だけでは、どちらのモードも設定されません。

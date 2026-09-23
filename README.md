@@ -20,8 +20,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a5` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.5` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a6` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.6` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -74,8 +74,9 @@ ChatGPT Work task. The experimental adapter supports explicit model selection,
 submission tracking and correlated result recovery. The parent assigns scope,
 compares evidence and verifies proposed changes before integrating them.
 
-This checkout's Codex Plugin adds a separate Subchat MCP server with six
-read-only tools for capabilities, catalog, saved operations and result recovery.
+This checkout's Codex Plugin adds a separate Subchat MCP server with seven
+read-only tools for capabilities, catalog, saved operations, result recovery
+and a bounded download of one verified sandbox file.
 It cannot create or send a subchat. Generation remains in the separately
 configured `anywhere-subchat` CLI/MCP, using either its browser-assisted mode
 or an opt-in HTTP-only mode with an explicit observed request handoff. Installing

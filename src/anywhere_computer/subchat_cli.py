@@ -331,6 +331,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'expired authorization requires operator action, not a retry loop. '
                         'A pending observation is not proof of Thinking. Interruption is not '
                         'a completed answer. Queued work is never sent by this adapter. '
+                        'subchat_download_file retrieves one exact final-answer sandbox link '
+                        'as bounded base64 bytes; it does not upload to another Chat or Library. '
                         'Deletion checks the saved conversation and bound account; an unknown '
                         'delete outcome is never replayed automatically.')
                     if http_generation is not None:
@@ -344,6 +346,9 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                             'status and SSE are not final-answer proof; recover the original '
                             'operation through HTTP history. Handoff headers may expire and '
                             'must be supplied again by the operator in a new process. '
+                            'subchat_download_file retrieves one exact final-answer sandbox '
+                            'link as bounded base64 bytes; it does not upload to another Chat '
+                            'or Library. '
                             'Deletion checks the saved conversation and bound account; an '
                             'unknown delete outcome is never replayed automatically.')
                 if read_only_mcp:
@@ -354,6 +359,9 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'mutation is exposed here. subchat_capabilities reports '
                         'generation_transport=unavailable. Use subchat_catalog source=http, '
                         'subchat_list, subchat_status, subchat_recover and subchat_wait. '
+                        'subchat_download_file retrieves one exact saved final-answer sandbox '
+                        'link as bounded base64 bytes without writing a local file. It does '
+                        'not upload to another Chat or Library. '
                         'Recover only the original operation ID; an unconfirmed or pending '
                         'state never permits resending. Login failure requires operator action.')
                 server = session(service, observe_catalog=backend.catalog,

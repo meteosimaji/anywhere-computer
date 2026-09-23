@@ -8,11 +8,18 @@ Computer engine and the public OpenAI API.
 ## Codex Plugin: read-only Subchat server
 
 The Codex Plugin registers `anywhere-subchat` beside `anywhere-computer`. Its
-Subchat server exposes six read-only tools: `subchat_capabilities`,
+Subchat server exposes seven read-only tools: `subchat_capabilities`,
 `subchat_catalog`, `subchat_list`, `subchat_status`, `subchat_recover` and
-`subchat_wait`. Check `subchat_capabilities` first. The default
+`subchat_wait`, plus `subchat_download_file`. Check `subchat_capabilities` first. The default
 `generation_transport=unavailable` means this server cannot create or send a
 Chat. Plugin installation does not configure generation for the separate CLI.
+
+`subchat_download_file` takes a saved completed operation ID and an exact
+`sandbox:/mnt/data/...` link from its final answer. It rechecks the bound
+account and answer, then returns file metadata and at most 512 KiB of base64
+content. It writes no local file and does not upload into another Chat or Library.
+An unknown link, changed account, or oversized file fails explicitly. The
+source Chat's path alone does not give another Chat access to its sandbox.
 
 The Plugin server uses an already logged-in, dedicated Chrome profile. By
 default, the profile and ledger are the `subchat/chrome-login` and

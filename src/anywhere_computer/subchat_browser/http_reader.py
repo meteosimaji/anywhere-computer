@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, cast
 from urllib.parse import urlsplit
@@ -24,6 +25,8 @@ if TYPE_CHECKING:
     from playwright.async_api import APIRequestContext, APIResponse, BrowserContext, Page, Response
 
     from ..subchat_http_session import ObservedHTTPSession
+
+logger = logging.getLogger(__name__)
 
 
 class ChatHTTPReader:
@@ -55,6 +58,15 @@ class ChatHTTPReader:
         self._catalog_url: str | None = session.catalog_url if session is not None else None
         self._access_status: int | None = None
         self._denied_urls: set[str] = set()
+        self._pending_closes: set[asyncio.Task[None]] = set()
+
+    async def _retry_page_close(self, page: Page) -> None:
+        try:
+            await asyncio.wait_for(page.close(), timeout=5)
+        except Exception:
+            # The read has already completed. Report cleanup failure without
+            # turning a successful read or its original error into a close error.
+            logger.warning('Temporary Chat read tab could not be closed', exc_info=True)
 
     def can_read_without_browser(self, context: BrowserContext, *, catalog: bool = False
                                  ) -> bool:
@@ -102,7 +114,14 @@ class ChatHTTPReader:
                 self._access_status = error.status
                 raise
             finally:
-                await asyncio.wait_for(page.close(), timeout=5)
+                try:
+                    await asyncio.wait_for(page.close(), timeout=5)
+                except TimeoutError:
+                    # Retry in the background so a stalled tab close cannot replace
+                    # the read result or its original error.
+                    task = asyncio.create_task(self._retry_page_close(page))
+                    self._pending_closes.add(task)
+                    task.add_done_callback(self._pending_closes.discard)
         self._check_account(expected_account)
         if self._request_factory is not None:
             request = await self._request_factory()

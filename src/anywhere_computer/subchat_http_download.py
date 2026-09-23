@@ -36,6 +36,10 @@ class SandboxDownload:
     content: bytes
 
 
+class SandboxFileTooLarge(ValueError):
+    """The requested file exceeds the caller's explicit byte limit."""
+
+
 def _sandbox_path(value: str) -> str:
     prefix = 'sandbox:/mnt/data/'
     if (not isinstance(value, str) or not value.startswith(prefix) or len(value) > 1024
@@ -95,7 +99,7 @@ async def download_verified_sandbox_file(
     finally:
         await response.aclose()
     if metadata.file_size_bytes is not None and metadata.file_size_bytes > max_bytes:
-        raise ValueError('Chat file exceeds the size limit')
+        raise SandboxFileTooLarge('Chat file exceeds the size limit')
     if (metadata.file_name in ('.', '..') or '/' in metadata.file_name
             or '\\' in metadata.file_name or any(ord(char) < 32 for char in metadata.file_name)
             or any(ord(char) < 33 for char in metadata.mime_type)):
@@ -109,11 +113,14 @@ async def download_verified_sandbox_file(
             raise SubchatAccessError(file_response.status_code)
         if file_response.status_code != 200:
             raise ConnectionError('Chat file content was not accepted')
+        received_type = file_response.headers.get('content-type', '').split(';', 1)[0].strip()
+        if received_type in {'text/html', 'application/json'}:
+            raise ValueError('Chat file response has an unexpected content type')
         for_chunk_limit = max_bytes + 1
         async for chunk in file_response.aiter_bytes():
             content.extend(chunk)
             if len(content) >= for_chunk_limit:
-                raise ValueError('Chat file exceeds the size limit')
+                raise SandboxFileTooLarge('Chat file exceeds the size limit')
     if metadata.file_size_bytes is not None and len(content) != metadata.file_size_bytes:
         raise ValueError('Chat file size does not match metadata')
     return SandboxDownload(metadata.file_name, metadata.mime_type,

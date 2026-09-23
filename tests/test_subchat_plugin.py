@@ -64,7 +64,8 @@ async def test_plugin_read_only_catalog_rejects_mutations(tmp_path):
                                        'params': {}})
         assert listing is not None
         assert {tool['name'] for tool in listing['result']['tools']} == (
-            READ_ONLY_TOOLS - {'subchat_capabilities', 'subchat_catalog'})
+            READ_ONLY_TOOLS - {'subchat_capabilities', 'subchat_catalog',
+                               'subchat_download_file'})
         for name in ('subchat_send', 'subchat_delete', 'subchat_message',
                      'subchat_cancel', 'subchat_queue_watch'):
             result = await server.handle({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call',

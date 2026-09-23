@@ -16,6 +16,7 @@ from .subchat import (
 )
 from .subchat_browser.catalog import require_http_selection
 from .subchat_browser.http_reader import ChatHTTPReader
+from .subchat_http_download import MAX_FILE_BYTES
 from .subchat_http_generation import ObservedHTTPGeneration, dispatch_generation
 from .subchat_http_sender import HTTPFollowupParent, HTTPGenerationPlan
 from .subchat_http_session import ObservedHTTPSession
@@ -217,7 +218,8 @@ class HTTPOnlySubchatBackend:
             return await self._http_reader.patch_delete(None, submission)
 
     async def download_sandbox_file(self, operation_id: str,
-                                    sandbox_link: str) -> SandboxDownload:
+                                    sandbox_link: str, *, max_bytes: int = MAX_FILE_BYTES
+                                    ) -> SandboxDownload:
         """Download one file from a saved, history-verified final answer."""
         from .subchat_http_download import download_verified_sandbox_file
 
@@ -232,4 +234,4 @@ class HTTPOnlySubchatBackend:
             raise ValueError('A verified final answer is required for file download')
         return await download_verified_sandbox_file(
             saved, answer, sandbox_link, session=self._session,
-            client=await self._request_factory())
+            client=await self._request_factory(), max_bytes=max_bytes)
