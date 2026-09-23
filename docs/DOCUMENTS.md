@@ -17,6 +17,21 @@ editing. Markdown interpretation, formula calculation and images are not yet imp
 Generated packages are tested with the internal reader;
 Microsoft Office rendering remains unverified.
 
+`documents_edit_paragraph` replaces one DOCX main-body paragraph selected by its
+one-based `paragraph` number from `documents_read`. Supply the exact
+`expected_sha256`, `expected_text`, and `new_text`. The tool currently accepts
+only a paragraph with one plain text run, with optional paragraph/run formatting;
+tabs, line breaks, hyperlinks, fields, and multiple runs are rejected. It
+returns the old/new text diff, new hash, and backup ID for `files_restore`.
+Before replacement it checks that all other extracted paragraphs are unchanged,
+and that every other ZIP package part has identical content. A concurrent file
+change fails the atomic hash check. This is a constrained targeted edit, not a
+rendered preview or general Word editing. Signed documents are rejected.
+Documents whose main Word XML contains markup compatibility attributes or
+elements (including `mc:Ignorable`) are also rejected before writing, because
+the XML serializer cannot preserve namespace declarations used only by those
+constructs.
+
 `documents_read` reads the main-body text of Word OOXML documents, stored Excel
 worksheet cells and formulas, and PowerPoint slide paragraphs. It uses Python
 ZIP and XML support without Office format libraries. It is a content inspector,

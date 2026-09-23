@@ -202,6 +202,54 @@ async def test_filtered_catalog_does_not_imply_missing_running_implementation(
     assert audio["connection_authorization"] == "denied"
 
 
+@pytest.mark.parametrize("second_status", ["restarted", "unavailable"])
+async def test_diagnosis_does_not_attribute_catalog_across_agent_change(
+    tmp_path, monkeypatch, second_status,
+):
+    from anywhere_computer import diagnostics
+    from anywhere_computer.models import Reply
+
+    (tmp_path / "agent.json").write_text(json.dumps({
+        "pid": os.getpid(), "process_started": psutil.Process().create_time(),
+        "instance_id": "first-instance",
+    }), encoding="utf-8")
+    monkeypatch.setattr(diagnostics, "local_credential", lambda *_: "fixture-credential")
+    calls = []
+
+    async def fixture_exchange(_directory, tool, **_kwargs):
+        calls.append(tool)
+        if calls == ["__status"]:
+            return Reply(operation_id="a" * 32, state="completed", data={
+                "state": "ready", "instance_id": "first-instance",
+                "runtime_id": "first-runtime", "version": __version__,
+                "capability_diagnostics": {
+                    "audio_capture": {"running_implementation": "present"},
+                },
+            })
+        if tool == "__catalog":
+            return Reply(operation_id="b" * 32, state="completed", data={"tools": [
+                {"name": "audio_status"}, {"name": "audio_capture"},
+            ]})
+        assert tool == "__status"
+        if second_status == "unavailable":
+            raise ConnectionError("second status unavailable")
+        return Reply(operation_id="c" * 32, state="completed", data={
+            "state": "ready", "instance_id": "second-instance",
+            "runtime_id": "second-runtime", "version": __version__,
+        })
+
+    monkeypatch.setattr(diagnostics, "exchange", fixture_exchange)
+    result = await diagnose(tmp_path)
+    assert calls == ["__status", "__catalog", "__status"]
+    assert result["state"] == (
+        "snapshot_unconfirmed" if second_status == "unavailable" else "endpoint_changed"
+    )
+    assert result["changed"] is False
+    assert result["agent"]["capability_diagnostics"]["audio_capture"][
+        "connection_publication"
+    ] == "unknown"
+
+
 def test_runtime_diagnosis_exposes_path_resolution_without_environment(tmp_path, monkeypatch):
     from anywhere_computer.diagnostics import runtime_environment
 

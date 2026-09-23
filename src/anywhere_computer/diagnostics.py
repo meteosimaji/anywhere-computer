@@ -153,6 +153,21 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
         } if catalog_reply.state == "completed" and isinstance(catalog, list) else None
     except (OSError, ValueError, TimeoutError):
         catalog_names = None
+    try:
+        confirmed = await exchange(directory, "__status", credential=credential, timeout=3)
+        if confirmed.state != "completed" or confirmed.data.get("state") != "ready":
+            snapshot_state = "unconfirmed"
+        elif (confirmed.data.get("instance_id") != agent.get("instance_id")
+              or confirmed.data.get("runtime_id") != agent.get("runtime_id")):
+            snapshot_state = "changed"
+        else:
+            snapshot_state = "same"
+    except (OSError, ValueError, TimeoutError):
+        snapshot_state = "unconfirmed"
+    if snapshot_state != "same":
+        # Status and catalog are separate reads. A restart between them must not
+        # attribute the new engine's catalog to the earlier runtime snapshot.
+        catalog_names = None
     for name, required in CAPABILITY_TOOLS.items():
         raw = capability_diagnostics.get(name)
         details = dict(raw) if isinstance(raw, dict) else {}
@@ -174,6 +189,17 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
         details.setdefault("acceptance", "not_verified")
         capability_diagnostics[name] = details
     agent["capability_diagnostics"] = capability_diagnostics
+    if snapshot_state == "changed":
+        return report(
+            "endpoint_changed", "Agent changed during diagnosis; rerun anywhere doctor.",
+            agent=agent,
+        )
+    if snapshot_state == "unconfirmed":
+        return report(
+            "snapshot_unconfirmed",
+            "Agent status could not be reconfirmed; rerun anywhere doctor.",
+            agent=agent,
+        )
     agent_version = reply.data.get("version")
     agent_runtime_id = reply.data.get("runtime_id")
     same_version = isinstance(agent_version, str) and agent_version == __version__

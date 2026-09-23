@@ -20,7 +20,7 @@ from .authorization import GrantIdentity, current_grant_read_only
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
-from .document_writer import write_document
+from .document_writer import edit_document_paragraph, write_document
 from .documents import read_document
 from .downloads import Downloads
 from .files import Files, absolute_path, inspect_file
@@ -40,6 +40,7 @@ from .models import (
     DirectMCPSessionId,
     DirectMCPTools,
     DownloadRange,
+    EditDocumentParagraph,
     EditFile,
     Empty,
     FilePath,
@@ -669,6 +670,9 @@ class Engine:
         async def document_write(args: WriteDocument) -> Result:
             return await asyncio.to_thread(write_document, self.files, args)
 
+        async def document_edit(args: EditDocumentParagraph) -> Result:
+            return await asyncio.to_thread(edit_document_paragraph, self.files, args)
+
         async def read(args: ReadFile) -> Result:
             args = args.model_copy(
                 update={"limit": min(args.limit, self.settings().file_read_line_limit)}
@@ -824,6 +828,12 @@ class Engine:
             "Replace regenerates the entire document, requires its current hash, "
             "and retains backup.",
             WriteDocument, document_write, destructive=True,
+        )
+        self.register(
+            "documents_edit_paragraph",
+            "Replace one plain-text DOCX paragraph by number, requiring the file hash and "
+            "exact old text. Return a before/after diff and retain a backup.",
+            EditDocumentParagraph, document_edit, destructive=True,
         )
         self.register(
             "computer_status",

@@ -245,6 +245,19 @@ for line in sys.stdin:
                 await call("documents_write", {"path": document, "format": format_, **content})
                 result = await call("documents_read", {"path": document})
                 assert "Document" in str(result) if format_ == "docx" else "42" in str(result)
+                if format_ == "docx":
+                    edited = await call("documents_edit_paragraph", {
+                        "path": document, "paragraph": 1,
+                        "expected_sha256": result["sha256"],
+                        "expected_text": "Document 日本語", "new_text": "Document 更新済み",
+                    })
+                    assert edited["diff"] == {
+                        "paragraph": 1, "before": "Document 日本語",
+                        "after": "Document 更新済み",
+                    }
+                    assert (await call("documents_read", {"path": document}))["entries"][0][
+                        "text"
+                    ] == "Document 更新済み"
             search = await call(
                 "search_start",
                 {"path": str(tmp_path / "work"), "pattern": "日本語", "kind": "text"},
