@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
@@ -424,17 +425,26 @@ async def test_shared_http_restart_keeps_agent_and_deduplication(configured, tmp
     selected = config.model_copy(update={'shared_agent_directory': str(directory)})
     (tmp_path / 'http-server/config.json').write_text(selected.model_dump_json())
     stop = asyncio.Event()
+    ready = asyncio.Event()
     monkeypatch.setattr('anywhere_computer.connection.local_credential',
                         lambda *a, **kw: 'shared-service-fixture')
     agent = asyncio.create_task(serve(
-        directory, credential='shared-service-fixture', shutdown=stop,
+        directory, credential='shared-service-fixture', shutdown=stop, ready=ready,
     ))
+    ready_wait = asyncio.create_task(ready.wait())
     try:
-        async with asyncio.timeout(5):
-            while not (directory / 'agent.json').exists():
-                if agent.done():
-                    await agent
-                await asyncio.sleep(0.01)
+        done, _ = await asyncio.wait(
+            {agent, ready_wait}, timeout=30, return_when=asyncio.FIRST_COMPLETED,
+        )
+        if agent in done:
+            await agent
+            pytest.fail('Shared agent stopped before publishing its endpoint')
+        if ready_wait not in done:
+            stack = [(Path(frame.f_code.co_filename).name, frame.f_lineno)
+                     for frame in agent.get_stack(limit=3)]
+            pytest.fail(f'Shared agent did not publish its endpoint: stack={stack}, '
+                        f'pending={(directory / "agent.pending.json").exists()}')
+        assert (directory / 'agent.json').exists()
         before = await exchange(directory, '__status')
 
         def forbidden_engine(*a, **kw):
@@ -464,5 +474,7 @@ async def test_shared_http_restart_keeps_agent_and_deduplication(configured, tmp
                 assert result['result']['structuredContent']['state'] == 'completed'
                 assert target.read_text() == 'external change'
     finally:
+        ready_wait.cancel()
+        await asyncio.gather(ready_wait, return_exceptions=True)
         stop.set()
         await asyncio.wait_for(agent, 10)

@@ -125,8 +125,10 @@ async def exchange(
 
 
 async def serve(
-    directory: Path, *, credential: str | None = None, shutdown: asyncio.Event | None = None
+    directory: Path, *, credential: str | None = None, shutdown: asyncio.Event | None = None,
+    ready: asyncio.Event | None = None,
 ) -> None:
+    """Serve one local agent, optionally signaling after its endpoint is published."""
     prepare_directory(directory)
     secret = credential if credential is not None else local_credential(directory)
     stop = shutdown or asyncio.Event()
@@ -261,6 +263,8 @@ async def serve(
             pending = directory / "agent.pending.json"
             pending.write_text(json.dumps(metadata))
             pending.replace(directory / "agent.json")
+            if ready is not None:
+                ready.set()
             loop = asyncio.get_running_loop()
             if os.name != "nt":
                 for sig in (signal.SIGINT, signal.SIGTERM):
