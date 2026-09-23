@@ -1,12 +1,13 @@
 """Explicit background queue delivery without caller polling or implicit browser startup."""
 import asyncio
+import time
 
 import pytest
 from test_subchat_delivery import Provider
 
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat import SubchatAccessError, Subchats
+from anywhere_computer.subchat import SubchatAccessError, SubchatAnswer, SubchatReceipt, Subchats
 from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatSubmissions
 
@@ -58,10 +59,13 @@ async def test_watch_dispatches_after_parent_without_client_recovery_and_never_r
     assert (await watch()).data['state'] == 'watching'
     assert server.queue_watches[child] is task
     provider.finished = True
-    await asyncio.wait_for(asyncio.shield(task), 2)
+    async with asyncio.timeout(2):
+        while service.store.get(child, owner=None).state != 'sending':
+            await asyncio.sleep(.01)
     assert service.store.get(child, owner=None).state == 'sending'
     assert provider.sends == [parent, child]
-    assert (await watch()).data['submission_state'] == 'sending'
+    assert not task.done()
+    assert (await watch()).data['state'] == 'watching'
     assert (await watch(False)).data['state'] == 'disabled'
     assert (await watch()).state == 'failed'  # uncertain send cannot be armed again
     assert provider.sends == [parent, child]
@@ -91,6 +95,8 @@ async def test_watch_stops_on_loss_cancel_or_controller_close(watched, stop):
         reply = await server.execute(Request(operation_id='c' * 32, tool='subchat_status',
                                             arguments={'operation_id': child}))
         assert reply.data['queue_watch']['state'] == 'stopped'
+        if stop == 'access':
+            assert reply.data['queue_watch']['reason'] == 'authorization_lost'
         assert (await watch()).data['state'] == 'stopped'  # no implicit retry
 
 
@@ -121,6 +127,60 @@ async def test_watch_slots_are_bounded_and_released_explicitly(watched):
     await watch(False, operation_id=f'{10:032x}')
     assert (await watch()).state == 'completed'
     assert len(server.queue_watches) == 8 and provider.sends == [parent]
+
+
+async def test_watch_lease_expires_without_dispatch_or_implicit_restart(watched):
+    service, provider, server, parent, child, watch = watched
+    armed = await server.execute(Request(operation_id='c' * 32, tool='subchat_queue_watch',
+        arguments={'operation_id': child, 'lease_seconds': 30}))
+    assert armed.data['state'] == 'watching'
+    server.queue_watch_deadlines[child] = time.monotonic() - 1
+    await asyncio.wait_for(server.queue_watches[child], 2)
+    assert server.queue_watch_states[child] == {'state': 'stopped', 'reason': 'lease_expired'}
+    assert provider.sends == [parent]
+    assert service.store.get(child, owner=None).state == 'queued'
+    assert (await watch()).data['state'] == 'watching'
+
+
+async def test_long_read_in_one_conversation_does_not_block_another(tmp_path):
+    entered, release = asyncio.Event(), asyncio.Event()
+    first, second = '3' * 32, '4' * 32
+
+    class SeparateReads(Provider):
+        async def send(self, submission):
+            self.sends.append(submission.operation_id)
+            return SubchatReceipt(conversation_id='chat-' + submission.operation_id,
+                                  user_message_id='user-' + submission.operation_id,
+                                  prompt=submission.prompt)
+
+        async def read_answer(self, submission):
+            if submission.operation_id == first:
+                entered.set()
+                await release.wait()
+                return None
+            return SubchatAnswer(conversation_id=submission.conversation_id,
+                                 user_message_id=submission.user_message_id,
+                                 prompt=submission.prompt, answer_message_id='answer-second',
+                                 text='done')
+
+    ledger = Ledger(tmp_path)
+    provider = SeparateReads()
+    service = Subchats(SubchatSubmissions(ledger.connection), provider)
+    server = session(service)
+    try:
+        await service.send(first, 'first', 'model', 'effort', owner=None)
+        await service.send(second, 'second', 'model', 'effort', owner=None)
+        pending = asyncio.create_task(server.execute(Request(operation_id='5' * 32,
+            tool='subchat_wait', arguments={'operation_id': first, 'wait_ms': 100})))
+        await asyncio.wait_for(entered.wait(), 1)
+        other = await asyncio.wait_for(server.execute(Request(operation_id='6' * 32,
+            tool='subchat_recover', arguments={'operation_id': second})), 1)
+        assert other.data['state'] == 'completed'
+        assert (await pending).data['state'] == 'submitted'
+    finally:
+        release.set()
+        await server.close()
+        ledger.close()
 
 
 async def test_real_browser_backend_readiness_does_not_create_context():

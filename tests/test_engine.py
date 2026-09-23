@@ -173,7 +173,7 @@ async def test_literal_search_pagination(engine, tmp_path):
 async def test_registry_schemas_validation_and_duplicate_guard(engine):
     from anywhere_computer.models import Empty
 
-    assert len(engine.tools) == 68
+    assert len(engine.tools) == 69
     capture = engine.tools["audio_capture"]
     assert capture.destructive and capture.open_world and not capture.read_only
     press = engine.tools["gui_native_press"]

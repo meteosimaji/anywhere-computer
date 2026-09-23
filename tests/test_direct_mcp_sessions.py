@@ -1,8 +1,101 @@
+import sqlite3
 import sys
 
 import pytest
 
 from anywhere_computer.engine import Engine
+
+
+async def test_bounded_subchat_watch_owns_outer_session_and_records_stop(tmp_path, monkeypatch):
+    from anywhere_computer import direct_mcp_sessions
+
+    now = [0.0]
+    journal = sqlite3.connect(tmp_path / 'watches.sqlite3')
+
+    class Peer:
+        cleanup_confirmed = False
+
+        def __init__(self, command, cwd):
+            pass
+
+        async def open(self):
+            pass
+
+        async def close(self):
+            self.cleanup_confirmed = True
+
+        async def call(self, name, arguments):
+            if name == 'subchat_queue_watch':
+                state = 'disabled' if arguments.get('enabled') is False else 'watching'
+                data = {'submission_operation_id': arguments['operation_id'], 'state': state}
+            else:
+                data = {'state': 'queued', 'queue_watch': {'state': 'watching'}}
+            return {'isError': False, 'structuredContent': {'state': 'completed', 'data': data}}
+
+    monkeypatch.setattr(direct_mcp_sessions, 'DirectMCPContext', Peer)
+    pool = direct_mcp_sessions.DirectMCPSessions(clock=lambda: now[0], journal=journal)
+    identity = 'a' * 32
+    try:
+        opened = await pool.open([sys.executable], tmp_path, owner='owner', idle_timeout=30)
+        sid = opened['session_id']
+        await pool.call(sid, 'subchat_queue_watch', {'operation_id': identity,
+                        'lease_seconds': 600}, owner='owner')
+        now[0] = 301
+        await pool.expire_idle()
+        assert pool.status(sid, owner='owner')['state'] == 'open'
+        assert pool.active_watch_count == 1
+        assert pool.watch_history(owner='other') == []
+        assert pool.watch_history(owner='owner')[0]['state'] == 'watching'
+        await pool.call(sid, 'subchat_queue_watch', {'operation_id': identity,
+                        'enabled': False}, owner='owner')
+        assert pool.active_watch_count == 0
+        assert pool.watch_history(owner='owner')[0]['reason'] == 'explicit_cancel'
+        now[0] = 332
+        await pool.expire_idle()
+        assert pool.status(sid, owner='owner')['state'] == 'expired'
+
+        second = await pool.open([sys.executable], tmp_path, owner='owner', idle_timeout=30)
+        await pool.call(second['session_id'], 'subchat_queue_watch',
+                        {'operation_id': identity}, owner='owner')
+        restarted = direct_mcp_sessions.DirectMCPSessions(journal=journal)
+        assert restarted.watch_history(owner='owner')[0]['reason'] == 'engine_restart'
+        await restarted.close()
+    finally:
+        await pool.close()
+        journal.close()
+
+
+async def test_subchat_watch_is_visible_as_engine_update_blocker(tmp_path, monkeypatch):
+    from anywhere_computer import direct_mcp_sessions
+
+    class Peer:
+        cleanup_confirmed = False
+
+        def __init__(self, command, cwd):
+            pass
+
+        async def open(self):
+            pass
+
+        async def close(self):
+            self.cleanup_confirmed = True
+
+        async def call(self, name, arguments):
+            return {'isError': False, 'structuredContent': {'state': 'completed', 'data': {
+                'submission_operation_id': arguments['operation_id'], 'state': 'watching'}}}
+
+    monkeypatch.setattr(direct_mcp_sessions, 'DirectMCPContext', Peer)
+    engine = Engine(tmp_path / 'engine')
+    try:
+        opened = await engine.direct_mcp_sessions.open([sys.executable], tmp_path, owner=None)
+        await engine.direct_mcp_sessions.call(opened['session_id'], 'subchat_queue_watch',
+            {'operation_id': 'f' * 32}, owner=None)
+        status = engine.status()
+        assert status['active_resources']['subchat_queue_watches'] == 1
+        assert 'subchat_queue_watches' in status['update_blockers']
+        assert status['update_blocked'] is True
+    finally:
+        await engine.close()
 
 
 async def test_large_paginated_catalog_keeps_empty_filtered_page_cursor_and_last_tool(tmp_path):

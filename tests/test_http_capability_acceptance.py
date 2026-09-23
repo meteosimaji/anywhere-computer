@@ -363,6 +363,7 @@ for line in sys.stdin:
                 assert action["observation_consumed"] and not action["is_error"]
             await call("mcp_session_status", dsid)
             assert (await call("mcp_session_close", dsid))["cleanup_confirmed"]
+            assert (await call("mcp_watch_list"))["watches"] == []
             assert (await call("operations_get", {"operation_id": write_id}))[
                 "state"
             ] == "completed"
