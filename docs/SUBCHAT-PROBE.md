@@ -59,8 +59,17 @@ default, the profile and ledger are the `subchat/chrome-login` and
 Set absolute `ANYWHERE_SUBCHAT_CHROME_LOGIN_PROFILE` and
 `ANYWHERE_SUBCHAT_STATE_DIR` paths in the Plugin process to override them. Log
 in to the dedicated profile in a separate Chrome session, then close that
-session before starting the server. Do not use a normal profile that is open
-elsewhere. If login is missing or denied, the server still exposes capabilities
+session before starting the server. Do not point the dedicated-profile setting
+at a normal profile that is open elsewhere. On macOS, set the separate
+`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` variable to an explicit ordinary Chrome
+profile directory, such as `~/Library/Application Support/Google/Chrome/Default`,
+to use its existing login. The Plugin takes a private, temporary snapshot of
+ChatGPT cookies and opens only that snapshot headlessly; the ordinary Chrome
+window remains open and is not activated. This selection applies only to the
+read-only HTTP mode. `browser-send` continues to use its separate dedicated
+profile and can still briefly take focus. Check the account reported by
+`subchat_capabilities` before recovering account-bound data. If login is missing
+or denied, the server still exposes capabilities
 and saved operations. `subchat_capabilities.authentication_state` identifies the
 rejection; HTTP reads return `authentication_required` or `access_denied`. Log in
 and restart that Plugin session. The main Anywhere Computer server is independent.

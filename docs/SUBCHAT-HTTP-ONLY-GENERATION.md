@@ -22,14 +22,27 @@ Install the optional `browser` extra and use a private ledger directory with
   be closed elsewhere. For generation, also pass
   `--http-generation-stdin --expected-account-id ID`; the generation handoff is
   still required. Use a separate profile for each Chat account.
+- `--chrome-login-source-profile PATH` on macOS selects an existing ordinary
+  Chrome profile directory such as `~/Library/Application Support/Google/Chrome/Default`
+  or `Profile 1`. It takes a private, temporary snapshot of that profile's
+  ChatGPT cookies and opens only the snapshot headlessly. The ordinary Chrome
+  process can stay open and is not activated or changed. The snapshot is
+  removed after startup; HTTPX retains the read session in memory. Select the
+  profile explicitly and check the returned account. For generation, pin it
+  with `--expected-account-id ID` and still provide the separate handoff.
 
 Start in read-only mode and inspect `capabilities` (or
 `subchat_capabilities` in MCP) for the authenticated account and available
 transport. For Chrome-login generation, pin the reported account ID exactly;
 startup rejects a mismatch before accepting a generation handoff. The
 controller has no independent login, automatic session renewal, or automatic
-acquisition of Sentinel, proof, or Turnstile values. An expired Chrome login
-requires the owner to log into the dedicated profile again.
+acquisition of Sentinel, proof, or Turnstile values. An expired login requires
+the owner to sign in through ordinary Chrome or the dedicated profile, then
+restart the controller. The existing-profile snapshot is verified on macOS;
+Windows and Linux retain the dedicated-profile or explicit-session paths.
+On 2026-09-24 the macOS snapshot path returned HTTP 200 for both auth and model
+catalog GETs, without opening a visible Chrome window. This is not generation
+acceptance.
 
 The handoff has exactly four fields:
 

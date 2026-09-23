@@ -182,6 +182,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
               http_session: ObservedHTTPSession | None = None,
               http_generation: ObservedHTTPGeneration | None = None,
               chrome_login_profile: Path | None = None,
+              chrome_login_source_profile: Path | None = None,
               chrome_generation_stdin: bool = False,
               expected_account_id: str | None = None,
               read_only_mcp: bool = False) -> None:
@@ -194,9 +195,12 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
         raise ValueError('Browser mode requires a profile and cannot import an HTTP session')
     if http_generation is not None and (not http_only or http_session is None):
         raise ValueError('HTTP generation requires an explicit browser-free session')
-    if chrome_login_profile is not None and (not http_only or http_session is not None):
+    chrome_login = chrome_login_profile is not None or chrome_login_source_profile is not None
+    if chrome_login_profile is not None and chrome_login_source_profile is not None:
+        raise ValueError('Choose one Chrome login profile source')
+    if chrome_login and (not http_only or http_session is not None):
         raise ValueError('Chrome login requires HTTP-only mode without a supplied session')
-    if expected_account_id is not None and chrome_login_profile is None:
+    if expected_account_id is not None and not chrome_login:
         raise ValueError('Expected account requires Chrome login')
 
     ledger = Ledger(state)
@@ -257,26 +261,36 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         await cdp.detach()
                 return context
 
-            if chrome_login_profile is not None:
+            if chrome_login:
                 from .subchat_browser import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
                 from .subchat_chrome_login import chrome_generation_cookie, chrome_http_session
+                from .subchat_chrome_profile import temporary_chrome_profile
 
-                chrome_context = await (await runtime()).chromium.launch_persistent_context(
-                    str(chrome_login_profile), channel='chrome', headless=True,
-                    ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS))
                 try:
-                    try:
-                        http_session = await chrome_http_session(
-                            chrome_context, await open_standalone_http(),
-                            expected_account_id=expected_account_id)
-                    except SubchatAccessError as error:
-                        if not read_only_mcp:
-                            raise
-                        chrome_access_status = error.status
-                finally:
-                    # Authentication is now held in memory by HTTPX. Do not leave a
-                    # Chrome process open for the lifetime of the MCP controller.
-                    await chrome_context.close()
+                    async with AsyncExitStack() as chrome_resources:
+                        profile_root = chrome_login_profile
+                        launch_args: list[str] = []
+                        if chrome_login_source_profile is not None:
+                            profile_root = await chrome_resources.enter_async_context(
+                                temporary_chrome_profile(chrome_login_source_profile))
+                            launch_args.append(
+                                f'--profile-directory={chrome_login_source_profile.name}')
+                        assert profile_root is not None
+                        chrome_context = await (await runtime()).chromium.launch_persistent_context(
+                            str(profile_root), channel='chrome', headless=True,
+                            ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
+                            args=launch_args)
+                        try:
+                            http_session = await chrome_http_session(
+                                chrome_context, await open_standalone_http(),
+                                expected_account_id=expected_account_id)
+                        finally:
+                            # HTTPX retains this account's session in memory only.
+                            await chrome_context.close()
+                except SubchatAccessError as error:
+                    if not read_only_mcp:
+                        raise
+                    chrome_access_status = error.status
                 if chrome_generation_stdin:
                     from .subchat_http_generation import read_http_generation_handoff
 
@@ -313,7 +327,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 backend = HTTPOnlySubchatBackend(
                     open_standalone_http, http_session, generation=http_generation,
                     store=store,
-                    chrome_login=chrome_login_profile is not None,
+                    chrome_login=chrome_login,
                     startup_access_status=chrome_access_status)
             else:
                 from .subchat_browser.backend import BrowserSubchatBackend
@@ -409,6 +423,10 @@ def main() -> None:
     parser.add_argument('--chrome-login-profile', type=Path,
                         help='Use a logged-in dedicated Chrome profile headlessly to GET an '
                              'HTTP session at startup; no login UI or automatic renewal')
+    parser.add_argument('--chrome-login-source-profile', type=Path,
+                        help='macOS: snapshot an explicitly selected logged-in Chrome profile '
+                             '(for example .../Chrome/Default) for headless HTTP login; the '
+                             'running Chrome profile is never opened or changed')
     parser.add_argument('--expected-account-id',
                         help='Pin the selected Chat account ID before sending from Chrome login')
     parser.add_argument('--http-session-stdin', action='store_true',
@@ -421,18 +439,23 @@ def main() -> None:
     if args.http_only:
         if args.browser_profile is not None or args.http_read or args.minimized:
             parser.error('--http-only cannot be combined with browser options')
-        if args.chrome_login_profile is not None and args.http_session_stdin:
+        if (args.chrome_login_profile is not None
+                or args.chrome_login_source_profile is not None) and args.http_session_stdin:
             parser.error('Choose Chrome login or an explicit HTTP session')
     elif args.browser_profile is None or args.http_session_stdin or args.http_generation_stdin:
         parser.error('Browser mode requires --browser-profile; session handoff needs --http-only')
-    if args.chrome_login_profile is not None and not args.http_only:
-        parser.error('--chrome-login-profile requires --http-only')
-    if args.expected_account_id is not None and args.chrome_login_profile is None:
-        parser.error('--expected-account-id requires --chrome-login-profile')
-    if (args.chrome_login_profile is not None and args.http_generation_stdin
+    if args.chrome_login_profile is not None and args.chrome_login_source_profile is not None:
+        parser.error('Choose one Chrome login profile source')
+    chrome_login = (args.chrome_login_profile is not None
+                    or args.chrome_login_source_profile is not None)
+    if chrome_login and not args.http_only:
+        parser.error('Chrome login requires --http-only')
+    if args.expected_account_id is not None and not chrome_login:
+        parser.error('--expected-account-id requires Chrome login')
+    if (chrome_login and args.http_generation_stdin
             and args.expected_account_id is None):
         parser.error('Chrome-login generation requires --expected-account-id')
-    if args.http_generation_stdin and not (args.http_session_stdin or args.chrome_login_profile):
+    if args.http_generation_stdin and not (args.http_session_stdin or chrome_login):
         parser.error('--http-generation-stdin requires a session source')
     observed_session = None
     if args.http_session_stdin:
@@ -464,6 +487,9 @@ def main() -> None:
                     http_session=observed_session, http_generation=observed_generation,
                     chrome_login_profile=(args.chrome_login_profile.resolve()
                                           if args.chrome_login_profile is not None else None),
-                    chrome_generation_stdin=bool(args.chrome_login_profile
-                                                 and args.http_generation_stdin),
+                    chrome_login_source_profile=(args.chrome_login_source_profile.resolve()
+                                                 if args.chrome_login_source_profile is not None
+                                                 else None),
+                    chrome_generation_stdin=bool(chrome_login
+                                                  and args.http_generation_stdin),
                     expected_account_id=args.expected_account_id))

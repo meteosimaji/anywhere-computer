@@ -48,8 +48,31 @@ def test_plugin_entry_uses_headless_http_read_only_mode(tmp_path, monkeypatch):
     assert observed == {
         'profile': None, 'state': state,
         'options': {'mcp': True, 'http_only': True, 'chrome_login_profile': profile,
+                    'chrome_login_source_profile': None,
                     'read_only_mcp': True},
     }
+
+
+def test_plugin_source_profile_is_explicit_and_browser_send_stays_dedicated(
+    tmp_path, monkeypatch,
+):
+    profile, state = tmp_path / 'login', tmp_path / 'ledger'
+    source = tmp_path / 'Chrome/Default'
+    monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE', str(source))
+    observed = {}
+
+    async def fake_run(browser_profile: Path | None, state_dir: Path, **options: object) -> None:
+        observed.update(profile=browser_profile, state=state_dir, options=options)
+
+    monkeypatch.setattr(subchat_plugin, 'run', fake_run)
+    subchat_plugin.main()
+    assert observed['options']['chrome_login_profile'] is None
+    assert observed['options']['chrome_login_source_profile'] == source
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', 'browser-send')
+    subchat_plugin.main()
+    assert observed['profile'] == profile
+    assert observed['options'] == {'mcp': True, 'http_read': True, 'minimized': True}
 
 
 def test_plugin_browser_send_opt_in_reuses_login_with_minimized_window(tmp_path, monkeypatch):
@@ -293,10 +316,11 @@ async def test_chrome_login_closes_before_plugin_serves_tools(
 
     class Chromium:
         async def launch_persistent_context(self, profile, *, channel, headless,
-                                            ignore_default_args):
+                                            ignore_default_args, args):
             assert profile == str(tmp_path / 'login')
             assert channel == 'chrome' and headless is True
             assert ignore_default_args == ['--use-mock-keychain']
+            assert args == []
             events.append('chrome_started')
             return Context()
 

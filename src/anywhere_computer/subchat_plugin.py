@@ -40,8 +40,15 @@ def main() -> None:
     profile, state = plugin_paths()
     transport = os.environ.get("ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT", "http-read-only")
     if transport == "http-read-only":
+        source_value = os.environ.get("ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE")
+        source = (_configured_path("ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE", profile)
+                  if source_value is not None else None)
+        if source is not None and (source == state or source in state.parents
+                                   or state in source.parents):
+            raise ValueError("Subchat Chrome source profile and state must be separate")
         asyncio.run(run(None, state, mcp=True, http_only=True,
-                        chrome_login_profile=profile, read_only_mcp=True))
+                        chrome_login_profile=profile if source is None else None,
+                        chrome_login_source_profile=source, read_only_mcp=True))
     elif transport == "browser-send":
         browser = browser_send_profile(profile, state)
         asyncio.run(run(browser, state, mcp=True, http_read=True, minimized=True))

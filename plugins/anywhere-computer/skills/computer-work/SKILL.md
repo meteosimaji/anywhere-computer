@@ -124,6 +124,12 @@ main Anywhere engine. Set absolute paths in
 `ANYWHERE_SUBCHAT_CHROME_LOGIN_PROFILE` and `ANYWHERE_SUBCHAT_STATE_DIR` to
 choose other dedicated locations before starting the server. No account secrets
 belong in tool calls, Plugin files or environment variables.
+On macOS, the read-only HTTP mode can instead use an explicitly selected
+ordinary Chrome profile through `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE`. The
+Plugin snapshots only its ChatGPT cookies into a private temporary headless
+profile and leaves the ordinary Chrome window alone. Check the authenticated
+account in `subchat_capabilities`; this does not enable HTTP-only generation.
+`browser-send` still uses a separate dedicated profile and may take focus.
 To recover an operation created by a separate `anywhere-subchat` controller,
 start that controller with `--state-dir` set to the same absolute ledger path.
 Check the account and operation ID; this Plugin does not import other ledgers.
