@@ -1,4 +1,4 @@
-"""Browser-free ordinary-Chat adapter with an opt-in observed generation handoff."""
+"""Browser-free ordinary-Chat adapter with optional generation and deletion."""
 from __future__ import annotations
 
 import asyncio
@@ -28,9 +28,9 @@ CONVERSATION_ID = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
 
 
 class HTTPOnlySubchatBackend:
-    """No BrowserContext, DOM adapter, generation method or credential discovery.
+    """No BrowserContext, DOM adapter or credential discovery.
 
-    Reuses the existing GET transport, projections and durable operation store.
+    Reuses the existing HTTP transport, projections and durable operation store.
     A supplied read session is not an independent authentication implementation.
     """
 
@@ -49,6 +49,7 @@ class HTTPOnlySubchatBackend:
         self._store = store
         self._owner = owner
         self._generation_origin = generation_origin
+        self._delete_session_available = session is not None
 
     def capabilities(self) -> dict[str, object]:
         enabled = self._generation is not None
@@ -62,7 +63,9 @@ class HTTPOnlySubchatBackend:
                 'generation_transport': 'explicit_handoff_http' if enabled else 'unavailable',
                 'http_selection_send_supported': enabled, 'credential_refresh': False,
                 'independent_login': False, 'persistent_credentials': False,
-                'session_source': 'explicit_in_memory_handoff', 'automatic_retry': False}
+                'session_source': 'explicit_in_memory_handoff', 'automatic_retry': False,
+                'http_delete_supported': self._delete_session_available,
+                'deletion_transport': 'authenticated_http'}
 
     def validate_send_selection(self, selection: SubchatHTTPSelection | None) -> None:
         if self._generation is None:
@@ -176,3 +179,13 @@ class HTTPOnlySubchatBackend:
             self._store.record_http_event(submission.operation_id, 'history_unknown',
                                           owner=self._owner)
         return answer
+
+    async def verify_delete_target(self, submission: SubchatSubmission) -> None:
+        if not self._has_identity(submission):
+            raise ValueError('Deletion needs a saved conversation and input')
+        async with asyncio.timeout(20):
+            await self._http_reader.verify_delete_target(None, submission)
+
+    async def patch_delete(self, submission: SubchatSubmission) -> bool:
+        async with asyncio.timeout(20):
+            return await self._http_reader.patch_delete(None, submission)

@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
+from urllib.parse import urlsplit
 
 from ..subchat import (
     SubchatAccessError,
@@ -14,7 +16,7 @@ from ..subchat import (
 )
 from ..subchat_state import SubchatAccountMismatch, SubchatSubmission
 from .catalog import observe_http_catalog, project_http_catalog
-from .history import observe_history, project_observation, project_receipt
+from .history import matched_input, observe_history, project_observation, project_receipt
 
 if TYPE_CHECKING:
     from playwright.async_api import APIRequestContext, BrowserContext, Page, Response
@@ -32,9 +34,17 @@ class ChatHTTPReader:
     """
 
     def __init__(self, request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None,
-                 *, browser_free: bool = False, session: ObservedHTTPSession | None = None) -> None:
+                 *, browser_free: bool = False, session: ObservedHTTPSession | None = None,
+                 test_origin: str | None = None) -> None:
         if (browser_free and request_factory is None) or (session is not None and not browser_free):
             raise ValueError('Explicit HTTP sessions require a browser-free request factory')
+        if test_origin is not None:
+            parsed = urlsplit(test_origin)
+            if (parsed.scheme != 'http' or parsed.hostname != '127.0.0.1'
+                    or parsed.port is None or parsed.path or parsed.query or parsed.fragment
+                    or parsed.username is not None or parsed.password is not None):
+                raise ValueError('Only an exact loopback test origin is supported')
+        self._origin = test_origin or 'https://chatgpt.com'
         self._request_factory = request_factory
         self._browser_free = browser_free
         self._context: BrowserContext | None = None
@@ -160,7 +170,7 @@ class ChatHTTPReader:
             return await observe_history(page, submission)
 
         return await self._read(context,
-            'https://chatgpt.com/backend-api/conversations/' + str(submission.conversation_id),
+            self._origin + '/backend-api/conversations/' + str(submission.conversation_id),
             observe, expected_account=submission.provider_account_id)
 
     async def catalog(self, context: BrowserContext | None) -> dict[str, object]:
@@ -173,3 +183,56 @@ class ChatHTTPReader:
         result = project_http_catalog(payload)
         result['source'] = 'preauthenticated_http' if self._browser_free else 'browser_session_http'
         return result
+
+    async def verify_delete_target(self, context: BrowserContext | None,
+                                   submission: SubchatSubmission) -> None:
+        """Check the exact saved conversation and user input before a delete claim."""
+        payload = await self._history_payload(context, submission)
+        if matched_input(payload, submission) is None:
+            raise ValueError('Remote conversation does not match the saved input')
+
+    async def patch_delete(self, context: BrowserContext | None,
+                           submission: SubchatSubmission) -> bool:
+        """Send one exact authenticated visibility change, with no redirect or retry."""
+        self._check_account(submission.provider_account_id)
+        if not self._headers:
+            raise ValueError('Deletion needs an observed authenticated session')
+        if self._access_status is not None:
+            raise SubchatAccessError(self._access_status)
+        if self._request_factory is not None:
+            request = await self._request_factory()
+        else:
+            assert context is not None
+            request = context.request
+        self._check_account(submission.provider_account_id)
+        response = await request.patch(
+            self._origin + '/backend-api/conversation/' + str(submission.conversation_id),
+            data='{"is_visible":false}',
+            headers={**self._headers, 'content-type': 'application/json'},
+            timeout=15_000, max_redirects=0, max_retries=0)
+        try:
+            if response.status in (401, 403):
+                raise SubchatAccessError(response.status)
+            if response.status != 200:
+                return False
+            if response.headers.get('content-type', '').split(';', 1)[0].strip() != (
+                    'application/json'):
+                return False
+            body = await response.body()
+            if len(body) > 65_536:
+                return False
+            try:
+                data = json.loads(body)
+            except (ValueError, UnicodeDecodeError):
+                return False
+            if not isinstance(data, dict) or data.get('success') is not True:
+                return False
+        finally:
+            await response.dispose()
+        visibility = await request.get(
+            self._origin + '/backend-api/conversations/' + str(submission.conversation_id),
+            headers=self._headers, timeout=15_000, max_redirects=0, max_retries=0)
+        try:
+            return visibility.status == 404
+        finally:
+            await visibility.dispose()
