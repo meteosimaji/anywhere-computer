@@ -60,6 +60,17 @@ headers. This controller therefore sends those handed-off headers only on the
 generation request. The UI completed Sentinel prepare/finalize while generation
 was in flight; a later turn used the prior finalize response token. The
 controller does not implement that token lifecycle or the finalize request.
+In two successful turns in one hidden in-app Chat, the observed request starts
+were conversation prepare, generation, Sentinel prepare, then Sentinel
+finalize; all four responses were HTTP 200 and both final answers arrived.
+For the second turn, an in-memory comparison confirmed that its generation
+requirements header equaled the previous turn's finalize response token, and
+its proof and Turnstile headers equaled the previous finalize request values.
+No token, Cookie, request body, or answer content was retained by this check.
+That Sentinel prepare response marked Turnstile, proof of work, and the extra
+collector as required. These observations show a concrete previous-turn
+protection dependency, but do not establish a browser-free way to produce or
+renew its values or prove the cause of HTTPX's 403 response.
 Its sequential Sentinel and conversation preparation requests have returned 200
 while an independent HTTPX generation returned 403. This header correction does
 not establish that the 403 is resolved or that HTTP-only generation is supported
