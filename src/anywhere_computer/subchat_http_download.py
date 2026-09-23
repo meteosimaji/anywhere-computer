@@ -85,19 +85,19 @@ async def download_verified_sandbox_file(
              + '/interpreter/download?' + urlencode({
                  'download_intent': 'true', 'message_id': saved.answer_message_id,
                  'sandbox_path': path}))
-    response = await client.get(route, headers=session.headers(), timeout=15.0,
-                                follow_redirects=False)
-    try:
+    metadata_bytes = bytearray()
+    async with client.stream('GET', route, headers=session.headers(), timeout=15.0,
+                             follow_redirects=False) as response:
         if response.status_code in (401, 403):
             raise SubchatAccessError(response.status_code)
         content_type = response.headers.get('content-type', '').split(';', 1)[0].strip()
         if response.status_code != 200 or content_type != 'application/json':
             raise ConnectionError('Chat file metadata was not accepted')
-        if len(response.content) > 65_536:
-            raise ValueError('Chat file metadata is too large')
-        metadata = _DownloadMetadata.model_validate_json(response.content)
-    finally:
-        await response.aclose()
+        async for chunk in response.aiter_bytes():
+            if len(metadata_bytes) + len(chunk) > 65_536:
+                raise ValueError('Chat file metadata is too large')
+            metadata_bytes.extend(chunk)
+    metadata = _DownloadMetadata.model_validate_json(metadata_bytes)
     if metadata.file_size_bytes is not None and metadata.file_size_bytes > max_bytes:
         raise SandboxFileTooLarge('Chat file exceeds the size limit')
     if (metadata.file_name in ('.', '..') or '/' in metadata.file_name
@@ -118,9 +118,9 @@ async def download_verified_sandbox_file(
             raise ValueError('Chat file response has an unexpected content type')
         for_chunk_limit = max_bytes + 1
         async for chunk in file_response.aiter_bytes():
-            content.extend(chunk)
-            if len(content) >= for_chunk_limit:
+            if len(content) + len(chunk) >= for_chunk_limit:
                 raise SandboxFileTooLarge('Chat file exceeds the size limit')
+            content.extend(chunk)
     if metadata.file_size_bytes is not None and len(content) != metadata.file_size_bytes:
         raise ValueError('Chat file size does not match metadata')
     return SandboxDownload(metadata.file_name, metadata.mime_type,

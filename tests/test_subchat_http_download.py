@@ -129,6 +129,44 @@ async def test_streamed_content_exceeding_declared_size_is_rejected(tmp_path):
         ledger.close()
 
 
+async def test_oversized_metadata_stops_reading_before_file_request(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, payload = completed(store)
+        chunks_read = 0
+        file_requested = False
+
+        class MetadataStream(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                nonlocal chunks_read
+                for _ in range(4):
+                    chunks_read += 1
+                    yield b'x' * 40_000
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            nonlocal file_requested
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            if request.url.path.endswith('/interpreter/download'):
+                return httpx.Response(200, stream=MetadataStream(),
+                                      headers={'content-type': 'application/json'})
+            file_requested = True
+            raise AssertionError('File content must not be requested')
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            with pytest.raises(ValueError, match='metadata is too large'):
+                await backend.download_sandbox_file(submission.operation_id, LINK)
+        assert chunks_read == 2
+        assert not file_requested
+    finally:
+        ledger.close()
+
+
 async def test_read_only_mcp_exposes_one_verified_file_without_local_storage(tmp_path):
     ledger = Ledger(tmp_path)
     try:

@@ -3,6 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a7 / Plugin 0.2.0-alpha.7 — unpublished candidate (2026-09-23)
+
+- Bound sandbox download metadata while receiving it, so an oversized response
+  cannot be buffered in full before validation. Bound file chunks before appending.
+- a6 passed all five Quality CI jobs, including the Windows full suite and
+  relocated portable verification. ChatGPT accepted status/capabilities, but
+  blocked Subchat catalog/list before dispatch; Codex completed both tools.
+
 ## 0.2.0a6 / Plugin 0.2.0-alpha.6 — unpublished candidate (2026-09-23)
 
 - A temporary Chat catalog tab close timeout no longer replaces the completed
