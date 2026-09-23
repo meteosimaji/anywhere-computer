@@ -5,9 +5,10 @@ import uuid
 
 import pytest
 
+from anywhere_computer import engine as engine_module
 from anywhere_computer.browser_control import BrowserControl
 from anywhere_computer.engine import Engine
-from anywhere_computer.models import BrowserNavigate, BrowserSession, Request
+from anywhere_computer.models import BrowserNavigate, BrowserSession, Reply, Request
 
 
 @pytest.fixture
@@ -65,17 +66,31 @@ async def test_isolated_browser_exact_owner_tab_and_stale_references(local_page)
         await control.close()
 
 
-async def test_engine_browser_tools_are_owned_and_block_update(tmp_path, local_page):
+async def test_engine_browser_tools_are_owned_and_block_update(tmp_path, local_page, monkeypatch):
     pytest.importorskip("playwright.async_api")
     engine = Engine(tmp_path / "state")
     engine.browser.channel = "chrome"
 
     async def call(tool, arguments, peer):
-        return await engine.execute(Request(operation_id=uuid.uuid4().hex,
-                                            tool=tool, arguments=arguments), peer=peer)
+        operation_id = uuid.uuid4().hex
+        reply = await engine.execute(Request(operation_id=operation_id,
+                                             tool=tool, arguments=arguments), peer=peer)
+        async with asyncio.timeout(30):
+            while reply.state == "running":
+                recovered = await engine.execute(Request(
+                    operation_id=uuid.uuid4().hex, tool="operations_get",
+                    arguments={"operation_id": operation_id},
+                ), peer=peer)
+                assert recovered.state == "completed", recovered
+                reply = Reply.model_validate(recovered.data)
+                if reply.state == "running":
+                    await asyncio.sleep(0.1)
+        return reply
 
     try:
-        opened = await call("browser_open", {}, "owner-a")
+        with monkeypatch.context() as patch:
+            patch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", 0.001)
+            opened = await call("browser_open", {}, "owner-a")
         assert opened.state == "completed", opened.error
         ids = {"session_id": opened.data["session_id"], "tab_id": opened.data["tab_id"]}
         assert engine.status(owner="owner-a")["active_resources"]["browser_sessions"] == 1
