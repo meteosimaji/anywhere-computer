@@ -165,10 +165,8 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
                 "published" if published == required else
                 "partial" if published else "not_published"
             )
-            details.setdefault("running_implementation", (
-                "present" if published == required else
-                "partial" if published else "absent"
-            ))
+            # A connection catalog can be filtered by publication or grants. It
+            # cannot establish what code is installed in the running engine.
         details.setdefault("running_implementation", "unknown")
         details.setdefault("connection_authorization", "not_observed")
         details.setdefault("helper", "not_checked")

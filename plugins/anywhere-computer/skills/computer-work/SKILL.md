@@ -94,8 +94,10 @@ Inspect its schema, keep the same session, and target the requested application 
 After each input action, observe the actual result. If the UI has not settled, repeat only
 the observation within a short deadline, never blindly repeat input. Peekaboo's agent/analyze
 tools can invoke another model; do not use them for a local-only GUI request.
-capabilities.gui=false refers to the absent built-in GUI backend; an external MCP's
-availability must be checked separately. Existing HTTP connections may need the local
+`capabilities.gui=false` does not by itself deny the separately registered native
+macOS Accessibility tools. Check the actual `gui_native_*` catalog entries, helper
+verification, OS permission, and target app before using them. An external MCP's
+availability must also be checked separately. Existing HTTP connections may need the local
 http-add-tools upgrade before newly introduced direct-MCP tools become discoverable.
 
 This Plugin also registers `anywhere-subchat` as a separate local MCP server. It
@@ -111,6 +113,9 @@ and ledger are separate from the main Anywhere engine. Set absolute paths in
 `ANYWHERE_SUBCHAT_CHROME_LOGIN_PROFILE` and `ANYWHERE_SUBCHAT_STATE_DIR` to
 choose other dedicated locations before starting the server. No account secrets
 belong in tool calls, Plugin files or environment variables.
+To recover an operation created by a separate `anywhere-subchat` controller,
+start that controller with `--state-dir` set to the same absolute ledger path.
+Check the account and operation ID; this Plugin does not import other ledgers.
 
 Codex Computer Use currently exposes a discoverable MCP catalog, but direct execution
 has returned "Sender process is not authenticated" in local verification. Catalog
@@ -200,9 +205,11 @@ public connectivity evidence. tunnel-forget removes local credentials only;
 provider revocation and DNS are separate. These commands do not provision a public endpoint
 or managed internet relay. http-doctor probes only configured loopback metadata;
 metadata_reachable does not prove authenticated readiness or public HTTPS reachability.
-Built-in GUI interaction and OCR are not implemented; use the explicit external MCP
-adapter described above when available. Explain
-those limits when they affect the requested task.
+Native macOS Accessibility interaction is available only with its verified helper
+and OS permission; inspect the running engine and use exact window/element references.
+OCR and general cross-platform GUI control are not qualified. The explicit external
+MCP adapter above is another provider when installed and authorized. Explain these
+limits when they affect the requested task.
 
 
 Resolve a selected skill's relative references, scripts, and assets against the

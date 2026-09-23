@@ -38,6 +38,24 @@ Computer's `state_directory()` rule or set the absolute overrides explicitly.
 The Plugin server's catalog and history reads use the selected browser login;
 they are not a credential renewal service.
 
+The Plugin reads only its selected ledger. To inspect operations created by a
+separate generation controller, use the same absolute ledger directory for
+that controller's `--state-dir` and the Plugin's
+`ANYWHERE_SUBCHAT_STATE_DIR` (or its default). The operation ID and logged-in
+account must also match. The Plugin does not search or import another ledger.
+For example, on macOS, the default Plugin ledger can be shared with a
+separately configured controller as follows:
+
+```sh
+anywhere-subchat --browser-profile /absolute/path/to/dedicated-chat-profile \
+  --state-dir "$HOME/Library/Application Support/Anywhere Computer/subchat/ledger"
+```
+
+This browser-assisted controller can open a Chrome window. Its HTTP-only mode
+uses the same `--state-dir` option but requires its separate generation handoff
+for sends. Check the Plugin's `subchat_list` after sending to verify the shared
+ledger before attempting recovery.
+
 ## Local generation controller
 
 For explicitly configured generation experiments, install the optional

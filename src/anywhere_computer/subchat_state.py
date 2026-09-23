@@ -20,6 +20,12 @@ class SubchatAccountMismatch(ValueError):
     code = 'account_mismatch'
 
 
+class SubchatOperationNotFound(ValueError):
+    """No operation with this ID is visible in the selected owner and ledger."""
+
+    code = 'unknown_operation'
+
+
 class SubchatSelectionError(ValueError):
     """Safe, field-specific local catalog validation failure before dispatch."""
 
@@ -242,7 +248,7 @@ class SubchatSubmissions:
             (operation_id,),
         ).fetchone()
         if row is None or row[0] != owner:
-            raise ValueError('Unknown subchat submission')
+            raise SubchatOperationNotFound('Unknown subchat submission')
         saved = SubchatSubmission.model_validate_json(row[1])
         binding = self.connection.execute(
             'SELECT account_id FROM subchat_account_bindings WHERE operation_id=? '

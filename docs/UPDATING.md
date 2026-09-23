@@ -2,7 +2,7 @@
 
 2026-09-19時点の公開版はPython `0.1.0b1` / Codex Plugin `0.1.0-beta.1`です。
 [Beta 1の配布物](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0b1)は
-プレリリースです。このチェックアウトの `0.2.0a4` / `0.2.0-alpha.4` は開発版で、公開betaとは異なります。
+プレリリースです。このチェックアウトの `0.2.0a5` / `0.2.0-alpha.5` は開発版で、公開betaとは異なります。
 正式stableリリースと一般向け自動更新の受け入れは未完了です。
 
 ## 公開beta／alphaを手動で更新する

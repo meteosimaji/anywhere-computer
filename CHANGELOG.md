@@ -3,6 +3,19 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a5 / Plugin 0.2.0-alpha.5 — unpublished candidate (2026-09-23)
+
+- Windows ConPTY resize now waits for a worker acknowledgement before reporting
+  the new dimensions.
+- Added an explicit, target-scoped Cua GUI adapter and removed unverified provider
+  images from its observation output.
+- Improved read-only HTTP Subchat catalog defaults and unknown-operation errors;
+  refined same-build diagnostic evidence without changing authorization.
+- Refuse dirty Plugin release bundles by default, pin CI action revisions, and
+  provide private vulnerability reporting guidance.
+- Headless Chrome-profile HTTP authentication and model catalog returned 200;
+  this candidate has not yet passed new/follow-up HTTP generation acceptance.
+
 ## 0.2.0a4 / Plugin 0.2.0-alpha.4 — unpublished candidate (2026-09-23)
 
 - Dedicated Chrome login rejects a different selected account immediately after

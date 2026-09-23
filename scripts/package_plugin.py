@@ -1,5 +1,6 @@
 """Build a portable plugin containing our wheel and pinned runtime dependencies."""
 
+import argparse
 import ast
 import hashlib
 import json
@@ -22,13 +23,15 @@ def plugin_version(python_version: str) -> str:
     return f"{match[1]}-{label}.{match[3]}"
 
 
-def package_plugin(root: Path) -> Path:
+def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     if re.fullmatch(r"[a-f0-9]{40}", commit) is None:
         raise ValueError("Build needs an identifiable Git commit")
     dirty = bool(subprocess.check_output(
         ["git", "status", "--porcelain", "--untracked-files=normal"], cwd=root, text=True,
     ).strip())
+    if dirty and not allow_dirty:
+        raise ValueError("Refusing to package a dirty source tree; commit source changes first")
     plugin = root / "plugins/anywhere-computer"
     bundled = plugin / "bundled"
     bundled.mkdir(exist_ok=True)
@@ -124,4 +127,9 @@ def package_plugin(root: Path) -> Path:
 
 
 if __name__ == "__main__":
-    print(package_plugin(Path(__file__).resolve().parents[1]))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--allow-dirty", action="store_true",
+                        help="Build an explicitly marked, unverified development artifact")
+    options = parser.parse_args()
+    print(package_plugin(Path(__file__).resolve().parents[1],
+                         allow_dirty=options.allow_dirty))

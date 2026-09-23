@@ -1,9 +1,12 @@
+import io
+import json
 from pathlib import Path
 
 import pytest
 from test_subchat_lifecycle import BrowserFixture
 
 from anywhere_computer import subchat_plugin
+from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import Subchats
 from anywhere_computer.subchat_mcp import READ_ONLY_TOOLS, session
@@ -70,6 +73,51 @@ async def test_plugin_read_only_catalog_rejects_mutations(tmp_path):
             assert result['error']['message'] == 'Unknown tool'
     finally:
         await server.close()
+        ledger.close()
+
+
+async def test_plugin_http_catalog_defaults_to_http_and_missing_id_is_clear(tmp_path):
+    ledger = Ledger(tmp_path)
+
+    async def http_catalog():
+        return {'state': 'http_catalog_observed', 'versions': []}
+
+    server = session(Subchats(SubchatSubmissions(ledger.connection), BrowserFixture()),
+                     observe_http_catalog=http_catalog,
+                     read_only=True)
+    try:
+        definitions = {item['name']: item for item in await server.catalog()}
+        assert definitions['subchat_catalog']['inputSchema']['properties']['source'][
+            'default'] == 'http'
+        assert definitions['subchat_catalog']['annotations']['readOnlyHint'] is True
+        catalog = await server.execute(Request(operation_id='a' * 32,
+                                               tool='subchat_catalog', arguments={}))
+        assert catalog.state == 'completed'
+        assert catalog.data['state'] == 'http_catalog_observed'
+        missing = await server.execute(Request(operation_id='b' * 32,
+                                               tool='subchat_status',
+                                               arguments={'operation_id': 'c' * 32}))
+        assert missing.state == 'failed'
+        assert missing.data['error_code'] == 'unknown_operation'
+        assert 'subchat_list' in (missing.error or '')
+    finally:
+        await server.close()
+        ledger.close()
+
+
+async def test_cli_unknown_operation_names_the_ledger_check(tmp_path):
+    from anywhere_computer.subchat_cli import process_lines
+
+    ledger = Ledger(tmp_path)
+    source = io.StringIO(json.dumps({'action': 'status', 'operation_id': 'c' * 32}) + '\n')
+    output = io.StringIO()
+    try:
+        await process_lines(Subchats(SubchatSubmissions(ledger.connection), BrowserFixture()),
+                            source, output)
+        result = json.loads(output.getvalue())
+        assert result['state'] == 'unknown_operation'
+        assert 'ledger' in result['next_action']
+    finally:
         ledger.close()
 
 

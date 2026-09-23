@@ -28,6 +28,7 @@ from .subchat_state import (
     SubchatAccountMismatch,
     SubchatHTTPSelection,
     SubchatList,
+    SubchatOperationNotFound,
     SubchatSelectionError,
     SubchatSubmission,
     SubchatWorkContext,
@@ -53,6 +54,10 @@ class Message(Contract):
 class Catalog(Contract):
     model: str | None = Field(default=None, min_length=1, max_length=256)
     source: Literal['ui', 'http'] = 'ui'
+
+
+class ReadOnlyHTTPCatalog(Contract):
+    source: Literal['http'] = 'http'
 
 
 class Wait(OperationId):
@@ -318,7 +323,12 @@ def session(service: Subchats, *,
         definitions['subchat_capabilities'] = (
             Contract, 'Read configured transport capabilities without network or browser work.')
 
-    if observe_catalog is not None:
+    if read_only and observe_http_catalog is not None:
+        definitions['subchat_catalog'] = (
+            ReadOnlyHTTPCatalog,
+            'Read the authenticated HTTP model catalog without sending or changing a model. '
+            'This Plugin supports only source=http.')
+    elif observe_catalog is not None and not read_only:
         definitions['subchat_catalog'] = (
             Catalog, 'Observe model labels and effort without sending. Optionally select an '
             'exact observed model in the dedicated empty tab to discover its effort choices; '
@@ -336,7 +346,8 @@ def session(service: Subchats, *,
     async def catalog() -> list[JsonValue]:
         return [cast(JsonValue, {
             'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
-            'annotations': {'readOnlyHint': name in {'subchat_status', 'subchat_list'},
+            'annotations': {'readOnlyHint': name in {
+                'subchat_capabilities', 'subchat_catalog', 'subchat_status', 'subchat_list'},
                             'destructiveHint': name == 'subchat_delete', 'openWorldHint': True},
         }) for name, (schema, description) in definitions.items()]
 
@@ -472,15 +483,25 @@ def session(service: Subchats, *,
                                       service.store.http_progress(result.operation_id,
                                                                   owner=None)) is not None
                                       else {})})
-            if request.tool == 'subchat_catalog' and observe_catalog is not None:
-                args_catalog = Catalog.model_validate(request.arguments)
+            if request.tool == 'subchat_catalog' and (
+                (read_only and observe_http_catalog is not None)
+                or (not read_only and observe_catalog is not None)
+            ):
                 async with browser_lock:
-                    if args_catalog.source == 'http':
-                        if args_catalog.model is not None or observe_http_catalog is None:
-                            raise ValueError('HTTP catalog requires support and no model selection')
+                    if read_only:
+                        ReadOnlyHTTPCatalog.model_validate(request.arguments)
+                        assert observe_http_catalog is not None
                         observed = await observe_http_catalog()
                     else:
-                        observed = await observe_catalog(args_catalog.model)
+                        args_catalog = Catalog.model_validate(request.arguments)
+                        if args_catalog.source == 'http':
+                            if args_catalog.model is not None or observe_http_catalog is None:
+                                raise ValueError(
+                                    'HTTP catalog requires support and no model selection')
+                            observed = await observe_http_catalog()
+                        else:
+                            assert observe_catalog is not None
+                            observed = await observe_catalog(args_catalog.model)
                 data = TypeAdapter(dict[str, JsonValue]).validate_python(observed)
                 return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_send':
@@ -557,6 +578,12 @@ def session(service: Subchats, *,
                          data={'error_code': error.code, 'field': error.field,
                                'reason': error.reason, 'dispatched': False,
                                'corrected_request_requires_new_operation_id': True})
+        except SubchatOperationNotFound:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='No operation with this ID is visible in the selected ledger. '
+                               'Check the ID and ledger path, then use subchat_list.',
+                         data={'error_code': 'unknown_operation', 'dispatched': False,
+                               'automatic_retry': False})
         except ValidationError as error:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Subchat input has invalid fields. Correct them before sending.',

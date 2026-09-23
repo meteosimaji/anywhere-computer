@@ -73,6 +73,7 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
     )
     engine.plugin_sessions.entries[other] = SimpleNamespace(
         owner="owner-b", state="open", lock=asyncio.Lock(), cleanup_confirmed=False,
+        private_context="other-owner-secret-must-stay-private",
     )
     release = asyncio.Event()
     own_task = asyncio.create_task(release.wait(), name="files_write")
@@ -97,6 +98,7 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
         ]
         assert other not in repr(result["update_blocker_details"])
         assert other_operation not in repr(result["update_blocker_details"])
+        assert "other-owner-secret-must-stay-private" not in repr(result)
         unrelated = engine.status(owner="owner-c")
         assert unrelated["update_blocker_details"] == []
         assert unrelated["active_resources"] == {

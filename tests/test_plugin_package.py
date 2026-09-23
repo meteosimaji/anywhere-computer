@@ -5,6 +5,8 @@ import zipfile
 from email.parser import Parser
 from pathlib import Path
 
+import pytest
+
 from anywhere_computer import __version__
 from anywhere_computer.runtime_identity import ENGINE_API_VERSION
 from anywhere_computer.state import LEDGER_MIN_SUPPORTED_SCHEMA, LEDGER_SCHEMA_VERSION
@@ -35,7 +37,7 @@ def test_packaged_runtime_matches_current_source_and_checksums():
     assert release["python_version"] == __version__
     assert release["version"] == manifest["version"]
     assert re.fullmatch(r"[a-f0-9]{40}", release["source_commit"])
-    assert type(release["source_dirty"]) is bool
+    assert release["source_dirty"] is False
     assert release["validation"] == "unverified"
     assert release["engine_api"] == {"minimum": ENGINE_API_VERSION, "maximum": ENGINE_API_VERSION}
     assert release["ledger_schema"] == {
@@ -83,3 +85,22 @@ def test_packaged_runtime_matches_current_source_and_checksums():
         assert "Requires-Dist: httpx==0.28.1" in metadata
         assert "Requires-Dist: filelock" not in metadata
         assert "Requires-Dist: platformdirs" not in metadata
+
+
+def test_plugin_packager_refuses_dirty_source_before_writing(tmp_path, monkeypatch):
+    import importlib.util
+
+    module_spec = importlib.util.spec_from_file_location(
+        "package_plugin", ROOT / "scripts/package_plugin.py"
+    )
+    assert module_spec is not None and module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    def git_output(command, **_kwargs):
+        return "a" * 40 if command[1] == "rev-parse" else " M src/changed.py\n"
+
+    monkeypatch.setattr(module.subprocess, "check_output", git_output)
+    with pytest.raises(ValueError, match="dirty source tree"):
+        module.package_plugin(tmp_path)
+    assert list(tmp_path.iterdir()) == []

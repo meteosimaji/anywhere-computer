@@ -7,7 +7,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
@@ -24,6 +24,9 @@ def normalized(raw: dict[str, JsonValue]) -> dict[str, JsonValue]:
 
 
 class GUIObserve(DirectMCPSessionId):
+    provider: Literal['peekaboo', 'cua'] = 'peekaboo'
+    pid: int | None = Field(default=None, ge=1)
+    query: str | None = Field(default=None, min_length=1, max_length=200)
     window_id: int = Field(ge=1, le=4294967295, description=(
         'Required target window. Use the selected server window tool with action=list '
         'and the app to discover its ID. Observes without app focus and pins actions '
@@ -34,6 +37,14 @@ class GUIObserve(DirectMCPSessionId):
         'localized (for example 計算機). If absent, inspect its app tool and use the '
         'name returned by launch; this operation does not launch applications.'
     ))
+
+    @model_validator(mode='after')
+    def validate_provider(self) -> 'GUIObserve':
+        if self.provider == 'cua' and self.pid is None:
+            raise ValueError('Cua requires an exact process ID')
+        if self.provider == 'peekaboo' and (self.pid is not None or self.query is not None):
+            raise ValueError('Cua-only arguments require provider=cua')
+        return self
 
 
 class GUIAction(DirectMCPSessionId):
@@ -54,6 +65,7 @@ class GUIType(GUIAction):
 
 
 class GUIKey(GUIAction):
+    element_id: str | None = Field(default=None, min_length=1, max_length=128)
     keys: list[str] = Field(min_length=1, max_length=8, description=(
         'One key chord, case-insensitive: cmd, shift, alt, option, ctrl, fn, a-z, 0-9, '
         'space, return (alias enter), tab, escape (alias esc), delete, '
@@ -94,6 +106,9 @@ class Observation:
     elements: frozenset[str]
     created: float
     window_id: int
+    provider: Literal['peekaboo', 'cua'] = 'peekaboo'
+    pid: int | None = None
+    roles: dict[str, str] | None = None
 
 
 class GUIMCP:
@@ -164,6 +179,23 @@ class GUIMCP:
     async def _observe(self, args: GUIObserve, *, owner: str | None) -> dict[str, JsonValue]:
         self.sessions.status(args.session_id, owner=owner)
         self.observations.pop(args.session_id, None)
+        if args.provider == 'cua':
+            from .gui_cua import observe_cua
+            result, snapshot, elements = await observe_cua(self.sessions, args, owner)
+            if snapshot is None:
+                return result
+            observation = Observation(owner, uuid.uuid4().hex, args.app, snapshot,
+                                      frozenset(elements), time.monotonic(), args.window_id,
+                                      'cua', args.pid,
+                                      {str(row['element_id']): str(row['role'])
+                                       for row in result['elements'] if isinstance(row, dict)}
+                                      if isinstance(result['elements'], list) else {})
+            self.observations = {key: value for key, value in self.observations.items()
+                                 if key in self.sessions.entries and
+                                 time.monotonic() - value.created < 60}
+            self.observations[args.session_id] = observation
+            return {**result, 'observation_id': observation.identity,
+                    'expires_in_seconds': 60}
         await self._require_exact_window(args.session_id, owner)
         capture: dict[str, JsonValue] = {'app_target': args.app, 'window_id': args.window_id}
         raw = await self.sessions.call(
@@ -255,6 +287,16 @@ class GUIMCP:
                 or observation.identity != args.observation_id
                 or time.monotonic() - observation.created >= 60):
             raise ValueError('GUI observation is missing, stale or belongs to another connection')
+        if observation.provider == 'cua':
+            from .gui_cua import act_cua
+            name, cua_parameters = act_cua(args, observation)
+            self.observations.clear()
+            raw = await self.sessions.call(args.session_id, name, cua_parameters, owner=owner)
+            return {**normalized(raw), 'observation_consumed': True,
+                    'app': observation.app, 'stage': 'action_result',
+                    'window_id': observation.window_id,
+                    'postcondition_verified': False,
+                    'next_action': 'Observe the same window to verify the intended effect.'}
         parameters: dict[str, JsonValue]
         if isinstance(args, GUIClick):
             if args.element_id not in observation.elements:

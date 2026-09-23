@@ -125,9 +125,16 @@ def _conpty_input(pty: _ConPTY) -> None:
         try:
             if kind == b"I":
                 pty.write(payload.decode("utf-8"))
-            elif kind == b"R" and length == 4:
-                rows, columns = struct.unpack("!HH", payload)
-                pty.set_size(columns, rows)
+            elif kind == b"R" and length == 8:
+                sequence, rows, columns = struct.unpack("!IHH", payload)
+                try:
+                    pty.set_size(columns, rows)
+                except (OSError, RuntimeError):
+                    status = b"E"
+                else:
+                    status = b"A"
+                sys.stderr.buffer.write(b"\0" + status + sequence.to_bytes(4, "big"))
+                sys.stderr.buffer.flush()
             else:
                 break
         except (OSError, RuntimeError):

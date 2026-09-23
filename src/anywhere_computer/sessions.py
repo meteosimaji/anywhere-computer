@@ -60,6 +60,10 @@ class Session:
     interactive: bool = False
     rows: int | None = None
     columns: int | None = None
+    control_reader: asyncio.Task[None] | None = None
+    control_closed: bool = False
+    resize_sequence: int = 0
+    pending_resizes: dict[int, asyncio.Future[bool]] = field(default_factory=dict)
 
 
 def _make_controlling_terminal() -> None:
@@ -117,7 +121,7 @@ class Sessions:
                 sys.executable, "-I", str(Path(__file__).with_name("terminal_worker.py")),
                 "--conpty", shell, args.command, str(args.rows), str(args.columns),
                 cwd=cwd, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT, env=with_tool_path(os.environ),
+                stderr=asyncio.subprocess.PIPE, env=with_tool_path(os.environ),
             )
         elif args.interactive:
             master_fd, slave_fd = _openpty()
@@ -147,7 +151,38 @@ class Sessions:
                           columns=args.columns if args.interactive else None)
         self.sessions[session.session_id] = session
         session.reader = asyncio.create_task(self._read(session))
+        if args.interactive and os.name == "nt":
+            session.control_reader = asyncio.create_task(self._read_control(session))
         return self.describe(session)
+
+    @staticmethod
+    async def _read_control(session: Session) -> None:
+        assert session.process.stderr is not None
+        try:
+            while True:
+                frame = await session.process.stderr.readexactly(6)
+                if frame[:1] != b"\0":
+                    # Startup errors still appear in terminal output as they did
+                    # when worker stderr was merged with stdout.
+                    diagnostic = frame + await session.process.stderr.read()
+                    Sessions._append_output(session, diagnostic)
+                    break
+                sequence = int.from_bytes(frame[2:], "big")
+                pending = session.pending_resizes.pop(sequence, None)
+                if pending is not None and not pending.done():
+                    if frame[1:2] in (b"A", b"E"):
+                        pending.set_result(frame[1:2] == b"A")
+                    else:
+                        pending.set_exception(RuntimeError("Invalid terminal control response"))
+        except asyncio.IncompleteReadError as error:
+            if error.partial:
+                Sessions._append_output(session, error.partial)
+        finally:
+            session.control_closed = True
+            for pending in session.pending_resizes.values():
+                if not pending.done():
+                    pending.set_exception(RuntimeError("Terminal control stream closed"))
+            session.pending_resizes.clear()
 
     async def _read(self, session: Session) -> None:
         try:
@@ -259,17 +294,34 @@ class Sessions:
         if not session.interactive or session.process.returncode is not None:
             raise ValueError("Session is not an active interactive terminal")
         if os.name == "nt":
-            assert session.process.stdin is not None
-            payload = struct.pack("!HH", args.rows, args.columns)
-            async with session.input_lock:
-                session.process.stdin.write(b"R" + len(payload).to_bytes(4, "big") + payload)
-                await asyncio.wait_for(session.process.stdin.drain(), 10)
+            await self._resize_conpty(session, args.rows, args.columns)
         else:
             assert session.master_fd is not None
             _ioctl(session.master_fd, _TIOCSWINSZ,
                         struct.pack("HHHH", args.rows, args.columns, 0, 0))
         session.rows, session.columns = args.rows, args.columns
         return self.describe(session)
+
+    @staticmethod
+    async def _resize_conpty(session: Session, rows: int, columns: int) -> None:
+        assert session.process.stdin is not None
+        loop = asyncio.get_running_loop()
+        async with session.input_lock:
+            if session.control_closed:
+                raise RuntimeError("Terminal control stream closed")
+            session.resize_sequence = (session.resize_sequence + 1) & 0xffffffff
+            sequence = session.resize_sequence
+            pending: asyncio.Future[bool] = loop.create_future()
+            session.pending_resizes[sequence] = pending
+            payload = struct.pack("!IHH", sequence, rows, columns)
+            try:
+                session.process.stdin.write(b"R" + len(payload).to_bytes(4, "big") + payload)
+                await asyncio.wait_for(session.process.stdin.drain(), 10)
+                if not await asyncio.wait_for(pending, 10):
+                    raise RuntimeError("Terminal resize failed in ConPTY worker")
+            finally:
+                session.pending_resizes.pop(sequence, None)
+                pending.cancel()
 
     async def _wait_response(
         self, session: Session, args: SessionInput, cursor: int,
@@ -372,6 +424,8 @@ class Sessions:
                 await asyncio.wait_for(asyncio.shield(session.reader), 2)
             except TimeoutError:
                 session.reader.cancel()
+        if session.control_reader:
+            await session.control_reader
         return self.describe(session)
 
     @staticmethod

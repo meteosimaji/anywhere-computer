@@ -29,6 +29,7 @@ from .subchat_state import (
     SubchatAccountMismatch,
     SubchatHTTPSelection,
     SubchatList,
+    SubchatOperationNotFound,
     SubchatSelectionError,
     SubchatSubmissions,
     SubchatWorkContext,
@@ -146,6 +147,7 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
             output = json.dumps({
                 'state': ('invalid_parameter' if isinstance(error, ValidationError) else error.code
                           if isinstance(error, SubchatAccessError | SubchatAccountMismatch
+                                        | SubchatOperationNotFound
                                         | SubchatUnsupported | SubchatSelectionError)
                           else 'browser_closed' if isinstance(error, SubchatBrowserClosed)
                           else 'submission_unconfirmed'
@@ -167,6 +169,9 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
                    if isinstance(error, ValidationError) else {}),
                 **({'dispatched': False} if isinstance(error, SubchatUnsupported)
                    and error.code == 'http_generation_unavailable' else {}),
+                **({'next_action': 'Check the operation ID and selected ledger; use list '
+                                   'to inspect saved operations.'}
+                   if isinstance(error, SubchatOperationNotFound) else {}),
             })
         destination.write(output + '\n')
         destination.flush()
