@@ -71,7 +71,8 @@ class BrowserSubchatBackend:
                 'state': 'capabilities', 'transport': 'browser_prepared',
                 'browser_required': True, 'generation_transport': 'browser_prepared',
                 'http_selection_send_supported': self.http_read,
-                'credential_refresh': False, 'independent_login': False}
+                'credential_refresh': False, 'independent_login': False,
+                'http_delete_supported': True, 'deletion_transport': 'authenticated_http'}
 
     def _browser_closed(self, context: BrowserContext) -> None:
         self._closed = True
@@ -121,6 +122,14 @@ class BrowserSubchatBackend:
             result['http_selection_send_supported'] = self.http_read
             result['generation_transport'] = 'browser_prepared'
             return result
+
+    async def verify_delete_target(self, submission: SubchatSubmission) -> None:
+        async with asyncio.timeout(20):
+            await self._http_reader.verify_delete_target(await self._read_context(), submission)
+
+    async def patch_delete(self, submission: SubchatSubmission) -> bool:
+        async with asyncio.timeout(20):
+            return await self._http_reader.patch_delete(await self._read_context(), submission)
 
     async def _page(self, submission: SubchatSubmission) -> Page | None:
         if self._context is not None:

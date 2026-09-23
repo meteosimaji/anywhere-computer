@@ -109,7 +109,7 @@ class SubchatUnsupported(ValueError):
     """An explicit unavailable capability; no fallback or automatic retry is allowed."""
 
     def __init__(self, code: Literal['http_generation_unavailable', 'http_session_required',
-                                    'ui_unavailable']) -> None:
+                                    'http_delete_unavailable', 'ui_unavailable']) -> None:
         self.code = code
         super().__init__(code)
 

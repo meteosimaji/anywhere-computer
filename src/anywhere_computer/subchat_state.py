@@ -307,6 +307,14 @@ class SubchatSubmissions:
         with self.connection:
             # Serialize identity validation and mutation across ledger connections.
             self.connection.execute('BEGIN IMMEDIATE')
+            if new.state == 'sending' and new.conversation_id is not None:
+                deletion_table = self.connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='subchat_http_deletions'").fetchone()
+                if deletion_table is not None and self.connection.execute(
+                        'SELECT 1 FROM subchat_http_deletions WHERE conversation_id=?',
+                        (new.conversation_id,)).fetchone() is not None:
+                    raise ValueError('Conversation has a pending or confirmed deletion')
             if new.user_message_id is not None:
                 peers = self.connection.execute(
                     'SELECT body FROM subchat_submissions WHERE owner IS ? AND operation_id != ?',

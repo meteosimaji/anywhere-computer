@@ -23,6 +23,7 @@ from .subchat import (
     SubchatUnsupported,
 )
 from .subchat_content import SubchatResources
+from .subchat_delete import DeleteRequest, SubchatDeletionUnknown, delete_saved
 from .subchat_state import (
     SubchatAccountMismatch,
     SubchatHTTPSelection,
@@ -68,9 +69,13 @@ class QueueCommand(OperationId):
     prompt: str = Field(min_length=1, max_length=100_000)
 
 
+class DeleteCommand(DeleteRequest):
+    action: Literal['delete']
+
+
 async def dispatch(service: Subchats,
                    command: Command | ListCommand | QueueCommand | CatalogCommand
-                   | CapabilitiesCommand) -> str:
+                   | CapabilitiesCommand | DeleteCommand) -> str:
     if isinstance(command, CapabilitiesCommand):
         capabilities = getattr(service.backend, 'capabilities', None)
         if capabilities is None:
@@ -87,6 +92,9 @@ async def dispatch(service: Subchats,
     if isinstance(command, QueueCommand):
         return service.queue(command.operation_id, command.target_operation_id,
                              command.prompt, owner=None).model_dump_json()
+    if isinstance(command, DeleteCommand):
+        return (await delete_saved(service, DeleteRequest.model_validate(command.model_dump(
+            exclude={'action'})), owner=None)).model_dump_json()
     if command.action == 'send':
         if command.prompt is None or command.model is None or command.effort is None:
             raise ValueError('send requires prompt, model and effort')
@@ -116,11 +124,11 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
         if not line:
             return
         command: (Command | ListCommand | QueueCommand | CatalogCommand
-                  | CapabilitiesCommand | None) = None
+                  | CapabilitiesCommand | DeleteCommand | None) = None
         try:
             command = TypeAdapter(
                 Command | ListCommand | QueueCommand | CatalogCommand
-                | CapabilitiesCommand).validate_json(line)
+                | CapabilitiesCommand | DeleteCommand).validate_json(line)
             output = await dispatch(service, command)
         except Exception as error:
             # Do not print provider errors or invalid input: both can contain secrets.
@@ -131,9 +139,11 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
                           else 'browser_closed' if isinstance(error, SubchatBrowserClosed)
                           else 'submission_unconfirmed'
                           if isinstance(error, SubchatOutcomeUnknown) else 'reply_interrupted'
-                          if isinstance(error, SubchatInterrupted) else 'command_failed'),
+                          if isinstance(error, SubchatInterrupted) else 'delete_unknown'
+                          if isinstance(error, SubchatDeletionUnknown) else 'command_failed'),
                 'operation_id': (command.operation_id
-                                 if isinstance(command, Command | QueueCommand) else None),
+                                 if isinstance(command, Command | QueueCommand | DeleteCommand)
+                                 else None),
                 'error_type': type(error).__name__,
                 'automatic_retry': False,
                 **({'dispatched': False} if isinstance(error, SubchatUnsupported)
@@ -236,7 +246,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 instructions = None
                 if http_only:
                     instructions = (
-                        'Browser-free read-only ordinary Chat recovery. No browser fallback, '
+                        'Browser-free ordinary Chat recovery and explicit deletion. No browser '
+                        'fallback, '
                         'independent login, credential refresh or generation is implemented. '
                         'Use subchat_catalog source=http, saved status/list and recover/wait '
                         'with the original operation ID. UI catalog is unsupported. '
@@ -246,7 +257,9 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'in-memory session supplied by the operator at startup. Missing or '
                         'expired authorization requires operator action, not a retry loop. '
                         'A pending observation is not proof of Thinking. Interruption is not '
-                        'a completed answer. Queued work is never sent by this adapter.')
+                        'a completed answer. Queued work is never sent by this adapter. '
+                        'Deletion checks the saved conversation and bound account; an unknown '
+                        'delete outcome is never replayed automatically.')
                     if http_generation is not None:
                         instructions = (
                             'Browser-free ordinary Chat with an explicit in-memory generation '
@@ -256,7 +269,9 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                             'generation. A pending or unknown result is never resent. HTTP '
                             'status and SSE are not final-answer proof; recover the original '
                             'operation through HTTP history. Handoff headers may expire and '
-                            'must be supplied again by the operator in a new process.')
+                            'must be supplied again by the operator in a new process. '
+                            'Deletion checks the saved conversation and bound account; an '
+                            'unknown delete outcome is never replayed automatically.')
                 server = session(service, observe_catalog=backend.catalog,
                                  observe_http_catalog=backend.http_catalog,
                                  instructions=instructions, serialize_recovery=not http_only)

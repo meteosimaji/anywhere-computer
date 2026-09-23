@@ -23,6 +23,7 @@ from .subchat import (
     SubchatUnsupported,
 )
 from .subchat_content import SubchatResources
+from .subchat_delete import DeleteRequest, SubchatDeletionUnknown, delete_saved
 from .subchat_state import (
     SubchatAccountMismatch,
     SubchatHTTPSelection,
@@ -87,6 +88,10 @@ INSTRUCTIONS = (
     'subchat_message mode=queue persists a follow-up bound to the target operation; '
     'recover/wait on its message operation dispatches only after that target completes. '
     'subchat_cancel cancels only a local queued/prepared input, never generation. '
+    'subchat_delete requires a saved operation plus its exact conversation ID. '
+    'It checks the saved input against server history, then makes one authenticated HTTP '
+    'visibility change. A deleted result requires provider success and a later history 404. '
+    'Unknown deletion outcomes must not be retried automatically. '
     'No background dispatcher is implied. queued is local acceptance, not delivery. '
     'Explicit subchat_queue_watch can observe and dispatch an existing queue in this '
     'controller using an already open owned browser tab. It stops on error, final saved '
@@ -274,6 +279,9 @@ def session(service: Subchats, *,
             'This is browser-assisted delivery, not quiet HTTP generation or immediate steer.'),
         'subchat_list': (SubchatList, 'List saved submission summaries without opening Chrome.'),
         'subchat_cancel': (OperationId, 'Cancel an unsent queued/prepared input; never stop Chat.'),
+        'subchat_delete': (DeleteRequest, 'Hide one exact saved ordinary Chat conversation. '
+            'Requires matching saved operation and conversation ID and checks the bound account. '
+            'Makes one authenticated HTTP PATCH; unknown outcomes are never replayed.'),
         'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
                             'Steer returns unsupported without sending or queueing.'),
         'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels.'),
@@ -305,7 +313,7 @@ def session(service: Subchats, *,
         return [cast(JsonValue, {
             'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
             'annotations': {'readOnlyHint': name in {'subchat_status', 'subchat_list'},
-                            'destructiveHint': False, 'openWorldHint': True},
+                            'destructiveHint': name == 'subchat_delete', 'openWorldHint': True},
         }) for name, (schema, description) in definitions.items()]
 
     async def execute(request: Request) -> Reply:
@@ -382,6 +390,13 @@ def session(service: Subchats, *,
                 recoveries.pop(target.operation_id, None)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data=result.model_dump(mode='json'))
+            if request.tool == 'subchat_delete':
+                target_delete = DeleteRequest.model_validate(request.arguments)
+                async with browser_lock:
+                    result_delete = await delete_saved(service, target_delete, owner=None)
+                return Reply(operation_id=request.operation_id,
+                             state='completed' if result_delete.state == 'deleted' else 'unknown',
+                             data=result_delete.model_dump(mode='json'))
             if request.tool == 'subchat_message':
                 message = Message.model_validate(request.arguments)
                 service.store.get(message.target_operation_id, owner=None)
@@ -507,6 +522,11 @@ def session(service: Subchats, *,
                          error='Submission unconfirmed. Use subchat_recover with '
                                'submission_operation_id; do not send again with a new ID.',
                          data={'submission_operation_id': error.operation_id})
+        except SubchatDeletionUnknown:
+            return Reply(operation_id=request.operation_id, state='unknown',
+                         error='Deletion outcome is unknown. Inspect the exact conversation; '
+                               'do not repeat the PATCH automatically.',
+                         data={'error_code': 'delete_unknown', 'automatic_retry': False})
         except Exception as error:
             # Never expose provider error text, invalid prompt contents or account data.
             return Reply(operation_id=request.operation_id, state='failed',

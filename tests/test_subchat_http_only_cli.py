@@ -176,7 +176,7 @@ async def test_http_only_real_stdio_mcp_without_browser_or_credentials(tmp_path)
         async with stdio_client(params) as (read, write):
             async with ClientSession(read, write) as client:
                 initialized = await client.initialize()
-                assert 'Browser-free read-only' in initialized.instructions
+                assert 'Browser-free ordinary Chat recovery' in initialized.instructions
                 tools = await client.list_tools()
                 assert 'subchat_capabilities' in {tool.name for tool in tools.tools}
                 caps = await client.call_tool('subchat_capabilities', {})
@@ -291,5 +291,5 @@ def test_mcp_session_prefix_preserves_buffered_initialize_packet(tmp_path):
     assert result.returncode == 0, result.stderr
     reply, = map(json.loads, result.stdout.splitlines())
     assert reply['id'] == 1 and 'error' not in reply
-    assert 'Browser-free read-only' in reply['result']['instructions']
+    assert 'Browser-free ordinary Chat recovery' in reply['result']['instructions']
     assert SECRET.encode() not in result.stdout + result.stderr
