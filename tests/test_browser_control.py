@@ -71,11 +71,16 @@ async def test_engine_browser_tools_are_owned_and_block_update(tmp_path, local_p
     engine = Engine(tmp_path / "state")
     engine.browser.channel = "chrome"
 
-    async def call(tool, arguments, peer):
+    async def call(tool, arguments, peer, *, force_pending=False):
         operation_id = uuid.uuid4().hex
-        reply = await engine.execute(Request(operation_id=operation_id,
-                                             tool=tool, arguments=arguments), peer=peer)
-        async with asyncio.timeout(30):
+        request = Request(operation_id=operation_id, tool=tool, arguments=arguments)
+        if force_pending:
+            with monkeypatch.context() as patch:
+                patch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", 0.001)
+                reply = await engine.execute(request, peer=peer)
+        else:
+            reply = await engine.execute(request, peer=peer)
+        async with asyncio.timeout(90):
             while reply.state == "running":
                 recovered = await engine.execute(Request(
                     operation_id=uuid.uuid4().hex, tool="operations_get",
@@ -91,9 +96,7 @@ async def test_engine_browser_tools_are_owned_and_block_update(tmp_path, local_p
         return reply
 
     try:
-        with monkeypatch.context() as patch:
-            patch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", 0.001)
-            opened = await call("browser_open", {}, "owner-a")
+        opened = await call("browser_open", {}, "owner-a", force_pending=True)
         assert opened.state == "completed", opened.error
         ids = {"session_id": opened.data["session_id"], "tab_id": opened.data["tab_id"]}
         assert engine.status(owner="owner-a")["active_resources"]["browser_sessions"] == 1
