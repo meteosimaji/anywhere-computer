@@ -19,6 +19,7 @@ from test_audio_capture import audio_helper as audio_helper
 from test_http_service import initialize
 from test_native_gui import helper_process as helper_process
 
+from anywhere_computer import engine as engine_module
 from anywhere_computer.authorization import LOCAL_ONLY_TOOLS, AuthorizationStore, pkce_s256
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
 from anywhere_computer.engine import Engine
@@ -126,6 +127,7 @@ for line in sys.stdin:
 
             async def call(name, args=None, *, operation=None, expected="completed"):
                 assert name in discovered, f'Tool was not discovered in this session: {name}'
+                operation_id = operation or uuid.uuid4().hex
                 response = await http.post(
                     "/mcp",
                     headers=headers,
@@ -137,21 +139,32 @@ for line in sys.stdin:
                             "name": name,
                             "arguments": args or {},
                             "_meta": {
-                                "io.github.meteosimaji.anywhere-computer/operation_id": operation
-                                or uuid.uuid4().hex,
+                                "io.github.meteosimaji.anywhere-computer/operation_id":
+                                    operation_id,
                             },
                         },
                     },
                 )
                 assert response.status_code == 200
                 result = response.json()["result"]["structuredContent"]
+                if result["state"] == "running" and expected == "completed":
+                    # A slow tool has only acknowledged the operation. Recover its
+                    # original reply without issuing the side effect a second time.
+                    async with asyncio.timeout(40):
+                        while result["state"] == "running":
+                            recovered = await call("operations_get", {"operation_id": operation_id})
+                            result = recovered
+                            if result["state"] == "running":
+                                await asyncio.sleep(0.1)
                 assert result["state"] == expected, (name, result)
                 covered.add(name)
                 return result["data"]
 
             status = await call("computer_status")
             assert status["active_sessions"] == 0
-            browser = await call("browser_open")
+            with monkeypatch.context() as patch:
+                patch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", 0.001)
+                browser = await call("browser_open")
             browser_ids = {"session_id": browser["session_id"], "tab_id": browser["tab_id"]}
             navigated = await call("browser_navigate", {**browser_ids, "url": browser_url})
             assert navigated["url"] == browser_url
