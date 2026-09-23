@@ -17,6 +17,23 @@ editing. Markdown interpretation, formula calculation and images are not yet imp
 Generated packages are tested with the internal reader;
 Microsoft Office rendering remains unverified.
 
+`documents_edit_cell` makes a targeted edit to one existing plain string cell in an
+XLSX workbook. Supply `path`, exact `sheet` name, `cell` in A1 notation,
+`old_text`, `new_text`, and the workbook's current `expected_sha256` from
+`documents_read`. Set `preview: true` to receive the before/after text diff,
+the changed worksheet part, and the predicted result hash without writing.
+Repeat with `preview: false` and the same hash to apply the edit. A concurrent
+workbook change or a different old cell value rejects the edit. The applied
+result includes a backup ID for `files_restore`.
+
+The editor preserves every other ZIP part's uncompressed bytes and keeps the
+other cells in the edited worksheet, including their styles and formulas.
+It handles existing simple inline or shared string cells only; formulas,
+numbers, rich text and empty locations require a separate workflow. Editing
+the chosen cell converts a shared string reference into a plain inline string.
+The preview is a structured value preview and diff, not an Office-rendered
+page. Visual rendering and broad Office editing remain open acceptance gates.
+
 2026-09-09 independent-reader verification also passed using development-only
 python-docx and openpyxl: Japanese Word paragraphs, workbook sheet order, numeric/boolean
 cells, literal leading-equals strings and explicitly stored formulas. These libraries were

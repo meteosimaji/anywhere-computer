@@ -18,6 +18,7 @@ from .audio_status import inspect_audio, verified_audio_helper
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
+from .document_editor import edit_spreadsheet_cell
 from .document_writer import write_document
 from .documents import read_document
 from .downloads import Downloads
@@ -39,6 +40,7 @@ from .models import (
     DirectMCPTools,
     DownloadRange,
     EditFile,
+    EditSpreadsheetCell,
     Empty,
     FilePath,
     History,
@@ -610,6 +612,9 @@ class Engine:
         async def document_write(args: WriteDocument) -> Result:
             return await asyncio.to_thread(write_document, self.files, args)
 
+        async def document_edit_cell(args: EditSpreadsheetCell) -> Result:
+            return await asyncio.to_thread(edit_spreadsheet_cell, self.files, args)
+
         async def read(args: ReadFile) -> Result:
             args = args.model_copy(
                 update={"limit": min(args.limit, self.settings().file_read_line_limit)}
@@ -753,6 +758,12 @@ class Engine:
             "Replace regenerates the entire document, requires its current hash, "
             "and retains backup.",
             WriteDocument, document_write, destructive=True,
+        )
+        self.register(
+            "documents_edit_cell",
+            "Preview or edit one existing plain-text XLSX cell using its workbook hash "
+            "and exact old text. Returns a before/after diff; edits retain a backup.",
+            EditSpreadsheetCell, document_edit_cell, destructive=True,
         )
         self.register(
             "computer_status",
