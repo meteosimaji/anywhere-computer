@@ -53,9 +53,13 @@ class ChatHTTPReader:
     def __init__(self, request_factory: Callable[
                  [], Awaitable[APIRequestContext | AsyncClient]] | None = None,
                  *, browser_free: bool = False, session: ObservedHTTPSession | None = None,
-                 test_origin: str | None = None) -> None:
+                 test_origin: str | None = None,
+                 access_status: int | None = None) -> None:
         if (browser_free and request_factory is None) or (session is not None and not browser_free):
             raise ValueError('Explicit HTTP sessions require a browser-free request factory')
+        if access_status not in (None, 401, 403) or (access_status is not None
+                                                    and (session is not None or not browser_free)):
+            raise ValueError('Rejected HTTP access requires an unbound browser-free reader')
         if test_origin is not None:
             parsed = urlsplit(test_origin)
             if (parsed.scheme != 'http' or parsed.hostname != '127.0.0.1'
@@ -68,7 +72,7 @@ class ChatHTTPReader:
         self._context: BrowserContext | None = None
         self._headers: dict[str, str] = session.headers() if session is not None else {}
         self._catalog_url: str | None = session.catalog_url if session is not None else None
-        self._access_status: int | None = None
+        self._access_status: int | None = access_status
         self._denied_urls: set[str] = set()
         self._pending_closes: set[asyncio.Task[None]] = set()
 

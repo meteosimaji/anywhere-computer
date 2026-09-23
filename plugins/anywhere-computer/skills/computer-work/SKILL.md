@@ -104,6 +104,10 @@ This Plugin also registers `anywhere-subchat` as a separate local MCP server. It
 default mode uses a dedicated logged-in Chrome profile headlessly at startup,
 then HTTPX for Chat history and catalog reads. It closes Chrome before serving
 read-only MCP tools. `generation_transport=unavailable` means it cannot send.
+If startup login fails, the server still exposes capabilities and saved state;
+`authentication_state` reports the rejection and HTTP reads stop with the same
+`authentication_required` or `access_denied` code. Restore login, then restart
+the Plugin session. It does not refresh credentials automatically.
 Set `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process and
 restart its MCP session to expose `subchat_send` through the same dedicated
 profile. Check `subchat_capabilities`: this mode reports

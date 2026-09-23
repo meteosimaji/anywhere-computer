@@ -205,6 +205,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
             driver: Playwright | None = None
             http_client: APIRequestContext | None = None
             standalone_http_client: httpx.AsyncClient | None = None
+            chrome_access_status: int | None = None
             http_init_lock = asyncio.Lock()
 
             async def runtime() -> Playwright:
@@ -264,9 +265,14 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     str(chrome_login_profile), channel='chrome', headless=True,
                     ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS))
                 try:
-                    http_session = await chrome_http_session(
-                        chrome_context, await open_standalone_http(),
-                        expected_account_id=expected_account_id)
+                    try:
+                        http_session = await chrome_http_session(
+                            chrome_context, await open_standalone_http(),
+                            expected_account_id=expected_account_id)
+                    except SubchatAccessError as error:
+                        if not read_only_mcp:
+                            raise
+                        chrome_access_status = error.status
                 finally:
                     # Authentication is now held in memory by HTTPX. Do not leave a
                     # Chrome process open for the lifetime of the MCP controller.
@@ -274,6 +280,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 if chrome_generation_stdin:
                     from .subchat_http_generation import read_http_generation_handoff
 
+                    assert http_session is not None
                     generation_cookie = chrome_generation_cookie(await open_standalone_http())
                     if generation_cookie is None:
                         raise SubchatAccessError(401)
@@ -306,7 +313,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 backend = HTTPOnlySubchatBackend(
                     open_standalone_http, http_session, generation=http_generation,
                     store=store,
-                    chrome_login=chrome_login_profile is not None)
+                    chrome_login=chrome_login_profile is not None,
+                    startup_access_status=chrome_access_status)
             else:
                 from .subchat_browser.backend import BrowserSubchatBackend
 

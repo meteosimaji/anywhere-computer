@@ -94,8 +94,12 @@ compares evidence and verifies proposed changes before integrating them.
 
 This checkout's Codex Plugin adds a separate Subchat MCP server. Its default
 mode has seven read-only tools for capabilities, catalog, saved operations,
-result recovery and a bounded download of one verified sandbox file. Set
-`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process to expose
+result recovery and a bounded download of one verified sandbox file.
+`subchat_capabilities.authentication_state` reports whether startup found an
+authenticated session. If login is missing or denied, the server still exposes
+its tools and saved operations; HTTP reads return `authentication_required` or
+`access_denied` until the operator logs in and restarts that Plugin session.
+Set `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process to expose
 `subchat_send` and follow-up tools through the dedicated, logged-in Chrome
 profile. This mode minimizes Chrome but briefly activated its window in a live
 macOS probe;

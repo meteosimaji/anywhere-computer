@@ -17,6 +17,25 @@ CATALOG_URL = 'https://chatgpt.com/backend-api/models?language=ja'
 SECRET = 'Bearer fixture-secret-not-a-live-token'
 
 
+@pytest.mark.parametrize('status', [401, 403])
+async def test_chrome_login_rejection_keeps_capabilities_but_blocks_http(status):
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    async def no_request():
+        raise AssertionError('Rejected startup must not make another HTTP request')
+
+    backend = HTTPOnlySubchatBackend(
+        no_request, chrome_login=True, startup_access_status=status)
+    capabilities = backend.capabilities()
+    assert capabilities['authentication_state'] == (
+        'authentication_required' if status == 401 else 'access_denied')
+    assert capabilities['authenticated_account_id'] is None
+    assert capabilities['generation_transport'] == 'unavailable'
+    with pytest.raises(SubchatAccessError) as rejected:
+        await backend.http_catalog()
+    assert rejected.value.status == status
+
+
 def session_payload():
     return {'authorization': SECRET, 'account_id': 'fixture-account',
             'catalog_url': CATALOG_URL, 'language': 'ja'}

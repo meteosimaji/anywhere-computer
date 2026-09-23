@@ -60,8 +60,10 @@ Set absolute `ANYWHERE_SUBCHAT_CHROME_LOGIN_PROFILE` and
 `ANYWHERE_SUBCHAT_STATE_DIR` paths in the Plugin process to override them. Log
 in to the dedicated profile in a separate Chrome session, then close that
 session before starting the server. Do not use a normal profile that is open
-elsewhere. A login failure leaves this Subchat server unavailable; the main
-Anywhere Computer server is independent.
+elsewhere. If login is missing or denied, the server still exposes capabilities
+and saved operations. `subchat_capabilities.authentication_state` identifies the
+rejection; HTTP reads return `authentication_required` or `access_denied`. Log in
+and restart that Plugin session. The main Anywhere Computer server is independent.
 
 If Google sign-in rejects a browser controlled by test automation, use the
 ordinary Chrome process shown below for this one-time interactive login. Do

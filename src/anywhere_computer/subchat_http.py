@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from .subchat import (
+    SubchatAccessError,
     SubchatAnswer,
     SubchatPendingObservation,
     SubchatPreparedSend,
@@ -48,7 +49,11 @@ class HTTPOnlySubchatBackend:
                  store: SubchatSubmissions | None = None,
                  owner: str | None = None,
                  generation_origin: str = 'https://chatgpt.com',
-                 chrome_login: bool = False) -> None:
+                 chrome_login: bool = False,
+                 startup_access_status: int | None = None) -> None:
+        if startup_access_status is not None and (startup_access_status not in (401, 403)
+                                                  or not chrome_login or session is not None):
+            raise ValueError('Chrome login rejection requires an unbound HTTP session')
         if generation is not None and (session is None or store is None):
             raise ValueError('HTTP generation requires a session and durable store')
         if generation is not None and session is not None:
@@ -58,7 +63,9 @@ class HTTPOnlySubchatBackend:
                     or (session.cookie is not None and generation_headers['cookie']
                         != session.cookie.get_secret_value())):
                 raise ValueError('HTTP generation handoff does not match login session')
-        self._http_reader = ChatHTTPReader(request_factory, browser_free=True, session=session)
+        self._http_reader = ChatHTTPReader(
+            request_factory, browser_free=True, session=session,
+            access_status=startup_access_status)
         self._request_factory = request_factory
         self._session = session
         self._generation = generation
@@ -67,6 +74,7 @@ class HTTPOnlySubchatBackend:
         self._generation_origin = generation_origin
         self._delete_session_available = session is not None
         self._chrome_login = chrome_login
+        self._startup_access_status = startup_access_status
 
     def capabilities(self) -> dict[str, object]:
         enabled = self._generation is not None
@@ -82,6 +90,11 @@ class HTTPOnlySubchatBackend:
                 'independent_login': False, 'persistent_credentials': False,
                 'session_source': ('chrome_profile_http_get' if self._chrome_login
                                    else 'explicit_in_memory_handoff'),
+                'authentication_state': (
+                    'authenticated' if self._session is not None else
+                    'authentication_required' if self._startup_access_status == 401 else
+                    'access_denied' if self._startup_access_status == 403 else
+                    'http_session_required'),
                 'authenticated_account_id': (self._session.account_id
                                              if self._session is not None else None),
                 'authenticated_user_email': (self._session.user_email
@@ -225,6 +238,8 @@ class HTTPOnlySubchatBackend:
         from .subchat_http_download import download_verified_sandbox_file
 
         if self._store is None or self._session is None:
+            if self._startup_access_status is not None:
+                raise SubchatAccessError(self._startup_access_status)
             raise SubchatUnsupported('http_session_required')
         saved = self._store.get(operation_id, owner=self._owner)
         if saved.state != 'completed':
