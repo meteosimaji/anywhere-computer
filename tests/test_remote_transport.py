@@ -394,8 +394,11 @@ async def test_computer_status_reports_only_this_peers_feature_grant(tmp_path):
         assert reply.state == "completed"
         diagnostics = reply.data["capability_diagnostics"]
         assert diagnostics["files"]["connection_authorization"] == "authorized"
+        assert diagnostics["files"]["connection_publication"] == "published"
         assert diagnostics["skills"]["connection_authorization"] == "partial_grant"
+        assert diagnostics["skills"]["connection_publication"] == "partial"
         assert diagnostics["terminal"]["connection_authorization"] == "not_granted"
+        assert diagnostics["terminal"]["connection_publication"] == "not_published"
         assert diagnostics["terminal"]["authorization_next_action"].endswith(
             "no permission was changed."
         )

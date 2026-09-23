@@ -91,6 +91,67 @@ async def test_cli_read_only_mode_wires_filtered_stdio_session(tmp_path, monkeyp
     assert 'generation_transport=unavailable' in observed['instructions']
 
 
+async def test_plugin_capabilities_describe_exposed_read_only_tools(tmp_path):
+    from test_subchat_http_only import credentials
+
+    from anywhere_computer.models import Request
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    ledger = Ledger(tmp_path)
+
+    async def unused_client():
+        raise AssertionError('Capabilities must not make an HTTP request')
+
+    backend = HTTPOnlySubchatBackend(unused_client, credentials())
+    server = session(Subchats(SubchatSubmissions(ledger.connection), backend),
+                     read_only=True)
+    try:
+        assert backend.capabilities()['http_delete_supported'] is True
+        reply = await server.execute(Request(operation_id='d' * 32,
+                                             tool='subchat_capabilities', arguments={}))
+        assert reply.state == 'completed'
+        assert reply.data['http_delete_supported'] is False
+        assert reply.data['deletion_transport'] == 'unavailable'
+        assert reply.data['generation_transport'] == 'unavailable'
+        assert reply.data['http_selection_send_supported'] is False
+        assert reply.data['queue_dispatch'] == 'unavailable'
+        assert reply.data['queue_watch_supported'] is False
+        assert 'subchat_delete' not in {tool['name'] for tool in await server.catalog()}
+    finally:
+        await server.close()
+        ledger.close()
+
+
+async def test_read_only_recovery_cannot_dispatch_saved_queued_followup(tmp_path):
+    from anywhere_computer.models import Request
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    backend = BrowserFixture()
+    service = Subchats(store, backend)
+    parent, child = 'a' * 32, 'b' * 32
+    store.prepare(parent, 'input', 'model', 'effort', owner=None)
+    store.begin_send(parent, owner=None)
+    store.submitted(parent, 'chat', 'input-message', owner=None)
+    store.complete(parent, 'answer-message', 'done', owner=None)
+    service.queue(child, parent, 'follow-up', owner=None)
+    server = session(service, read_only=True)
+    try:
+        for tool, arguments in (
+            ('subchat_recover', {'operation_id': child}),
+            ('subchat_wait', {'operation_id': child, 'wait_ms': 10}),
+        ):
+            reply = await server.execute(Request(operation_id='c' * 32, tool=tool,
+                                                 arguments=arguments))
+            assert reply.state == 'completed'
+            assert reply.data['state'] == 'queued'
+            assert store.get(child, owner=None).state == 'queued'
+            assert backend.sends == 0
+    finally:
+        await server.close()
+        ledger.close()
+
+
 async def test_chrome_login_closes_before_plugin_serves_tools(tmp_path, monkeypatch):
     import playwright.async_api
     from test_subchat_http_only import credentials

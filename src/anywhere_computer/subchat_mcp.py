@@ -236,6 +236,10 @@ def session(service: Subchats, *,
         current = service.store.get(operation_id, owner=None)
         if current.state == 'interrupted':
             raise SubchatInterrupted('Provider interruption is saved; do not resend')
+        # Recovering a queued follow-up can dispatch it when its parent is complete.
+        # An observation-only server must leave that durable queue untouched.
+        if read_only and current.state == 'queued':
+            return current
         task = recoveries.get(operation_id)
         if task is None and current.state in {'queued', 'sending', 'submitted'}:
             if len(recoveries) >= 8:
@@ -389,9 +393,16 @@ def session(service: Subchats, *,
                              data={'submission_operation_id': watch.operation_id, **data})
             if request.tool == 'subchat_capabilities' and capabilities is not None:
                 Contract.model_validate(request.arguments)
+                reported = capabilities()
+                if read_only:
+                    # The backend can delete with its authenticated HTTP session,
+                    # but this Plugin deliberately does not expose that tool.
+                    reported = {**reported, 'http_delete_supported': False,
+                                'deletion_transport': 'unavailable'}
                 data = TypeAdapter(dict[str, JsonValue]).validate_python({
-                    **capabilities(),
-                    'queue_watch_supported': hasattr(service.backend, 'queue_watch_ready'),
+                    **reported,
+                    'queue_watch_supported': (not read_only
+                                              and hasattr(service.backend, 'queue_watch_ready')),
                 })
                 return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_list':

@@ -17,26 +17,13 @@ from typing import Literal
 from pydantic import JsonValue
 
 from .authorization import LOCAL_ONLY_TOOLS
+from .capability_contract import CAPABILITY_TOOLS
 from .downloads import DOWNLOAD_TOOLS
 from .engine import Engine
 from .mcp_server import MCPSession
 from .models import OperationId, Reply, Request, TransferId
 from .remote_transport import remote_exchange
 from .uploads import UPLOAD_TOOLS
-
-_CAPABILITY_GRANT_TOOLS: dict[str, frozenset[str]] = {
-    "files": frozenset({"files_read", "files_write"}),
-    "terminal": frozenset({"terminal_start", "terminal_output", "terminal_input",
-                            "terminal_list", "terminal_stop"}),
-    "literal_search": frozenset({"search_start", "search_results", "search_list",
-                                  "search_stop"}),
-    "office_text_read": frozenset({"documents_read"}),
-    "audio_capture": frozenset({"audio_status", "audio_capture"}),
-    "gui_native": frozenset({"gui_native_windows", "gui_native_observe", "gui_native_close"}),
-    "gui_mcp": frozenset({"gui_observe", "gui_click", "gui_type", "gui_key"}),
-    "skills": frozenset({"skills_list", "skills_read"}),
-    "codex_skills": frozenset({"codex_skills_list", "codex_skill_read"}),
-}
 
 
 class RemoteAgent:
@@ -172,7 +159,7 @@ class RemoteAgent:
             data["remote_channel_authenticated"] = True
             diagnostics = data.get("capability_diagnostics")
             if isinstance(diagnostics, dict):
-                for capability, required in _CAPABILITY_GRANT_TOOLS.items():
+                for capability, required in CAPABILITY_TOOLS.items():
                     granted = required & allowed
                     if not granted:
                         state = "not_granted"
@@ -188,12 +175,18 @@ class RemoteAgent:
                     )
                     raw = diagnostics.get(capability)
                     if isinstance(raw, dict):
+                        published = required & allowed & self.engine.tools.keys()
+                        raw["connection_publication"] = (
+                            "published" if published == required else
+                            "partial" if published else "not_published"
+                        )
                         raw["connection_authorization"] = state
                         raw["authorization_next_action"] = next_action
                     else:
                         diagnostics[capability] = {
                             "running_implementation": "unknown",
                             "runtime_available": "unknown",
+                            "connection_publication": "unknown",
                             "connection_authorization": state,
                             "authorization_next_action": next_action,
                             "helper": "not_checked",

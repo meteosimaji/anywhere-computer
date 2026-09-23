@@ -100,6 +100,51 @@ async def test_live_diagnosis_does_not_restart_or_modify_agent(tmp_path, monkeyp
         await asyncio.wait_for(task, 5)
 
 
+async def test_same_version_different_runtime_reports_source_runtime_and_catalog_separately(
+    tmp_path, monkeypatch,
+):
+    from anywhere_computer import diagnostics
+    from anywhere_computer.models import Reply
+
+    (tmp_path / "agent.json").write_text(json.dumps({
+        "pid": os.getpid(), "process_started": psutil.Process().create_time(),
+        "instance_id": "fixture-instance",
+    }), encoding="utf-8")
+    monkeypatch.setattr(diagnostics, "local_credential", lambda *_: "fixture-credential")
+    monkeypatch.setattr(diagnostics, "runtime_identity", lambda: "source-runtime")
+
+    async def fixture_exchange(_directory, tool, **_kwargs):
+        if tool == "__status":
+            return Reply(operation_id="a" * 32, state="completed", data={
+                "state": "ready", "instance_id": "fixture-instance",
+                "version": __version__, "runtime_id": "running-runtime",
+                "capability_diagnostics": {
+                    "skills": {"running_implementation": "absent", "acceptance": "not_verified"},
+                    "audio_capture": {"running_implementation": "present", "helper": "unavailable"},
+                },
+            })
+        assert tool == "__catalog"
+        return Reply(operation_id="b" * 32, state="completed", data={"tools": [
+            {"name": "audio_status"}, {"name": "audio_capture"},
+        ]})
+
+    monkeypatch.setattr(diagnostics, "exchange", fixture_exchange)
+    result = await diagnostics.diagnose(tmp_path)
+    assert result["state"] == "different_build"
+    assert result["runtime_comparison"]["version_matches"] is True
+    skills = result["agent"]["capability_diagnostics"]["skills"]
+    assert skills["source_implementation"] == "present"
+    assert skills["running_implementation"] == "absent"
+    assert skills["connection_publication"] == "not_published"
+    assert skills["connection_authorization"] == "not_observed"
+    audio = result["agent"]["capability_diagnostics"]["audio_capture"]
+    assert audio["source_implementation"] == "present"
+    assert audio["running_implementation"] == "present"
+    assert audio["connection_publication"] == "published"
+    assert audio["helper"] == "unavailable"
+    assert audio["acceptance"] == "not_verified"
+
+
 def test_runtime_diagnosis_exposes_path_resolution_without_environment(tmp_path, monkeypatch):
     from anywhere_computer.diagnostics import runtime_environment
 

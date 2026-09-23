@@ -20,8 +20,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a2` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.2` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a3` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.3` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -74,6 +74,14 @@ A subchat is an ordinary ChatGPT Chat used for a delegated task, separate from a
 ChatGPT Work task. The experimental adapter supports explicit model selection,
 submission tracking and correlated result recovery. The parent assigns scope,
 compares evidence and verifies proposed changes before integrating them.
+
+This checkout's Codex Plugin adds a separate Subchat MCP server with six
+read-only tools for capabilities, catalog, saved operations and result recovery.
+It cannot create or send a subchat. Generation remains in the separately
+configured `anywhere-subchat` CLI/MCP, using either its browser-assisted mode
+or an opt-in HTTP-only mode with an explicit observed request handoff. Installing
+the Plugin does not configure either mode. The existing Anywhere Computer engine
+and its remote ChatGPT connection are separate from this Subchat server.
 
 The subchat guide is the authority for supported transports, CLI/MCP usage,
 attachments, plugin selection, parallel-work evidence and remaining limitations.

@@ -1,5 +1,6 @@
 """Read-only connection diagnosis without starting, stopping or repairing an agent."""
 
+import ast
 import os
 import shutil
 import sys
@@ -10,11 +11,34 @@ import psutil
 from pydantic import JsonValue
 
 from . import __version__
+from .capability_contract import CAPABILITY_TOOLS
 from .codex_context import _executable
 from .connection import exchange, load_endpoint
 from .credentials import local_credential
 from .execution_environment import with_tool_path
 from .runtime_identity import runtime_identity
+
+
+def source_capability_implementations() -> dict[str, JsonValue]:
+    """Read literal tool registrations from this installed source without creating an engine."""
+    try:
+        source = Path(__file__).with_name("engine.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+    except (OSError, SyntaxError, UnicodeError):
+        return {name: "unknown" for name in CAPABILITY_TOOLS}
+    registered = {
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name) and node.func.value.id == "self"
+        and node.func.attr == "register" and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    }
+    return {
+        name: "present" if required <= registered else "absent"
+        for name, required in CAPABILITY_TOOLS.items()
+    }
 
 
 def runtime_environment() -> dict[str, JsonValue]:
@@ -59,10 +83,12 @@ def runtime_environment() -> dict[str, JsonValue]:
 
 async def diagnose(directory: Path) -> dict[str, JsonValue]:
     source_runtime_id = runtime_identity()
+    source_capabilities = source_capability_implementations()
 
     def report(state: str, action: str, **details: JsonValue) -> dict[str, JsonValue]:
         return {"state": state, "action": action, "changed": False,
                 "source_build": {"version": __version__, "runtime_id": source_runtime_id},
+                "source_capabilities": source_capabilities,
                 "runtime_environment": runtime_environment(), **details}
 
     try:
@@ -112,6 +138,44 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
         return report("not_ready", "Agent responded without readiness; retry diagnosis.")
     if reply.data.get("instance_id") != endpoint.get("instance_id"):
         return report("endpoint_changed", "Connection metadata changed; rerun anywhere doctor.")
+    agent = dict(reply.data)
+    raw_diagnostics = agent.get("capability_diagnostics")
+    capability_diagnostics: dict[str, JsonValue] = {
+        name: dict(value) for name, value in raw_diagnostics.items()
+        if isinstance(name, str) and isinstance(value, dict)
+    } if isinstance(raw_diagnostics, dict) else {}
+    try:
+        catalog_reply = await exchange(directory, "__catalog", credential=credential, timeout=3)
+        catalog = catalog_reply.data.get("tools")
+        catalog_names = {
+            row["name"] for row in catalog
+            if isinstance(row, dict) and isinstance(row.get("name"), str)
+        } if catalog_reply.state == "completed" and isinstance(catalog, list) else None
+    except (OSError, ValueError, TimeoutError):
+        catalog_names = None
+    for name, required in CAPABILITY_TOOLS.items():
+        raw = capability_diagnostics.get(name)
+        details = dict(raw) if isinstance(raw, dict) else {}
+        details["source_implementation"] = source_capabilities[name]
+        if catalog_names is None:
+            details["connection_publication"] = "unknown"
+        else:
+            published = required & catalog_names
+            details["connection_publication"] = (
+                "published" if published == required else
+                "partial" if published else "not_published"
+            )
+            details.setdefault("running_implementation", (
+                "present" if published == required else
+                "partial" if published else "absent"
+            ))
+        details.setdefault("running_implementation", "unknown")
+        details.setdefault("connection_authorization", "not_observed")
+        details.setdefault("helper", "not_checked")
+        details.setdefault("os_permission", "not_checked")
+        details.setdefault("acceptance", "not_verified")
+        capability_diagnostics[name] = details
+    agent["capability_diagnostics"] = capability_diagnostics
     agent_version = reply.data.get("version")
     agent_runtime_id = reply.data.get("runtime_id")
     same_version = isinstance(agent_version, str) and agent_version == __version__
@@ -133,7 +197,7 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
             "Finish active work with the previous installation, then run anywhere start "
             "to switch an idle agent to this build. Feature authorization, helper permissions, "
             "and acceptance were not checked.",
-            runtime_comparison=runtime_comparison, agent=reply.data,
+            runtime_comparison=runtime_comparison, agent=agent,
         )
     return report("ready", "No action required.",
-                  runtime_comparison=runtime_comparison, agent=reply.data)
+                  runtime_comparison=runtime_comparison, agent=agent)
