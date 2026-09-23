@@ -42,13 +42,15 @@ class DirectMCPSessions:
 
     def __init__(self, *, clock: Callable[[], float] = time.monotonic,
                  journal: sqlite3.Connection | None = None,
-                 owner_active: Callable[[str | None], bool] | None = None) -> None:
+                 owner_active: Callable[[str | None], bool] | None = None,
+                 owner_released: Callable[[str | None], None] | None = None) -> None:
         self.entries: dict[str, _Entry] = {}
         self._closed = False
         self.clock = clock
         self._reaper: asyncio.Task[None] | None = None
         self.journal = journal
         self.owner_active = owner_active
+        self.owner_released = owner_released
         if journal is not None:
             with journal:
                 journal.execute('CREATE TABLE IF NOT EXISTS subchat_queue_watch_leases ('
@@ -125,6 +127,14 @@ class DirectMCPSessions:
             await entry.context.close()
         except RuntimeError:
             entry.state = 'cleanup_incomplete'
+        if (self.owner_released is not None
+                and not any(other.owner == entry.owner and
+                            (other.state in {'open', 'opening'}
+                             or not other.context.cleanup_confirmed
+                             or any(watch.state == 'watching'
+                                    for watch in other.watches.values()))
+                            for other in self.entries.values())):
+            self.owner_released(entry.owner)
 
     async def open(self, command: list[str], cwd: Path, *, owner: str | None,
                    idle_timeout: int = 300,

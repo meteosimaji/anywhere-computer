@@ -59,6 +59,10 @@ async def test_revoked_http_grant_stops_engine_owned_watch(
         opened = await engine.direct_mcp_sessions.open([sys.executable], tmp_path,
                                                        owner=grant.grant_id)
         sid = opened['session_id']
+        other = await engine.direct_mcp_sessions.open([sys.executable], tmp_path,
+                                                      owner=grant.grant_id)
+        await engine.direct_mcp_sessions.stop(other['session_id'], owner=grant.grant_id)
+        assert grant.grant_id in engine._http_watch_grants
         await engine.direct_mcp_sessions.call(sid, 'subchat_queue_watch',
             {'operation_id': 'a' * 32}, owner=grant.grant_id)
         assert engine.direct_mcp_sessions.active_watch_count == 1
@@ -75,6 +79,7 @@ async def test_revoked_http_grant_stops_engine_owned_watch(
         assert engine.direct_mcp_sessions.watch_history(owner=grant.grant_id)[0]['reason'] == (
             'authorization_lost')
         assert engine.direct_mcp_sessions.active_count == 0
+        assert grant.grant_id not in engine._http_watch_grants
     finally:
         await engine.close()
         store.close()

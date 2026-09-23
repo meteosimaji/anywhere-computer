@@ -181,6 +181,7 @@ class Engine:
         self._http_watch_grants: dict[str, tuple[Path, GrantIdentity]] = {}
         self.direct_mcp_sessions = DirectMCPSessions(
             journal=self.ledger.connection, owner_active=self._watch_owner_active,
+            owner_released=self._release_watch_owner,
         )
         self.gui_mcp = GUIMCP(self.direct_mcp_sessions)
         self.native_gui = NativeGUI()
@@ -198,6 +199,12 @@ class Engine:
 
     def bind_http_watch_grant(self, grant_id: str, database: Path) -> None:
         """Bind a trusted local HTTP gateway grant to its current authority database."""
+        active = set(self.inflight_owners.values())
+        active.update(entry.owner for entry in self.direct_mcp_sessions.entries.values()
+                      if entry.state in {'open', 'opening'} or not entry.context.cleanup_confirmed
+                      or any(watch.state == 'watching' for watch in entry.watches.values()))
+        for stale in self._http_watch_grants.keys() - active - {grant_id}:
+            self._http_watch_grants.pop(stale)
         if not database.is_absolute():
             raise ValueError('HTTP authority database must be absolute')
         current = current_grant_read_only(database, grant_id)
@@ -216,6 +223,10 @@ class Engine:
             return current_grant_read_only(database, owner) == initial
         except (OSError, ValueError, sqlite3.Error):
             return False
+
+    def _release_watch_owner(self, owner: str | None) -> None:
+        if owner is not None:
+            self._http_watch_grants.pop(owner, None)
 
     def register(
         self,
