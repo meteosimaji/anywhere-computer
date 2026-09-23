@@ -110,14 +110,16 @@ async def test_reenable_rejects_old_form_even_during_password_verification(
 
     def paused_verify(password):
         entered.set()
-        assert release.wait(5)
+        release.wait()
         return True
 
     if during_password:
         monkeypatch.setattr(browser.credentials, "verify", paused_verify)
         pending = asyncio.create_task(decide(browser, fields, headers))
-        assert await asyncio.to_thread(entered.wait, 5)
     try:
+        if during_password:
+            assert await asyncio.to_thread(entered.wait, 30)
+            assert not pending.done()
         authority.revoke_device(owner="owner", device="device")
         assert authority.enable_device(owner="owner", device="device")
     finally:
