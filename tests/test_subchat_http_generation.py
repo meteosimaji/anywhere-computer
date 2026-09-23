@@ -9,13 +9,16 @@ from test_subchat_http_catalog import catalog
 from test_subchat_http_only import CATALOG_URL, SECRET, credentials, session_payload
 from test_subchat_http_only_cli import command, environment
 
+from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
+from anywhere_computer.subchat_cli import Command, dispatch
 from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
 from anywhere_computer.subchat_http_generation import (
     ObservedHTTPGeneration,
     read_http_generation_handoff,
 )
+from anywhere_computer.subchat_mcp import session as mcp_session
 from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmissions
 
 CHAT = '00000000-0000-0000-0000-000000000001'
@@ -410,6 +413,129 @@ async def test_generation_403_is_claimed_recorded_and_never_reposted(tmp_path):
             await client.dispose()
 
 
+@pytest.mark.parametrize('stage', ['sentinel', 'generation'])
+@pytest.mark.parametrize('cancelled', [False, True])
+async def test_cancelled_http_request_records_failure_without_replay(
+        tmp_path, monkeypatch, stage, cancelled):
+    from playwright.async_api import async_playwright
+
+    async with LocalChat() as api, async_playwright() as playwright:
+        client = await playwright.request.new_context()
+        try:
+            ledger, store, service = await setup(tmp_path, api, client)
+            try:
+                if cancelled and stage == 'sentinel':
+                    async def cancelled_post(self, url, **kwargs):
+                        raise asyncio.CancelledError
+
+                    monkeypatch.setattr(LocalRequests, 'post', cancelled_post)
+                elif cancelled:
+                    import httpx
+
+                    class CancelledStream:
+                        async def __aenter__(self):
+                            raise asyncio.CancelledError
+
+                        async def __aexit__(self, *_):
+                            return None
+
+                    class CancelledSender:
+                        def __init__(self, **_kwargs):
+                            pass
+
+                        async def __aenter__(self):
+                            return self
+
+                        async def __aexit__(self, *_):
+                            return None
+
+                        def stream(self, *_args, **_kwargs):
+                            return CancelledStream()
+
+                    monkeypatch.setattr(httpx, 'AsyncClient', CancelledSender)
+                operation = '9' * 32 if stage == 'sentinel' else '8' * 32
+                if cancelled:
+                    with pytest.raises(asyncio.CancelledError):
+                        await service.send(operation, 'cancelled prompt', 'Future Chat',
+                            'Future effort', owner=None, http_selection=SELECTION)
+                else:
+                    await service.send(operation, 'cancelled prompt', 'Future Chat',
+                        'Future effort', owner=None, http_selection=SELECTION)
+                saved = store.get(operation, owner=None)
+                assert saved.state == 'sending'
+                stages = [event['stage'] for event in store.http_events(operation, owner=None)]
+                if stage == 'sentinel' and cancelled:
+                    assert stages == ['sentinel_request', 'sentinel_failed']
+                elif stage == 'sentinel':
+                    assert stages[:2] == ['sentinel_request', 'sentinel_response']
+                    assert stages[-2:] == ['generation_response', 'sse_candidate']
+                elif not cancelled:
+                    assert stages[-2:] == ['generation_response', 'sse_candidate']
+                else:
+                    assert stages[-3:] == [
+                        'dispatch_claimed', 'generation_request', 'generation_failed']
+                assert store.connection.execute('SELECT COUNT(*) FROM '
+                    'subchat_http_dispatch_claims').fetchone()[0] == (
+                        not cancelled or stage == 'generation')
+                request_count = len(api.requests)
+                repeated = await service.send(operation, 'cancelled prompt', 'Future Chat',
+                    'Future effort', owner=None, http_selection=SELECTION)
+                assert repeated.state == 'sending'
+                assert len(api.requests) == request_count
+            finally:
+                ledger.close()
+        finally:
+            await client.dispose()
+
+
+@pytest.mark.parametrize('cancelled', [False, True])
+async def test_cancelled_branch_check_records_failure_without_generation(
+        tmp_path, monkeypatch, cancelled):
+    from playwright.async_api import async_playwright
+
+    async with LocalChat() as api, async_playwright() as playwright:
+        client = await playwright.request.new_context()
+        try:
+            ledger, store, service = await setup(tmp_path, api, client)
+            try:
+                parent = await service.send('6' * 32, 'parent', 'Future Chat',
+                    'Future effort', owner=None, http_selection=SELECTION)
+                assert (await service.recover(parent.operation_id, owner=None)).state == 'completed'
+                child = service.queue('7' * 32, parent.operation_id, 'child', owner=None)
+                original_get = LocalRequests.get
+
+                async def cancelled_branch(self, url, **kwargs):
+                    if url.endswith('/backend-api/conversation/' + CHAT):
+                        raise asyncio.CancelledError
+                    return await original_get(self, url, **kwargs)
+
+                if cancelled:
+                    monkeypatch.setattr(LocalRequests, 'get', cancelled_branch)
+                    with pytest.raises(asyncio.CancelledError):
+                        await service.recover(child.operation_id, owner=None)
+                else:
+                    await service.recover(child.operation_id, owner=None)
+                assert store.get(child.operation_id, owner=None).state == 'sending'
+                stages = [event['stage'] for event in store.http_events(
+                    child.operation_id, owner=None)]
+                if cancelled:
+                    assert stages[-2:] == ['branch_request', 'branch_failed']
+                else:
+                    assert stages[4:6] == ['branch_request', 'branch_response']
+                    assert stages[-2:] == ['generation_response', 'sse_candidate']
+                assert store.connection.execute('SELECT COUNT(*) FROM '
+                    'subchat_http_dispatch_claims').fetchone()[0] == (1 if cancelled else 2)
+                request_count = len(api.requests)
+                if cancelled:
+                    recovered = await service.recover(child.operation_id, owner=None)
+                    assert recovered.state == 'sending'
+                    assert len(api.requests) == request_count + 1  # Recovery reads history only.
+            finally:
+                ledger.close()
+        finally:
+            await client.dispose()
+
+
 @pytest.mark.parametrize('poison_stage', ['sentinel', 'generation'])
 async def test_provider_payload_does_not_escape_diagnostic_failure(tmp_path, poison_stage):
     from playwright.async_api import async_playwright
@@ -469,11 +595,15 @@ def test_http_events_are_private_bounded_and_durable(tmp_path):
         for _index in range(70):
             store.record_http_event(operation, 'history_unknown', owner='private-owner')
         events = store.http_events(operation, owner='private-owner')
+        assert store.http_progress(operation, owner='private-owner') == {
+            key: events[-1][key] for key in ('stage', 'status', 'timestamp')}
         assert len(events) == 64
         assert all(set(event) == {'operation_id', 'stage', 'status', 'timestamp'}
                    for event in events)
         with pytest.raises(ValueError):
             store.http_events(operation, owner=None)
+        with pytest.raises(ValueError):
+            store.http_progress(operation, owner=None)
         with pytest.raises(ValueError):
             store.record_http_event(operation, 'private prompt', owner='private-owner')
         rows = ledger.connection.execute('SELECT operation_id,stage,status,timestamp '
@@ -486,8 +616,80 @@ def test_http_events_are_private_bounded_and_durable(tmp_path):
     try:
         assert SubchatSubmissions(reopened.connection).http_events(
             operation, owner='private-owner') == events
+        assert SubchatSubmissions(reopened.connection).http_progress(
+            operation, owner='private-owner') == {
+                key: events[-1][key] for key in ('stage', 'status', 'timestamp')}
     finally:
         reopened.close()
+
+
+async def test_http_progress_surfaces_preserve_pending_and_final_state(tmp_path):
+    from playwright.async_api import async_playwright
+
+    async with LocalChat() as api, async_playwright() as playwright:
+        client = await playwright.request.new_context()
+        try:
+            ledger, store, service = await setup(tmp_path, api, client)
+            try:
+                pending = await service.send('5' * 32, 'private prompt', 'Future Chat',
+                    'Future effort', owner=None, http_selection=SELECTION)
+                assert pending.state == 'sending'
+                cli = json.loads(await dispatch(service, Command(action='status',
+                    operation_id=pending.operation_id)))
+                assert cli['state'] == 'sending' and cli['answer'] is None
+                assert set(cli['http_progress']) == {'stage', 'status', 'timestamp'}
+                assert cli['http_progress']['stage'] == 'sse_candidate'
+                server = mcp_session(service, serialize_recovery=False)
+                status = await server.execute(Request(operation_id='6' * 32,
+                    tool='subchat_status', arguments={'operation_id': pending.operation_id}))
+                assert status.data['state'] == 'sending'
+                assert status.data['http_progress'] == cli['http_progress']
+                waited = await server.execute(Request(operation_id='7' * 32,
+                    tool='subchat_wait', arguments={'operation_id': pending.operation_id,
+                                                   'wait_ms': 0}))
+                assert waited.data['state'] == 'sending'
+                assert waited.data['http_progress']['stage'] == 'sse_candidate'
+                final = await server.execute(Request(operation_id='8' * 32,
+                    tool='subchat_recover', arguments={'operation_id': pending.operation_id}))
+                assert final.data['state'] == 'completed'
+                assert final.data['http_progress']['stage'] == 'history_final'
+                await server.close()
+            finally:
+                ledger.close()
+            reopened = Ledger(tmp_path)
+            try:
+                persisted = SubchatSubmissions(reopened.connection)
+                assert persisted.http_progress('5' * 32, owner=None) == final.data['http_progress']
+            finally:
+                reopened.close()
+        finally:
+            await client.dispose()
+
+
+async def test_http_progress_reports_rejection_without_claiming_completion(tmp_path):
+    from playwright.async_api import async_playwright
+
+    async with LocalChat() as api, async_playwright() as playwright:
+        api.fail_stage = '/backend-api/f/conversation'
+        client = await playwright.request.new_context()
+        try:
+            ledger, _, service = await setup(tmp_path, api, client)
+            try:
+                with pytest.raises(SubchatOutcomeUnknown):
+                    await service.send('9' * 32, 'private prompt', 'Future Chat',
+                        'Future effort', owner=None, http_selection=SELECTION)
+                result = json.loads(await dispatch(service, Command(action='status',
+                    operation_id='9' * 32)))
+                assert result['state'] == 'sending' and result['answer'] is None
+                assert result['generation_http_status'] == 403
+                assert result['http_progress']['stage'] == 'generation_failed'
+                assert result['http_progress']['status'] is None
+                assert SECRET not in json.dumps(result) and PROOF not in json.dumps(result)
+                assert 'private prompt' not in json.dumps(result['http_progress'])
+            finally:
+                ledger.close()
+        finally:
+            await client.dispose()
 
 
 def test_cli_opt_in_handoff_reports_capability_without_browser_or_secret_output(tmp_path):

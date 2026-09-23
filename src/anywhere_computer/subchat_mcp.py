@@ -106,6 +106,8 @@ INSTRUCTIONS = (
     'current saved state; '
     'a pending result can be waited on again without stopping generation. '
     'subchat_status reads the saved record without browser interaction. '
+    'When present, http_progress is the latest saved transport checkpoint, not proof of a '
+    'final answer; only completed with a saved answer is final. '
     'prepared means this adapter has not dispatched; external/manual sends are not tracked. '
     'After correcting preparation, reconcile the visible Chat before retrying the same ID. '
     'sending means receipt unconfirmed: recover it, never click Send again. '
@@ -287,7 +289,8 @@ def session(service: Subchats, *,
         'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels.'),
         'subchat_recover': (OperationId, 'Recover receipt/answer or progress a queued follow-up; '
                             'never replay an uncertain send.'),
-        'subchat_status': (OperationId, 'Read the saved submission without browser interaction.'),
+        'subchat_status': (OperationId, 'Read the saved submission and latest HTTP transport '
+                           'checkpoint without browser interaction.'),
         'subchat_wait': (Wait, 'Wait for an answer without stopping generation or resending. '
                          'Other subchats can progress between observations. Timeout returns '
                          'the current saved state, not a failed generation.'),
@@ -432,7 +435,11 @@ def session(service: Subchats, *,
                                 owner=None).state != 'submitted'):
                         result = current
                 return Reply(operation_id=request.operation_id, state='completed',
-                             data=result.model_dump(mode='json'))
+                             data={**result.model_dump(mode='json'),
+                                   **({'http_progress': progress} if (progress :=
+                                      service.store.http_progress(result.operation_id,
+                                                                  owner=None)) is not None
+                                      else {})})
             if request.tool == 'subchat_catalog' and observe_catalog is not None:
                 args_catalog = Catalog.model_validate(request.arguments)
                 async with browser_lock:
@@ -463,6 +470,9 @@ def session(service: Subchats, *,
                 raise ValueError('Unknown subchat tool')
             return Reply(operation_id=request.operation_id, state='completed',
                          data={**result.model_dump(mode='json'),
+                               **({'http_progress': progress} if (progress :=
+                                  service.store.http_progress(result.operation_id,
+                                                              owner=None)) is not None else {}),
                                **({'queue_watch': server.queue_watch_states[result.operation_id]}
                                   if result.operation_id in server.queue_watch_states else {})})
         except asyncio.CancelledError:

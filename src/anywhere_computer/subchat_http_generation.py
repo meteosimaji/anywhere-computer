@@ -7,6 +7,7 @@ launches Chrome or persists the handoff.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import time
@@ -221,6 +222,9 @@ async def _preparation_post(stage: str, *, plan: HTTPGenerationPlan,
             return await _json_response(response)
         finally:
             await response.dispose()
+    except asyncio.CancelledError:
+        store.record_http_event(plan.operation_id, stage + '_failed', owner=owner)
+        raise
     except SubchatAccessError:
         store.record_http_event(plan.operation_id, stage + '_failed', owner=owner)
         raise
@@ -278,6 +282,9 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
                 current = await _json_response(branch)
             finally:
                 await branch.dispose()
+        except asyncio.CancelledError:
+            store.record_http_event(plan.operation_id, 'branch_failed', owner=owner)
+            raise
         except SubchatAccessError:
             store.record_http_event(plan.operation_id, 'branch_failed', owner=owner)
             raise
@@ -345,6 +352,9 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
                             store.record_http_event(plan.operation_id, 'sse_candidate', owner=owner)
                             candidate_logged = True
                 decoder.finish()
+    except asyncio.CancelledError:
+        store.record_http_event(plan.operation_id, 'generation_failed', owner=owner)
+        raise
     except SubchatAccessError:
         store.record_http_event(plan.operation_id, 'generation_failed', owner=owner)
         raise
