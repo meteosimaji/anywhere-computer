@@ -66,6 +66,16 @@ waiting screen and did not load the composer, so browser-UI capture of a fresh
 generation handoff did not succeed in headless mode. This trial establishes
 HTTPX login and catalog, not a generated answer from that new GET token.
 
+In the `0.2.0a4` acceptance check, the headless dedicated-profile path again
+received HTTP 200 from both the auth-session GET and the model-catalog GET.
+Pinning a deliberately different account ID stopped after the auth GET; it did
+not request the catalog. A separate Chrome control generated a saved reply with
+HTTP 200 at all three POST stages, but its successful generation request omitted
+`openai-sentinel-chat-requirements-prepare-token`. The handoff parser now permits
+that one omission. The Chrome control did not remain minimized, so observation
+stopped before a new HTTPX generation attempt. No `0.2.0a4` HTTPX generation
+result is claimed from this check.
+
 Later on 2026-09-23, a live minimized-Chrome control supplied the request
 templates and protection values in process memory. Separately, HTTPX performed
 the Chrome-cookie authentication GET and catalog GET, both with status 200.
@@ -173,7 +183,7 @@ The generation handoff has four fields:
 
 | Field | Required content |
 | --- | --- |
-| `headers` | All 28 recognized names from the observed successful generation request, with their actual values. Authorization and account must equal the read-session line. Origin and referer must be `chatgpt.com`. |
+| `headers` | The recognized names from a successful generation request, with their actual values. The `openai-sentinel-chat-requirements-prepare-token` header may be absent when the observed successful request omitted it; the other 27 names remain required and unknown names are rejected. Authorization and account must equal the read-session line. Origin and referer must be `chatgpt.com`. |
 | `sentinel_p` | The observed `p` value for `POST /backend-api/sentinel/chat-requirements/prepare`. |
 | `prepare_template` | The full body observed on a successful conversation preparation, including `client_prepare_state: "sent"`, `partial_query`, timezone, and other observed fields. |
 | `generation_template` | The JSON body template observed on a successful ordinary Chat generation. Message fields outside its input ID, text parts, and creation time are preserved. |
