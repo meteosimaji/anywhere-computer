@@ -1,5 +1,6 @@
 """Real loopback HTTP for the opt-in browser-free generation handoff."""
 import asyncio
+import gzip
 import json
 import subprocess
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from anywhere_computer.subchat_cli import Command, dispatch
 from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
 from anywhere_computer.subchat_http_generation import (
     ObservedHTTPGeneration,
+    _json_response,
     read_http_generation_handoff,
 )
 from anywhere_computer.subchat_mcp import session as mcp_session
@@ -72,10 +74,14 @@ def handoff():
 
 
 class LocalChat:
-    def __init__(self, *, prepare_token_present=True):
+    def __init__(self, *, prepare_token_present=True, rotate_cookie=False,
+                 compress_generation=False, oversize_sentinel=False):
         self.requests = []
         self.messages = []
         self.prepare_token_present = prepare_token_present
+        self.rotate_cookie = rotate_cookie
+        self.compress_generation = compress_generation
+        self.oversize_sentinel = oversize_sentinel
         self.current_node = None
         self.stale = False
         self.lost_generation = False
@@ -113,6 +119,8 @@ class LocalChat:
                     'proofofwork': {'required': True, 'seed': 'fixture', 'difficulty': 'fixture'},
                     'so': {'required': True, 'collector_dx': 'fixture',
                            'snapshot_dx': 'fixture'}}).encode()
+                if self.oversize_sentinel:
+                    payload = b'{"padding":"' + b'a' * 1_100_000 + b'"}'
             elif path == '/backend-api/f/conversation/prepare':
                 assert method == 'POST' and data['client_prepare_state'] == 'sent'
                 assert data['partial_query']['extra'] == 'keep'
@@ -170,6 +178,8 @@ class LocalChat:
                            f'data: {{"conversation_id":"{CHAT}"}}\n\n'
                            'data: [DONE]\n\n').encode()
                 content_type = 'text/event-stream'
+                if self.compress_generation:
+                    payload = gzip.compress(payload)
             elif path == '/backend-api/conversations/' + CHAT:
                 assert method == 'GET'
                 payload = json.dumps({'conversation_id': CHAT,
@@ -178,8 +188,15 @@ class LocalChat:
                 status, payload = '404 Not Found', b'{}'
             if path == self.fail_stage:
                 status, payload = '403 Forbidden', b'{}'
+            set_cookie = ('Set-Cookie: session=rotated; Path=/\r\n'
+                          if self.rotate_cookie and path == (
+                              '/backend-api/sentinel/chat-requirements/prepare') else '')
+            content_encoding = ('Content-Encoding: gzip\r\n'
+                                if self.compress_generation and path == (
+                                    '/backend-api/f/conversation') else '')
             writer.write(f'HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\n'
-                         f'Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n'.encode()
+                         f'Content-Length: {len(payload)}\r\n{set_cookie}{content_encoding}'
+                         'Connection: close\r\n\r\n'.encode()
                          + payload)
             await writer.drain()
         finally:
@@ -213,7 +230,7 @@ class LocalRequests:
             yield response
 
 
-async def setup(tmp_path, api, client, *, generation=None):
+async def setup(tmp_path, api, client, *, generation=None, chrome_login=False):
     ledger = Ledger(tmp_path)
     store = SubchatSubmissions(ledger.connection)
     proxy = LocalRequests(client, api.origin)
@@ -223,7 +240,8 @@ async def setup(tmp_path, api, client, *, generation=None):
 
     backend = HTTPOnlySubchatBackend(factory, credentials(),
                                      generation=handoff() if generation is None else generation,
-                                     store=store, generation_origin=api.origin)
+                                     store=store, generation_origin=api.origin,
+                                     chrome_login=chrome_login)
     return ledger, store, Subchats(store, backend)
 
 
@@ -413,6 +431,94 @@ async def test_generation_preserves_absent_observed_prepare_token(tmp_path):
                 assert len(post_headers) == 3
                 assert all('openai-sentinel-chat-requirements-prepare-token' not in headers
                            for headers in post_headers)
+            finally:
+                ledger.close()
+
+
+async def test_chrome_generation_uses_rotating_client_cookie(tmp_path):
+    async with LocalChat(rotate_cookie=True) as api:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            client.cookies.set('session', 'initial', domain='127.0.0.1', path='/')
+            ledger, _, service = await setup(tmp_path, api, client, chrome_login=True)
+            try:
+                sent = await service.send('8' * 32, 'rotating cookie', 'Future Chat',
+                    'Future effort', owner=None, http_selection=SELECTION)
+                assert sent.state == 'sending'
+                stages = {path: headers.get('cookie') for _, path, headers, _ in api.requests}
+                assert stages['/backend-api/sentinel/chat-requirements/prepare'] == (
+                    'session=initial')
+                assert stages['/backend-api/f/conversation/prepare'] == 'session=rotated'
+                assert stages['/backend-api/f/conversation'] == 'session=rotated'
+            finally:
+                ledger.close()
+
+
+async def test_preparation_response_stops_at_raw_byte_limit():
+    chunks_read = 0
+
+    class Oversized(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            nonlocal chunks_read
+            for chunk in (b' ' * 600_000, b' ' * 600_000):
+                chunks_read += 1
+                yield chunk
+            raise AssertionError('The response should be closed at the size limit')
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _:
+            httpx.Response(200, headers={'content-type': 'application/json'},
+                           stream=Oversized()))) as client:
+        async with client.stream('POST', 'https://chatgpt.com/backend-api/test') as response:
+            with pytest.raises(ValueError, match='too large'):
+                await _json_response(response)
+    assert chunks_read == 2
+
+
+async def test_oversized_preparation_never_reaches_generation(tmp_path, monkeypatch):
+    post_called = False
+
+    async def buffered_post(*_args, **_kwargs):
+        nonlocal post_called
+        post_called = True
+        raise AssertionError('Preparation must use the bounded stream path')
+
+    monkeypatch.setattr(LocalRequests, 'post', buffered_post)
+    async with LocalChat(oversize_sentinel=True) as api:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            ledger, store, service = await setup(tmp_path, api, client)
+            try:
+                with pytest.raises(SubchatOutcomeUnknown):
+                    await service.send('d' * 32, 'large preparation', 'Future Chat',
+                        'Future effort', owner=None, http_selection=SELECTION)
+                assert not post_called
+                assert store.get('d' * 32, owner=None).state == 'sending'
+                assert [event['stage'] for event in store.http_events(
+                    'd' * 32, owner=None)][-2:] == ['sentinel_response', 'sentinel_failed']
+                assert not any(path == '/backend-api/f/conversation' for _, path, _, _
+                               in api.requests)
+            finally:
+                ledger.close()
+
+
+async def test_compressed_generation_is_not_decoded_or_replayed(tmp_path):
+    async with LocalChat(compress_generation=True) as api:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            ledger, store, service = await setup(tmp_path, api, client)
+            try:
+                with pytest.raises(SubchatOutcomeUnknown):
+                    await service.send('c' * 32, 'compressed reply', 'Future Chat',
+                        'Future effort', owner=None, http_selection=SELECTION)
+                assert store.get('c' * 32, owner=None).state == 'sending'
+                assert [event['stage'] for event in store.http_events(
+                    'c' * 32, owner=None)][-1] == 'generation_failed'
+                assert sum(path == '/backend-api/f/conversation' for _, path, _, _
+                           in api.requests) == 1
+                generation_paths = {
+                    '/backend-api/sentinel/chat-requirements/prepare',
+                    '/backend-api/f/conversation/prepare',
+                    '/backend-api/f/conversation',
+                }
+                assert all(headers.get('accept-encoding') == 'identity' for _, path,
+                           headers, _ in api.requests if path in generation_paths)
             finally:
                 ledger.close()
 
@@ -655,10 +761,12 @@ async def test_cancelled_preparation_keeps_original_operation_unknown(tmp_path, 
             transport=httpx.AsyncHTTPTransport(retries=0)) as client:
         ledger, store, service = await setup(tmp_path, api, client)
         try:
-            async def cancelled_post(self, url, **kwargs):
+            @asynccontextmanager
+            async def cancelled_stream(self, method, url, **kwargs):
                 raise asyncio.CancelledError
+                yield
 
-            monkeypatch.setattr(LocalRequests, 'post', cancelled_post)
+            monkeypatch.setattr(LocalRequests, 'stream', cancelled_stream)
             operation = '9' * 32
             with pytest.raises(asyncio.CancelledError):
                 await service.send(operation, 'cancelled prompt', 'Future Chat',
@@ -688,25 +796,18 @@ async def test_cancelled_followup_or_generation_preserves_claim_boundary(
                 'Future effort', owner=None, http_selection=SELECTION)
             assert (await service.recover(parent.operation_id, owner=None)).state == 'completed'
             child = service.queue('7' * 32, parent.operation_id, 'child', owner=None)
-            if stage == 'branch':
-                original_get = LocalRequests.get
+            original_stream = LocalRequests.stream
 
-                async def cancelled_get(self, url, **kwargs):
-                    if url.endswith('/backend-api/conversation/' + CHAT):
-                        raise asyncio.CancelledError
-                    return await original_get(self, url, **kwargs)
+            @asynccontextmanager
+            async def cancelled_stream(self, method, url, **kwargs):
+                target = ('/backend-api/conversation/' + CHAT if stage == 'branch'
+                          else '/backend-api/f/conversation')
+                if url.endswith(target):
+                    raise asyncio.CancelledError
+                async with original_stream(self, method, url, **kwargs) as response:
+                    yield response
 
-                monkeypatch.setattr(LocalRequests, 'get', cancelled_get)
-            else:
-                class CancelledStream:
-                    async def __aenter__(self):
-                        raise asyncio.CancelledError
-
-                    async def __aexit__(self, *_):
-                        return None
-
-                monkeypatch.setattr(LocalRequests, 'stream',
-                                    lambda *_args, **_kwargs: CancelledStream())
+            monkeypatch.setattr(LocalRequests, 'stream', cancelled_stream)
             with pytest.raises(asyncio.CancelledError):
                 await service.recover(child.operation_id, owner=None)
             assert store.get(child.operation_id, owner=None).state == 'sending'

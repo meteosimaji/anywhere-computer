@@ -1,6 +1,9 @@
 """Bootstrap personal Chat HTTP access from an owned, logged-in Chrome profile."""
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
+from http.cookiejar import Cookie
+
 import httpx
 from playwright.async_api import BrowserContext
 
@@ -10,28 +13,68 @@ from .subchat_http_session import ObservedHTTPSession
 from .subchat_state import SubchatAccountMismatch
 
 CATALOG_URL = 'https://chatgpt.com/backend-api/models?language=ja'
+AUTH_URL = 'https://chatgpt.com/api/auth/session'
+GENERATION_URL = 'https://chatgpt.com/backend-api/f/conversation'
+
+
+async def _exact_origin_only(request: httpx.Request) -> None:
+    """Prevent an imported Chrome cookie from reaching another host or scheme."""
+    if (request.url.scheme != 'https' or request.url.host != 'chatgpt.com'
+            or request.url.port not in (None, 443)):
+        raise ValueError('Chrome session requests require the exact ChatGPT origin')
+
+
+def chrome_generation_cookie(client: httpx.AsyncClient) -> str | None:
+    """Read the current path-scoped cookie for handoff validation only."""
+    cookie = client.build_request('POST', GENERATION_URL).headers.get('cookie')
+    return str(cookie) if cookie is not None else None
+
+
+def _import_chrome_cookies(client: httpx.AsyncClient,
+                           cookies: Iterable[Mapping[str, object]]) -> None:
+    """Keep Chrome cookie path/expiry and restrict this client to one origin."""
+    if _exact_origin_only not in client.event_hooks['request']:
+        client.event_hooks['request'].append(_exact_origin_only)
+    for item in cookies:
+        domain = item.get('domain')
+        name = item.get('name')
+        value = item.get('value')
+        path = item.get('path', '/')
+        expires = item.get('expires', -1)
+        if (item.get('partitionKey') is not None
+                or domain not in ('chatgpt.com', '.chatgpt.com')
+                or not isinstance(name, str) or not name
+                or not isinstance(value, str) or not isinstance(path, str)
+                or not path.startswith('/')
+                or not isinstance(expires, (int, float)) or isinstance(expires, bool)):
+            continue
+        client.cookies.jar.set_cookie(Cookie(
+            version=0, name=name, value=value, port=None, port_specified=False,
+            domain=domain, domain_specified=domain.startswith('.'),
+            domain_initial_dot=domain.startswith('.'), path=path, path_specified=True,
+            secure=item.get('secure') is True,
+            expires=int(expires) if expires > 0 else None,
+            discard=expires <= 0, comment=None, comment_url=None,
+            rest={}, rfc2109=False))
 
 
 async def chrome_http_session(context: BrowserContext, client: httpx.AsyncClient,
                               *, expected_account_id: str | None = None
                               ) -> ObservedHTTPSession:
     """GET auth and catalog with HTTPX; retain Chrome cookies only in memory."""
-    cookies = await context.cookies('https://chatgpt.com')
-    cookie_header = '; '.join(
-        f"{cookie['name']}={cookie['value']}" for cookie in cookies
-        if cookie.get('domain', '').lstrip('.') == 'chatgpt.com')
-    if not cookie_header:
+    _import_chrome_cookies(client, await context.cookies())
+    if 'cookie' not in client.build_request('GET', AUTH_URL).headers:
         raise SubchatAccessError(401)
     page = await context.new_page()
     try:
         user_agent = await page.evaluate('navigator.userAgent')
     finally:
         await page.close()
-    auth_headers = {'cookie': cookie_header, 'accept': 'application/json',
+    auth_headers = {'accept': 'application/json',
                     'referer': 'https://chatgpt.com/', 'user-agent': user_agent,
                     'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors',
                     'sec-fetch-dest': 'empty'}
-    response = await client.get('https://chatgpt.com/api/auth/session',
+    response = await client.get(AUTH_URL,
                                 headers=auth_headers, timeout=15.0,
                                 follow_redirects=False)
     try:
@@ -58,7 +101,6 @@ async def chrome_http_session(context: BrowserContext, client: httpx.AsyncClient
             'account_id': account_id,
             'catalog_url': CATALOG_URL,
             'language': 'ja',
-            'cookie': cookie_header,
             'user_agent': user_agent,
             'user_email': email,
         })

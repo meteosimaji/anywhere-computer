@@ -196,24 +196,21 @@ def _url(origin: str, path: str) -> str:
     return origin + path
 
 
-def _json_response(response: Response) -> dict[str, JsonValue]:
+async def _json_response(response: Response) -> dict[str, JsonValue]:
     if response.status_code in (401, 403):
         raise SubchatAccessError(response.status_code)
     if response.status_code != 200:
         raise ConnectionError('Chat preparation was not accepted')
     if response.headers.get('content-type', '').split(';', 1)[0].strip() != 'application/json':
         raise ValueError('Unexpected Chat preparation response')
-    raw = response.content
-    if len(raw) > 1_048_576:
-        raise ValueError('Chat preparation response is too large')
+    if response.headers.get('content-encoding', 'identity').lower() != 'identity':
+        raise ValueError('Compressed Chat preparation response is unsupported')
+    raw = bytearray()
+    async for chunk in response.aiter_raw():
+        if len(raw) + len(chunk) > 1_048_576:
+            raise ValueError('Chat preparation response is too large')
+        raw.extend(chunk)
     return TypeAdapter(dict[str, JsonValue]).validate_json(raw)
-
-
-async def _post(client: httpx.AsyncClient, url: str, *, body: bytes,
-                headers: dict[str, str]) -> Response:
-    return await client.post(url, content=body, headers=headers,
-                             timeout=httpx.Timeout(120.0, connect=10.0),
-                             follow_redirects=False)
 
 
 async def _preparation_post(stage: str, *, plan: HTTPGenerationPlan,
@@ -222,14 +219,12 @@ async def _preparation_post(stage: str, *, plan: HTTPGenerationPlan,
                             headers: dict[str, str]) -> dict[str, JsonValue]:
     store.record_http_event(plan.operation_id, stage + '_request', owner=owner)
     try:
-        response = await _post(client, _url(origin, _PATHS[stage]), body=body,
-                               headers=headers)
-        try:
+        async with client.stream('POST', _url(origin, _PATHS[stage]), content=body,
+                                 headers=headers, timeout=httpx.Timeout(120.0, connect=10.0),
+                                 follow_redirects=False) as response:
             store.record_http_event(plan.operation_id, stage + '_response', owner=owner,
                                     status=response.status_code)
-            return _json_response(response)
-        finally:
-            await response.aclose()
+            return await _json_response(response)
     except (asyncio.CancelledError, SubchatAccessError):
         store.record_http_event(plan.operation_id, stage + '_failed', owner=owner)
         raise
@@ -241,7 +236,8 @@ async def _preparation_post(stage: str, *, plan: HTTPGenerationPlan,
 async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmission, *,
                               handoff: ObservedHTTPGeneration, client: httpx.AsyncClient,
                               store: SubchatSubmissions, owner: str | None,
-                              origin: str = 'https://chatgpt.com') -> None:
+                              origin: str = 'https://chatgpt.com',
+                              use_client_cookies: bool = False) -> None:
     """Prepare once, inspect branch, claim once, then POST once.
 
     Any failure after `begin_send` leaves the original operation in `sending`.
@@ -255,7 +251,11 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
     except Exception:
         store.record_http_event(plan.operation_id, 'generation_failed', owner=owner)
         raise ValueError('HTTP generation request is invalid') from None
-    headers = {**handoff.headers, 'accept': 'application/json'}
+    request_headers = handoff.headers
+    if use_client_cookies:
+        request_headers.pop('cookie')
+    headers = {**request_headers, 'accept': 'application/json',
+               'accept-encoding': 'identity'}
     observed = await _preparation_post('sentinel', plan=plan, client=client, store=store,
         owner=owner, origin=origin, body=json.dumps({'p': handoff.sentinel_p}).encode(),
         headers=headers)
@@ -279,15 +279,12 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
             raise ValueError('Invalid follow-up conversation identity')
         store.record_http_event(plan.operation_id, 'branch_request', owner=owner)
         try:
-            branch = await client.get(_url(origin,
-                '/backend-api/conversation/' + plan.conversation_id), headers=headers,
-                timeout=15.0, follow_redirects=False)
-            try:
+            async with client.stream('GET', _url(origin,
+                    '/backend-api/conversation/' + plan.conversation_id), headers=headers,
+                    timeout=15.0, follow_redirects=False) as branch:
                 store.record_http_event(plan.operation_id, 'branch_response', owner=owner,
                                         status=branch.status_code)
-                current = _json_response(branch)
-            finally:
-                await branch.aclose()
+                current = await _json_response(branch)
         except (asyncio.CancelledError, SubchatAccessError):
             store.record_http_event(plan.operation_id, 'branch_failed', owner=owner)
             raise
@@ -303,16 +300,18 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
             model_slug=plan.model_slug, thinking_effort=plan.thinking_effort,
             conversation_id=plan.conversation_id, predecessor_id=plan.predecessor_id):
         raise ValueError('HTTP generation was already claimed; recover without resending')
-    # One HTTPX client handles preparation, branch checks and generation. The operator's
-    # observed generation headers are forwarded unchanged. HTTPX does not
-    # acquire or fabricate protection values, including an absent prepare token.
+    # One HTTPX client handles preparation, branch checks and generation. Chrome
+    # sessions use its rotating cookie jar; explicit handoffs retain their headers.
+    # HTTPX does not acquire or fabricate protection values, including an absent
+    # prepare token.
     decoder = SSEDecoder()
     candidate = plan.conversation_id
     candidate_logged = False
     store.record_http_event(plan.operation_id, 'generation_request', owner=owner)
     try:
         async with client.stream('POST', _url(origin, _PATHS['generation']),
-                                 content=body, headers=handoff.headers,
+                                 content=body,
+                                 headers={**request_headers, 'accept-encoding': 'identity'},
                                  timeout=httpx.Timeout(120.0, connect=10.0),
                                  follow_redirects=False) as response:
                 store.record_http_event(plan.operation_id, 'generation_response', owner=owner,
@@ -327,7 +326,9 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
                 if response.headers.get('content-type', '').split(';', 1)[0].strip() != (
                         'text/event-stream'):
                     raise ValueError('Unexpected generation response format')
-                async for chunk in response.aiter_bytes():
+                if response.headers.get('content-encoding', 'identity').lower() != 'identity':
+                    raise ValueError('Compressed generation response is unsupported')
+                async for chunk in response.aiter_raw():
                     for event in decoder.feed(chunk):
                         if event.data == '[DONE]':
                             continue

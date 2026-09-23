@@ -3,6 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a9 / Plugin 0.2.0-alpha.9 — unpublished candidate (2026-09-23)
+
+- Keep Chrome-profile cookies in HTTPX's scoped, in-memory cookie jar so
+  `Set-Cookie` updates reach later requests. Check a generation handoff against
+  the current cookie before sending; explicit handoffs keep their behavior.
+- Bound preparation JSON while receiving it and reject compressed generation
+  streams before SSE decoding. HTTP-only provider generation remains unverified.
+
 ## 0.2.0a8 / Plugin 0.2.0-alpha.8 — unpublished candidate (2026-09-23)
 
 - Reject compressed sandbox download responses and inspect raw response chunks,

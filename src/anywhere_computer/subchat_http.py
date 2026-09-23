@@ -147,7 +147,8 @@ class HTTPOnlySubchatBackend:
         plan = HTTPGenerationPlan.from_reserved(submission, followup_parent=parent)
         await dispatch_generation(plan, submission, handoff=self._generation,
                                   client=await self._request_factory(), store=self._store,
-                                  owner=self._owner, origin=self._generation_origin)
+                                  owner=self._owner, origin=self._generation_origin,
+                                  use_client_cookies=self._chrome_login)
         return None  # Only history can confirm the saved input and final answer.
 
     async def catalog(self, model: str | None = None) -> dict[str, object]:

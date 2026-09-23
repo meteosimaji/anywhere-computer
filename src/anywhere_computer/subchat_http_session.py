@@ -16,8 +16,9 @@ class ObservedHTTPSession(Contract):
 
     Possession is not provider approval for automation. Only an operator-authorized,
     already established session may be handed off; this module acquires no credentials.
-    Chrome-login mode may attach its in-memory Cookie and User-Agent. Refresh
-    credentials and request-preparation/protection tokens are not stored here.
+    Chrome-login mode retains cookies in the HTTPX client jar and may attach its
+    User-Agent here. Refresh credentials and request-preparation/protection
+    tokens are not stored here.
     """
 
     model_config = ConfigDict(extra='forbid', strict=True, frozen=True, hide_input_in_errors=True)

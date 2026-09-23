@@ -254,7 +254,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 return context
 
             if chrome_login_profile is not None:
-                from .subchat_chrome_login import chrome_http_session
+                from .subchat_chrome_login import chrome_generation_cookie, chrome_http_session
 
                 chrome_context = await (await runtime()).chromium.launch_persistent_context(
                     str(chrome_login_profile), channel='chrome', headless=True)
@@ -269,12 +269,14 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 if chrome_generation_stdin:
                     from .subchat_http_generation import read_http_generation_handoff
 
+                    generation_cookie = chrome_generation_cookie(await open_standalone_http())
+                    if generation_cookie is None:
+                        raise SubchatAccessError(401)
                     http_generation = read_http_generation_handoff(
                         sys.stdin.buffer,
                         authorization=http_session.authorization.get_secret_value(),
                         account_id=http_session.account_id,
-                        cookie=(http_session.cookie.get_secret_value()
-                                if http_session.cookie is not None else None))
+                        cookie=generation_cookie)
 
             store = SubchatSubmissions(ledger.connection)
 
