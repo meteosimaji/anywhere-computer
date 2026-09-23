@@ -22,7 +22,8 @@ mutation tools; `subchat_capabilities` reports
 dedicated profile by default, with an optional absolute
 `ANYWHERE_SUBCHAT_BROWSER_SEND_PROFILE` override. Close any other Chrome process
 using that profile first. The controller minimizes its Chrome window, but it can
-briefly take focus. Obtain exact UI model and effort labels plus an available
+briefly take focus; a live macOS catalog probe observed this. Obtain exact UI
+model and effort labels plus an available
 `http_selection` from `subchat_catalog` before sending, and use the returned
 operation ID for `subchat_wait` or `subchat_recover`. Keep the controller alive
 until a pending send reaches a confirmed result. This mode uses Chrome to send;

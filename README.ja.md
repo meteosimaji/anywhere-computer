@@ -55,7 +55,7 @@ subchatは、役割を分担した通常のChatGPT Chatです。ChatGPT Workタ�
 保存済み回答のsandboxファイル1件を上限付きで取得する読み取り専用の7ツールを
 既定で提供します。Pluginプロセスに`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send`を
 設定して再接続すると、ログイン済みの専用Chromeプロファイルを使う送信ツールが現れます。
-Chromeは最小化しますが、一時的に前面に出る可能性があります。能力表示では
+Chromeは最小化しますが、macOSでの実測では一時的に前面へ出ました。能力表示では
 `generation_transport=browser_prepared`となります。独立したHTTP専用の生成は
 別途設定する`anywhere-subchat` CLI/MCPの実験機能で、実生成の合格はまだです。
 既存のAnywhere ComputerエンジンとChatGPT向けリモート接続は、このSubchatサーバーと別です。

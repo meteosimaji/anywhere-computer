@@ -9,7 +9,9 @@
   `subchat_send` through the existing dedicated Chrome transport while keeping
   the default HTTP observation mode read-only. The two modes use the same
   logged-in dedicated profile at different times; the send mode minimizes its
-  Chrome window and reports `generation_transport=browser_prepared`.
+  Chrome window and reports `generation_transport=browser_prepared`. A live
+  catalog probe observed Chrome briefly become the foreground app despite
+  minimization, so this mode is not enabled by default.
 - A live local MCP session sent a new ordinary Chat and a follow-up in the same
   conversation, then recovered both final answers. Independent HTTPX generation
   is still unverified and remains a release gate.

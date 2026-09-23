@@ -79,7 +79,8 @@ mode has seven read-only tools for capabilities, catalog, saved operations,
 result recovery and a bounded download of one verified sandbox file. Set
 `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process to expose
 `subchat_send` and follow-up tools through the dedicated, logged-in Chrome
-profile. This mode minimizes Chrome but can still briefly activate its window;
+profile. This mode minimizes Chrome but briefly activated its window in a live
+macOS probe;
 `subchat_capabilities` reports `generation_transport=browser_prepared`. Close
 other Chrome sessions using that profile before starting the Plugin. The same
 profile can be used by the two Plugin modes at different times. Independent
