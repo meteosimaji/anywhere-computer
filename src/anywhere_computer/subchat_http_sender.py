@@ -13,9 +13,9 @@ from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import urlsplit
 
-from .subchat import SubchatAccessError
+from .subchat import SubchatAccessError, SubchatOutcomeUnknown
 from .subchat_sse import SSEDecoder
-from .subchat_state import SubchatAccountMismatch, SubchatSubmission
+from .subchat_state import SubchatAccountMismatch, SubchatSubmission, SubchatSubmissions
 
 CONVERSATION_ID = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
 
@@ -107,18 +107,29 @@ def _localhost_url(url: str) -> None:
         raise ValueError('Only the exact loopback generation test path is supported')
 
 
-async def post_once(plan: HTTPGenerationPlan, *, url: str, account_id: str,
+async def post_once(plan: HTTPGenerationPlan, *, store: SubchatSubmissions,
+                    owner: str | None, url: str, account_id: str,
                     on_conversation: Callable[[str], None],
                     on_rejection: Callable[[int], None]) -> HTTPStreamObservation:
     """Dispatch one POST and checkpoint consistent conversation candidates.
 
-    The caller owns the durable reservation and supplies a synchronous checkpoint
-    callback. Every transport error after entry has an unknown remote outcome;
-    callers must recover the original operation rather than invoke this again.
+    The durable claim commits before the POST and is never released, even if the
+    process stops before network I/O. A second caller must recover the original
+    operation. The claim checks the saved completed parent; the caller must also
+    verify the provider's current branch immediately before this call. This
+    localhost-only fixture is not evidence of provider acceptance. Checkpoint
+    callbacks remain synchronous.
     """
     _localhost_url(url)
     if plan.account_id != account_id:
         raise SubchatAccountMismatch('Reserved HTTP account changed')
+    body = plan.body()
+    if not store.claim_http_dispatch(
+            plan.operation_id, owner=owner, user_message_id=plan.user_message_id,
+            provider_account_id=account_id, prompt=plan.prompt,
+            model_slug=plan.model_slug, thinking_effort=plan.thinking_effort,
+            conversation_id=plan.conversation_id, predecessor_id=plan.predecessor_id):
+        raise SubchatOutcomeUnknown(plan.operation_id)
     # Kept out of normal runtime dependencies until a real provider contract is
     # established. This module is not imported by the production HTTP backend.
     import httpx
@@ -129,7 +140,7 @@ async def post_once(plan: HTTPGenerationPlan, *, url: str, account_id: str,
     async with httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(retries=0),
                                  follow_redirects=False, trust_env=False,
                                  timeout=httpx.Timeout(120.0, connect=10.0)) as client:
-        async with client.stream('POST', url, content=plan.body(), headers={
+        async with client.stream('POST', url, content=body, headers={
                 'content-type': 'application/json', 'accept': 'text/event-stream',
                 'chatgpt-account-id': account_id}) as response:
             if response.status_code in (401, 403):

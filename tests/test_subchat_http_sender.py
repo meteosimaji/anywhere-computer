@@ -1,12 +1,15 @@
 """Local HTTP acceptance for the unintegrated one-shot generation transport."""
 import asyncio
 import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 
 import httpx
 import pytest
 
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat import SubchatAccessError
+from anywhere_computer.subchat import SubchatAccessError, SubchatOutcomeUnknown
 from anywhere_computer.subchat_http_sender import (
     HTTPFollowupParent,
     HTTPGenerationPlan,
@@ -101,7 +104,8 @@ async def test_one_post_preserves_reserved_input_account_and_candidate(tmp_path,
         payload = (f'data: {{"conversation_id":"{CHAT}"}}\r\n\r\n'
                    'data: [DONE]\n\n').encode()
         async with LocalGeneration(('200 OK', [payload[:7], payload[7:]], len(payload))) as api:
-            observed = await post_once(plan, url=api.url, account_id='fixture-account',
+            observed = await post_once(plan, store=store, owner=None, url=api.url,
+                                       account_id='fixture-account',
                 on_conversation=lambda identity: store.observe_conversation(
                     operation, saved.user_message_id, identity, owner=None,
                     provider_account_id='fixture-account'),
@@ -135,7 +139,8 @@ async def test_refusal_or_redirect_never_retries_or_confirms(tmp_path, status):
         async with LocalGeneration((status, [], 0)) as api:
             expected = SubchatAccessError if status.startswith('403') else ConnectionError
             with pytest.raises(expected):
-                await post_once(HTTPGenerationPlan.from_reserved(saved), url=api.url,
+                await post_once(HTTPGenerationPlan.from_reserved(saved),
+                                store=store, owner=None, url=api.url,
                                 account_id='fixture-account', on_conversation=lambda _: None,
                                 on_rejection=lambda code: store.observe_rejection(
                                     saved.operation_id, saved.user_message_id, code, owner=None,
@@ -156,7 +161,8 @@ async def test_lost_stream_keeps_candidate_without_receipt_or_retry(tmp_path):
         chunk = f'data: {{"conversation_id":"{CHAT}"}}\n\n'.encode()
         async with LocalGeneration(('200 OK', [chunk], len(chunk) + 100)) as api:
             with pytest.raises(httpx.RemoteProtocolError):
-                await post_once(HTTPGenerationPlan.from_reserved(saved), url=api.url,
+                await post_once(HTTPGenerationPlan.from_reserved(saved),
+                                store=store, owner=None, url=api.url,
                                 account_id='fixture-account',
                                 on_conversation=lambda identity: store.observe_conversation(
                                     saved.operation_id, saved.user_message_id, identity,
@@ -182,7 +188,8 @@ async def test_account_mismatch_and_unreserved_input_make_zero_requests(tmp_path
                                 user_message_id='input', provider_account_id='fixture-account')
         async with LocalGeneration(('200 OK', [], 0)) as api:
             with pytest.raises(ValueError, match='account'):
-                await post_once(HTTPGenerationPlan.from_reserved(saved), url=api.url,
+                await post_once(HTTPGenerationPlan.from_reserved(saved),
+                                store=store, owner=None, url=api.url,
                                 account_id='other-account', on_conversation=lambda _: None,
                                 on_rejection=lambda _: None)
             assert api.requests == []
@@ -200,7 +207,8 @@ async def test_conflicting_conversation_candidates_stop_with_first_checkpoint(tm
                    f'data: {{"conversation_id":"{other}"}}\n\n').encode()
         async with LocalGeneration(('200 OK', [payload], len(payload))) as api:
             with pytest.raises(ValueError, match='Conflicting'):
-                await post_once(HTTPGenerationPlan.from_reserved(saved), url=api.url,
+                await post_once(HTTPGenerationPlan.from_reserved(saved),
+                                store=store, owner=None, url=api.url,
                     account_id='fixture-account',
                     on_conversation=lambda identity: store.observe_conversation(
                         saved.operation_id, saved.user_message_id, identity, owner=None,
@@ -211,3 +219,116 @@ async def test_conflicting_conversation_candidates_stop_with_first_checkpoint(tm
         assert current.state == 'sending' and current.conversation_id == CHAT
     finally:
         ledger.close()
+
+
+async def test_separate_connections_compete_for_one_http_post(tmp_path):
+    first = Ledger(tmp_path)
+    second = Ledger(tmp_path)
+    try:
+        stores = (SubchatSubmissions(first.connection), SubchatSubmissions(second.connection))
+        saved = reserved(stores[0], '2' * 32, 'one network request')
+        plan = HTTPGenerationPlan.from_reserved(saved)
+        payload = b'data: [DONE]\n\n'
+        async with LocalGeneration(('200 OK', [payload], len(payload))) as api:
+            results = await asyncio.gather(*(post_once(
+                plan, store=store, owner=None, url=api.url, account_id='fixture-account',
+                on_conversation=lambda _: None, on_rejection=lambda _: None)
+                for store in stores), return_exceptions=True)
+            assert len(api.requests) == 1
+            assert sum(isinstance(result, SubchatOutcomeUnknown) for result in results) == 1
+            assert sum(not isinstance(result, Exception) for result in results) == 1
+        claim = first.connection.execute(
+            'SELECT owner, user_message_id, account_id '
+            'FROM subchat_http_dispatch_claims WHERE operation_id=?',
+            (saved.operation_id,),
+        ).fetchone()
+        assert claim == (None, saved.user_message_id, 'fixture-account')
+    finally:
+        second.close()
+        first.close()
+
+
+async def test_committed_claim_survives_restart_without_post(tmp_path):
+    first = Ledger(tmp_path)
+    store = SubchatSubmissions(first.connection)
+    saved = reserved(store, '3' * 32, 'crash window')
+    plan = HTTPGenerationPlan.from_reserved(saved)
+    assert store.claim_http_dispatch(
+        plan.operation_id, owner=None, user_message_id=plan.user_message_id,
+        provider_account_id=plan.account_id, prompt=plan.prompt, model_slug=plan.model_slug,
+        thinking_effort=plan.thinking_effort, conversation_id=None, predecessor_id=None)
+    first.close()  # Simulate exit immediately after claim, before network I/O.
+    restarted = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(restarted.connection)
+        async with LocalGeneration(('200 OK', [], 0)) as api:
+            with pytest.raises(SubchatOutcomeUnknown):
+                await post_once(plan, store=store, owner=None, url=api.url,
+                                account_id='fixture-account', on_conversation=lambda _: None,
+                                on_rejection=lambda _: None)
+            assert api.requests == []
+        assert store.get(plan.operation_id, owner=None).state == 'sending'
+    finally:
+        restarted.close()
+
+
+async def test_mismatched_plan_cannot_claim_or_post(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        saved = reserved(store, '4' * 32, 'saved prompt')
+        plan = HTTPGenerationPlan.from_reserved(saved)
+        async with LocalGeneration(('200 OK', [], 0)) as api:
+            for changed in (replace(plan, prompt='different prompt'),
+                            replace(plan, user_message_id='other input'),
+                            replace(plan, model_slug='other model')):
+                with pytest.raises(ValueError, match='identity'):
+                    await post_once(changed, store=store, owner=None, url=api.url,
+                                    account_id='fixture-account',
+                                    on_conversation=lambda _: None,
+                                    on_rejection=lambda _: None)
+            assert api.requests == []
+        assert ledger.connection.execute(
+            'SELECT COUNT(*) FROM subchat_http_dispatch_claims').fetchone()[0] == 0
+    finally:
+        ledger.close()
+
+
+def test_atomic_claim_from_concurrent_ledger_connections(tmp_path):
+    setup = Ledger(tmp_path)
+    saved = reserved(SubchatSubmissions(setup.connection), '5' * 32, 'concurrent claim')
+    plan = HTTPGenerationPlan.from_reserved(saved)
+    setup.close()
+    barrier = threading.Barrier(2)
+
+    def contend():
+        ledger = Ledger(tmp_path)
+        try:
+            store = SubchatSubmissions(ledger.connection)
+            barrier.wait(timeout=5)
+            return store.claim_http_dispatch(
+                plan.operation_id, owner=None, user_message_id=plan.user_message_id,
+                provider_account_id=plan.account_id, prompt=plan.prompt,
+                model_slug=plan.model_slug, thinking_effort=plan.thinking_effort,
+                conversation_id=None, predecessor_id=None)
+        finally:
+            ledger.close()
+
+    with ThreadPoolExecutor(max_workers=2) as workers:
+        results = list(workers.map(lambda _: contend(), range(2)))
+    assert sorted(results) == [False, True]
+
+
+def test_existing_submission_database_adds_claim_table_without_reset(tmp_path):
+    old = Ledger(tmp_path)
+    saved = reserved(SubchatSubmissions(old.connection), '6' * 32, 'legacy submission')
+    old.connection.execute('DROP TABLE subchat_http_dispatch_claims')
+    old.close()
+    reopened = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(reopened.connection)
+        assert store.get(saved.operation_id, owner=None) == saved
+        assert reopened.connection.execute(
+            'SELECT COUNT(*) FROM subchat_http_dispatch_claims').fetchone()[0] == 0
+    finally:
+        reopened.close()
