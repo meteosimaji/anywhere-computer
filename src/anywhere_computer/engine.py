@@ -1293,7 +1293,7 @@ class Engine:
                     "state": ("busy" if busy and plugin_entry.state == "open"
                               else plugin_entry.state),
                     "stop_tool": "codex_plugin_session_close",
-                    "stop_available": not busy,
+                    "stop_available": not busy and plugin_entry.owner == owner,
                 })
         for session_id, direct_entry in self.direct_mcp_sessions.entries.items():
             if ((owner is None or direct_entry.owner == owner)
@@ -1302,7 +1302,7 @@ class Engine:
                 blocker_details.append({
                     "resource": "direct_mcp_session", "id": session_id,
                     "state": direct_entry.state, "stop_tool": "mcp_session_close",
-                    "stop_available": not busy,
+                    "stop_available": not busy and direct_entry.owner == owner,
                 })
         watch_owners = ({entry.owner for entry in self.direct_mcp_sessions.entries.values()}
                         if owner is None else {owner})
@@ -1318,7 +1318,7 @@ class Engine:
             watch_operation_id = watch_operation_raw
             watch_direct_entry = self.direct_mcp_sessions.entries.get(watch_session_id)
             stop_available = (watch_direct_entry is not None
-                              and (owner is None or watch_direct_entry.owner == owner)
+                              and watch_direct_entry.owner == owner
                               and watch_direct_entry.state == "open"
                               and not watch_direct_entry.lock.locked())
             blocker_details.append({
@@ -1338,7 +1338,8 @@ class Engine:
                     "resource": "native_gui_session", "id": session_id,
                     "state": ("exited" if gui_entry.process.returncode is not None
                               else "busy" if busy else "running"),
-                    "stop_tool": "gui_native_close", "stop_available": not busy,
+                    "stop_tool": "gui_native_close",
+                    "stop_available": not busy and gui_entry.owner == owner,
                 })
         for session_id, browser_entry in self.browser.entries.items():
             if owner is None or browser_entry.owner == owner:
@@ -1346,7 +1347,8 @@ class Engine:
                     "resource": "browser_session", "id": session_id,
                     "state": ("running" if browser_entry.browser.is_connected() else "ended"),
                     "stop_tool": "browser_close", "tab_id": browser_entry.tab_id,
-                    "stop_available": not browser_entry.lock.locked(),
+                    "stop_available": (not browser_entry.lock.locked()
+                                       and browser_entry.owner == owner),
                 })
         for search_id, search_entry in self.searches.searches.items():
             if (search_entry.state == "running"

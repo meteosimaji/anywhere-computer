@@ -99,7 +99,7 @@ async def test_engine_browser_tools_are_owned_and_block_update(tmp_path, local_p
         assert engine.status()["update_blocker_details"] == [{
             "resource": "browser_session", "id": ids["session_id"],
             "state": "running", "stop_tool": "browser_close",
-            "tab_id": ids["tab_id"], "stop_available": True,
+            "tab_id": ids["tab_id"], "stop_available": False,
         }]
         denied = await call("browser_observe", ids, "owner-b")
         assert denied.state == "failed"

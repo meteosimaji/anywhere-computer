@@ -131,6 +131,9 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
         assert {item["id"] for item in local["update_blocker_details"]} == {
             current, other, own_operation, other_operation,
         }
+        assert all(item["stop_available"] is False
+                   for item in local["update_blocker_details"]
+                   if item["resource"] == "plugin_session")
         assert "other-owner-secret-must-stay-private" not in repr(local)
         unrelated = engine.status(owner="owner-c")
         assert unrelated["update_blocker_details"] == []
@@ -176,6 +179,8 @@ async def test_status_explains_owned_exited_native_gui_blocker(engine):
         assert {item["id"] for item in engine.status()["update_blocker_details"]} == {
             owned, foreign,
         }
+        assert all(item["stop_available"] is False
+                   for item in engine.status()["update_blocker_details"])
         assert foreign not in repr(status)
         await engine.native_gui.lock.acquire()
         assert engine.status(owner="owner-a")["update_blocker_details"][0][
@@ -390,7 +395,9 @@ async def test_status_shows_owned_live_watch_stop_contract(engine, monkeypatch):
             },
             "inspect_tool": "mcp_watch_list", "stop_available": True,
         }
-        assert detail in engine.status()["update_blocker_details"]
+        local_detail = next(row for row in engine.status()["update_blocker_details"]
+                            if row["resource"] == "subchat_queue_watch")
+        assert local_detail == {**detail, "stop_available": False}
         assert engine.status(owner="owner-b")["update_blocker_details"] == []
     finally:
         engine.direct_mcp_sessions.entries.clear()
