@@ -15,6 +15,7 @@ Translations may explain it, but must not introduce a separate release/status ta
 | Available tools / command options | Runtime catalog/schema; CLI `--help` | [Operations](OPERATIONS.md), [MCP clients](MCP-CLIENTS.md), feature guides |
 | Setup, update, routing | [Setup](SETUP-CONTROLLER.md), [updates](UPDATING.md), [routing](DEVICE-ROUTING.md) | README links to these contracts instead of copying their detailed steps |
 | Experimental subchat contract and acceptance | [Subchat guide](SUBCHAT-PROBE.md), matching source/tests and dated receipts | README gives an overview, not another capability matrix |
+| Opt-in HTTP-only generation handoff | [HTTP-only generation contract](SUBCHAT-HTTP-ONLY-GENERATION.md), matching source/tests | No stored credentials, browser fallback, or automatic replay |
 | Intended future work | [Product roadmap](PRODUCT-ROADMAP.md) | A milestone is not an implemented feature |
 | Historical evidence | Dated acceptance records, [execution history](EXECUTION-ROADMAP.md), dated [implementation snapshot](IMPLEMENTATION-STATUS.md), [2026-09-22 subchat HTTP audit (Japanese)](SUBCHAT-HTTP-AUDIT-2026-09-22.ja.md), [HTTP/Codex mechanism study](SUBCHAT-HTTP-MECHANISMS-2026-09-22.ja.md) | Do not silently rewrite historical failures as current successes |
 | Required checks | [Quality workflow](../.github/workflows/quality.yml) | README links to the workflow instead of maintaining another full command list |

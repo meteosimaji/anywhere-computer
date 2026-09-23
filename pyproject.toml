@@ -12,6 +12,7 @@ dependencies = [
     "pydantic>=2.11,<3",
     "psutil>=7,<8",
     "keyring>=25,<26",
+    "httpx==0.28.1",
     "pywinpty==3.0.5 ; sys_platform == 'win32'",
 ]
 
@@ -29,6 +30,7 @@ browser = [
 ]
 mcp = [
     "mcp==1.30.0",
+    "playwright==1.58.0",
 ]
 
 [dependency-groups]
@@ -43,7 +45,6 @@ dev = [
     "build>=1",
     "pytest-xdist>=3.8,<4",
     "playwright==1.58.0",
-    "httpx==0.28.1",
 ]
 
 [tool.pytest.ini_options]

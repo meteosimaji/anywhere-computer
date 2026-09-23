@@ -23,6 +23,8 @@ def test_packaged_runtime_matches_current_source_and_checksums():
     checksums = json.loads((plugin / "bundled/checksums.json").read_text(encoding="utf-8"))
     dependencies = (plugin / "bundled/dependencies.txt").read_text(encoding="utf-8")
     assert re.search(r'^mcp==1\.30\.0\s', dependencies, re.MULTILINE)
+    assert re.search(r'^playwright==1\.58\.0\s', dependencies, re.MULTILINE)
+    assert re.search(r'^httpx==0\.28\.1\s', dependencies, re.MULTILINE)
     release = json.loads((plugin / "bundled/release.json").read_text(encoding="utf-8"))
     assert release["artifacts_sha256"] == checksums
     assert release["python_version"] == __version__
@@ -70,5 +72,7 @@ def test_packaged_runtime_matches_current_source_and_checksums():
         mcp_requirements = [line for line in metadata.splitlines()
                             if line.startswith("Requires-Dist: mcp")]
         assert mcp_requirements == ["Requires-Dist: mcp==1.30.0; extra == 'mcp'"]
+        assert "Requires-Dist: playwright==1.58.0; extra == 'mcp'" in metadata
+        assert "Requires-Dist: httpx==0.28.1" in metadata
         assert "Requires-Dist: filelock" not in metadata
         assert "Requires-Dist: platformdirs" not in metadata
