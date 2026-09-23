@@ -428,13 +428,34 @@ async def _inspect_tools(
     _validate_inspection(limit, server, tool)
     clean_cwd = context.cwd
     bounded_cursor = _cursor(cursor)
-    servers, next_cursor, _ = await asyncio.wait_for(
-        _start_and_catalog(
-            context.session, clean_cwd, limit=limit, cursor=bounded_cursor,
-            max_pages=MAX_PAGES if server else 1, thread_id=context.thread_id,
-            target_server=server, target_tool=tool,
-        ), timeout=STARTUP_TIMEOUT,
-    )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + STARTUP_TIMEOUT
+    empty_tools_since: float | None = None
+    while True:
+        servers, next_cursor, _ = await asyncio.wait_for(
+            _start_and_catalog(
+                context.session, clean_cwd, limit=limit, cursor=bounded_cursor,
+                max_pages=MAX_PAGES if server else 1, thread_id=context.thread_id,
+                target_server=server, target_tool=tool,
+            ), timeout=max(0.001, deadline - loop.time()),
+        )
+        selected_server = next((row for row in servers if row.get('server') == server), None)
+        starting = selected_server is not None and selected_server.get(
+            'availability') == 'runtime_not_ready'
+        empty_tools = (selected_server is not None
+                       and selected_server.get('runtime_status') == 'connected'
+                       and selected_server.get('received_tool_count') == 0)
+        now = loop.time()
+        if empty_tools and empty_tools_since is None:
+            empty_tools_since = now
+        if (not starting and not empty_tools) or now >= deadline or (
+                empty_tools and empty_tools_since is not None
+                and now - empty_tools_since >= 5):
+            break
+        # Keep the same Codex process and ephemeral thread while its MCP server
+        # starts. A connected server may also publish its tool catalog shortly
+        # after its runtime status changes.
+        await asyncio.sleep(min(0.25, max(0, deadline - loop.time())))
     selected_servers: list[dict[str, JsonValue]] = []
     for row in servers:
         if server is not None and row["server"] != server:

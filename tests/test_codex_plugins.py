@@ -567,6 +567,58 @@ async def test_call_waits_for_same_runtime_startup(
     assert methods.count("mcpServer/tool/call") == (0 if expected else 1)
 
 
+async def test_exact_tool_inspection_waits_for_same_runtime_startup(
+    stub_catalog, tmp_path, monkeypatch,
+):
+    original = codex_plugins._Session.request
+    polls = []
+
+    async def starting_then_ready(self, method, params):
+        if method == 'mcpServerStatus/list':
+            polls.append(params['threadId'])
+            stub_catalog['rows'][0]['runtimeStatus'] = (
+                'starting' if len(polls) == 1 else 'connected')
+            if len(polls) == 1:
+                stub_catalog['rows'][0]['tools'] = {}
+            else:
+                stub_catalog['rows'][0]['tools'] = {'echo': {
+                    'name': 'echo', 'description': 'Echo',
+                    'inputSchema': {'type': 'object'},
+                }}
+        return await original(self, method, params)
+
+    monkeypatch.setattr(codex_plugins._Session, 'request', starting_then_ready)
+    result = await list_codex_plugin_tools(str(tmp_path), server='demo', tool='echo')
+    row = result['servers'][0]
+    assert row['availability'] == 'ready_to_call'
+    assert [tool['name'] for tool in row['tools']] == ['echo']
+    assert polls == ['isolated', 'isolated']
+    assert sum(method == 'thread/start' for method, _ in stub_catalog['calls']) == 1
+
+
+async def test_exact_tool_inspection_waits_for_connected_catalog(
+    stub_catalog, tmp_path, monkeypatch,
+):
+    original = codex_plugins._Session.request
+    polls = []
+
+    async def empty_then_published(self, method, params):
+        if method == 'mcpServerStatus/list':
+            polls.append(params['threadId'])
+            stub_catalog['rows'][0]['runtimeStatus'] = 'connected'
+            stub_catalog['rows'][0]['tools'] = {} if len(polls) == 1 else {'echo': {
+                'name': 'echo', 'description': 'Echo',
+                'inputSchema': {'type': 'object'},
+            }}
+        return await original(self, method, params)
+
+    monkeypatch.setattr(codex_plugins._Session, 'request', empty_then_published)
+    result = await list_codex_plugin_tools(str(tmp_path), server='demo', tool='echo')
+    assert result['servers'][0]['availability'] == 'ready_to_call'
+    assert [tool['name'] for tool in result['servers'][0]['tools']] == ['echo']
+    assert polls == ['isolated', 'isolated']
+
+
 async def test_startup_catalog_transport_failure_is_not_retried(
     stub_catalog, tmp_path, monkeypatch,
 ):
