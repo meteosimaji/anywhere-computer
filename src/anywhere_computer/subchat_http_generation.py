@@ -37,6 +37,8 @@ _HEADERS = frozenset({
     'sec-ch-ua-platform-version', 'user-agent', 'x-oai-turn-trace-id',
     'x-openai-codex-window-type', 'x-openai-web-frontend', 'x-openai-web-sse-compression',
 })
+_OPTIONAL_HEADERS = frozenset({'openai-sentinel-chat-requirements-prepare-token'})
+_REQUIRED_HEADERS = _HEADERS - _OPTIONAL_HEADERS
 _CHAT = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
 _PATHS = {
     'sentinel': '/backend-api/sentinel/chat-requirements/prepare',
@@ -77,7 +79,8 @@ class ObservedHTTPGeneration:
                 'headers', 'sentinel_p', 'prepare_template', 'generation_template'}:
             raise ValueError('Invalid HTTP generation handoff')
         raw_headers = data['headers']
-        if (not isinstance(raw_headers, dict) or set(raw_headers) != _HEADERS
+        if (not isinstance(raw_headers, dict)
+                or not _REQUIRED_HEADERS <= set(raw_headers) <= _HEADERS
                 or any(not isinstance(key, str) or key.lower() != key
                        or not isinstance(value, str) or not value
                        or len(value) > 16_384 or any(ord(char) < 32 for char in value)
@@ -193,7 +196,7 @@ def _url(origin: str, path: str) -> str:
     return origin + path
 
 
-async def _json_response(response: Response) -> dict[str, JsonValue]:
+def _json_response(response: Response) -> dict[str, JsonValue]:
     if response.status_code in (401, 403):
         raise SubchatAccessError(response.status_code)
     if response.status_code != 200:
@@ -224,13 +227,10 @@ async def _preparation_post(stage: str, *, plan: HTTPGenerationPlan,
         try:
             store.record_http_event(plan.operation_id, stage + '_response', owner=owner,
                                     status=response.status_code)
-            return await _json_response(response)
+            return _json_response(response)
         finally:
             await response.aclose()
-    except asyncio.CancelledError:
-        store.record_http_event(plan.operation_id, stage + '_failed', owner=owner)
-        raise
-    except SubchatAccessError:
+    except (asyncio.CancelledError, SubchatAccessError):
         store.record_http_event(plan.operation_id, stage + '_failed', owner=owner)
         raise
     except Exception:
@@ -263,8 +263,9 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
     if not isinstance(token, str) or not token or len(token) > 16_384:
         store.record_http_event(plan.operation_id, 'sentinel_failed', owner=owner)
         raise ValueError('Sentinel preparation token is unavailable')
-    # Keep the exact successful Chrome header value. A fresh sentinel response
-    # token with the handed-off proof and Turnstile values is not yet verified.
+    # Preserve whether the successful Chrome request sent a prepare-token header.
+    # A fresh sentinel response token with the handed-off proof and Turnstile
+    # values is not yet verified.
     try:
         prepare_body = handoff.prepare_body(plan)
     except Exception:
@@ -284,13 +285,10 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
             try:
                 store.record_http_event(plan.operation_id, 'branch_response', owner=owner,
                                         status=branch.status_code)
-                current = await _json_response(branch)
+                current = _json_response(branch)
             finally:
                 await branch.aclose()
-        except asyncio.CancelledError:
-            store.record_http_event(plan.operation_id, 'branch_failed', owner=owner)
-            raise
-        except SubchatAccessError:
+        except (asyncio.CancelledError, SubchatAccessError):
             store.record_http_event(plan.operation_id, 'branch_failed', owner=owner)
             raise
         except Exception:
@@ -306,8 +304,8 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
             conversation_id=plan.conversation_id, predecessor_id=plan.predecessor_id):
         raise ValueError('HTTP generation was already claimed; recover without resending')
     # One HTTPX client handles preparation, branch checks and generation. The operator's
-    # observed generation headers are forwarded unchanged, including the copied
-    # prepare token. HTTPX does not acquire or fabricate protection values.
+    # observed generation headers are forwarded unchanged. HTTPX does not
+    # acquire or fabricate protection values, including an absent prepare token.
     decoder = SSEDecoder()
     candidate = plan.conversation_id
     candidate_logged = False
@@ -354,10 +352,7 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
                             store.record_http_event(plan.operation_id, 'sse_candidate', owner=owner)
                             candidate_logged = True
                 decoder.finish()
-    except asyncio.CancelledError:
-        store.record_http_event(plan.operation_id, 'generation_failed', owner=owner)
-        raise
-    except SubchatAccessError:
+    except (asyncio.CancelledError, SubchatAccessError):
         store.record_http_event(plan.operation_id, 'generation_failed', owner=owner)
         raise
     except Exception:

@@ -152,7 +152,9 @@ async def test_read_only_recovery_cannot_dispatch_saved_queued_followup(tmp_path
         ledger.close()
 
 
-async def test_chrome_login_closes_before_plugin_serves_tools(tmp_path, monkeypatch):
+@pytest.mark.parametrize('pinned_account_id', [None, 'fixture-account'])
+async def test_chrome_login_closes_before_plugin_serves_tools(
+        tmp_path, monkeypatch, pinned_account_id):
     import playwright.async_api
     from test_subchat_http_only import credentials
 
@@ -180,7 +182,8 @@ async def test_chrome_login_closes_before_plugin_serves_tools(tmp_path, monkeypa
         async def __aexit__(self, *_):
             events.append('driver_closed')
 
-    async def auth(_context, _client):
+    async def auth(_context, _client, *, expected_account_id):
+        assert expected_account_id == pinned_account_id
         events.append('http_authenticated')
         return credentials()
 
@@ -193,5 +196,6 @@ async def test_chrome_login_closes_before_plugin_serves_tools(tmp_path, monkeypa
     monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', auth)
     monkeypatch.setattr(mcp_server, 'serve_stdio', serve)
     await subchat_cli.run(None, tmp_path / 'ledger', http_only=True, mcp=True,
-                          chrome_login_profile=tmp_path / 'login', read_only_mcp=True)
+                          chrome_login_profile=tmp_path / 'login', read_only_mcp=True,
+                          expected_account_id=pinned_account_id)
     assert events[-1] == 'driver_closed'

@@ -72,9 +72,10 @@ def handoff():
 
 
 class LocalChat:
-    def __init__(self):
+    def __init__(self, *, prepare_token_present=True):
         self.requests = []
         self.messages = []
+        self.prepare_token_present = prepare_token_present
         self.current_node = None
         self.stale = False
         self.lost_generation = False
@@ -119,7 +120,10 @@ class LocalChat:
                 assert data['partial_query']['id'] != 'old-input'
                 assert data['partial_query']['content']['parts'] != ['old prompt']
                 assert headers['accept'] == 'application/json'
-                assert headers['openai-sentinel-chat-requirements-prepare-token'] == 'fixture'
+                assert ('openai-sentinel-chat-requirements-prepare-token' in headers
+                        ) is self.prepare_token_present
+                if self.prepare_token_present:
+                    assert headers['openai-sentinel-chat-requirements-prepare-token'] == 'fixture'
                 payload = json.dumps({'status': 'ok', 'conduit_token': 'fixture'}).encode()
             elif path == '/backend-api/conversation/' + CHAT:
                 assert method == 'GET'
@@ -128,7 +132,10 @@ class LocalChat:
             elif path == '/backend-api/f/conversation':
                 assert method == 'POST'
                 assert headers['accept'] == 'text/event-stream'
-                assert headers['openai-sentinel-chat-requirements-prepare-token'] == 'fixture'
+                assert ('openai-sentinel-chat-requirements-prepare-token' in headers
+                        ) is self.prepare_token_present
+                if self.prepare_token_present:
+                    assert headers['openai-sentinel-chat-requirements-prepare-token'] == 'fixture'
                 if self.lost_generation:
                     return
                 if self.lost_after_candidate:
@@ -206,7 +213,7 @@ class LocalRequests:
             yield response
 
 
-async def setup(tmp_path, api, client):
+async def setup(tmp_path, api, client, *, generation=None):
     ledger = Ledger(tmp_path)
     store = SubchatSubmissions(ledger.connection)
     proxy = LocalRequests(client, api.origin)
@@ -214,7 +221,8 @@ async def setup(tmp_path, api, client):
     async def factory():
         return proxy
 
-    backend = HTTPOnlySubchatBackend(factory, credentials(), generation=handoff(),
+    backend = HTTPOnlySubchatBackend(factory, credentials(),
+                                     generation=handoff() if generation is None else generation,
                                      store=store, generation_origin=api.origin)
     return ledger, store, Subchats(store, backend)
 
@@ -384,6 +392,31 @@ async def test_new_and_followup_use_http_only_and_history_final(tmp_path):
                 await client.aclose()
 
 
+async def test_generation_preserves_absent_observed_prepare_token(tmp_path):
+    data = handoff_data()
+    data['headers'].pop('openai-sentinel-chat-requirements-prepare-token')
+    generation = ObservedHTTPGeneration.from_data(
+        data, authorization=SECRET, account_id='fixture-account')
+    async with LocalChat(prepare_token_present=False) as api:
+        async with httpx.AsyncClient(
+                trust_env=False, follow_redirects=False,
+                transport=httpx.AsyncHTTPTransport(retries=0)) as client:
+            ledger, _, service = await setup(tmp_path, api, client, generation=generation)
+            try:
+                sent = await service.send('9' * 32, 'no prepare header', 'Future Chat',
+                    'Future effort', owner=None, http_selection=SELECTION)
+                assert sent.state == 'sending' and sent.conversation_id == CHAT
+                final = await service.recover(sent.operation_id, owner=None)
+                assert final.state == 'completed'
+                post_headers = [headers for method, _, headers, _ in api.requests
+                                if method == 'POST']
+                assert len(post_headers) == 3
+                assert all('openai-sentinel-chat-requirements-prepare-token' not in headers
+                           for headers in post_headers)
+            finally:
+                ledger.close()
+
+
 async def test_stale_branch_and_lost_post_do_not_replay(tmp_path):
     async with LocalChat() as api:
         async with httpx.AsyncClient(
@@ -541,6 +574,25 @@ def test_handoff_parser_redacts_secrets_and_requires_exact_session():
                                      authorization=SECRET, account_id='fixture-account')
     assert PROOF not in str(caught.value) and SECRET not in str(caught.value)
     assert CATALOG_URL.startswith('https://chatgpt.com/')
+
+
+def test_handoff_allows_absent_observed_prepare_token_only():
+    data = handoff_data()
+    data['headers'].pop('openai-sentinel-chat-requirements-prepare-token')
+    parsed = ObservedHTTPGeneration.from_data(
+        data, authorization=SECRET, account_id='fixture-account')
+    assert 'openai-sentinel-chat-requirements-prepare-token' not in parsed.headers
+
+    data['headers']['unobserved-header'] = 'fixture'
+    with pytest.raises(ValueError, match='Invalid HTTP generation headers'):
+        ObservedHTTPGeneration.from_data(
+            data, authorization=SECRET, account_id='fixture-account')
+    data['headers'].pop('unobserved-header')
+
+    data['headers'].pop('openai-sentinel-proof-token')
+    with pytest.raises(ValueError, match='Invalid HTTP generation headers'):
+        ObservedHTTPGeneration.from_data(
+            data, authorization=SECRET, account_id='fixture-account')
 
 
 def test_http_events_are_private_bounded_and_durable(tmp_path):

@@ -255,14 +255,12 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     str(chrome_login_profile), channel='chrome', headless=True)
                 try:
                     http_session = await chrome_http_session(
-                        chrome_context, await open_standalone_http())
+                        chrome_context, await open_standalone_http(),
+                        expected_account_id=expected_account_id)
                 finally:
                     # Authentication is now held in memory by HTTPX. Do not leave a
                     # Chrome process open for the lifetime of the MCP controller.
                     await chrome_context.close()
-                if (expected_account_id is not None
-                        and http_session.account_id != expected_account_id):
-                    raise SubchatAccountMismatch('Chrome login selected another Chat account')
                 if chrome_generation_stdin:
                     from .subchat_http_generation import read_http_generation_handoff
 

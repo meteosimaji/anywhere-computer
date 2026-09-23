@@ -7,11 +7,13 @@ from playwright.async_api import BrowserContext
 from .subchat import SubchatAccessError
 from .subchat_browser.catalog import project_http_catalog
 from .subchat_http_session import ObservedHTTPSession
+from .subchat_state import SubchatAccountMismatch
 
 CATALOG_URL = 'https://chatgpt.com/backend-api/models?language=ja'
 
 
-async def chrome_http_session(context: BrowserContext, client: httpx.AsyncClient
+async def chrome_http_session(context: BrowserContext, client: httpx.AsyncClient,
+                              *, expected_account_id: str | None = None
                               ) -> ObservedHTTPSession:
     """GET auth and catalog with HTTPX; retain Chrome cookies only in memory."""
     cookies = await context.cookies('https://chatgpt.com')
@@ -62,6 +64,8 @@ async def chrome_http_session(context: BrowserContext, client: httpx.AsyncClient
         })
     finally:
         await response.aclose()
+    if expected_account_id is not None and session.account_id != expected_account_id:
+        raise SubchatAccountMismatch('Chrome login selected another Chat account')
     catalog = await client.get(CATALOG_URL, headers=session.headers(),
                                timeout=15.0, follow_redirects=False)
     try:

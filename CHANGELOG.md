@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a4 / Plugin 0.2.0-alpha.4 — unpublished candidate (2026-09-23)
+
+- Dedicated Chrome login rejects a different selected account immediately after
+  the HTTP authentication GET, before requesting the model catalog.
+- Explicit HTTP generation handoffs accept a successful observed request that omits
+  `openai-sentinel-chat-requirements-prepare-token`. Other required headers and
+  account/origin checks remain enforced; the missing header is never synthesized.
+- Simplified duplicated HTTP error recording without changing retry semantics.
+  Auth and catalog HTTP 200 were rechecked with the logged-in dedicated profile;
+  new HTTPX generation for this candidate remains unverified.
+
 ## 0.1.0b1 / Plugin 0.1.0-beta.1 — published prerelease (2026-09-14)
 
 - Common local Skills and hash-checked resource reads without Codex; persistent

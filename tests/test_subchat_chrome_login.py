@@ -7,6 +7,7 @@ from test_subchat_http_generation import handoff_data
 from anywhere_computer.subchat import SubchatAccessError
 from anywhere_computer.subchat_chrome_login import CATALOG_URL, chrome_http_session
 from anywhere_computer.subchat_http_generation import ObservedHTTPGeneration
+from anywhere_computer.subchat_state import SubchatAccountMismatch
 
 
 class Page:
@@ -44,7 +45,7 @@ async def test_chrome_login_gets_token_then_validates_catalog():
         return httpx.Response(200, json=catalog())
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
-        session = await chrome_http_session(Context(), client)
+        session = await chrome_http_session(Context(), client, expected_account_id='account')
     assert len(seen) == 2
     assert session.catalog_url == CATALOG_URL
     assert session.headers()['cookie'] == 'session=private-cookie'
@@ -63,6 +64,22 @@ async def test_chrome_login_stops_on_denied_get():
     async with httpx.AsyncClient(transport=httpx.MockTransport(deny)) as client:
         with pytest.raises(SubchatAccessError):
             await chrome_http_session(Context(), client)
+    assert paths == ['/api/auth/session']
+
+
+async def test_chrome_login_rejects_wrong_account_before_catalog_get():
+    paths = []
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        assert request.url.path == '/api/auth/session'
+        return httpx.Response(200, json={'accessToken': 'private-token',
+                                         'account': {'id': 'another-account'},
+                                         'user': {'email': 'other@example.com'}})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+        with pytest.raises(SubchatAccountMismatch, match='another Chat account'):
+            await chrome_http_session(Context(), client, expected_account_id='account')
     assert paths == ['/api/auth/session']
 
 
