@@ -81,6 +81,9 @@ async def test_engine_browser_tools_are_owned_and_block_update(tmp_path, local_p
                     operation_id=uuid.uuid4().hex, tool="operations_get",
                     arguments={"operation_id": operation_id},
                 ), peer=peer)
+                if recovered.state == "running":
+                    await asyncio.sleep(0.1)
+                    continue
                 assert recovered.state == "completed", recovered
                 reply = Reply.model_validate(recovered.data)
                 if reply.state == "running":

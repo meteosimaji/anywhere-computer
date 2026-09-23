@@ -125,9 +125,7 @@ for line in sys.stdin:
 
             discovered = await discover()
 
-            async def call(name, args=None, *, operation=None, expected="completed"):
-                assert name in discovered, f'Tool was not discovered in this session: {name}'
-                operation_id = operation or uuid.uuid4().hex
+            async def dispatch(name, args, operation_id):
                 response = await http.post(
                     "/mcp",
                     headers=headers,
@@ -146,14 +144,26 @@ for line in sys.stdin:
                     },
                 )
                 assert response.status_code == 200
-                result = response.json()["result"]["structuredContent"]
+                return response.json()["result"]["structuredContent"]
+
+            async def call(name, args=None, *, operation=None, expected="completed"):
+                assert name in discovered, f'Tool was not discovered in this session: {name}'
+                operation_id = operation or uuid.uuid4().hex
+                result = await dispatch(name, args or {}, operation_id)
                 if result["state"] == "running" and expected == "completed":
                     # A slow tool has only acknowledged the operation. Recover its
                     # original reply without issuing the side effect a second time.
                     async with asyncio.timeout(40):
                         while result["state"] == "running":
-                            recovered = await call("operations_get", {"operation_id": operation_id})
-                            result = recovered
+                            recovered = await dispatch(
+                                "operations_get", {"operation_id": operation_id},
+                                uuid.uuid4().hex,
+                            )
+                            if recovered["state"] == "running":
+                                await asyncio.sleep(0.1)
+                                continue
+                            assert recovered["state"] == "completed", recovered
+                            result = recovered["data"]
                             if result["state"] == "running":
                                 await asyncio.sleep(0.1)
                 assert result["state"] == expected, (name, result)
