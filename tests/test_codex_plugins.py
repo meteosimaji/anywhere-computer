@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import os
 from pathlib import Path
@@ -702,4 +703,28 @@ async def test_startup_catalog_transport_failure_is_not_retried(
     with pytest.raises(codex_plugins.PluginPreflightError, match="plugin_catalog_failed"):
         await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
     assert polls == 2
+    assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])
+
+
+async def test_catalog_timeout_reports_rpc_progress_without_dispatch(
+    stub_catalog, tmp_path, monkeypatch,
+):
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    digest = catalog["servers"][0]["tools"][0]["catalog_sha256"]
+    original = codex_plugins._Session.request
+    monkeypatch.setattr(codex_plugins, "STARTUP_TIMEOUT", 0.02)
+
+    async def stalled_catalog(self, method, params):
+        if method == "mcpServerStatus/list":
+            await asyncio.sleep(1)
+        return await original(self, method, params)
+
+    monkeypatch.setattr(codex_plugins._Session, "request", stalled_catalog)
+    stub_catalog["calls"].clear()
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
+    assert caught.value.code == "plugin_catalog_failed"
+    assert caught.value.details["catalog_progress"] == {
+        "catalog_poll": 1, "catalog_page": 1, "catalog_rpc_state": "waiting",
+    }
     assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])

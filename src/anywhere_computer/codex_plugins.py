@@ -296,6 +296,7 @@ async def _start_and_catalog(
     session: _Session, cwd: str, *, limit: int, cursor: str | None = None,
     max_pages: int = MAX_PAGES, thread_id: str | None = None,
     target_server: str | None = None, target_tool: str | None = None,
+    progress: dict[str, JsonValue] | None = None,
 ) -> tuple[list[dict[str, JsonValue]], str | None, str]:
     if thread_id is None:
         thread_id = await _start_thread(session, cwd)
@@ -303,13 +304,18 @@ async def _start_and_catalog(
     seen_servers: set[str] = set()
     page_cursor = cursor
     seen_cursors: set[str] = set()
-    for _ in range(max_pages):
+    for page in range(max_pages):
         params: dict[str, JsonValue] = {
             "threadId": thread_id, "detail": "toolsAndAuthOnly", "limit": limit,
         }
         if page_cursor is not None:
             params["cursor"] = page_cursor
+        if progress is not None:
+            progress["catalog_page"] = page + 1
+            progress["catalog_rpc_state"] = "waiting"
         result = await session.request("mcpServerStatus/list", params)
+        if progress is not None:
+            progress["catalog_rpc_state"] = "received"
         rows = result.get("data", result.get("servers", []))
         if isinstance(rows, dict):
             rows = [dict(value, server=key) for key, value in rows.items()
@@ -432,11 +438,14 @@ async def _inspect_tools(
     deadline = loop.time() + STARTUP_TIMEOUT
     empty_tools_since: float | None = None
     while True:
+        context._catalog_poll += 1
+        context._catalog_progress = {"catalog_poll": context._catalog_poll}
         servers, next_cursor, _ = await asyncio.wait_for(
             _start_and_catalog(
                 context.session, clean_cwd, limit=limit, cursor=bounded_cursor,
                 max_pages=MAX_PAGES if server else 1, thread_id=context.thread_id,
                 target_server=server, target_tool=tool,
+                progress=context._catalog_progress,
             ), timeout=max(0.001, deadline - loop.time()),
         )
         selected_server = next((row for row in servers if row.get('server') == server), None)
@@ -513,10 +522,13 @@ async def _call_tool(
     deadline = loop.time() + STARTUP_TIMEOUT
     missing_tool_since: float | None = None
     while True:
+        context._catalog_poll += 1
+        context._catalog_progress = {"catalog_poll": context._catalog_poll}
         servers, remaining_cursor, _ = await asyncio.wait_for(
             _start_and_catalog(
                 session, clean_cwd, limit=MAX_CATALOG, max_pages=MAX_PAGES,
                 thread_id=thread_id, target_server=server, target_tool=tool,
+                progress=context._catalog_progress,
             ), timeout=max(0.001, deadline - loop.time()),
         )
         selected_server = next((row for row in servers if row.get("server") == server), None)
@@ -615,6 +627,8 @@ class PluginContext:
         self.cwd = _cwd(cwd)
         self._session: _Session | None = None
         self.thread_id: str | None = None
+        self._catalog_poll = 0
+        self._catalog_progress: dict[str, JsonValue] = {}
 
     @property
     def session(self) -> _Session:
@@ -688,6 +702,8 @@ class PluginContext:
 
     def failure_details(self, error: BaseException, stage: str) -> dict[str, JsonValue]:
         details = failure_diagnostic(error, stage)
+        if stage == "catalog" and self._catalog_progress:
+            details["catalog_progress"] = dict(self._catalog_progress)
         if self._session is not None:
             # Test doubles may implement only the transport interface.
             diagnostics = getattr(self._session, "diagnostics", None)
