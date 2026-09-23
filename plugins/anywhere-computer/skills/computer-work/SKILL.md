@@ -100,18 +100,23 @@ verification, OS permission, and target app before using them. An external MCP's
 availability must also be checked separately. Existing HTTP connections may need the local
 http-add-tools upgrade before newly introduced direct-MCP tools become discoverable.
 
-This Plugin also registers `anywhere-subchat` as a separate local MCP server. It
-uses a dedicated Chrome login profile headlessly at startup, then HTTPX for Chat
-history and catalog reads. It closes Chrome before serving MCP tools. The
-profile must already be logged in and must not be
-open in another Chrome process. Check `subchat_capabilities` before use:
-`generation_transport=unavailable` means this Plugin server cannot send or queue
-Chat messages. Its read-only tool catalog exposes capabilities, HTTP catalog,
-saved list/status, recovery, wait, and `subchat_download_file` for one exact
-saved final-answer sandbox link (up to 512 KiB of base64). This does not write
-locally or upload into another Chat or Library. Recover only an existing operation's exact
-ID; a missing or pending answer does not authorize a new send. The local profile
-and ledger are separate from the main Anywhere engine. Set absolute paths in
+This Plugin also registers `anywhere-subchat` as a separate local MCP server. Its
+default mode uses a dedicated logged-in Chrome profile headlessly at startup,
+then HTTPX for Chat history and catalog reads. It closes Chrome before serving
+read-only MCP tools. `generation_transport=unavailable` means it cannot send.
+Set `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process and
+restart its MCP session to expose `subchat_send` through the same dedicated
+profile. Check `subchat_capabilities`: this mode reports
+`generation_transport=browser_prepared`, opens minimized Chrome for sends, and
+may briefly take focus. It is not independent HTTP-only generation. The profile
+must already be logged in and must not be open in another Chrome process. Use
+an exact available `http_selection` from `subchat_catalog`, plus observed UI
+model and effort labels, then recover the original send operation ID. Keep the
+controller running until a pending send is confirmed; a missing answer never
+authorizes replay with a new ID. `subchat_download_file` retrieves one exact
+saved final-answer sandbox link (up to 512 KiB of base64), without uploading it
+to another Chat or Library. The local profile and ledger are separate from the
+main Anywhere engine. Set absolute paths in
 `ANYWHERE_SUBCHAT_CHROME_LOGIN_PROFILE` and `ANYWHERE_SUBCHAT_STATE_DIR` to
 choose other dedicated locations before starting the server. No account secrets
 belong in tool calls, Plugin files or environment variables.

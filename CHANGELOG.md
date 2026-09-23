@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a13 / Plugin 0.2.0-alpha.13 — unpublished candidate (2026-09-23)
+
+- Add an explicit `browser-send` mode to the bundled Subchat Plugin. It exposes
+  `subchat_send` through the existing dedicated Chrome transport while keeping
+  the default HTTP observation mode read-only. The two modes use the same
+  logged-in dedicated profile at different times; the send mode minimizes its
+  Chrome window and reports `generation_transport=browser_prepared`.
+- A live local MCP session sent a new ordinary Chat and a follow-up in the same
+  conversation, then recovered both final answers. Independent HTTPX generation
+  is still unverified and remains a release gate.
+
 ## 0.2.0a12 / Plugin 0.2.0-alpha.12 — unpublished candidate (2026-09-23)
 
 - Send observed Sentinel protection headers only on the generation POST. A

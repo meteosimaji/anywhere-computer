@@ -36,6 +36,7 @@ def test_plugin_paths_allow_absolute_overrides_and_reject_overlap(tmp_path, monk
 
 def test_plugin_entry_uses_headless_http_read_only_mode(tmp_path, monkeypatch):
     profile, state = tmp_path / 'login', tmp_path / 'ledger'
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', raising=False)
     monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
     observed = {}
 
@@ -49,6 +50,77 @@ def test_plugin_entry_uses_headless_http_read_only_mode(tmp_path, monkeypatch):
         'options': {'mcp': True, 'http_only': True, 'chrome_login_profile': profile,
                     'read_only_mcp': True},
     }
+
+
+def test_plugin_browser_send_opt_in_reuses_login_with_minimized_window(tmp_path, monkeypatch):
+    login, state = tmp_path / 'login', tmp_path / 'ledger'
+    browser = tmp_path / 'browser-send'
+    monkeypatch.setattr(subchat_plugin, 'state_directory', lambda: tmp_path)
+    monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (login, state))
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', 'browser-send')
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_BROWSER_SEND_PROFILE', raising=False)
+    observed = {}
+
+    async def fake_run(browser_profile: Path | None, state_dir: Path, **options: object) -> None:
+        observed.update(profile=browser_profile, state=state_dir, options=options)
+
+    monkeypatch.setattr(subchat_plugin, 'run', fake_run)
+    subchat_plugin.main()
+    assert observed == {
+        'profile': login, 'state': state,
+        'options': {'mcp': True, 'http_read': True, 'minimized': True},
+    }
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_BROWSER_SEND_PROFILE', str(browser))
+    subchat_plugin.main()
+    assert observed['profile'] == browser
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_BROWSER_SEND_PROFILE', str(state / 'child'))
+    with pytest.raises(ValueError, match='separate from state'):
+        subchat_plugin.main()
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', 'typo')
+    with pytest.raises(ValueError, match='must be http-read-only or browser-send'):
+        subchat_plugin.main()
+
+
+async def test_plugin_browser_send_mode_exposes_and_dispatches_send(tmp_path, monkeypatch):
+    from anywhere_computer import mcp_server, subchat_cli
+    from anywhere_computer.subchat_browser import backend as browser_backend
+
+    backend = BrowserFixture()
+
+    async def ui_catalog(_model):
+        return {'state': 'catalog_observed', 'models': []}
+
+    async def http_catalog():
+        return {'state': 'http_catalog_observed', 'versions': []}
+
+    backend.catalog = ui_catalog
+    backend.http_catalog = http_catalog
+    backend.capabilities = lambda: {
+        'generation_transport': 'browser_prepared', 'browser_required': True,
+        'http_selection_send_supported': True,
+    }
+    monkeypatch.setattr(browser_backend, 'BrowserSubchatBackend',
+                        lambda *_args, **_kwargs: backend)
+    observed = {}
+
+    async def inspect(server, _source, _destination):
+        observed['tools'] = {tool['name'] for tool in await server.catalog()}
+        capability = await server.execute(Request(operation_id='a' * 32,
+                                                  tool='subchat_capabilities', arguments={}))
+        observed['transport'] = capability.data['generation_transport']
+        result = await server.execute(Request(operation_id='b' * 32,
+                                              tool='subchat_send', arguments={
+                                                  'prompt': 'hello', 'model': 'observed model',
+                                                  'effort': 'observed effort'}))
+        observed['result'] = result
+
+    monkeypatch.setattr(mcp_server, 'serve_stdio', inspect)
+    await subchat_cli.run(tmp_path / 'browser-send', tmp_path / 'ledger', mcp=True,
+                          http_read=True, minimized=True)
+    assert 'subchat_send' in observed['tools']
+    assert observed['transport'] == 'browser_prepared'
+    assert observed['result'].state == 'unknown'
+    assert backend.sends == 1
 
 
 async def test_plugin_read_only_catalog_rejects_mutations(tmp_path):

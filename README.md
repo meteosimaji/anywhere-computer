@@ -20,8 +20,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a12` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.12` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a13` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.13` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -74,14 +74,19 @@ ChatGPT Work task. The experimental adapter supports explicit model selection,
 submission tracking and correlated result recovery. The parent assigns scope,
 compares evidence and verifies proposed changes before integrating them.
 
-This checkout's Codex Plugin adds a separate Subchat MCP server with seven
-read-only tools for capabilities, catalog, saved operations, result recovery
-and a bounded download of one verified sandbox file.
-It cannot create or send a subchat. Generation remains in the separately
-configured `anywhere-subchat` CLI/MCP, using either its browser-assisted mode
-or an opt-in HTTP-only mode with an explicit observed request handoff. Installing
-the Plugin does not configure either mode. The existing Anywhere Computer engine
-and its remote ChatGPT connection are separate from this Subchat server.
+This checkout's Codex Plugin adds a separate Subchat MCP server. Its default
+mode has seven read-only tools for capabilities, catalog, saved operations,
+result recovery and a bounded download of one verified sandbox file. Set
+`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process to expose
+`subchat_send` and follow-up tools through the dedicated, logged-in Chrome
+profile. This mode minimizes Chrome but can still briefly activate its window;
+`subchat_capabilities` reports `generation_transport=browser_prepared`. Close
+other Chrome sessions using that profile before starting the Plugin. The same
+profile can be used by the two Plugin modes at different times. Independent
+HTTP-only generation remains an opt-in experiment in the separate
+`anywhere-subchat` CLI/MCP and has not passed live generation acceptance. The
+existing Anywhere Computer engine and its remote ChatGPT connection are separate
+from this Subchat server.
 
 The subchat guide is the authority for supported transports, CLI/MCP usage,
 attachments, plugin selection, parallel-work evidence and remaining limitations.

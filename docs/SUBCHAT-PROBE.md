@@ -5,14 +5,28 @@ experimental and depends on the selected account, observed model catalog and
 transport. It is separate from a Codex task, ChatGPT Work task, the Anywhere
 Computer engine and the public OpenAI API.
 
-## Codex Plugin: read-only Subchat server
+## Codex Plugin: Subchat server
 
 The Codex Plugin registers `anywhere-subchat` beside `anywhere-computer`. Its
-Subchat server exposes seven read-only tools: `subchat_capabilities`,
+Subchat server exposes seven read-only tools by default: `subchat_capabilities`,
 `subchat_catalog`, `subchat_list`, `subchat_status`, `subchat_recover` and
 `subchat_wait`, plus `subchat_download_file`. Check `subchat_capabilities` first. The default
 `generation_transport=unavailable` means this server cannot create or send a
 Chat. Plugin installation does not configure generation for the separate CLI.
+
+To enable actual sends through the dedicated Chrome profile, set
+`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process and restart
+its MCP session. This exposes `subchat_send`, `subchat_message` and related
+mutation tools; `subchat_capabilities` reports
+`generation_transport=browser_prepared`. The mode uses the same logged-in
+dedicated profile by default, with an optional absolute
+`ANYWHERE_SUBCHAT_BROWSER_SEND_PROFILE` override. Close any other Chrome process
+using that profile first. The controller minimizes its Chrome window, but it can
+briefly take focus. Obtain exact UI model and effort labels plus an available
+`http_selection` from `subchat_catalog` before sending, and use the returned
+operation ID for `subchat_wait` or `subchat_recover`. Keep the controller alive
+until a pending send reaches a confirmed result. This mode uses Chrome to send;
+it does not prove independent HTTP-only generation.
 
 `subchat_download_file` takes a saved completed operation ID and an exact
 `sandbox:/mnt/data/...` link from its final answer. It rechecks the bound

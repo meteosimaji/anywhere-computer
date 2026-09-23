@@ -1,7 +1,7 @@
 {
   "name": "anywhere-computer",
   "version": "0.2.0-alpha.12",
-  "description": "Computer tools, selected Codex context, MCP plugin access and Subchat observations.",
+  "description": "Computer tools, selected Codex context, MCP plugin access and optional browser-assisted Subchat sends.",
   "author": {
     "name": "\u3081\u3066\u304a",
     "url": "https://github.com/meteosimaji"
@@ -9,8 +9,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Anywhere Computer",
-    "shortDescription": "Computer work, Codex context and Subchat observations.",
-    "longDescription": "Files, searches and terminal work, with selected Codex conversations, skills and compatible MCP tools. A separate Subchat MCP uses a dedicated headless Chrome login and HTTP reads; generation and remote mutations are not exposed in that Plugin server. Public alpha. ChatGPT requires HTTPS setup; macOS native Accessibility GUI requires a verified helper and OS permission. Compatible Peekaboo is an optional external provider. Hosting is not included.",
+    "shortDescription": "Computer work, Codex context and optional Subchat sends.",
+    "longDescription": "Files, searches and terminal work, with selected Codex conversations, skills and compatible MCP tools. A separate Subchat MCP reads ordinary Chat history over authenticated HTTP by default; explicit browser-send mode adds generation using a dedicated minimized Chrome profile. Independent HTTP-only generation is unverified. Public alpha. ChatGPT requires HTTPS setup; macOS native Accessibility GUI requires a verified helper and OS permission. Compatible Peekaboo is an optional external provider. Hosting is not included.",
     "developerName": "\u3081\u3066\u304a",
     "category": "Productivity",
     "capabilities": [
