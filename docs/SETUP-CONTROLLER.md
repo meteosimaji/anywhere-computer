@@ -47,10 +47,6 @@ No generic network endpoint exposes these trusted-host methods.
 
 The shared functions alone do not establish a public route, start a service, register OS startup, request administrator rights, or prove a successful first-run experience. The product goal retains all of those applicable acceptance gates.
 
-Validation on 2026-09-09: related setup/HTTP/authorization tests 29 passed; full suite 496 passed, 5 skipped. Ruff, strict mypy and Windows-target mypy passed. Plugin validation passed. The installed version-specific runtime matched source and successfully planned/committed/read back a files-only configuration in a disposable directory without native credentials. No production setup or OS registration was performed.
-
-Controller validation on 2026-09-09: added lost-result/double-confirm, stale-plan/conflict, pending-save/retry, and corrupt-state tests. Full suite: 500 passed, 5 skipped. Ruff and strict mypy (including Windows target) passed for 54 runtime modules. The reinstalled version-specific runtime matched source and passed an isolated controller confirmation/reconciliation smoke test. These checks do not replace the pending graphical first-run acceptance test.
-
 ## Local MCP configuration screen
 
 The local stdio connector wraps DeviceRouter with SetupConnector. Only this wrapper
@@ -87,32 +83,6 @@ new review, callers receive unknown and must inspect status. Cancellation leaves
 claim in place. The database stores request digests and public setup replies, never
 credentials or the argument contents of delegated tools.
 
-Validation on 2026-09-09 for the integrated configuration screen:
-
-- Full pytest: 509 passed, 5 skipped in 74.56 seconds. After strengthening transport
-  metadata/prefix assertions, the related connector/UI tests passed again (13 tests).
-- Ruff passed; strict mypy passed for 55 runtime modules and the browser fixture;
-  Windows-target mypy passed for the runtime. No native Windows/Linux UI claim.
-- Real headed Chromium: local Connection tab, files profile, exact reviewed device
-  ID/resource saved to the fixture's config.json, terminal scope excluded, and saved
-  status reload. The final browser console had no errors or warnings. The mobile
-  screen was inspected at 420 pixels; Japanese heading wrap was corrected.
-- UI regression covers wrong/malformed replies, unknown-save guard, status-only
-  recovery, stale review after input changes, and missing/remote setup capability.
-- Connector tests cover 47 local tools versus 41 Engine tools, workspace metadata,
-  denied local/remote setup routing, cross-tool ID reuse, superseded/restarted plans,
-  cancellation, and atomic claim across two connector instances.
-- Plugin Creator validation passed. Installed
-  `0.1.0-alpha.1+codex.20260909021332`; all 55 loaded runtime modules and the UI asset
-  matched source. That version-specific runtime completed an isolated plan/save/status
-  round trip with the files profile.
-- All disposable browser fixture processes were stopped and their temporary state
-  removed. The private repository remains private. The old Commander LaunchAgent was
-  absent from launchctl and its disabled entry remained set.
-
-Screenshots: `output/playwright/workspace-connection-desktop.png`,
-`workspace-connection-mobile.png`, and `workspace-connection-saved.png`. This is
-browser/real-engine integration evidence, not actual ChatGPT/Codex host acceptance.
 The screen still requires an installed local MCP connector and a user-provided
 public URL. One-click native runtime bootstrap, credentials, service launch, actual
 internet reachability and official-directory acceptance remain outstanding.
@@ -156,31 +126,6 @@ CIMD, dynamic registration, or private-key JWT authentication.
 
 Source: https://developers.openai.com/apps-sdk/build/auth
 
-Validation of this preset/issuer update (2026-09-09):
-
-- Full pytest: 540 passed, 5 skipped in 74.32 seconds. Ruff and strict mypy,
-  including Windows-target mypy, passed on all 58 runtime modules.
-- HTTP integration exercised predefined ChatGPT client registration, stable callback,
-  exact issuer response, PKCE token exchange and the grant-filtered MCP catalog.
-- Success and denial both include the issuer. Tests reject callback issuer injection,
-  preserve explicit issuer authority spelling/port, resume completed ChatGPT setup
-  without prompts or credential writes, and reject replacement of native-client setup.
-- Public HTTPS integration verified matching issuer metadata/response, native login,
-  one-dispatch lost-write recovery, 17 MiB hash-checked download, refresh rotation,
-  grant revocation and a 6.67-second owned tunnel-child recovery retaining its MCP session.
-  The archived public receipt records the tested verifier script and runtime.
-  This was a disposable engine through the public edge,
-  not a ChatGPT app UI test or a production hosting setup.
-- The fixture listener, owned connector children, temporary files and temporary
-  keyring records were removed. The dedicated tunnel's retained token/route were preserved.
-- Installed `0.1.0-alpha.1+codex.20260909030721`. All 58 source modules and the web asset
-  matched the installed version-specific runtime; its CLI exposes `chatgpt-setup`.
-  Runtime ID: `6efefa2ea387858b1431fe842c7d2b4064463c720397d4a8e272f2477cfbc211`.
-- The old Commander LaunchAgent remains absent; launchctl reports its label as disabled.
-- No user's production owner password, ChatGPT account setting, or autostart definition
-  was changed by this update. Actual ChatGPT setup and one-command runtime installation
-  remain outstanding acceptance requirements.
-
 For AI-assisted ChatGPT setup, call `connection_setup_plan` with
 `client_kind: "chatgpt"`, the public `/mcp` resource, and the intended permission
 mode. The connector supplies the predefined ChatGPT client ID and redirect URI;
@@ -195,14 +140,6 @@ manual client field from ChatGPT drafts and lets the connector apply the preset.
 Switching the app invalidates a previously reviewed plan. Existing configuration
 is identified from its actual client and callback before choosing the displayed
 app; saved configuration remains locked against replacement.
-
-2026-09-09 browser verification: the disposable local browser host served the
-actual workspace HTML and SetupConnector. Entering `https://fixture.example/mcp`
-with ChatGPT selected produced `anywhere-chatgpt` and the predefined callback in
-the review. Saving showed the configured state, disabled editing, and explicitly
-stated that authentication/startup/connectivity were not performed. The temporary
-host and tab were stopped afterwards. This is real browser UI testing against a
-local fixture, not evidence of acceptance in ChatGPT itself.
 
 ## Explicit saved-device checks
 
@@ -220,36 +157,10 @@ and credentials are not returned to the WebView. Failed checks are not retried
 automatically. This applies to saved SSH/HTTP devices; relay enrollment is not yet
 integrated with this device list.
 
-macOS native check, 2026-09-14: built the manager with locked Cargo dependencies,
-wrapped it using the existing `include_manager` bundle layout, and launched it
-with a disposable state directory and explicit development Python. A saved SSH
-fixture targeting the existing unavailable local VM forwarding endpoint was
-checked through the actual button. This exposed CLI fallthrough: after printing
-the device observation, the command attempted local engine status and exited 1.
-A regression test reproduced it; returning after the observation fixed it.
-The native UI then displayed the specific connection failure and timestamp.
-Refreshing showed the previous `unreachable` observation while keeping current
-connectivity unconfirmed. No guest operation succeeded in this test; it proves the
-macOS app-to-CLI diagnostic path and failure presentation, not Windows acceptance.
-
-## Guided CLI acceptance (2026-09-14)
+## Guided CLI setup
 
 `anywhere setup` offers an English selector for the existing local start,
 ChatGPT self-hosted HTTPS setup and native OAuth self-hosted HTTPS setup. It
 accepts only an optional state directory; advanced commands retain their existing
 interfaces. This is a command selector, not hosted relay provisioning or automatic
 AI registration. The local selection preserves `start`'s idle replacement policy.
-
-On macOS, the development CLI was run in an actual interactive terminal with a
-separate temporary state path. Cancelling with `q` exited successfully without
-creating that path. A second isolated run selected local startup and returned
-ready. After that interactive process exited, a separate status command reached
-the same instance `1e70d22b0f4e465490ab01f6412a2ed4`, runtime
-`466bad39694431b10f444dc07cd8167ee600b23015dea154aaa3aea563fe083e`.
-The real native credential store was used; no credential values were logged.
-
-The isolated agent was explicitly stopped, diagnosis reported stopped, and the
-single fixture-specific Keychain entry was deleted and its absence verified.
-Production state, login startup, Windows and AI account configuration were not
-changed. This verifies local setup and terminal-exit continuity, not HTTPS setup,
-a fresh OS installation, portable-package onboarding or reboot acceptance.

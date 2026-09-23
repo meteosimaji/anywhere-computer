@@ -43,31 +43,12 @@ observations, not a complete audit log or proof of current liveness. Provider ra
 output, tokens and passwords are excluded. Diagnostic HTTP failures expose bounded
 status/subcode information, not response bodies or cookies.
 
-## Current Mac deployment (2026-09-10)
+## Operational limits
 
-Profile: `~/Library/Application Support/Anywhere Computer/chatgpt`.
-Portable release: `portable/plugin-inspect-20260910/Anywhere Computer` under the same
-application support root. Existing owner credentials and OAuth grants were retained.
-
-Before repair: no autostart receipt/LaunchAgent existed, no TCP 18768 listener,
-public HTTP 530 with subcode 1033. The last tunnel observation was interrupted;
-there is insufficient evidence to identify the initial stop trigger.
-After repair: LaunchAgent registered, enabled and running, local/public metadata
-reachable. An owned supervisor SIGKILL was followed by a new launchd-owned process
-and restored public metadata. This proves current-session OS recovery, not recovery
-after a Mac reboot, login or sleep. Those disruptive tests were not performed.
-
-Tests cover foreground contracts, persistent cooldown, 0/130 child exit,
-backend/read unavailability, blocked permanent errors, broken console, bounded
-history, legacy policy reconstruction, upgrade rollback and owned native start.
-Windows/Linux definitions and mocked adapters do not establish live recovery there.
-
-Authenticated acceptance also passed in a new ordinary ChatGPT Chat conversation:
-computer_status and directories_list completed in the production operation ledger.
-An older conversation rejected developer MCP before reaching this service; use the
-new compatible conversation. New OAuth grants have no time deadline. Existing active grants can be migrated
-with http-retain-grants; revoked/expired grants require fresh consent. Access
-tokens still expire after 15 minutes and are renewed with rotating refresh tokens. The engine's static
-remote_ready=false field is not a live public HTTPS reachability measurement;
-use remote-doctor and authenticated client calls for that evidence. GUI control
-remains unavailable.
+A registered service and reachable metadata establish only the checked process and
+route at the time of observation. Verify reboot, login and sleep recovery separately.
+New OAuth grants have no time deadline; existing active grants can be migrated with
+`http-retain-grants`, while revoked or expired grants require fresh consent. Access
+tokens expire after 15 minutes and use rotating refresh tokens. The engine's static
+`remote_ready=false` field is not a live public HTTPS reachability measurement; use
+`remote-doctor` and authenticated client calls for that evidence.

@@ -17,12 +17,6 @@ editing. Markdown interpretation, formula calculation and images are not yet imp
 Generated packages are tested with the internal reader;
 Microsoft Office rendering remains unverified.
 
-2026-09-09 independent-reader verification also passed using development-only
-python-docx and openpyxl: Japanese Word paragraphs, workbook sheet order, numeric/boolean
-cells, literal leading-equals strings and explicitly stored formulas. These libraries were
-not added to project runtime dependencies. This checks package interpretation, not Office
-rendering or formula recalculation.
-
 `documents_read` reads the main-body text of Word OOXML documents, stored Excel
 worksheet cells and formulas, and PowerPoint slide paragraphs. It uses Python
 ZIP and XML support without Office format libraries. It is a content inspector,

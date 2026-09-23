@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar, cast
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 from . import __version__, codex_context, codex_plugins, skills_context
 from .audio_capture import AudioCapture, AudioCaptureUnknown, capture_audio
@@ -78,8 +78,10 @@ from .models import (
     WriteFile,
 )
 from .native_gui import (
+    HELPER_ERROR_CODES,
     NativeApp,
     NativeGUI,
+    NativeGUIInputRefused,
     NativeGUIOutcomeUnknown,
     NativeObserve,
     NativePress,
@@ -151,6 +153,24 @@ _PREFLIGHT_FAILURES: dict[str, tuple[str, str]] = {
     "Audio helper is no longer installed": (
         "helper_unavailable", "Check the verified portable installation; no recording was made."
     ),
+}
+_TERMINAL_INPUT_REJECTIONS: dict[str, tuple[str, str]] = {
+    "Session is not accepting input": (
+        "session_not_accepting_input",
+        "Inspect the terminal session and start a new one if needed; no input was sent.",
+    ),
+    "Session input is busy; no input was sent": (
+        "session_busy",
+        "Wait for the active terminal input to finish before retrying; no input was sent.",
+    ),
+}
+_NATIVE_GUI_FAILURES: dict[str, str] = {
+    "Native GUI request exceeds limit": "native_gui_request_too_large",
+    "Invalid native GUI response framing": "native_gui_invalid_response",
+    "Invalid native GUI response JSON": "native_gui_invalid_response",
+    "Native GUI response identity mismatch": "native_gui_invalid_response",
+    "Invalid native observation": "native_gui_invalid_observation",
+    "Native GUI observation unavailable; observe again": "native_gui_observation_unavailable",
 }
 OBSERVER_WAIT_SECONDS = 5.0
 
@@ -1312,9 +1332,42 @@ class Engine:
             return Reply(operation_id=request.operation_id, state="failed", error="Unknown tool")
         try:
             arguments = tool.schema.model_validate(request.arguments)
+        except ValidationError as error:
+            # Pydantic's formatted error includes rejected input values. Error locations can
+            # also contain user-supplied dictionary keys, so expose only declared fields.
+            fields = tool.schema.model_fields
+            issues = error.errors(include_input=False, include_context=False)
+            invalid_params: list[JsonValue] = [
+                {
+                    "path": [str(part) if isinstance(part, int) or part in fields
+                             else "<unknown>" for part in item["loc"]],
+                    "code": item["type"],
+                }
+                for item in issues
+            ]
+            return Reply(
+                operation_id=request.operation_id, state="failed",
+                error="Tool arguments are invalid.",
+                data={"error_code": "invalid_parameter", "invalid_params": invalid_params,
+                      "dispatched": False,
+                      "next_action": "Correct the listed arguments and use a new operation ID."},
+            )
+        try:
             previous = self.ledger.claim(request)
         except ValueError as error:
-            return Reply(operation_id=request.operation_id, state="failed", error=str(error))
+            if str(error) == "Operation ID was already used for different arguments":
+                return Reply(
+                    operation_id=request.operation_id, state="failed",
+                    error="Operation ID was already used for different arguments.",
+                    data={"error_code": "operation_id_conflict", "dispatched": False,
+                          "next_action": "Use a new operation ID for the changed arguments."},
+                )
+            return Reply(
+                operation_id=request.operation_id, state="failed",
+                error="Operation could not be claimed.",
+                data={"error_code": "operation_claim_failed", "dispatched": False,
+                      "next_action": "Inspect the operation ledger before retrying."},
+            )
         if previous is not None:
             running = self.inflight.get(request.operation_id)
             return await self._observe(request.operation_id, running) if running else previous
@@ -1392,6 +1445,13 @@ class Engine:
                                   "upload_status and the destination; do not automatically "
                                   "publish again.",
                               })
+            except NativeGUIInputRefused:
+                reply = Reply(
+                    operation_id=request.operation_id, state="failed",
+                    error="Native GUI target changed since observation; input was not attempted",
+                    data={"error_code": "native_gui_input_refused", "dispatched": False,
+                          "next_action": "Observe the target again before sending new input."},
+                )
             except Exception as error:
                 fixed = _PREFLIGHT_FAILURES.get(str(error))
                 if fixed is not None and type(error) in (RuntimeError, ValueError):
@@ -1402,9 +1462,35 @@ class Engine:
                         data={"error_code": code, "dispatched": False,
                               "execution_state": "not_dispatched", "next_action": action},
                     )
-                else:
+                elif request.tool.startswith("gui_native_") and type(error) is ValueError and (
+                    (native_code := _NATIVE_GUI_FAILURES.get(str(error))) is not None
+                    or (str(error).startswith("Native GUI helper rejected request: ")
+                        and str(error).removeprefix("Native GUI helper rejected request: ")
+                        in HELPER_ERROR_CODES | {"invalid_response"})
+                ):
                     reply = Reply(
                         operation_id=request.operation_id, state="failed", error=str(error),
+                        data={"error_code": native_code or "native_gui_helper_rejected",
+                              "next_action": "Inspect the native GUI session and observe again "
+                              "before further input."},
+                    )
+                elif (request.tool == "terminal_input" and type(error) is ValueError
+                      and (fixed := _TERMINAL_INPUT_REJECTIONS.get(str(error))) is not None):
+                    code, action = fixed
+                    reply = Reply(
+                        operation_id=request.operation_id, state="failed", error=str(error),
+                        data={"error_code": code, "dispatched": False,
+                              "execution_state": "not_dispatched", "next_action": action},
+                    )
+                else:
+                    reply = Reply(
+                        operation_id=request.operation_id, state="failed",
+                        error="Operation failed; the underlying error was withheld.",
+                        data={
+                            "error_code": "operation_failed",
+                            "next_action": "Inspect this operation with operations_get and check "
+                            "the target state before retrying.",
+                        },
                     )
             self.ledger.finish(reply)
             return reply

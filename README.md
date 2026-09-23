@@ -62,6 +62,21 @@ For a local MCP client, use this checkout as the working directory and configure
 `uv run --locked anywhere mcp`. It starts an absent agent or reuses a compatible
 running engine; connecting alone does not replace it with another build.
 
+For the Codex Plugin in this checkout, install `uv` and make it available to
+Codex, then register this checkout's local marketplace and install its Plugin:
+
+```sh
+codex plugin marketplace add /absolute/path/to/anywhere-computer
+codex plugin add anywhere-computer@personal
+```
+
+The marketplace entry is in `.agents/plugins/marketplace.json`; the Plugin runs
+its bundled wheel through `uv`. Restart the Plugin session, then check that
+`anywhere-computer` and `anywhere-subchat` appear as separate MCP servers. Call
+`subchat_capabilities` to confirm the Subchat server's actual mode and version.
+For a published version, use a checkout of its matching release tag rather than
+assuming that this development checkout matches the release asset.
+
 For ChatGPT, choose its HTTPS route in `setup`. You still need a public HTTPS MCP
 URL, authentication and registration in ChatGPT. Installing the Codex Plugin does
 not perform those steps. Hosting, tunnels and managed pairing are not silently

@@ -57,14 +57,4 @@ gemini mcp add --scope user --transport stdio anywhere-computer /absolute/path/t
 そのクライアントで管理し、Anywhere Computer独自の繰り返し承認を追加しない。
 ローカルの `mcp` は既存エンジンを共有するため、クライアント終了とエンジン停止は別である。
 
-## 検証範囲（2026-09-12）
-
-- 公式MCP Python SDK: 実stdioサーバーの初期化・一覧・ファイル書込／読取・結果回収を確認。
-  Codexが解決不能で任意連携が失敗した後も基本操作は成功した。
-- Gemini CLI 0.32.1: インストール済みCLIの `mcp add --help` で登録構文を確認。
-  実接続・ツール実行は未確認。
-- Claude Code: 公式文書の登録構文を確認。現在のPATHでは実行ファイルが見つからず、実機未確認。
-- ChatGPT HTTP入口: 別途記録された認証・セッション継続試験がある。上記stdio設定を
-  ChatGPT Webへそのまま登録する手順ではない。
-
-登録コマンドを利用者の実設定へ実行したという検証記録ではない。
+登録構文の確認だけでは実接続・ツール実行は保証されません。

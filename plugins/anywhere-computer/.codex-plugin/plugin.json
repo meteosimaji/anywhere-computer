@@ -10,7 +10,7 @@
   "interface": {
     "displayName": "Anywhere Computer",
     "shortDescription": "Computer work, Codex context and optional Subchat sends.",
-    "longDescription": "Files, searches and terminal work, with selected Codex conversations, skills and compatible MCP tools. A separate Subchat MCP reads ordinary Chat history over authenticated HTTP by default; explicit browser-send mode adds generation using a dedicated minimized Chrome profile. Independent HTTP-only generation is unverified. Public alpha. ChatGPT requires HTTPS setup; macOS native Accessibility GUI requires a verified helper and OS permission. Compatible Peekaboo is an optional external provider. Hosting is not included.",
+    "longDescription": "Files, searches and terminal work, with selected Codex conversations, skills and compatible MCP tools. A separate Subchat MCP reads ordinary Chat history over authenticated HTTP by default; explicit browser-send mode adds generation using a dedicated minimized Chrome profile. Independent HTTP-only generation is unverified. Development alpha candidate. ChatGPT requires HTTPS setup; macOS native Accessibility GUI requires a verified helper and OS permission. Compatible Peekaboo is an optional external provider. Hosting is not included.",
     "developerName": "\u3081\u3066\u304a",
     "category": "Productivity",
     "capabilities": [

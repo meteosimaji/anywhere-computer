@@ -199,6 +199,79 @@ async def test_capacity_failure_has_fixed_code_and_safe_action(engine, tmp_path,
     assert reply.data["next_action"]
 
 
+@pytest.mark.parametrize("failure_type", [RuntimeError, ValueError, OSError])
+async def test_unclassified_provider_errors_are_withheld_and_recoverable(
+    engine, tmp_path, monkeypatch, failure_type,
+):
+    secret = "synthetic-provider-credential-Bearer-ABC123"
+
+    async def rejected(*args, **kwargs):
+        raise failure_type(f"provider rejected request with {secret}")
+
+    monkeypatch.setattr(engine.direct_mcp_sessions, "open", rejected)
+    operation = request("mcp_session_open", command=[sys.executable], cwd=str(tmp_path))
+    reply = await engine.execute(operation)
+    assert reply.state == "failed"
+    assert reply.error == "Operation failed; the underlying error was withheld."
+    assert reply.data["error_code"] == "operation_failed"
+    assert "operations_get" in reply.data["next_action"]
+    assert "dispatched" not in reply.data
+    assert secret not in reply.model_dump_json()
+    assert engine.ledger.get(operation.operation_id) == reply
+    assert await engine.execute(operation) == reply
+
+
+async def test_plugin_catalog_transport_error_does_not_expose_credentials(
+    engine, tmp_path, monkeypatch,
+):
+    secret = "synthetic-plugin-token-XYZ789"
+
+    async def failed_catalog(*args, **kwargs):
+        raise ConnectionError(f"app-server 401: {secret}")
+
+    monkeypatch.setattr(
+        "anywhere_computer.codex_plugins.list_codex_plugin_tools", failed_catalog,
+    )
+    reply = await engine.execute(request("codex_plugin_tools", cwd=str(tmp_path)))
+    assert reply.state == "failed"
+    assert reply.data["error_code"] == "operation_failed"
+    assert "operations_get" in reply.data["next_action"]
+    assert secret not in reply.model_dump_json()
+
+
+async def test_invalid_arguments_do_not_echo_values_or_unknown_field_names(engine):
+    secret = "synthetic-validation-secret-ABC123"
+    operation = request("files_read", path=secret, limit=secret, **{secret: "value"})
+    reply = await engine.execute(operation)
+    assert reply.state == "failed"
+    assert reply.error == "Tool arguments are invalid."
+    assert reply.data["error_code"] == "invalid_parameter"
+    assert reply.data["dispatched"] is False
+    assert {item["code"] for item in reply.data["invalid_params"]} == {
+        "int_parsing", "extra_forbidden",
+    }
+    assert {tuple(item["path"]) for item in reply.data["invalid_params"]} == {
+        ("limit",), ("<unknown>",),
+    }
+    assert secret not in reply.model_dump_json()
+    with pytest.raises(ValueError, match="Unknown operation ID"):
+        engine.ledger.get(operation.operation_id)
+
+
+async def test_changed_arguments_have_fixed_idempotency_conflict(engine):
+    operation = request("workspace_open")
+    first = await engine.execute(operation)
+    secret = "synthetic-conflict-secret-XYZ789"
+    changed = operation.model_copy(update={"arguments": {"path": secret}})
+    conflict = await engine.execute(changed)
+    assert first.state == "completed"
+    assert conflict.state == "failed"
+    assert conflict.data["error_code"] == "operation_id_conflict"
+    assert conflict.data["dispatched"] is False
+    assert secret not in conflict.model_dump_json()
+    assert engine.ledger.get(operation.operation_id) == first
+
+
 async def test_status_shows_owned_live_watch_stop_contract(engine, monkeypatch):
     session_id = "e" * 32
     operation_id = "f" * 32

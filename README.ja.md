@@ -46,6 +46,10 @@ GitHubの「Download ZIP」はソースコードです。CodexへのPlugin導入
 コマンド列をこの翻訳へ重複掲載せず、同じ手順を参照します。OS資格情報ストアが必要で、
 ChatGPT接続には公開HTTPS URL・認証・ChatGPT側の登録も必要です。
 日常の起動・診断・常駐設定は日本語の運用ガイドを参照してください。
+Codex Pluginの導入にはCodexから使える`uv`が必要です。このチェックアウトを使う場合は
+[英語READMEの導入コマンド](README.md#get-started)でローカルmarketplaceを登録し、
+`anywhere-computer`を導入します。再接続後、独立した`anywhere-computer`と
+`anywhere-subchat`のMCPサーバーを確認し、`subchat_capabilities`で実際の版とモードを確認します。
 
 ## subchatで共同作業する
 

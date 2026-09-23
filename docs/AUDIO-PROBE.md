@@ -26,31 +26,6 @@ duration. Source timestamps are not yet aligned. A captured file does not prove
 audible speaker output; silence is a valid recording, not a playback success.
 Failures can leave partial files in the private output directory.
 
-## Verification on 2026-09-19
-
-- A first three-second experiment exceeded the requested system-audio duration
-  while capture startup was pending. The helper now caps saved samples.
-- A subsequent real capture saved exactly three seconds per track, but both
-  tracks measured zero peak/RMS. Audible content was not verified.
-- The user reported selection of an iPhone microphone. Default-input capture
-  was removed; no further microphone capture was performed after that report.
-- Three tests in `tests/test_audio_probe.py` pass without opening a capture
-  device. Two reject missing microphone IDs before creating an output folder.
-  A synthetic PCM harness crosses the duration boundary for both tracks and
-  independently reopens the files to check frame counts and signal metrics.
-- Removing final-buffer clamping in a temporary source copy makes that harness
-  fail. The repository source was preserved during this negative test.
-
-A later system-only experiment played a quiet synthetic 440 Hz WAV through
-`afplay` and captured two seconds with `microphone_device_id=none`. It returned
-96,000 frames at 48 kHz, peak 0.04883 and RMS 0.03447. Independent conversion
-with `afconvert` and Python WAV reading confirmed two seconds of stereo audio;
-positive zero crossings estimated 441.5 Hz. This confirms non-silent OS playback
-capture, not physical speaker output. Playback and recording both ended.
-
-Virtual-device routing, device disconnect and Windows support remain pending. The engine integration below is newer than
-these capture experiments; they do not prove its live end-to-end acceptance.
-
 ## Optional portable packaging
 
 On the macOS build machine, compile the reviewed helper for the target architecture:
@@ -68,11 +43,6 @@ files. The builder must supply a trusted binary for the target architecture;
 file validation is not code-signature or architecture verification. This option
 does not request permissions or record audio. The current engine exposes the
 system-capture tool below; permission onboarding and native signing remain pending.
-
-A local build with the compiled helper was extracted into a separate Unicode
-path. Its manifest digest and binary bytes matched, and its `--check` command
-completed with `capture_started=false`. No user-PC compiler was involved in that
-relocated execution. This is packaging acceptance, not capture acceptance.
 
 ## Read-only engine inspection
 

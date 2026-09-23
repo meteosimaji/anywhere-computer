@@ -3,7 +3,8 @@
 `anywhere-subchat --http-only` is a local, experimental controller for an
 ordinary ChatGPT Chat. It reads by default. Sending requires a separately
 observed, successful generation request handoff. The Codex Plugin's Subchat
-server remains read-only; Plugin installation does not configure this controller.
+server is read-only by default; its separate opt-in `browser-send` mode can send
+through Chrome. Plugin installation does not configure this HTTP-only controller.
 Use this transport only within the account owner's permission and account scope.
 It is not the public OpenAI API, and provider behavior may change.
 

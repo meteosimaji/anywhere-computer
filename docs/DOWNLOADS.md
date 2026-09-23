@@ -42,10 +42,6 @@ HTTPの応答待ち上限より準備が長くなる場合、操作IDとtransfer
 コピー準備後に元ファイルを削除してDBを開き直し、4096チャンク全量を取得してhashを確認します。
 これはローカルDownloads APIの検証で、Engineの操作記録やインターネット全量転送の測定ではありません。
 
-2026-09-09の1 GiB全量測定（ローカルの履歴資料）は、
-コピー準備3.50秒、4096チャンク取得4.60秒、全体hash一致、closeと一時ディレクトリ削除を記録しています。
-この値は当該MacのローカルAPIの測定であり、ネットワークの転送速度ではありません。
-
 Windows互換性では、Python 3.12のパスstatとfd fstatでctimeの意味が異なるため、
 ctimeはfdの前後だけで比較します。パスとfdの同一性・サイズ・mtimeの比較は維持します。
 参照: [CPythonのパスstat処理](https://github.com/python/cpython/blob/3.12/Modules/posixmodule.c)、

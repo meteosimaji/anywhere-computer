@@ -8,7 +8,10 @@ Computer engine and the public OpenAI API.
 ## Codex Plugin: Subchat server
 
 The Codex Plugin registers `anywhere-subchat` beside `anywhere-computer`. Its
-Subchat server exposes seven read-only tools by default: `subchat_capabilities`,
+installation and `uv` prerequisite are described in the [README](../README.md#get-started).
+After installation, restart the Plugin session and confirm both MCP servers are
+available before using the Subchat tools. The Subchat server exposes seven
+read-only tools by default: `subchat_capabilities`,
 `subchat_catalog`, `subchat_list`, `subchat_status`, `subchat_recover` and
 `subchat_wait`, plus `subchat_download_file`. Check `subchat_capabilities` first. The default
 `generation_transport=unavailable` means this server cannot create or send a
