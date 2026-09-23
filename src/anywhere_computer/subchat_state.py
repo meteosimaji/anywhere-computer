@@ -114,6 +114,46 @@ class SubchatSubmissions:
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_answer_settings ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, '
                                'answer_message_id TEXT NOT NULL, body TEXT NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_http_dispatch_claims ('
+                               'operation_id TEXT PRIMARY KEY, owner TEXT, '
+                               'user_message_id TEXT NOT NULL, account_id TEXT NOT NULL)')
+
+    def claim_http_dispatch(self, operation_id: str, *, owner: str | None,
+                            user_message_id: str, provider_account_id: str,
+                            prompt: str, model_slug: str, thinking_effort: str | None,
+                            conversation_id: str | None, predecessor_id: str | None) -> bool:
+        """Commit the one HTTP dispatch right before network I/O; never release it.
+
+        A crash after this commit leaves the outcome unknown. Separate ledger
+        connections serialize at BEGIN IMMEDIATE, so only one caller may POST.
+        """
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            saved = self.get(operation_id, owner=owner)
+            if (saved.state != 'sending' or saved.http_selection is None
+                    or saved.resources is not None
+                    or saved.user_message_id != user_message_id
+                    or saved.provider_account_id != provider_account_id
+                    or saved.prompt != prompt
+                    or saved.http_selection.model_slug != model_slug
+                    or saved.http_selection.thinking_effort != thinking_effort
+                    or saved.requested_conversation_id != conversation_id):
+                raise ValueError('HTTP dispatch identity does not match the reserved submission')
+            if saved.after_operation_id is None:
+                if predecessor_id is not None:
+                    raise ValueError('New Chat cannot have a predecessor')
+            else:
+                target = self.get(saved.after_operation_id, owner=owner)
+                if (target.state != 'completed'
+                        or target.conversation_id != conversation_id
+                        or target.user_message_id != saved.expected_last_user_message_id
+                        or target.answer_message_id != predecessor_id):
+                    raise ValueError('HTTP predecessor does not match the completed target')
+            cursor = self.connection.execute(
+                'INSERT OR IGNORE INTO subchat_http_dispatch_claims VALUES (?,?,?,?)',
+                (operation_id, owner, user_message_id, provider_account_id),
+            )
+            return cursor.rowcount == 1
 
     def get(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
         row = self.connection.execute(
