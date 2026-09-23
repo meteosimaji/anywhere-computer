@@ -1161,6 +1161,7 @@ class Engine:
             }
         implementation_tools = {
             "skills": ("skills_list", "skills_read"),
+            "codex_skills": ("codex_skills_list", "codex_skill_read"),
             "audio_capture": ("audio_status", "audio_capture"),
             "gui_native": ("gui_native_windows", "gui_native_observe"),
             "gui_mcp": ("gui_observe",),

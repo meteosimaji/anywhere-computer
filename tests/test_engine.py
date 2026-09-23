@@ -51,6 +51,14 @@ def test_status_separates_capability_evidence_without_claiming_acceptance(tmp_pa
             "os_permission": "not_required",
             "acceptance": "not_verified",
         }
+        assert diagnostics["codex_skills"] == {
+            "running_implementation": "present",
+            "runtime_available": "unknown",
+            "connection_authorization": "not_observed",
+            "helper": "not_required",
+            "os_permission": "not_required",
+            "acceptance": "not_verified",
+        }
         assert diagnostics["gui_native"]["running_implementation"] == "present"
         assert diagnostics["gui_native"]["helper"] in {
             "verified_available", "unavailable", "unsupported_platform", "verification_failed",
