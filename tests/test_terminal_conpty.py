@@ -66,6 +66,9 @@ for line in sys.stdin:
         page = sessions.output(SessionOutput(session_id=identity, cursor=ready["next_cursor"]))
         assert "ECHO=日本語🙂" in page["text"]
         assert page["next_cursor"] <= page["end_cursor"]
+        await sessions.send(SessionInput(session_id=identity, text="\x1a\r"))
+        await asyncio.wait_for(sessions.get(identity).reader, 10)
+        assert sessions.get(identity).output_eof
     finally:
         await sessions.close()
     assert sessions.get(identity).output_eof
