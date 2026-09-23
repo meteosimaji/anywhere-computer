@@ -34,7 +34,7 @@ The handoff has exactly four fields:
 
 | Field | Content |
 | --- | --- |
-| `headers` | Recognized headers from a successful generation request. Authorization and account must match the read session; origin and referer must be `chatgpt.com`. The `openai-sentinel-chat-requirements-prepare-token` header may be absent if the observed request omitted it. |
+| `headers` | Recognized headers from a successful generation request. Authorization and account must match the read session; origin and referer must be `chatgpt.com`. The `openai-sentinel-chat-requirements-prepare-token` and `openai-sentinel-chat-requirements-token` headers are optional, according to what the observed request actually sent. |
 | `sentinel_p` | The observed value for Sentinel preparation. |
 | `prepare_template` | The complete successful conversation-preparation JSON body. |
 | `generation_template` | The complete successful ordinary-Chat generation JSON body. |
@@ -52,6 +52,15 @@ the saved `conversation_id`. The controller validates the catalog selection,
 prepares the request once, checks the current branch for a follow-up, and
 dispatches generation once. It does not substitute newly observed protection
 values into the handed-off headers.
+
+A current ChatGPT UI control sent `openai-sentinel-chat-requirements-token` on
+generation and completed Sentinel prepare/finalize while that generation was
+in flight; a later turn used the prior finalize response token. This controller
+accepts an explicitly observed header value but does not implement that token
+lifecycle or the finalize request. Its sequential Sentinel and conversation
+preparation requests have returned 200 while an independent HTTPX generation
+returned 403. Accepting the additional header is not evidence that this 403 is
+resolved or that HTTP-only generation is supported by the provider.
 
 An HTTP success or streaming response alone does not prove completion. The
 controller correlates the saved input, final answer, and terminal markers in

@@ -31,13 +31,15 @@ if TYPE_CHECKING:
 _HEADERS = frozenset({
     'accept', 'authorization', 'chatgpt-account-id', 'content-type', 'cookie', 'oai-did',
     'oai-echo-logs', 'oai-language', 'openai-sentinel-chat-requirements-prepare-token',
+    'openai-sentinel-chat-requirements-token',
     'openai-sentinel-proof-token', 'openai-sentinel-turnstile-token', 'origin', 'originator',
     'referer', 'sec-ch-ua', 'sec-ch-ua-arch', 'sec-ch-ua-bitness', 'sec-ch-ua-full-version',
     'sec-ch-ua-full-version-list', 'sec-ch-ua-mobile', 'sec-ch-ua-model', 'sec-ch-ua-platform',
     'sec-ch-ua-platform-version', 'user-agent', 'x-oai-turn-trace-id',
     'x-openai-codex-window-type', 'x-openai-web-frontend', 'x-openai-web-sse-compression',
 })
-_OPTIONAL_HEADERS = frozenset({'openai-sentinel-chat-requirements-prepare-token'})
+_OPTIONAL_HEADERS = frozenset({'openai-sentinel-chat-requirements-prepare-token',
+                               'openai-sentinel-chat-requirements-token'})
 _REQUIRED_HEADERS = _HEADERS - _OPTIONAL_HEADERS
 _CHAT = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
 _PATHS = {

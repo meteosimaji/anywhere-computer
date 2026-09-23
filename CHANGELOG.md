@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a11 / Plugin 0.2.0-alpha.11 — unpublished candidate (2026-09-23)
+
+- Accept the current observed Chat requirements-token header in an explicit
+  HTTP generation handoff without changing its value. HTTP-only generation
+  remains unverified; the known 403 is not resolved by this compatibility fix.
+
 ## 0.2.0a10 / Plugin 0.2.0-alpha.10 — unpublished candidate (2026-09-23)
 
 - Write the standard default namespaces in OOXML package metadata. The prior

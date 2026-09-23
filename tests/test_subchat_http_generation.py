@@ -435,6 +435,34 @@ async def test_generation_preserves_absent_observed_prepare_token(tmp_path):
                 ledger.close()
 
 
+async def test_generation_forwards_observed_requirements_token_verbatim(tmp_path):
+    data = handoff_data()
+    data['headers'].pop('openai-sentinel-chat-requirements-prepare-token')
+    observed_token = 'observed-requirements-token'
+    data['headers']['openai-sentinel-chat-requirements-token'] = observed_token
+    generation = ObservedHTTPGeneration.from_data(
+        data, authorization=SECRET, account_id='fixture-account')
+    async with LocalChat(prepare_token_present=False) as api:
+        async with httpx.AsyncClient(
+                trust_env=False, follow_redirects=False,
+                transport=httpx.AsyncHTTPTransport(retries=0)) as client:
+            ledger, _, service = await setup(tmp_path, api, client, generation=generation)
+            try:
+                sent = await service.send('7' * 32, 'observed token', 'Future Chat',
+                    'Future effort', owner=None, http_selection=SELECTION)
+                assert sent.state == 'sending' and sent.conversation_id == CHAT
+                post_headers = [headers for method, _, headers, _ in api.requests
+                                if method == 'POST']
+                assert len(post_headers) == 3
+                assert all(headers.get('openai-sentinel-chat-requirements-token') ==
+                           observed_token for headers in post_headers)
+                assert all('openai-sentinel-chat-requirements-prepare-token' not in headers
+                           for headers in post_headers)
+                assert observed_token.encode() not in (tmp_path / 'operations.sqlite3').read_bytes()
+            finally:
+                ledger.close()
+
+
 async def test_chrome_generation_uses_rotating_client_cookie(tmp_path):
     async with LocalChat(rotate_cookie=True) as api:
         async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
@@ -682,12 +710,17 @@ def test_handoff_parser_redacts_secrets_and_requires_exact_session():
     assert CATALOG_URL.startswith('https://chatgpt.com/')
 
 
-def test_handoff_allows_absent_observed_prepare_token_only():
+def test_handoff_accepts_observed_token_variants_and_rejects_unknown_headers():
     data = handoff_data()
     data['headers'].pop('openai-sentinel-chat-requirements-prepare-token')
     parsed = ObservedHTTPGeneration.from_data(
         data, authorization=SECRET, account_id='fixture-account')
     assert 'openai-sentinel-chat-requirements-prepare-token' not in parsed.headers
+
+    data['headers']['openai-sentinel-chat-requirements-token'] = 'observed-token'
+    parsed = ObservedHTTPGeneration.from_data(
+        data, authorization=SECRET, account_id='fixture-account')
+    assert parsed.headers['openai-sentinel-chat-requirements-token'] == 'observed-token'
 
     data['headers']['unobserved-header'] = 'fixture'
     with pytest.raises(ValueError, match='Invalid HTTP generation headers'):
