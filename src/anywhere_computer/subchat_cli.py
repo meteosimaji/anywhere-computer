@@ -263,8 +263,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
 
                 chrome_context = await (await runtime()).chromium.launch_persistent_context(
                     str(chrome_login_profile), channel='chrome', headless=True,
-                    ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
-                    args=['--restore-last-session'])
+                    ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS))
                 try:
                     try:
                         http_session = await chrome_http_session(
