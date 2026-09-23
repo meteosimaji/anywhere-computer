@@ -141,13 +141,38 @@ class HTTPOnlySubchatBackend:
 
     async def find_submission(self, submission: SubchatSubmission) -> SubchatReceipt | None:
         if not self._has_identity(submission):
+            if self._generation is not None and self._store is not None:
+                self._store.record_http_event(submission.operation_id, 'history_unknown',
+                                              owner=self._owner)
             return None  # No history scan, fabricated identity, bootstrap tab or resend.
-        async with asyncio.timeout(20):
-            return await self._http_reader.receipt(None, submission)
+        try:
+            async with asyncio.timeout(20):
+                receipt = await self._http_reader.receipt(None, submission)
+        except Exception:
+            if self._generation is not None and self._store is not None:
+                self._store.record_http_event(submission.operation_id, 'history_failed',
+                                              owner=self._owner)
+                raise ConnectionError('HTTP history observation failed') from None
+            raise
+        if self._generation is not None and self._store is not None:
+            self._store.record_http_event(submission.operation_id,
+                'history_receipt' if receipt is not None else 'history_unknown', owner=self._owner)
+        return receipt
 
     async def read_answer(self, submission: SubchatSubmission
                           ) -> SubchatAnswer | SubchatPendingObservation | None:
         if not self._has_identity(submission):
             return None
-        async with asyncio.timeout(20):
-            return await self._http_reader.history(None, submission)
+        try:
+            async with asyncio.timeout(20):
+                answer = await self._http_reader.history(None, submission)
+        except Exception:
+            if self._generation is not None and self._store is not None:
+                self._store.record_http_event(submission.operation_id, 'history_failed',
+                                              owner=self._owner)
+                raise ConnectionError('HTTP history observation failed') from None
+            raise
+        if answer is None and self._generation is not None and self._store is not None:
+            self._store.record_http_event(submission.operation_id, 'history_unknown',
+                                          owner=self._owner)
+        return answer

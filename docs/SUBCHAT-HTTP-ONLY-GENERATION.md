@@ -57,3 +57,22 @@ Each dispatched once and reached `completed` through independent HTTP history;
 the follow-up remained in the same conversation. The trial used a temporary
 ledger and did not save or print header or body values. This confirms acceptance
 for that observed session and request shape; handoff expiry remains unmeasured.
+
+## Private transport diagnostics
+
+The local ledger keeps at most 64 HTTP diagnostic events per operation in
+`subchat_http_events`. Each event contains only the operation ID, a fixed stage
+name, an optional numeric HTTP status, and a Unix timestamp. The stage sequence
+covers Sentinel preparation, conversation preparation, follow-up branch check,
+the durable generation claim, generation HTTP status, SSE conversation candidate,
+and history receipt, final, or unknown observations. It does not store headers,
+cookies, proof values, prompts, answers, account IDs, URLs, or response bodies.
+`SubchatSubmissions.http_events(operation_id, owner=...)` reads the bounded
+events after checking ledger ownership. There is no MCP or CLI command that
+exposes these private diagnostics.
+
+A `*_request` event records a local attempt and is not evidence that the
+provider received a request. `dispatch_claimed` is committed atomically with
+the one-time generation claim; it never grants replay after a crash. A 200
+generation response or SSE candidate does not establish a saved answer.
+`history_final` is recorded only after the ledger has saved completion.

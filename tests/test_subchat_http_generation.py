@@ -75,6 +75,8 @@ class LocalChat:
         self.lost_generation = False
         self.lost_after_candidate = False
         self.fail_stage = None
+        self.poison_sentinel = False
+        self.poison_generation = False
 
     async def __aenter__(self):
         self.server = await asyncio.start_server(self.handle, '127.0.0.1', 0)
@@ -107,6 +109,8 @@ class LocalChat:
                     'proofofwork': {'required': True, 'seed': 'fixture', 'difficulty': 'fixture'},
                     'so': {'required': True, 'collector_dx': 'fixture',
                            'snapshot_dx': 'fixture'}}).encode()
+                if self.poison_sentinel:
+                    payload = (SECRET + PROOF).encode()
             elif path == '/backend-api/f/conversation/prepare':
                 assert method == 'POST' and data['client_prepare_state'] == 'sent'
                 assert data['partial_query']['extra'] == 'keep'
@@ -157,6 +161,8 @@ class LocalChat:
                 payload = ('data: non-json-progress\n\n'
                            f'data: {{"conversation_id":"{CHAT}"}}\n\n'
                            'data: [DONE]\n\n').encode()
+                if self.poison_generation:
+                    payload = ('data: {"conversation_id":"' + SECRET + PROOF + '"}\n\n').encode()
                 content_type = 'text/event-stream'
             elif path == '/backend-api/conversations/' + CHAT:
                 assert method == 'GET'
@@ -237,6 +243,26 @@ async def test_new_and_followup_use_http_only_and_history_final(tmp_path):
                            in api.requests) == 1
                 assert store.connection.execute(
                     'SELECT COUNT(*) FROM subchat_http_dispatch_claims').fetchone()[0] == 2
+                first_events = store.http_events(first.operation_id, owner=None)
+                assert [event['stage'] for event in first_events] == [
+                    'sentinel_request', 'sentinel_response', 'prepare_request',
+                    'prepare_response', 'dispatch_claimed', 'generation_request',
+                    'generation_response', 'sse_candidate', 'history_receipt', 'history_final',
+                ]
+                second_events = store.http_events(queued.operation_id, owner=None)
+                assert [event['stage'] for event in second_events] == [
+                    'sentinel_request', 'sentinel_response', 'prepare_request',
+                    'prepare_response', 'branch_request', 'branch_response',
+                    'dispatch_claimed', 'generation_request', 'generation_response',
+                    'sse_candidate', 'history_receipt', 'history_final',
+                ]
+                assert [event['status'] for event in first_events
+                        if event['stage'].endswith('_response')] == [200, 200, 200]
+                assert all(set(event) == {'operation_id', 'stage', 'status', 'timestamp'}
+                           and isinstance(event['timestamp'], float)
+                           for event in first_events + second_events)
+                assert all(event['timestamp'] <= later['timestamp'] for event, later in
+                           zip(first_events, first_events[1:], strict=False))
                 assert PROOF.encode() not in (tmp_path / 'operations.sqlite3').read_bytes()
             finally:
                 ledger.close()
@@ -264,6 +290,8 @@ async def test_stale_branch_and_lost_post_do_not_replay(tmp_path):
                            in api.requests) == 1
                 assert store.connection.execute('SELECT COUNT(*) FROM '
                     'subchat_http_dispatch_claims').fetchone()[0] == 1
+                assert [event['stage'] for event in store.http_events(
+                    queued.operation_id, owner=None)][-2:] == ['branch_response', 'branch_stale']
                 api.lost_generation = True
                 with pytest.raises(SubchatOutcomeUnknown):
                     await service.send('e' * 32, 'lost', 'Future Chat',
@@ -302,6 +330,11 @@ async def test_failed_preparation_keeps_unknown_without_claim_or_retry(tmp_path,
                 assert saved.state == 'sending' and len(api.requests) == count
                 assert store.connection.execute('SELECT COUNT(*) FROM '
                     'subchat_http_dispatch_claims').fetchone()[0] == 0
+                events = store.http_events('f' * 32, owner=None)
+                failed_stage = 'sentinel' if 'sentinel' in stage else 'prepare'
+                assert events[-1]['stage'] == failed_stage + '_failed'
+                assert events[-2]['stage'] == failed_stage + '_response'
+                assert events[-2]['status'] == 403
                 assert not any(path == '/backend-api/f/conversation' for _, path, _, _
                                in api.requests)
             finally:
@@ -327,6 +360,8 @@ async def test_lost_stream_checkpoints_candidate_but_not_receipt(tmp_path):
                 assert saved.answer is None
                 recovered = await service.recover('1' * 32, owner=None)
                 assert recovered.state == 'sending' and recovered.answer is None
+                stages = [event['stage'] for event in store.http_events('1' * 32, owner=None)]
+                assert stages[-3:] == ['sse_candidate', 'generation_failed', 'history_unknown']
                 assert sum(path == '/backend-api/f/conversation' for _, path, _, _
                            in api.requests) == 1
             finally:
@@ -351,6 +386,10 @@ async def test_generation_403_is_claimed_recorded_and_never_reposted(tmp_path):
                 saved = store.get('2' * 32, owner=None)
                 assert saved.state == 'sending'
                 assert saved.generation_http_status == 403
+                events = store.http_events('2' * 32, owner=None)
+                assert [(event['stage'], event['status']) for event in events[-3:]] == [
+                    ('generation_request', None), ('generation_response', 403),
+                    ('generation_failed', None)]
                 assert store.connection.execute('SELECT COUNT(*) FROM '
                     'subchat_http_dispatch_claims').fetchone()[0] == 1
                 posts = [path for method, path, _, _ in api.requests if method == 'POST']
@@ -363,7 +402,40 @@ async def test_generation_403_is_claimed_recorded_and_never_reposted(tmp_path):
                 repeated = await service.send('2' * 32, 'rejected prompt', 'Future Chat',
                     'Future effort', owner=None, http_selection=SELECTION)
                 assert repeated.state == 'sending' and len(api.requests) == request_count
+                assert store.http_events('2' * 32, owner=None) == events
                 assert PROOF.encode() not in (tmp_path / 'operations.sqlite3').read_bytes()
+            finally:
+                ledger.close()
+        finally:
+            await client.dispose()
+
+
+@pytest.mark.parametrize('poison_stage', ['sentinel', 'generation'])
+async def test_provider_payload_does_not_escape_diagnostic_failure(tmp_path, poison_stage):
+    from playwright.async_api import async_playwright
+
+    async with LocalChat() as api, async_playwright() as playwright:
+        api.poison_sentinel = poison_stage == 'sentinel'
+        api.poison_generation = poison_stage == 'generation'
+        client = await playwright.request.new_context()
+        try:
+            ledger, store, service = await setup(tmp_path, api, client)
+            try:
+                with pytest.raises(SubchatOutcomeUnknown) as caught:
+                    await service.send('4' * 32, 'private prompt', 'Future Chat',
+                        'Future effort', owner=None, http_selection=SELECTION)
+                chain = caught.value
+                while chain is not None:
+                    assert SECRET not in str(chain) and PROOF not in str(chain)
+                    chain = chain.__cause__
+                events = store.http_events('4' * 32, owner=None)
+                assert events[-1]['stage'] == poison_stage + '_failed'
+                assert SECRET not in json.dumps(events) and PROOF not in json.dumps(events)
+                assert 'private prompt' not in json.dumps(events)
+                request_count = len(api.requests)
+                assert (await service.send('4' * 32, 'private prompt', 'Future Chat',
+                    'Future effort', owner=None, http_selection=SELECTION)).state == 'sending'
+                assert len(api.requests) == request_count
             finally:
                 ledger.close()
         finally:
@@ -386,6 +458,36 @@ def test_handoff_parser_redacts_secrets_and_requires_exact_session():
                                      authorization=SECRET, account_id='fixture-account')
     assert PROOF not in str(caught.value) and SECRET not in str(caught.value)
     assert CATALOG_URL.startswith('https://chatgpt.com/')
+
+
+def test_http_events_are_private_bounded_and_durable(tmp_path):
+    operation = '3' * 32
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        store.prepare(operation, 'private prompt', 'model', 'effort', owner='private-owner')
+        for _index in range(70):
+            store.record_http_event(operation, 'history_unknown', owner='private-owner')
+        events = store.http_events(operation, owner='private-owner')
+        assert len(events) == 64
+        assert all(set(event) == {'operation_id', 'stage', 'status', 'timestamp'}
+                   for event in events)
+        with pytest.raises(ValueError):
+            store.http_events(operation, owner=None)
+        with pytest.raises(ValueError):
+            store.record_http_event(operation, 'private prompt', owner='private-owner')
+        rows = ledger.connection.execute('SELECT operation_id,stage,status,timestamp '
+            'FROM subchat_http_events').fetchall()
+        assert len(rows) == 64 and all(row[0] == operation and row[1] == 'history_unknown'
+                                       and row[2] is None for row in rows)
+    finally:
+        ledger.close()
+    reopened = Ledger(tmp_path)
+    try:
+        assert SubchatSubmissions(reopened.connection).http_events(
+            operation, owner='private-owner') == events
+    finally:
+        reopened.close()
 
 
 def test_cli_opt_in_handoff_reports_capability_without_browser_or_secret_output(tmp_path):
