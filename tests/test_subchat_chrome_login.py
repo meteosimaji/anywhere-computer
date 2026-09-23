@@ -1,4 +1,6 @@
 """Chrome login bootstraps HTTPX without persisting bearer or Cookie values."""
+import logging
+
 import httpx
 import pytest
 from test_subchat_http_catalog import catalog
@@ -33,7 +35,7 @@ class Context:
         return Page()
 
 
-async def test_chrome_login_gets_token_then_validates_catalog():
+async def test_chrome_login_gets_token_then_validates_catalog(caplog):
     seen = []
 
     def serve(request: httpx.Request) -> httpx.Response:
@@ -50,14 +52,19 @@ async def test_chrome_login_gets_token_then_validates_catalog():
         assert request.headers['chatgpt-account-id'] == 'account'
         return httpx.Response(200, json=catalog())
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
-        session = await chrome_http_session(Context(), client, expected_account_id='account')
+    with caplog.at_level(logging.INFO, logger='anywhere_computer.subchat_chrome_login'):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+            session = await chrome_http_session(Context(), client, expected_account_id='account')
     assert len(seen) == 2
     assert session.catalog_url == CATALOG_URL
     assert 'cookie' not in session.headers()
     assert session.user_email == 'owner@example.com'
     assert 'private-token' not in repr(session)
     assert 'private-cookie' not in repr(session)
+    assert 'Subchat HTTP auth GET status=200 elapsed_ms=' in caplog.text
+    assert 'Subchat HTTP catalog GET status=200 elapsed_ms=' in caplog.text
+    for private in ('private-token', 'private-cookie', 'owner@example.com', 'account'):
+        assert private not in caplog.text
 
 
 async def test_chrome_cookie_jar_rotates_from_auth_response():
@@ -113,17 +120,20 @@ async def test_chrome_cookie_scope_and_expiry():
         assert sent == []
 
 
-async def test_chrome_login_stops_on_denied_get():
+async def test_chrome_login_stops_on_denied_get(caplog):
     paths = []
 
     def deny(request: httpx.Request) -> httpx.Response:
         paths.append(request.url.path)
         return httpx.Response(403, json={'error': 'denied'})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(deny)) as client:
-        with pytest.raises(SubchatAccessError):
-            await chrome_http_session(Context(), client)
+    with caplog.at_level(logging.INFO, logger='anywhere_computer.subchat_chrome_login'):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(deny)) as client:
+            with pytest.raises(SubchatAccessError):
+                await chrome_http_session(Context(), client)
     assert paths == ['/api/auth/session']
+    assert 'Subchat HTTP auth GET status=403 elapsed_ms=' in caplog.text
+    assert 'private-cookie' not in caplog.text
 
 
 @pytest.mark.parametrize(('resource', 'limit', 'error'), [

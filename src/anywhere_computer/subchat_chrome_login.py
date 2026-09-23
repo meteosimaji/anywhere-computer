@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from collections.abc import Iterable, Mapping
 from http.cookiejar import Cookie
 
@@ -17,6 +19,7 @@ from .subchat_state import SubchatAccountMismatch
 CATALOG_URL = 'https://chatgpt.com/backend-api/models?language=ja'
 AUTH_URL = 'https://chatgpt.com/api/auth/session'
 GENERATION_URL = 'https://chatgpt.com/backend-api/f/conversation'
+logger = logging.getLogger(__name__)
 
 
 async def _exact_origin_only(request: httpx.Request) -> None:
@@ -76,8 +79,11 @@ async def chrome_http_session(context: BrowserContext, client: httpx.AsyncClient
                     'referer': 'https://chatgpt.com/', 'user-agent': user_agent,
                     'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors',
                     'sec-fetch-dest': 'empty'}
+    auth_started = time.perf_counter()
     async with client.stream('GET', AUTH_URL, headers=auth_headers,
                              timeout=15.0, follow_redirects=False) as response:
+        logger.info('Subchat HTTP auth GET status=%d elapsed_ms=%d',
+                    response.status_code, int((time.perf_counter() - auth_started) * 1000))
         if response.status_code in (401, 403):
             raise SubchatAccessError(response.status_code)
         if response.status_code != 200:
@@ -106,8 +112,11 @@ async def chrome_http_session(context: BrowserContext, client: httpx.AsyncClient
         })
     if expected_account_id is not None and session.account_id != expected_account_id:
         raise SubchatAccountMismatch('Chrome login selected another Chat account')
+    catalog_started = time.perf_counter()
     async with client.stream('GET', CATALOG_URL, headers=session.headers(),
                              timeout=15.0, follow_redirects=False) as catalog:
+        logger.info('Subchat HTTP catalog GET status=%d elapsed_ms=%d',
+                    catalog.status_code, int((time.perf_counter() - catalog_started) * 1000))
         if catalog.status_code in (401, 403):
             raise SubchatAccessError(catalog.status_code)
         if catalog.status_code != 200:
