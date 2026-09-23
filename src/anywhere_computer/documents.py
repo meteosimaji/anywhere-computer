@@ -150,7 +150,8 @@ class OfficePackage:
 
 
 def text_runs(element: ET.Element, namespace: str, budget: ExtractionBudget, *,
-              exclude_nested_paragraphs: bool = False) -> str:
+              exclude_nested_paragraphs: bool = False,
+              exclude_phonetic_runs: bool = False) -> str:
     pieces = []
     pending = [element]
     while pending:
@@ -158,6 +159,8 @@ def text_runs(element: ET.Element, namespace: str, budget: ExtractionBudget, *,
         budget.visit()
         if (exclude_nested_paragraphs and child is not element
                 and child.tag == namespace + "p"):
+            continue
+        if exclude_phonetic_runs and child.tag == namespace + "rPh":
             continue
         if child.tag == namespace + "t":
             piece = child.text or ""
@@ -237,7 +240,7 @@ def read_document(args: ReadDocument) -> dict[str, JsonValue]:
             for relation_kind, target in relations.values():
                 if relation_kind.endswith("/sharedStrings"):
                     shared = [
-                        text_runs(item, SHEET, budget)
+                        text_runs(item, SHEET, budget, exclude_phonetic_runs=True)
                         for item in package.xml(target).findall(SHEET + "si")
                     ]
             selected = None
@@ -268,7 +271,8 @@ def read_document(args: ReadDocument) -> dict[str, JsonValue]:
                                 raise ValueError("Invalid shared string reference")
                             value = shared[index]
                         elif cell_type == "inlineStr":
-                            value = text_runs(cell, SHEET, budget)
+                            value = text_runs(cell, SHEET, budget,
+                                              exclude_phonetic_runs=True)
                         budget.append(entries,
                             {
                                 "sheet": selected.get("name", ""),

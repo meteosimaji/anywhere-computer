@@ -17,6 +17,7 @@ from . import __version__, codex_context, codex_plugins, skills_context
 from .audio_capture import AudioCapture, AudioCaptureUnknown, capture_audio
 from .audio_status import inspect_audio, verified_audio_helper
 from .authorization import GrantIdentity, current_grant_read_only
+from .capability_contract import CAPABILITY_TOOLS
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
@@ -1189,14 +1190,8 @@ class Engine:
                 "os_permission": "not_checked",
                 "acceptance": "not_verified",
             }
-        implementation_tools = {
-            "skills": ("skills_list", "skills_read"),
-            "codex_skills": ("codex_skills_list", "codex_skill_read"),
-            "audio_capture": ("audio_status", "audio_capture"),
-            "gui_native": ("gui_native_windows", "gui_native_observe"),
-            "gui_mcp": ("gui_observe",),
-        }
-        for name, required_tools in implementation_tools.items():
+        for name in ("skills", "codex_skills", "audio_capture", "gui_native", "gui_mcp"):
+            required_tools = CAPABILITY_TOOLS[name]
             capability_diagnostics[name] = {
                 "running_implementation": (
                     "present" if all(tool in self.tools for tool in required_tools) else "absent"

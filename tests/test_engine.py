@@ -71,6 +71,22 @@ def test_status_separates_capability_evidence_without_claiming_acceptance(tmp_pa
         asyncio.run(engine.close())
 
 
+@pytest.mark.parametrize("capability,missing_tool", [
+    ("gui_native", "gui_native_close"),
+    ("gui_mcp", "gui_key"),
+])
+def test_status_does_not_claim_partial_gui_implementation(
+    tmp_path, capability, missing_tool,
+):
+    engine = Engine(tmp_path / "state")
+    try:
+        engine.tools.pop(missing_tool)
+        diagnostics = engine.status()["capability_diagnostics"]
+        assert diagnostics[capability]["running_implementation"] == "absent"
+    finally:
+        asyncio.run(engine.close())
+
+
 async def test_status_lists_only_current_owners_update_blockers(engine):
     current = "a" * 32
     other = "b" * 32
