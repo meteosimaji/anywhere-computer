@@ -511,6 +511,7 @@ async def _call_tool(
     session, thread_id = context.session, context.thread_id
     loop = asyncio.get_running_loop()
     deadline = loop.time() + STARTUP_TIMEOUT
+    missing_tool_since: float | None = None
     while True:
         servers, remaining_cursor, _ = await asyncio.wait_for(
             _start_and_catalog(
@@ -519,7 +520,20 @@ async def _call_tool(
             ), timeout=max(0.001, deadline - loop.time()),
         )
         selected_server = next((row for row in servers if row.get("server") == server), None)
-        if selected_server is None or selected_server.get("availability") != "runtime_not_ready":
+        starting = (selected_server is not None and
+                    selected_server.get("availability") == "runtime_not_ready")
+        missing_connected_tool = (
+            selected_server is not None and
+            selected_server.get("runtime_status") == "connected" and
+            selected_server.get("availability") == "unverified" and
+            not selected_server.get("tools") and remaining_cursor is None
+        )
+        now = loop.time()
+        if missing_connected_tool and missing_tool_since is None:
+            missing_tool_since = now
+        if (not starting and not missing_connected_tool) or now >= deadline or (
+                missing_connected_tool and missing_tool_since is not None and
+                now - missing_tool_since >= 5):
             break
         # Observe startup in this process only. Never replay a dispatched tool or
         # retry a failed catalog RPC, which can leave an unread response behind.
@@ -538,6 +552,12 @@ async def _call_tool(
                 if selected is not None:
                     raise ValueError("Plugin catalog contains duplicate tool names")
                 selected = candidate
+    if (missing_connected_tool and selected_server is not None and
+            selected_server.get("received_tool_count") == 0):
+        raise PluginPreflightError(
+            "runtime_not_ready",
+            "The connected plugin has not published its tools; inspect this server again",
+        )
     if selected_server is not None and selected_server.get("availability") in {
         "authentication_required", "runtime_not_ready", "unavailable",
     }:
