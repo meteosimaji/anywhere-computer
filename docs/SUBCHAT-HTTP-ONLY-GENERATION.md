@@ -46,9 +46,9 @@ Preparation failures leave the operation `sending` because remote effects are no
 known. The same operation is never prepared or posted automatically again. A lost
 generation response likewise remains uncertain; use `recover` with the original
 operation ID. A new Chat without a conversation candidate may require manual
-reconciliation. A handoff can expire, and long-term validity or independent login
-has not been established. Localhost tests verify the transport and ledger contract;
-they are not provider acceptance tests.
+reconciliation. The expiry time and independent login have not been established.
+Localhost tests verify the transport and ledger contract; they are not provider
+acceptance tests.
 
 On 2026-09-23, a separate live Plugin acceptance run used a successful Chrome
 generation as its explicit in-memory handoff, closed Chrome, selected the model
@@ -57,3 +57,20 @@ Each dispatched once and reached `completed` through independent HTTP history;
 the follow-up remained in the same conversation. The trial used a temporary
 ledger and did not save or print header or body values. This confirms acceptance
 for that observed session and request shape; handoff expiry remains unmeasured.
+
+A separate 2026-09-23 lifetime trial waited 1,800 seconds after Chrome closed,
+then used the previously observed handoff for HTTPX Sentinel preparation,
+conversation preparation, generation SSE, and final history recovery. The new
+Chat and follow-up reached `completed` with saved final answers. This demonstrates
+that those exact observed values worked for at least 1,800 seconds on that session;
+their expiry time is still unmeasured. That trial preceded this change to a single
+HTTPX client, so it does not establish live provider acceptance of the unified
+transport.
+
+The frontend's current JavaScript includes a cookie-backed `/api/auth/session`
+refresh flow that validates the returned access-token account and user before
+updating browser auth state. One HTTPX request using the observed session Cookie,
+`oai-did`, and target-path/route headers received 403 with no `Set-Cookie` and no
+`accessToken` in the response. A successful browser refresh request was not
+observed, so the HTTPX rejection cause and whether the endpoint renews a standalone
+HTTP session remain unresolved. Credential refresh is not implemented.
