@@ -1,6 +1,7 @@
 import asyncio
 import builtins
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -42,7 +43,8 @@ def test_inspect_then_select_pins_only_verified_account_without_send(tmp_path, m
         "chrome_source_profile": str(source), "expected_account_id": "account-a",
         "enable_background_send": False,
     }
-    assert stat.S_IMODE(selection.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(selection.stat().st_mode) == 0o600
     assert marker.read_text() == "source data"
     subchat_setup.main(["select", str(source), "--expect-account-id", "account-a",
                         "--enable-background-send"])
