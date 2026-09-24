@@ -72,18 +72,12 @@ the next one. If its outcome cannot be established from conversation history,
 the original conversation stays blocked against automated sends. Start a new
 Chat instead of resending the uncertain request. This prevents duplicate or
 out-of-order turns when the provider's receipt is unavailable.
-In live macOS runs, a new Chat and follow-up to the same conversation reached
-`completed` with exact saved answers, and a separate GPT-6 Pro run measured
-HTTPX `200 text/event-stream` for both generation POSTs. The installed alpha24
-Codex Plugin also created a Chat and recovered its answer, then sent and
-recovered follow-ups in that same conversation. During one follow-up, 41
-foreground-app samples all remained Prime Video. A separate 10 Hz window-list
-check over 30 seconds found that none of the dedicated Chrome windows were
-onscreen in its samples. A temporary Dock icon may appear during execution.
-These observations do not exclude shorter visible intervals or guarantee the
-same behavior on every macOS/Chrome combination. Long responses, provider
-changes and other model selections still need their own checks. Do not resend
-an operation whose outcome is uncertain; recover it by operation ID.
+The installed Codex Plugin has passed live new-Chat, same-conversation
+follow-up and saved-answer recovery checks on macOS. In sampled runs the
+dedicated Chrome windows stayed offscreen and another app retained focus; a
+temporary Dock icon may appear during execution. This does not guarantee the
+same behavior on every macOS/Chrome combination or after provider changes.
+Do not resend an operation whose outcome is uncertain; recover it by operation ID.
 
 In Codex, a natural-language request to use a Subchat still needs explicit tool
 discovery and selection. Inspect `subchat_capabilities` and `subchat_catalog`,
@@ -238,11 +232,23 @@ it.
 `--http-read` supports authenticated, saved-answer recovery and model reads
 through an observed browser session. It does not independently log in or send.
 An HTTP rejection does not trigger automatic browser fallback or generation
-replay. The [HTTP-only generation guide](SUBCHAT-HTTP-ONLY-GENERATION.md)
-describes a separate opt-in mode using a complete, observed request handoff.
-That mode has explicit account matching, does not acquire generation protection
-values automatically and does not renew an expired login. Start read-only and
-check the reported capabilities before enabling generation.
+replay. The separate opt-in HTTP-only generation mode has not passed live
+generation acceptance. It requires a complete observed request handoff, does
+not acquire generation protection values automatically and does not renew an
+expired login. Start read-only and check the reported capabilities before
+enabling generation.
+
+For this opt-in CLI mode, supply `--http-only --state-dir PATH` and exactly one
+session source: `--http-session-stdin`, `--chrome-login-profile PATH`, or (on
+macOS) `--chrome-login-source-profile PATH`. Sending also requires
+`--http-generation-stdin`; a Chrome login source additionally requires
+`--expected-account-id ID`. The generation handoff has four fields:
+`headers`, `sentinel_p`, `prepare_template` and `generation_template`. The
+controller checks the selected account against the authenticated read session
+before dispatch. Pass observed session and handoff data through a trusted
+anonymous stdin pipe. Keep credentials and protection values out of command
+arguments, files, logs, MCP calls and shell history. The controller does not
+refresh those values or retry an uncertain send.
 
 Personal ordinary-Chat HTTP access must stay within the permission and account
 scope granted to the owner. The experimental transport is not an official API;
