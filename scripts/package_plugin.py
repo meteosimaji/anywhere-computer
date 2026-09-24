@@ -51,6 +51,9 @@ def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
         if metadata["Name"] != "anywhere-computer":
             raise ValueError("Wheel package name does not match this plugin")
         version = plugin_version(metadata["Version"])
+    for stale_wheel in bundled.glob("anywhere_computer-*.whl"):
+        if stale_wheel != wheel:
+            stale_wheel.unlink()
     manifest_path = plugin / ".codex-plugin/plugin.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["version"] = version
