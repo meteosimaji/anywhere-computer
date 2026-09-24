@@ -60,17 +60,35 @@ def test_distinct_controllers_cannot_send_to_one_conversation_concurrently(tmp_p
         second.prepare('b' * 32, 'second', 'model', 'effort', owner=None,
                        conversation_id=conversation)
         first.begin_send('a' * 32, owner=None)
-        with pytest.raises(SubchatConcurrentSend, match='another active send'):
+        with pytest.raises(SubchatConcurrentSend, match='another active send') as blocked:
             second.begin_send('b' * 32, owner=None)
+        assert blocked.value.blocking_operation_id == 'a' * 32
         assert second.get('b' * 32, owner=None).state == 'prepared'
         first.submitted('a' * 32, conversation, 'first-user', owner=None)
-        with pytest.raises(SubchatConcurrentSend, match='another active send'):
+        with pytest.raises(SubchatConcurrentSend, match='another active send') as blocked:
             second.begin_send('b' * 32, owner=None)
+        assert blocked.value.blocking_operation_id == 'a' * 32
         first.complete('a' * 32, 'first-answer', 'done', owner=None)
         assert second.begin_send('b' * 32, owner=None).state == 'sending'
     finally:
         second_ledger.close()
         first_ledger.close()
+
+
+def test_concurrent_send_does_not_disclose_another_owner_operation(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    try:
+        store.prepare('a' * 32, 'first', 'model', 'effort', owner='first-owner',
+                      conversation_id='shared')
+        store.prepare('b' * 32, 'second', 'model', 'effort', owner='second-owner',
+                      conversation_id='shared')
+        store.begin_send('a' * 32, owner='first-owner')
+        with pytest.raises(SubchatConcurrentSend) as blocked:
+            store.begin_send('b' * 32, owner='second-owner')
+        assert blocked.value.blocking_operation_id is None
+    finally:
+        ledger.close()
 
 
 def test_submission_owner_arguments_and_stage_are_enforced(tmp_path):

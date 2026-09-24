@@ -66,8 +66,12 @@ dispatch and sent once through HTTPX; the browser then renders that response.
 `generation_transport=browser_prepared_httpx` and `browser_required=true`.
 Codex and Claude can use separate temporary browser snapshots while sharing a
 ledger. The ledger serializes distinct sends to the same conversation before
-dispatch; a competing send returns `concurrent_send` and is not sent. Recover
-the active operation before starting the next one.
+dispatch; a competing send returns `concurrent_send` with
+`blocking_operation_id` and is not sent. Recover that operation before starting
+the next one. If its outcome cannot be established from conversation history,
+the original conversation stays blocked against automated sends. Start a new
+Chat instead of resending the uncertain request. This prevents duplicate or
+out-of-order turns when the provider's receipt is unavailable.
 In a 2026-09-24 live macOS run observed at 30 frames per second, a new Chat and
 follow-up to that same conversation reached `completed` with the exact saved
 answers `背景送信一回目成功` and `背景送信二回目成功`. Chrome did not come to the foreground.

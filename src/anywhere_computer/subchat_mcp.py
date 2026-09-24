@@ -709,11 +709,15 @@ def session(service: Subchats, *,
                                'Check the ID and ledger path, then use subchat_list.',
                          data={'error_code': 'unknown_operation', 'dispatched': False,
                                'automatic_retry': False})
-        except SubchatConcurrentSend:
+        except SubchatConcurrentSend as error:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Another Subchat send is active in this conversation. '
-                               'Recover that operation before preparing this one.',
+                               'Recover it from the owning account before preparing this one. '
+                               'If its outcome remains unknown, start a new Chat '
+                               'without resending the uncertain request.',
                          data={'error_code': 'concurrent_send', 'dispatched': False,
+                               **({'blocking_operation_id': error.blocking_operation_id}
+                                  if error.blocking_operation_id is not None else {}),
                                'automatic_retry': False})
         except ValidationError as error:
             return Reply(operation_id=request.operation_id, state='failed',

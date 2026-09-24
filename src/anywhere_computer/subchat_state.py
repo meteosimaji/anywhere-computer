@@ -31,6 +31,10 @@ class SubchatConcurrentSend(ValueError):
 
     code = 'concurrent_send'
 
+    def __init__(self, blocking_operation_id: str | None) -> None:
+        self.blocking_operation_id = blocking_operation_id
+        super().__init__('Conversation has another active send; recover it first')
+
 
 class SubchatSelectionError(ValueError):
     """Safe, field-specific local catalog validation failure before dispatch."""
@@ -388,15 +392,15 @@ class SubchatSubmissions:
                 # ledger but not their in-memory browser locks. Serialize
                 # distinct sends to one Chat before either may dispatch.
                 peers = self.connection.execute(
-                    'SELECT body FROM subchat_submissions WHERE operation_id != ?',
+                    'SELECT owner, body FROM subchat_submissions WHERE operation_id != ?',
                     (old.operation_id,),
                 )
                 for peer_row in peers:
-                    peer = SubchatSubmission.model_validate_json(peer_row[0])
+                    peer = SubchatSubmission.model_validate_json(peer_row[1])
                     if (peer.conversation_id == new.conversation_id
                             and peer.state in {'sending', 'submitted'}):
                         raise SubchatConcurrentSend(
-                            'Conversation has another active send; recover it first')
+                            peer.operation_id if peer_row[0] == owner else None)
             if new.user_message_id is not None:
                 peers = self.connection.execute(
                     'SELECT body FROM subchat_submissions WHERE owner IS ? AND operation_id != ?',

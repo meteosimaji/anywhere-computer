@@ -106,6 +106,7 @@ async def test_competing_send_discards_prepared_page_before_dispatch(tmp_path):
         assert reply.state == 'failed' and reply.data is not None
         assert reply.data['error_code'] == SubchatConcurrentSend.code
         assert reply.data['dispatched'] is False
+        assert reply.data['blocking_operation_id'] == 'a' * 32
         assert provider.prepares == ['a' * 32, 'b' * 32]
         assert provider.sends == provider.prepares[:1]
         assert provider.discarded == ['b' * 32]
