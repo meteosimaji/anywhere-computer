@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a21` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.21` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a22` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.22` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -157,6 +157,19 @@ attachments, plugin selection, parallel-work evidence and remaining limitations.
 Do not infer browser-free generation, native steering, child permission isolation
 or automatic replay from the word "subchat". A Mac path is useful only when the
 selected device and connected tools can access it; it is not an attachment or a grant.
+
+Isolated browser sessions now expose `browser_click` and `browser_fill` in
+addition to opening, navigating, observing and closing an owned tab. Actions
+require a single visible target and return an unknown outcome if the result
+cannot be observed; inspect the tab before another action. Existing Chrome
+profiles and tabs are not part of this isolated-browser interface.
+
+For explicit local agent-to-agent text delivery, `anywhere-peer --help` describes
+owner provisioning and its separate MCP stdio server. Give each local peer its
+own mode-0600 credential file and bind it to the same intended owner, account
+and project. The recipient must be connected to receive a new message. This
+mailbox records delivery and acknowledgement; it does not start a model turn
+or insert text into a ChatGPT, Codex or Claude conversation.
 
 Use personal Chat HTTP access only within the permission and account scope granted
 to you. Misuse, including extracting Chat output at scale for model distillation

@@ -3,6 +3,21 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a22 / Plugin 0.2.0-alpha.22 — unpublished candidate (2026-09-24)
+
+- Add owner-bound click and fill operations to isolated browser sessions. A
+  post-action observation failure returns an unknown outcome instead of
+  encouraging a duplicate action. Existing-profile browser control remains
+  outside this slice.
+- Add an explicitly provisioned local peer MCP mailbox for Codex and Claude
+  Code style clients, with scoped credentials, per-session presence, bounded
+  delivery and recovery. It does not inject messages into model conversations
+  or start model turns; parent Chat and Subchat integration remains open.
+- Verify a21 in a live installed Codex Plugin and an ordinary ChatGPT Chat:
+  both paths created a Subchat, recovered an exact final answer, and matched
+  the saved child conversation. The common engine and ChatGPT HTTP service
+  were updated to a21; this does not establish browser-free generation.
+
 ## 0.2.0a21 / Plugin 0.2.0-alpha.21 — unpublished candidate (2026-09-24)
 
 - Bind explicit HTTP generation to the selected account with an authentication

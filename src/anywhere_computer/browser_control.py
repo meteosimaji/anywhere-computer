@@ -10,7 +10,7 @@ from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
-from .models import BrowserNavigate, BrowserSession
+from .models import BrowserClick, BrowserFill, BrowserNavigate, BrowserSession
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser, BrowserContext, Page, Playwright
@@ -18,6 +18,10 @@ if TYPE_CHECKING:
 
 class BrowserNavigationUnknown(Exception):
     """Navigation was attempted but its resulting page could not be confirmed."""
+
+
+class BrowserActionUnknown(Exception):
+    """A page action may have run, but its outcome could not be confirmed."""
 
 
 @dataclass
@@ -100,6 +104,57 @@ class BrowserControl:
         async with entry.lock:
             self._entry(args, owner)
             return await self._snapshot(entry)
+
+    async def _action(self, args: BrowserClick, *, owner: str | None,
+                      value: str | None = None) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            # A retained element handle pins the element selected by the preflight.
+            # A locator would resolve the selector again after the checks below.
+            try:
+                target = entry.page.locator("css=" + args.selector)
+                if await target.count() != 1:
+                    raise ValueError("Browser selector must match exactly one element")
+                element = await target.element_handle()
+                if (element is None or not await element.is_visible()
+                        or not await element.is_enabled()):
+                    raise ValueError("Browser target is not visible and enabled")
+                if value is not None:
+                    editable = await element.evaluate("""el => el.isContentEditable ||
+                        (el instanceof HTMLTextAreaElement && !el.readOnly) ||
+                        (el instanceof HTMLInputElement && !el.readOnly &&
+                         ['text', 'search', 'email', 'number', 'password', 'tel',
+                          'url'].includes(el.type))
+                    """)
+                    if not editable:
+                        raise ValueError("Browser target is not editable")
+            except ValueError:
+                raise
+            except Exception as error:
+                raise ValueError("Browser target could not be resolved") from error
+            try:
+                if value is None:
+                    await element.click(timeout=10000)
+                else:
+                    await element.fill(value, timeout=10000)
+                snapshot = await self._snapshot(entry)
+                if value is not None:
+                    observed_value = await element.evaluate(
+                        "el => el.isContentEditable ? el.innerText : el.value"
+                    )
+                    snapshot["value_verified"] = observed_value == value
+                return snapshot
+            except Exception as error:
+                raise BrowserActionUnknown(
+                    "Browser action outcome unconfirmed; observe the same tab before another action"
+                ) from error
+
+    async def click(self, args: BrowserClick, *, owner: str | None) -> dict[str, JsonValue]:
+        return await self._action(args, owner=owner)
+
+    async def fill(self, args: BrowserFill, *, owner: str | None) -> dict[str, JsonValue]:
+        return await self._action(args, owner=owner, value=args.value)
 
     async def _snapshot(self, entry: _Entry) -> dict[str, JsonValue]:
         title = await entry.page.title()

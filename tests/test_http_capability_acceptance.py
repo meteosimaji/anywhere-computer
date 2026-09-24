@@ -98,7 +98,10 @@ for line in sys.stdin:
     port = await adapter.start()
     async def browser_fixture(reader, writer):
         await reader.readuntil(b"\r\n\r\n")
-        body = b"<html><head><title>Browser fixture</title></head><body>Ready</body></html>"
+        body = (b"<html><head><title>Browser fixture</title></head><body>Ready"
+                b"<input id='entry' oninput=\"document.querySelector('#result').textContent"
+                b"=this.value\"><button id='go' onclick=\"document.querySelector('#result')"
+                b".textContent+=' clicked'\">Go</button><p id='result'></p></body></html>")
         writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
                      + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
                      + body)
@@ -181,6 +184,12 @@ for line in sys.stdin:
             assert navigated["http_status"] == 200
             assert navigated["title"] == "Browser fixture"
             assert (await call("browser_observe", browser_ids))["tab_id"] == browser["tab_id"]
+            filled = await call("browser_fill", {**browser_ids, "selector": "#entry",
+                                                 "value": "日本語 ✅"})
+            assert "日本語 ✅" in filled["text"]
+            assert filled["value_verified"] is True
+            clicked = await call("browser_click", {**browser_ids, "selector": "#go"})
+            assert "日本語 ✅ clicked" in clicked["text"]
             assert (await call("browser_close", browser_ids))["state"] == "closed"
             audio = await call("audio_status")
             assert audio["state"] in {"available", "unavailable", "unsupported"}

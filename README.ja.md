@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a21` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.21` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a22` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.22` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -72,6 +72,17 @@ macOSでは`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx`を選ぶ�
 使う場合は`ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID`で対象を固定してください。
 対応する通信経路・操作・検証結果・未対応事項は、上のsubchatガイドを正本とします。
 Macのパスを書くだけでアクセス権が増えるわけではなく、選択したPCと接続ツールの権限が必要です。
+
+隔離ブラウザには、所有するタブで一意の可視要素を対象にする`browser_click`と
+`browser_fill`もあります。操作後の確認に失敗した場合は結果不明を返すので、
+同じ操作を繰り返す前にタブを観測してください。既存Chromeのプロファイルや
+タブへの接続は、この隔離ブラウザ機能には含まれません。
+
+ローカルのエージェント同士で明示的に文章を送る`anywhere-peer` MCPもあります。
+`anywhere-peer --help`に所有者による登録と起動方法を示します。各peerの資格情報は
+権限0600の別ファイルで持ち、同じ所有者・アカウント・プロジェクトに限定します。
+送信先が接続している必要があります。配送と受領を記録しますが、モデルのターンを
+開始したり、ChatGPT・Codex・Claudeの会話本文へ自動挿入したりはしません。
 
 通常ChatへのHTTPアクセスは、本人に認められたアカウントと利用範囲でのみ使ってください。
 モデル蒸留を目的とする大量取得や第三者へのアクセス販売などの不正利用は禁止です。

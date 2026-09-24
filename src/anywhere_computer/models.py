@@ -261,6 +261,14 @@ class BrowserNavigate(BrowserSession):
     url: str = Field(min_length=1, max_length=4096)
 
 
+class BrowserClick(BrowserSession):
+    selector: str = Field(min_length=1, max_length=1024)
+
+
+class BrowserFill(BrowserClick):
+    value: str = Field(max_length=100000)
+
+
 class SessionInput(SessionId):
     text: str = Field(max_length=100000)
     wait_ms: int = Field(default=0, ge=0, le=30000)

@@ -8,7 +8,14 @@ import pytest
 from anywhere_computer import engine as engine_module
 from anywhere_computer.browser_control import BrowserControl
 from anywhere_computer.engine import Engine
-from anywhere_computer.models import BrowserNavigate, BrowserSession, Reply, Request
+from anywhere_computer.models import (
+    BrowserClick,
+    BrowserFill,
+    BrowserNavigate,
+    BrowserSession,
+    Reply,
+    Request,
+)
 
 
 @pytest.fixture
@@ -19,7 +26,10 @@ async def local_page():
                        if line.lower().startswith(b"cookie:")), b"")
         is_cookie_page = request.startswith(b"GET /cookie ")
         body = (b"<html><head><title>Local fixture</title></head><body>"
-                b"<p>Browser verified 42</p><p>" + cookie + b"</p></body></html>")
+                b"<p>Browser verified 42</p><p>" + cookie
+                + b"</p><input id='entry' oninput=\"document.querySelector('#result').textContent"
+                b"=this.value\"><button id='go' onclick=\"document.querySelector('#result')"
+                b".textContent+=' clicked'\">Go</button><p id='result'></p></body></html>")
         headers = (b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
                    + (b"Set-Cookie: isolated=owner-a; Path=/\r\n" if is_cookie_page else b""))
         writer.write(headers
@@ -113,6 +123,25 @@ async def test_engine_browser_tools_are_owned_and_block_update(tmp_path, local_p
         moved = await call("browser_navigate", {**ids, "url": local_page}, "owner-a")
         assert moved.state == "completed", moved.error
         assert moved.data["url"] == local_page
+        filled = await call("browser_fill", {**ids, "selector": "#entry",
+                                             "value": "日本語 ✅"}, "owner-a")
+        assert filled.state == "completed", filled.error
+        assert "日本語 ✅" in filled.data["text"]
+        clicked = await call("browser_click", {**ids, "selector": "#go"}, "owner-a")
+        assert clicked.state == "completed", clicked.error
+        assert "日本語 ✅ clicked" in clicked.data["text"]
+        async def lost_snapshot(_entry):
+            raise RuntimeError("observation lost after click")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(engine.browser, "_snapshot", lost_snapshot)
+            uncertain = await call("browser_click", {**ids, "selector": "#go"}, "owner-a")
+        assert uncertain.state == "unknown"
+        assert uncertain.data["error_code"] == "browser_action_outcome_unknown"
+        observed = await call("browser_observe", ids, "owner-a")
+        assert observed.state == "completed"
+        assert "日本語 ✅ clicked clicked" in observed.data["text"]
+        assert "clicked clicked clicked" not in observed.data["text"]
         closed = await call("browser_close", ids, "owner-a")
         assert closed.state == "completed"
         assert engine.status(owner="owner-a")["active_resources"]["browser_sessions"] == 0
@@ -137,5 +166,31 @@ async def test_browser_sessions_do_not_share_cookies(local_page):
                                              owner="owner-a")
         assert "isolated=owner-a" in first_page["text"]
         assert "isolated=owner-a" not in second_page["text"]
+    finally:
+        await control.close()
+
+
+async def test_browser_click_fill_exact_target_owner_and_preflight(local_page):
+    pytest.importorskip("playwright.async_api")
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="owner-a")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        await control.navigate(BrowserNavigate(**ids, url=local_page), owner="owner-a")
+        fill = BrowserFill(**ids, selector="#entry", value="日本語 ✅")
+        with pytest.raises(ValueError, match="unavailable"):
+            await control.fill(fill, owner="owner-b")
+        with pytest.raises(ValueError, match="exactly one"):
+            await control.click(BrowserClick(**ids, selector="p"), owner="owner-a")
+        with pytest.raises(ValueError, match="editable"):
+            await control.fill(BrowserFill(**ids, selector="#go", value="no"), owner="owner-a")
+        filled = await control.fill(fill, owner="owner-a")
+        assert "日本語 ✅" in filled["text"]
+        assert filled["value_verified"] is True
+        clicked = await control.click(BrowserClick(**ids, selector="#go"), owner="owner-a")
+        assert "日本語 ✅ clicked" in clicked["text"]
+        await control.stop(BrowserSession(**ids), owner="owner-a")
+        with pytest.raises(ValueError, match="unavailable"):
+            await control.click(BrowserClick(**ids, selector="#go"), owner="owner-a")
     finally:
         await control.close()

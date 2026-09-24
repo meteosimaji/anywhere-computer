@@ -17,7 +17,7 @@ from . import __version__, codex_context, codex_plugins, skills_context
 from .audio_capture import AudioCapture, AudioCaptureUnknown, capture_audio
 from .audio_status import inspect_audio, verified_audio_helper
 from .authorization import GrantIdentity, current_grant_read_only
-from .browser_control import BrowserControl, BrowserNavigationUnknown
+from .browser_control import BrowserActionUnknown, BrowserControl, BrowserNavigationUnknown
 from .capability_contract import CAPABILITY_TOOLS
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
@@ -31,6 +31,8 @@ from .mcp_results import normalize_tool_result
 from .models import (
     BeginDownload,
     BeginUpload,
+    BrowserClick,
+    BrowserFill,
     BrowserNavigate,
     BrowserSession,
     CodexPluginCall,
@@ -290,6 +292,12 @@ class Engine:
         async def browser_observe(args: BrowserSession) -> Result:
             return await self.browser.observe(args, owner=self._plugin_owner.get())
 
+        async def browser_click(args: BrowserClick) -> Result:
+            return await self.browser.click(args, owner=self._plugin_owner.get())
+
+        async def browser_fill(args: BrowserFill) -> Result:
+            return await self.browser.fill(args, owner=self._plugin_owner.get())
+
         async def browser_close(args: BrowserSession) -> Result:
             return await self.browser.stop(args, owner=self._plugin_owner.get())
 
@@ -303,6 +311,14 @@ class Engine:
         self.register("browser_observe", "Observe the exact owned tab without navigating. "
                       "Returns URL, title and bounded visible text.", BrowserSession,
                       browser_observe, read_only=True, open_world=True)
+        self.register("browser_click", "Click one visible, enabled element matching an exact "
+                      "CSS selector in the owned tab. May have web side effects; inspect an "
+                      "unknown outcome before another action.", BrowserClick, browser_click,
+                      destructive=True, open_world=True)
+        self.register("browser_fill", "Replace the value of one visible, enabled editable element "
+                      "matching an exact CSS selector in the owned tab. May have web side "
+                      "effects; inspect an unknown outcome before another action.", BrowserFill,
+                      browser_fill, destructive=True, open_world=True)
         self.register("browser_close", "Close the exact owned isolated browser session.",
                       BrowserSession, browser_close)
 
@@ -1500,6 +1516,14 @@ class Engine:
                           "execution_state": "unknown", "dispatched": None,
                           "next_action": "Observe the same browser tab and inspect this operation "
                                          "before navigating again."},
+                )
+            except BrowserActionUnknown as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state="unknown", error=str(error),
+                    data={"error_code": "browser_action_outcome_unknown",
+                          "execution_state": "unknown", "dispatched": None,
+                          "next_action": "Observe the same browser tab and inspect this operation "
+                                         "before another action."},
                 )
             except DirectMCPOutcomeUnknown as error:
                 reply = Reply(
