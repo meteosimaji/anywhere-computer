@@ -75,6 +75,31 @@ def test_plugin_source_profile_is_explicit_and_browser_send_stays_dedicated(
     assert observed['options'] == {'mcp': True, 'http_read': True, 'minimized': True}
 
 
+def test_plugin_reads_persistent_local_chrome_selection(tmp_path, monkeypatch):
+    profile, state = tmp_path / 'login', tmp_path / 'subchat/ledger'
+    source = tmp_path / 'Chrome/Default'
+    state.parent.mkdir()
+    (state.parent / 'login-selection.json').write_text(json.dumps({
+        'chrome_source_profile': str(source),
+    }))
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE', raising=False)
+    monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
+    observed = {}
+
+    async def fake_run(_browser_profile, _state_dir, **options):
+        observed.update(options)
+
+    monkeypatch.setattr(subchat_plugin, 'run', fake_run)
+    subchat_plugin.main()
+    assert observed['chrome_login_source_profile'] == source
+    assert observed['chrome_login_profile'] is None
+    (state.parent / 'login-selection.json').write_text(json.dumps({
+        'chrome_source_profile': 'relative/Default',
+    }))
+    with pytest.raises(ValueError, match='absolute path'):
+        subchat_plugin.main()
+
+
 def test_plugin_browser_send_opt_in_reuses_login_with_minimized_window(tmp_path, monkeypatch):
     login, state = tmp_path / 'login', tmp_path / 'ledger'
     browser = tmp_path / 'browser-send'

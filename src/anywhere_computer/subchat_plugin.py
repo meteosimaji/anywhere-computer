@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 from pathlib import Path
 
@@ -36,16 +37,40 @@ def browser_send_profile(profile: Path, state: Path) -> Path:
     return browser
 
 
+def selected_chrome_source(state: Path) -> Path | None:
+    """Read an explicit local account selection; never infer a Chrome profile."""
+    configured = os.environ.get("ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE")
+    if configured is not None:
+        source = _configured_path("ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE", state)
+    else:
+        selection = state.parent / "login-selection.json"
+        if not selection.exists():
+            return None
+        if selection.stat().st_size > 4096:
+            raise ValueError("Subchat login selection exceeds the size limit")
+        try:
+            record = json.loads(selection.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError("Invalid Subchat login selection") from error
+        if (not isinstance(record, dict)
+                or set(record) != {"chrome_source_profile"}
+                or not isinstance(record["chrome_source_profile"], str)
+                or not record["chrome_source_profile"]):
+            raise ValueError("Subchat login selection requires chrome_source_profile")
+        source = Path(record["chrome_source_profile"]).expanduser()
+        if not source.is_absolute():
+            raise ValueError("Subchat Chrome source profile must be an absolute path")
+        source = source.resolve()
+    if source == state or source in state.parents or state in source.parents:
+        raise ValueError("Subchat Chrome source profile and state must be separate")
+    return source
+
+
 def main() -> None:
     profile, state = plugin_paths()
     transport = os.environ.get("ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT", "http-read-only")
     if transport == "http-read-only":
-        source_value = os.environ.get("ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE")
-        source = (_configured_path("ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE", profile)
-                  if source_value is not None else None)
-        if source is not None and (source == state or source in state.parents
-                                   or state in source.parents):
-            raise ValueError("Subchat Chrome source profile and state must be separate")
+        source = selected_chrome_source(state)
         asyncio.run(run(None, state, mcp=True, http_only=True,
                         chrome_login_profile=profile if source is None else None,
                         chrome_login_source_profile=source, read_only_mcp=True))

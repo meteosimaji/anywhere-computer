@@ -63,7 +63,11 @@ session before starting the server. Do not point the dedicated-profile setting
 at a normal profile that is open elsewhere. On macOS, set the separate
 `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` variable to an explicit ordinary Chrome
 profile directory, such as `~/Library/Application Support/Google/Chrome/Default`,
-to use its existing login. The Plugin takes a private, temporary snapshot of
+to use its existing login. To retain the choice across Plugin updates, create
+`subchat/login-selection.json` under Anywhere Computer's local state directory
+with `{"chrome_source_profile":"/absolute/path/to/Chrome/Default"}`. The
+environment variable takes precedence over this local file. Neither setting
+contains cookies or tokens. The Plugin takes a private, temporary snapshot of
 ChatGPT cookies and opens only that snapshot headlessly; the ordinary Chrome
 window remains open and is not activated. This selection applies only to the
 read-only HTTP mode. `browser-send` continues to use its separate dedicated

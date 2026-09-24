@@ -104,7 +104,8 @@ On macOS, an explicitly selected existing Chrome profile can supply the login
 through a private headless snapshot (`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE`),
 without opening or activating the ordinary Chrome window. Authentication and
 model catalog GETs returned HTTP 200 in a live check; independent HTTP-only
-generation remains unverified.
+generation remains unverified. A local `subchat/login-selection.json` can retain
+the selected profile path across Plugin updates; see the Subchat guide.
 Set `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process to expose
 `subchat_send` and follow-up tools through the dedicated, logged-in Chrome
 profile. This mode minimizes Chrome but briefly activated its window in a live
