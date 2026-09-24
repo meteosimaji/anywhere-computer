@@ -141,7 +141,7 @@ async def test_http_only_cli_owns_only_request_client_and_disposes_it(
                         StringIO(''.join(json.dumps(item) + '\n' for item in commands)))
     monkeypatch.setattr(subchat_cli.sys, 'stdout', output)
     if concurrent or fail:
-        async def controlled(service, source, destination):
+        async def controlled(service, source, destination, *, owner=None):
             if concurrent:
                 results = await asyncio.gather(
                     service.backend.http_catalog(),

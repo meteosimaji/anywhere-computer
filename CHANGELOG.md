@@ -3,6 +3,18 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a24 / Plugin 0.2.0-alpha.24 — unpublished candidate (2026-09-24)
+
+- Add opt-in, account-pinned direct Subchat tools to the authenticated HTTPS
+  MCP service. Existing grants require a new consent before these tools appear.
+- Keep HTTP generation sends attached to the service across connection loss and
+  recover by the caller's operation ID. Scope saved operations to each grant.
+- Prepare Chrome account checks in background tabs. A recorded macOS OAuth
+  `/mcp` send returned HTTP 200, and a separate recovery returned the final
+  ordinary Chat answer without a visible Chrome window in sampled frames.
+- Allow same-ID retries after safe preparation failures and keep recovery
+  available when uncertain send IDs reach the gateway's capacity.
+
 ## 0.2.0a23 / Plugin 0.2.0-alpha.23 — unpublished candidate (2026-09-24)
 
 - Launch the macOS dedicated Chrome profile and create its owned tabs in the

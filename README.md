@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a23` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.23` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a24` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.24` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -102,6 +102,12 @@ For ChatGPT, choose its HTTPS route in `setup`. You still need a public HTTPS MC
 URL, authentication and registration in ChatGPT. Installing the Codex Plugin does
 not perform those steps. Hosting, tunnels and managed pairing are not silently
 provisioned. Use the setup and client guides above for the actual connection steps.
+On macOS, an explicitly selected, logged-in Chrome profile can also provide
+direct `subchat_*` tools on that HTTPS MCP connection. Adding those scopes requires
+a new OAuth consent; existing grants are not silently expanded. The selected
+account is pinned, Chrome prepares the request in a background tab, and HTTPX
+sends the generation request. See [HTTP server setup](docs/HTTP-SERVER.md) for
+the opt-in command and recovery rules.
 
 ## Cooperative work with subchats
 

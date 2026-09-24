@@ -69,6 +69,7 @@ class BrowserSubchatBackend:
                  httpx_generation: bool = False,
                  background_pages: bool = False,
                  store: SubchatSubmissions | None = None,
+                 owner: str | None = None,
                  expected_account_id: str | None = None) -> None:
         if httpx_generation and not http_read:
             raise ValueError('Browser-prepared HTTPX generation requires HTTP history')
@@ -80,6 +81,7 @@ class BrowserSubchatBackend:
         self.image_download_available = background_pages and http_read
         self._expected_account_id = expected_account_id
         self._store = store
+        self._owner = owner
         self._record_request = record_request
         self._record_preflight_failure = record_preflight_failure
         self._record_conversation = record_conversation
@@ -193,7 +195,7 @@ class BrowserSubchatBackend:
 
         if not self.image_download_available or self._store is None:
             raise SubchatUnsupported('http_session_required')
-        saved = self._store.get(operation_id, owner=None)
+        saved = self._store.get(operation_id, owner=self._owner)
         if saved.state not in {'submitted', 'completed'}:
             raise ValueError('Image download requires a confirmed submission')
         async with httpx.AsyncClient(

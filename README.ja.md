@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a23` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.23` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a24` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.24` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -69,6 +69,9 @@ Chromeは最小化しますが、macOSでの実測では一時的に前面へ出
 `generation_transport=browser_prepared`となります。独立したHTTP専用の生成は
 別途設定する`anywhere-subchat` CLI/MCPの実験機能で、実生成の合格はまだです。
 既存のAnywhere ComputerエンジンとChatGPT向けリモート接続は、このSubchatサーバーと別です。
+macOSでは、選択したログイン済みChromeプロファイルのSubchatツールをHTTPS MCPにも
+明示的に追加できます。既存の接続には自動で権限を付けず、新しいOAuth認可が必要です。
+設定方法と送信IDの回収手順は[HTTPサーバーの設定](docs/HTTP-SERVER.md)を参照してください。
 macOSでは`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx`を選ぶと、
 指定したログイン済みChromeプロファイルの一時スナップショットで送信準備を行い、
 生成POSTだけをHTTPXで一回送ります。GPT-6 Proの新規送信と同一会話への追送で、

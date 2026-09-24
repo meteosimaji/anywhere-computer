@@ -229,6 +229,7 @@ def session(service: Subchats, *,
             instructions: str | None = None,
             serialize_recovery: bool = False,
             read_only: bool = False,
+            owner: str | None = None,
             ) -> SubchatSession:
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
@@ -241,7 +242,7 @@ def session(service: Subchats, *,
                     server.queue_watch_states[operation_id] = {
                         'state': 'stopped', 'reason': 'lease_expired'}
                     return
-                current = service.store.get(operation_id, owner=None)
+                current = service.store.get(operation_id, owner=owner)
                 if current.state not in {'queued', 'sending', 'submitted'}:
                     server.queue_watch_states[operation_id] = {
                         'state': 'stopped', 'reason': 'submission_finished'
@@ -254,7 +255,7 @@ def session(service: Subchats, *,
                         'state': 'stopped', 'reason': 'owned_browser_unavailable'}
                     return
                 await observe(operation_id)
-                if service.store.get(operation_id, owner=None).state in {
+                if service.store.get(operation_id, owner=owner).state in {
                         'queued', 'sending', 'submitted'}:
                     await asyncio.sleep(min(QUEUE_WATCH_INTERVAL,
                         max(0, server.queue_watch_deadlines[operation_id] - time.monotonic())))
@@ -276,7 +277,7 @@ def session(service: Subchats, *,
     async def observe(operation_id: str) -> SubchatSubmission:
         if server.closed:
             raise RuntimeError('Subchat session is closed')
-        current = service.store.get(operation_id, owner=None)
+        current = service.store.get(operation_id, owner=owner)
         if current.state == 'interrupted':
             raise SubchatInterrupted('Provider interruption is saved; do not resend')
         # Recovering a queued follow-up can dispatch it when its parent is complete.
@@ -293,9 +294,9 @@ def session(service: Subchats, *,
                     nullcontext())
                 async with lock:
                     if current.state == 'queued':
-                        return await service.recover(operation_id, owner=None)
+                        return await service.recover(operation_id, owner=owner)
                     async with asyncio.timeout(25):
-                        return await service.recover(operation_id, owner=None)
+                        return await service.recover(operation_id, owner=owner)
 
             task = asyncio.create_task(run())
             recoveries[operation_id] = task
@@ -315,7 +316,7 @@ def session(service: Subchats, *,
             try:
                 result = await asyncio.shield(task)
             except asyncio.CancelledError:
-                current = service.store.get(operation_id, owner=None)
+                current = service.store.get(operation_id, owner=owner)
                 if not server.closed and task.cancelled() and current.state == 'cancelled':
                     return current
                 raise
@@ -430,6 +431,9 @@ def session(service: Subchats, *,
                              data=TypeAdapter(dict[str, JsonValue]).validate_python(refreshed))
             if request.tool == 'subchat_download_file' and download_sandbox_file is not None:
                 target_file = SandboxFile.model_validate(request.arguments)
+                # Backend download implementations may use their own ledger owner.
+                # Never pass another owner's operation to one of them.
+                service.store.get(target_file.operation_id, owner=owner)
                 try:
                     downloaded = await download_sandbox_file(
                         target_file.operation_id, target_file.sandbox_link,
@@ -451,6 +455,7 @@ def session(service: Subchats, *,
             if (request.tool == 'subchat_download_image' and download_image is not None
                     and 'subchat_download_image' in definitions):
                 target_image = ChatImage.model_validate(request.arguments)
+                service.store.get(target_image.operation_id, owner=owner)
                 try:
                     downloaded_image = await download_image(
                         target_image.operation_id, max_bytes=target_image.max_bytes)
@@ -480,7 +485,7 @@ def session(service: Subchats, *,
                 })
             if request.tool == 'subchat_queue_watch':
                 watch = QueueWatch.model_validate(request.arguments)
-                current = service.store.get(watch.operation_id, owner=None)
+                current = service.store.get(watch.operation_id, owner=owner)
                 if not watch.enabled:
                     watch_task = server.queue_watches.get(watch.operation_id)
                     if watch_task is not None:
@@ -540,12 +545,13 @@ def session(service: Subchats, *,
                 })
                 return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_list':
-                page = service.store.list(SubchatList.model_validate(request.arguments), owner=None)
+                page = service.store.list(SubchatList.model_validate(request.arguments),
+                                          owner=owner)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data=page.model_dump(mode='json'))
             if request.tool == 'subchat_cancel':
                 target = OperationId.model_validate(request.arguments)
-                result = service.store.cancel(target.operation_id, owner=None)
+                result = service.store.cancel(target.operation_id, owner=owner)
                 pending: list[asyncio.Task[Reply] | asyncio.Task[SubchatSubmission]] = [
                     task for task, call in server.calls.items()
                            if call.tool == 'subchat_send'
@@ -562,25 +568,25 @@ def session(service: Subchats, *,
             if request.tool == 'subchat_delete':
                 target_delete = DeleteRequest.model_validate(request.arguments)
                 async with browser_lock:
-                    result_delete = await delete_saved(service, target_delete, owner=None)
+                    result_delete = await delete_saved(service, target_delete, owner=owner)
                 return Reply(operation_id=request.operation_id,
                              state='completed' if result_delete.state == 'deleted' else 'unknown',
                              data=result_delete.model_dump(mode='json'))
             if request.tool == 'subchat_message':
                 message = Message.model_validate(request.arguments)
-                service.store.get(message.target_operation_id, owner=None)
+                service.store.get(message.target_operation_id, owner=owner)
                 if message.mode == 'steer':
                     return Reply(operation_id=request.operation_id, state='failed',
                                  error='Immediate steer is not supported by this adapter.',
                                  data={'error_code': 'unsupported', 'mode': 'steer',
                                        'dispatched': False, 'queued': False})
                 result = service.queue(request.operation_id, message.target_operation_id,
-                                       message.prompt, owner=None)
+                                       message.prompt, owner=owner)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data=result.model_dump(mode='json'))
             if request.tool == 'subchat_wait':
                 wait = Wait.model_validate(request.arguments)
-                result = service.store.get(wait.operation_id, owner=None)
+                result = service.store.get(wait.operation_id, owner=owner)
                 deadline = asyncio.timeout(wait.wait_ms / 1000)
                 try:
                     async with deadline:
@@ -596,17 +602,17 @@ def session(service: Subchats, *,
                 except TimeoutError:
                     if not deadline.expired():
                         raise
-                    current = service.store.get(wait.operation_id, owner=None)
+                    current = service.store.get(wait.operation_id, owner=owner)
                     if (current.state != result.state
                             or isinstance(result, SubchatObservedSubmission)
                             and service.store.get(result.observation.operation_id,
-                                owner=None).state != 'submitted'):
+                                owner=owner).state != 'submitted'):
                         result = current
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={**result.model_dump(mode='json'),
                                    **({'http_progress': progress} if (progress :=
                                       service.store.http_progress(result.operation_id,
-                                                                  owner=None)) is not None
+                                                                  owner=owner)) is not None
                                       else {})})
             if request.tool == 'subchat_catalog' and (
                 (read_only and observe_http_catalog is not None)
@@ -633,7 +639,7 @@ def session(service: Subchats, *,
                 args = Send.model_validate(request.arguments)
                 async with browser_lock:
                     result = await service.send(request.operation_id, args.prompt, args.model,
-                                                args.effort, owner=None,
+                                                args.effort, owner=owner,
                                                 conversation_id=args.conversation_id,
                                                 work_context=args.work_context,
                                                 resources=args.resources,
@@ -641,7 +647,7 @@ def session(service: Subchats, *,
             elif request.tool in {'subchat_recover', 'subchat_status'}:
                 target = OperationId.model_validate(request.arguments)
                 if request.tool == 'subchat_status':
-                    result = service.store.get(target.operation_id, owner=None)
+                    result = service.store.get(target.operation_id, owner=owner)
                 else:
                     result = await observe(target.operation_id)
             else:
@@ -650,12 +656,12 @@ def session(service: Subchats, *,
                          data={**result.model_dump(mode='json'),
                                **({'http_progress': progress} if (progress :=
                                   service.store.http_progress(result.operation_id,
-                                                              owner=None)) is not None else {}),
+                                                              owner=owner)) is not None else {}),
                                **({'queue_watch': server.queue_watch_states[result.operation_id]}
                                   if result.operation_id in server.queue_watch_states else {})})
         except asyncio.CancelledError:
             if request.tool == 'subchat_send' and not server.closed:
-                current = service.store.get(request.operation_id, owner=None)
+                current = service.store.get(request.operation_id, owner=owner)
                 if current.state == 'cancelled':
                     return Reply(operation_id=request.operation_id, state='completed',
                                  data=current.model_dump(mode='json'))

@@ -187,7 +187,7 @@ async def test_standalone_http_client_lifetime_without_browser(tmp_path, monkeyp
         finally:
             events.append('runtime_closed')
 
-    async def commands(service, source, destination):
+    async def commands(service, source, destination, *, owner=None):
         factory = service.backend._http_reader._request_factory
         first = await factory()
         assert await factory() is first
@@ -202,3 +202,64 @@ async def test_standalone_http_client_lifetime_without_browser(tmp_path, monkeyp
     else:
         await subchat_cli.run(tmp_path / 'unused-profile', tmp_path, http_read=True)
     assert events == ['runtime', 'create', 'dispose', 'runtime_closed']
+
+
+async def test_run_scopes_json_commands_to_ledger_owner(tmp_path, monkeypatch):
+    from io import StringIO
+
+    from anywhere_computer import subchat_cli
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    local, owned = 'a' * 32, 'b' * 32
+    store.prepare(local, 'local', 'model', 'effort', owner=None)
+    store.prepare(owned, 'owned', 'model', 'effort', owner='grant-1')
+    ledger.close()
+
+    commands = [{'action': 'list'},
+                {'action': 'status', 'operation_id': owned},
+                {'action': 'status', 'operation_id': local}]
+    output = StringIO()
+    monkeypatch.setattr(subchat_cli.sys, 'stdin', StringIO(
+        ''.join(json.dumps(item) + '\n' for item in commands)))
+    monkeypatch.setattr(subchat_cli.sys, 'stdout', output)
+    await subchat_cli.run(tmp_path / 'unused-profile', tmp_path, ledger_owner='grant-1')
+
+    replies = [json.loads(line) for line in output.getvalue().splitlines()]
+    assert [entry['operation_id'] for entry in replies[0]['submissions']] == [owned]
+    assert replies[1]['operation_id'] == owned
+    assert replies[2]['state'] == 'unknown_operation'
+
+
+async def test_run_binds_http_observation_callbacks_to_ledger_owner(tmp_path, monkeypatch):
+    from anywhere_computer import subchat_cli
+
+    operation = 'c' * 32
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    store.prepare(operation, 'owned', 'model', 'effort', owner='grant-1')
+    store.begin_send(operation, owner='grant-1')
+    ledger.close()
+
+    async def inspect(service, _source, _destination, *, owner):
+        assert owner == 'grant-1'
+        assert service.backend._owner == owner
+        service.backend._record_request(operation, 'user-1', 'account-1')
+        saved = service.store.get(operation, owner=owner)
+        assert saved.user_message_id == 'user-1'
+        assert saved.provider_account_id == 'account-1'
+
+    monkeypatch.setattr(subchat_cli, 'process_lines', inspect)
+    await subchat_cli.run(tmp_path / 'unused-profile', tmp_path, http_read=True,
+                          ledger_owner='grant-1')
+
+
+async def test_run_binds_http_only_backend_to_ledger_owner(tmp_path, monkeypatch):
+    from anywhere_computer import subchat_cli
+
+    async def inspect(service, _source, _destination, *, owner):
+        assert owner == 'grant-1'
+        assert service.backend._owner == owner
+
+    monkeypatch.setattr(subchat_cli, 'process_lines', inspect)
+    await subchat_cli.run(None, tmp_path, http_only=True, ledger_owner='grant-1')
