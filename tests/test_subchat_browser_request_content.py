@@ -7,11 +7,14 @@ from anywhere_computer.subchat_browser.request_content import generation_input
 from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmission
 
 
-def test_observed_gpt56_instant_browser_model_alias():
+@pytest.mark.parametrize(('version_id', 'model'), [
+    ('5.6', 'GPT-5.6 Sol'), ('latest', '最新'),
+])
+def test_observed_gpt56_instant_browser_model_alias(version_id, model):
     submission = SubchatSubmission(
-        operation_id='a' * 32, prompt='test', model='GPT-5.6 Sol', effort='Instant',
+        operation_id='a' * 32, prompt='test', model=model, effort='Instant',
         http_selection=SubchatHTTPSelection(
-            version_id='5.6', preset_id=0, model_slug='gpt-5-6-instant',
+            version_id=version_id, preset_id=0, model_slug='gpt-5-6-instant',
             thinking_effort=None),
     )
     body = {'action': 'next', 'model': 'gpt-5-6', 'thinking_effort': None,

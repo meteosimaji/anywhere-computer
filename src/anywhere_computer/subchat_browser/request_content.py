@@ -46,12 +46,15 @@ def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, J
     if submission.http_selection is not None:
         selected = submission.http_selection
         # The current GPT-5.6 Sol Instant composer emits the version model ID
-        # although its authenticated catalog preset names the Instant slug.
+        # for both its version and Latest picker entries, although the
+        # authenticated catalog preset names the Instant slug.
         observed_instant_alias = (
-            selected.version_id == '5.6' and selected.preset_id == 0
+            selected.version_id in {'5.6', 'latest'} and selected.preset_id == 0
             and selected.model_slug == 'gpt-5-6-instant'
             and selected.thinking_effort is None
-            and submission.model == 'GPT-5.6 Sol' and submission.effort == 'Instant'
+            and submission.model == ('最新' if selected.version_id == 'latest'
+                                     else 'GPT-5.6 Sol')
+            and submission.effort == 'Instant'
             and body.get('model') == 'gpt-5-6'
         )
         # The current Latest > Pro composer sends standard on the wire, while
