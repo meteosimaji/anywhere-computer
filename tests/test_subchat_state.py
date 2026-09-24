@@ -60,7 +60,9 @@ def test_legacy_completed_text_without_answer_type_remains_idempotent(tmp_path):
         body = json.loads(ledger.connection.execute(
             'SELECT body FROM subchat_submissions WHERE operation_id=?',
             (operation,)).fetchone()[0])
-        body.pop('answer_type')
+        body.pop('answer_type', None)
+        ledger.connection.execute('DELETE FROM subchat_answer_types WHERE operation_id=?',
+                                  (operation,))
         with ledger.connection:
             ledger.connection.execute(
                 'UPDATE subchat_submissions SET body=? WHERE operation_id=?',
@@ -69,6 +71,77 @@ def test_legacy_completed_text_without_answer_type_remains_idempotent(tmp_path):
         assert saved.state == 'completed' and saved.answer == 'existing text'
         assert saved.answer_type is None
         assert store.complete(operation, 'answer', 'existing text', owner=None) == saved
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize(('answer', 'answer_type'), [
+    ('text', 'text'), ('caption', 'multimodal'), (None, 'image'),
+])
+def test_answer_type_side_table_keeps_submission_json_readable(tmp_path, answer, answer_type):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        operation = 'e' * 32
+        store.prepare(operation, 'prompt', 'model', 'effort', owner='peer')
+        store.begin_send(operation, owner='peer')
+        store.submitted(operation, 'conversation', 'user', owner='peer')
+        store.complete(operation, 'answer', answer, answer_type=answer_type, owner='peer')
+        raw = ledger.connection.execute(
+            'SELECT body FROM subchat_submissions WHERE operation_id=?',
+            (operation,)).fetchone()[0]
+        assert 'answer_type' not in json.loads(raw)
+        assert store.get(operation, owner='peer').answer_type == answer_type
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize(('answer', 'answer_type'), [
+    ('text', 'text'), ('caption', 'multimodal'), (None, 'image'), (None, None),
+])
+def test_existing_answer_type_is_migrated_without_changing_other_fields(
+        tmp_path, answer, answer_type):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        operation = 'd' * 32
+        store.prepare(operation, 'prompt', 'model', 'effort', owner='peer')
+        store.begin_send(operation, owner='peer')
+        store.submitted(operation, 'conversation', 'user', owner='peer')
+        if answer_type is None:
+            store.complete(operation, 'answer', 'text', owner='peer')
+        else:
+            store.complete(operation, 'answer', answer, answer_type=answer_type, owner='peer')
+        original = json.loads(ledger.connection.execute(
+            'SELECT body FROM subchat_submissions WHERE operation_id=?',
+            (operation,)).fetchone()[0])
+        ledger.connection.execute('DELETE FROM subchat_answer_types WHERE operation_id=?',
+                                  (operation,))
+        legacy = {**original, 'answer_type': answer_type}
+        ledger.connection.execute('UPDATE subchat_submissions SET body=? WHERE operation_id=?',
+                                  (json.dumps(legacy), operation))
+        SubchatSubmissions(ledger.connection)
+        migrated = json.loads(ledger.connection.execute(
+            'SELECT body FROM subchat_submissions WHERE operation_id=?',
+            (operation,)).fetchone()[0])
+        assert migrated == original
+        assert store.get(operation, owner='peer').answer_type == answer_type
+    finally:
+        ledger.close()
+
+
+def test_read_only_store_can_read_ledger_before_answer_type_table(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        operation = 'c' * 32
+        store.prepare(operation, 'prompt', 'model', 'effort', owner=None)
+        store.begin_send(operation, owner=None)
+        store.submitted(operation, 'conversation', 'user', owner=None)
+        store.complete(operation, 'answer', 'text', owner=None)
+        ledger.connection.execute('DROP TABLE subchat_answer_types')
+        reader = SubchatSubmissions(ledger.connection, initialize=False)
+        assert reader.get(operation, owner=None).answer == 'text'
     finally:
         ledger.close()
 

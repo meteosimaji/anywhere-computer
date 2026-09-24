@@ -158,8 +158,11 @@ async def test_image_download_after_image_only_final_is_still_bound(tmp_path):
         ledger.close()
 
 
-@pytest.mark.parametrize('placement', ['final_only', 'tool_with_caption'])
-async def test_completed_image_projection_matches_download_source(tmp_path, placement):
+@pytest.mark.parametrize(('placement', 'legacy_type'), [
+    ('final_only', False), ('tool_with_caption', False), ('tool_with_caption', True),
+])
+async def test_completed_image_projection_matches_download_source(tmp_path, placement,
+                                                                  legacy_type):
     ledger = Ledger(tmp_path)
     try:
         store = SubchatSubmissions(ledger.connection)
@@ -181,6 +184,11 @@ async def test_completed_image_projection_matches_download_source(tmp_path, plac
         assert observed.answer_type == ('image' if placement == 'final_only' else 'multimodal')
         completed = store.complete(saved.operation_id, observed.answer_message_id, observed.text,
                                    answer_type=observed.answer_type, owner=None)
+        if legacy_type:
+            ledger.connection.execute('DELETE FROM subchat_answer_types WHERE operation_id=?',
+                                      (saved.operation_id,))
+            completed = store.get(saved.operation_id, owner=None)
+            assert completed.answer_type is None and completed.answer == 'Caption'
 
         def serve(request):
             if request.url.path.startswith('/backend-api/conversations/'):
@@ -232,7 +240,14 @@ async def test_image_completion_and_download_reject_ambiguous_or_changed_history
             store.complete(saved.operation_id, observed.answer_message_id, observed.text,
                            answer_type=observed.answer_type, owner=None)
             final['content'] = {'content_type': 'text', 'parts': ['Changed']}
-        if case != 'changed_final':
+        if case in {'two_final_images', 'tool_and_final_image'}:
+            observed = project_history(json.dumps(payload).encode(), saved)
+            assert observed is not None and observed.answer_type == 'image'
+            completed = store.complete(saved.operation_id, observed.answer_message_id,
+                                       observed.text, answer_type=observed.answer_type,
+                                       owner=None)
+            assert completed.state == 'completed'
+        elif case != 'changed_final':
             assert project_history(json.dumps(payload).encode(), saved) is None
         requests = []
 

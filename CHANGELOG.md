@@ -3,6 +3,21 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a26 / Plugin 0.2.0-alpha.26 — unpublished candidate (2026-09-24)
+
+- Preserve compatibility with older submission readers by moving completed
+  answer types into an atomic side table, including migration of existing rows.
+- Complete image-generating answers with multiple images while requiring an
+  unambiguous single image for the current download operation. Recover legacy
+  text-and-image answers against the exact saved final turn.
+- Settle intercepted browser requests when a completed generation is canceled,
+  and use a fresh owned tab for the next queued turn. Bound the wait for HTTP
+  headers while leaving the generation stream itself unbounded.
+- Surface delayed preparation errors through the original gateway operation
+  and allow an explicit retry with the same ID and unchanged input.
+- Reject a changed wheel under an existing Plugin version during clean release
+  packaging. The previous alpha.25 wheel remains a separate immutable build.
+
 ## 0.2.0a25 / Plugin 0.2.0-alpha.25 — unpublished candidate (2026-09-24)
 
 - Keep a browser-prepared HTTPX generation stream alive after its HTTP 200/SSE

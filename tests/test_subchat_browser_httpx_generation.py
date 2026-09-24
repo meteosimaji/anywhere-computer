@@ -76,6 +76,24 @@ async def test_httpx_reports_headers_before_a_silent_sse_body():
     assert result.body == b'data: [DONE]\n\n' and chunks == [result.body]
 
 
+async def test_httpx_times_out_waiting_for_headers_without_reposting():
+    requests = []
+    waiting = asyncio.Event()
+
+    class StalledHeaders(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            requests.append(request)
+            await waiting.wait()
+            raise AssertionError('Headers should time out first')
+
+    async with httpx.AsyncClient(transport=StalledHeaders()) as client:
+        with pytest.raises(TimeoutError):
+            await post_browser_prepared_once(
+                RequestFixture(), client, authorization='Bearer fixture', content=b'{}',
+                header_timeout=0.01)
+    assert len(requests) == 1
+
+
 async def test_browser_prepared_generation_rejects_changed_account_without_post():
     sent = []
 
@@ -412,6 +430,140 @@ async def test_httpx_headers_release_send_while_stream_and_identity_continue(mon
         await asyncio.sleep(0)
     assert page.fulfilled and page.unrouted and client.closed
     assert not backend.has_live_generation()
+
+
+async def test_completed_stream_aborts_route_and_retains_queue_without_reusing_tab(monkeypatch):
+    from anywhere_computer import subchat_chrome_login
+    from anywhere_computer.subchat_browser import backend as backend_module
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_browser.httpx_generation import HTTPXGenerationResponse
+
+    first_half = asyncio.Event()
+    continue_chunks = asyncio.Event()
+    candidate_seen = asyncio.Event()
+    never_finished = asyncio.Event()
+    callbacks = []
+    posts = []
+
+    class Store:
+        state = 'sending'
+
+        def get(self, operation_id, *, owner):
+            return SimpleNamespace(state=self.state)
+
+    store = Store()
+
+    class Client:
+        closed = False
+
+        def __init__(self, **kwargs):
+            pass
+
+        async def aclose(self):
+            self.closed = True
+
+    client = Client()
+
+    class Page:
+        url = 'https://chatgpt.com/c/11111111-2222-3333-4444-555555555555'
+        routed = None
+        unrouted = False
+
+        def is_closed(self):
+            return False
+
+        async def route(self, pattern, callback):
+            self.routed = callback
+
+        async def unroute(self, pattern, callback):
+            self.unrouted = True
+
+        async def expose_binding(self, *args):
+            pass
+
+        async def evaluate(self, *args):
+            pass
+
+    class Route:
+        request = RequestFixture()
+        aborted = False
+        fulfilled = False
+
+        async def abort(self):
+            self.aborted = True
+
+        async def fulfill(self, **kwargs):
+            self.fulfilled = True
+
+    page = Page()
+    route = Route()
+
+    async def browser():
+        return object()
+
+    async def session(*args, **kwargs):
+        return SimpleNamespace(account_id='account-a',
+                               authorization=SimpleNamespace(
+                                   get_secret_value=lambda: 'Bearer fixture'))
+
+    def record_conversation(*args):
+        candidate_seen.set()
+        if store.state == 'completed':
+            raise ValueError('Completed submission does not accept candidates')
+
+    async def stream_post(request, supplied_client, **kwargs):
+        posts.append(request)
+        kwargs['on_headers'](HTTPXGenerationResponse(
+            200, 'text/event-stream', b'', 'HTTP/1.1', False))
+        kwargs['on_chunk'](b'data: {"p":"","o":"add","v":{"conversation_id":"11111111-')
+        first_half.set()
+        await continue_chunks.wait()
+        kwargs['on_chunk'](b'2222-3333-4444-555555555555"}}\n\n')
+        await candidate_seen.wait()
+        await never_finished.wait()
+        raise AssertionError('Completed stream must be cancelled')
+
+    async def send(submission):
+        callbacks.append(asyncio.create_task(page.routed(route)))
+        return None
+
+    backend = BrowserSubchatBackend(browser, http_read=True, httpx_generation=True,
+                                    record_request=lambda *args: None,
+                                    record_conversation=record_conversation,
+                                    store=store, owner='owner-a')
+    operation_id = 'a' * 32
+    backend.pages[operation_id] = page
+    monkeypatch.setattr(backend, '_browser', browser)
+    monkeypatch.setattr(backend, '_send', send)
+    monkeypatch.setattr(backend_module.httpx, 'AsyncClient', lambda **kwargs: client)
+    monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', session)
+    monkeypatch.setattr(backend_module, 'generation_input', lambda *args: {
+        'messages': [{'id': 'message-a'}]})
+    monkeypatch.setattr(
+        __import__('anywhere_computer.subchat_browser.httpx_generation', fromlist=['x']),
+        'post_browser_prepared_once', stream_post)
+    submission = SubchatSubmission(operation_id=operation_id, prompt='fixture', model='fixture',
+                                   effort='fixture', state='sending')
+    await asyncio.wait_for(backend.send(submission), 1)
+    await first_half.wait()
+    store.state = 'completed'
+    # A candidate split across chunks arrives after final history committed.
+    # The store rejects it, but that must not abort an otherwise accepted stream.
+    continue_chunks.set()
+    await asyncio.wait_for(candidate_seen.wait(), 1)
+    assert not route.aborted and not callbacks[0].done()
+    completed = submission.model_copy(update={
+        'state': 'completed', 'conversation_id': '11111111-2222-3333-4444-555555555555'})
+    await backend.release_completed(completed, keep_for_queue=True)
+    await asyncio.gather(*callbacks, return_exceptions=True)
+    assert route.aborted and not route.fulfilled
+    assert page in backend._unreusable_pages and client.closed and page.unrouted
+    backend._context = SimpleNamespace(browser=None)
+    queued = submission.model_copy(update={
+        'operation_id': 'b' * 32,
+        'requested_conversation_id': completed.conversation_id})
+    assert backend.queue_watch_ready(queued)
+    assert len(posts) == 1 and not backend.has_live_generation()
 
 
 @pytest.mark.parametrize('failure_stage', ['account_binding', 'observer_setup'])

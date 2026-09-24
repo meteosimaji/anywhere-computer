@@ -23,6 +23,14 @@ def plugin_version(python_version: str) -> str:
     return f"{match[1]}-{label}.{match[3]}"
 
 
+def require_immutable_wheel(target: Path, built: Path, *, allow_dirty: bool) -> None:
+    """A released version must not silently change under an installer cache."""
+    if (target.exists() and not allow_dirty
+            and hashlib.sha256(target.read_bytes()).digest()
+            != hashlib.sha256(built.read_bytes()).digest()):
+        raise ValueError("Bundled wheel for this version changed; bump the version first")
+
+
 def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     if re.fullmatch(r"[a-f0-9]{40}", commit) is None:
@@ -41,6 +49,7 @@ def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
         if len(wheels) != 1:
             raise ValueError("Build must produce exactly one Anywhere Computer wheel")
         wheel = bundled / wheels[0].name
+        require_immutable_wheel(wheel, wheels[0], allow_dirty=allow_dirty)
         shutil.copyfile(wheels[0], wheel)
     with zipfile.ZipFile(wheel) as archive:
         metadata_paths = [name for name in archive.namelist()

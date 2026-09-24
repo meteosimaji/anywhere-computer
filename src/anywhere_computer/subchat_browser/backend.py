@@ -414,7 +414,11 @@ class BrowserSubchatBackend:
         if submission.state != 'completed':
             raise ValueError('Only a completed submission can release its browser page')
         operation_id = submission.operation_id
+        page = self.pages.get(operation_id)
+        if page is not None:
+            self._completed_page_owners.add(operation_id)
         generation = self._generation_tasks.get(operation_id)
+        interrupted_generation = generation is not None and not generation.done()
         if generation is not None and not generation.done():
             if generation not in self._generation_cleanups:
                 generation.cancel()
@@ -422,10 +426,12 @@ class BrowserSubchatBackend:
             cleanup = self._generation_tasks.get(operation_id)
             if cleanup is not None:
                 await asyncio.gather(cleanup, return_exceptions=True)
-        page = self.pages.get(operation_id)
-        if page is not None:
-            self._completed_page_owners.add(operation_id)
         if keep_for_queue:
+            if (interrupted_generation and page is not None and not page.is_closed()):
+                # The intercepted POST was aborted after history proved completion.
+                # Its optimistic Stop control may remain visible. Keep ownership
+                # for the queue gate, but prepare the next turn in a fresh tab.
+                self._unreusable_pages.add(page)
             return
         url = ('https://chatgpt.com/c/' + submission.conversation_id
                if submission.conversation_id is not None else None)
@@ -699,6 +705,7 @@ class BrowserSubchatBackend:
             if not request_started.done():
                 request_started.set_result(True)
             accepted = False
+            route_settled = False
             stage = 'request_validation'
             identity_tracker = _StreamIdentity()
             current_task = asyncio.current_task()
@@ -758,8 +765,19 @@ class BrowserSubchatBackend:
                         conversation = identity_tracker.feed(chunk)
                         if conversation is not None and self._record_conversation is not None:
                             assert generation_account is not None
-                            self._record_conversation(submission.operation_id, identity,
-                                                      conversation, generation_account)
+                            if submission.operation_id in self._completed_page_owners:
+                                return
+                            try:
+                                self._record_conversation(submission.operation_id, identity,
+                                                          conversation, generation_account)
+                            except Exception:
+                                # A final history observation can commit while a
+                                # later SSE frame is being processed. Its candidate
+                                # is no longer needed and must not abort the POST.
+                                if (self._store is None or
+                                        self._store.get(submission.operation_id,
+                                                        owner=self._owner).state != 'completed'):
+                                    raise
 
                     response = await post_browser_prepared_once(
                         route.request, generation_client,
@@ -775,16 +793,23 @@ class BrowserSubchatBackend:
                             conversation = _stream_conversation_id(response.body)
                             if conversation is not None:
                                 assert generation_account is not None
-                                self._record_conversation(submission.operation_id, identity,
-                                                          conversation, generation_account)
+                                if submission.operation_id not in self._completed_page_owners:
+                                    self._record_conversation(submission.operation_id, identity,
+                                                              conversation, generation_account)
                         await route.fulfill(status=200,
                                             headers={'content-type': 'text/event-stream'},
                                             body=response.body)
+                        route_settled = True
                     else:
                         await route.fulfill(status=response.status,
                                             headers={'content-type': 'application/json'},
                                             body=b'{}')
+                        route_settled = True
                 accepted = True
+            except asyncio.CancelledError:
+                if not route_settled:
+                    await route.abort()
+                raise
             except Exception as error:
                 # Provider details can contain account information; do not expose them.
                 logger.warning('Subchat generation stage=%s error_type=%s',
@@ -795,7 +820,8 @@ class BrowserSubchatBackend:
                                         for frame in frames[-5:]))
                 if str(error).startswith('Invalid browser request header types: '):
                     logger.warning('%s', error)
-                await route.abort()
+                if not route_settled:
+                    await route.abort()
                 if (stage in {'request_validation', 'account_binding'}
                         or isinstance(error, HTTPXGenerationPreflightError)):
                     # The browser may have painted an optimistic user bubble

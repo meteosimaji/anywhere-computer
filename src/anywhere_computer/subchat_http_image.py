@@ -171,9 +171,12 @@ async def download_verified_image(saved: SubchatSubmission, history_payload: byt
         raise ValueError('Saved Chat final is not verified')
     final = None
     if saved.state == 'completed':
-        if (not isinstance(observation, SubchatAnswer)
-                or observation.answer_message_id != saved.answer_message_id
-                or observation.answer_type != saved.answer_type
+        if not isinstance(observation, SubchatAnswer):
+            raise ValueError('Saved Chat final does not match current history')
+        legacy_text_type = (saved.answer_type is None and saved.answer is not None
+                            and observation.answer_type in {'text', 'multimodal'})
+        if (observation.answer_message_id != saved.answer_message_id
+                or not (observation.answer_type == saved.answer_type or legacy_text_type)
                 or observation.text != saved.answer):
             raise ValueError('Saved Chat final does not match current history')
     if isinstance(observation, SubchatAnswer):

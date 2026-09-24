@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, f
 
 from .authorization import GrantIdentity
 from .models import Contract, OperationId, Reply, Request
+from .subchat import SubchatPreparationFailed
 from .subchat_mcp import (
     ReadOnlyHTTPCatalog,
     SubchatSession,
@@ -116,15 +117,21 @@ class SubchatGateway:
                 return Reply(operation_id=request.operation_id, state="failed",
                              error="Operation ID was already used with different input",
                              data={"dispatched": False})
-            if (task.done() and not task.cancelled()
-                    and task.exception() is None
-                    and (reply := task.result()).state == "failed"
-                    and reply.data.get("error_code") == "preparation_failed"
-                    and reply.data.get("dispatched") is False):
-                # The ledger is still prepared. A caller may explicitly retry
-                # this same exact input after fixing the browser preparation.
-                self.pending.pop(key)
-                existing = None
+            if task.done() and not task.cancelled() and task.exception() is None:
+                reply = task.result()
+                sending = getattr(self._core(grant_id), "sends", {}).get(
+                    request.operation_id)
+                if (request.tool == "subchat_send"
+                        and ((reply.state == "failed"
+                              and reply.data.get("error_code") == "preparation_failed"
+                              and reply.data.get("dispatched") is False)
+                             or (reply.state == "running"
+                                 and (sending is None or sending.done())))):
+                    # A send ACK is only a checkpoint. Once its core task has
+                    # settled, an explicit same-ID call must reach the ledger
+                    # guard and see the result or retry unsent preparation.
+                    self.pending.pop(key)
+                    existing = None
         if existing is None:
             if len(self.pending) >= 128:
                 # Completed sends and messages have a durable receipt in the
@@ -203,6 +210,10 @@ class SubchatGateway:
         """Keep owned sends and detached observations alive across HTTP idle gaps."""
         return (any(not entry[2].done() for entry in self.pending.values())
                 or any(core.recoveries for core in self.cores.values())
+                or any(task.done() and not task.cancelled()
+                       and isinstance(task.exception(), SubchatPreparationFailed)
+                       for core in self.cores.values()
+                       for task in getattr(core, 'sends', {}).values())
                 or any((live := getattr(core, 'live_transport', None)) is not None and live()
                        for core in self.cores.values())
                 or any(not task.done() for core in self.cores.values()
@@ -361,8 +372,18 @@ class LazySubchatGateway:
                 core = gateway.cores.get(grant_id)
                 if core is not None and target.operation_id in core.queue_watch_states:
                     queue_watch = dict(core.queue_watch_states[target.operation_id])
-            return await asyncio.to_thread(self._saved_status, grant_id, request.operation_id,
-                                           target.operation_id, queue_watch)
+            saved = await asyncio.to_thread(self._saved_status, grant_id,
+                                            request.operation_id, target.operation_id,
+                                            queue_watch)
+            if saved.data.get("state") == "prepared" and gateway is not None:
+                core = gateway.cores.get(grant_id)
+                sending = core.sends.get(target.operation_id) if core is not None else None
+                if (core is not None and sending is not None and sending.done()
+                        and not sending.cancelled() and sending.exception() is not None):
+                    # The durable row cannot store a failed browser preparation.
+                    # The live core retains the sanitized error for observation.
+                    return await core.execute(request)
+            return saved
         except SubchatOperationNotFound:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="No operation with this ID is visible in the selected ledger. "

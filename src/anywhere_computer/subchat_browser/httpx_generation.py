@@ -6,6 +6,7 @@ Request and response contents remain in memory and must never be logged.
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -19,6 +20,7 @@ if TYPE_CHECKING:
 
 _MAX_REQUEST = 1_048_576
 _MAX_RESPONSE = 16_777_216
+_HEADER_TIMEOUT = 120.0
 _DROP_HEADERS = frozenset({
     'accept-encoding', 'connection', 'content-length', 'host', 'keep-alive',
     'proxy-authenticate', 'proxy-authorization', 'te', 'trailer',
@@ -43,7 +45,8 @@ async def post_browser_prepared_once(request: Request, client: httpx.AsyncClient
                                      *, authorization: str, content: bytes,
                                      on_headers: Callable[[HTTPXGenerationResponse], None]
                                      | None = None,
-                                     on_chunk: Callable[[bytes], None] | None = None
+                                     on_chunk: Callable[[bytes], None] | None = None,
+                                     header_timeout: float = _HEADER_TIMEOUT,
                                      ) -> HTTPXGenerationResponse:
     """Make exactly one HTTPX POST from an intercepted, account-bound request."""
     parsed = urlsplit(request.url)
@@ -72,10 +75,14 @@ async def post_browser_prepared_once(request: Request, client: httpx.AsyncClient
     outgoing['accept-encoding'] = 'identity'
     # Generations can remain silent while thinking. The saved send identity
     # remains recoverable, and cancellation does not authorize another POST.
-    async with client.stream('POST', request.url, headers=outgoing, content=content,
-                             timeout=httpx.Timeout(connect=10.0, read=None,
-                                                   write=120.0, pool=120.0),
-                             follow_redirects=False) as response:
+    prepared = client.build_request(
+        'POST', request.url, headers=outgoing, content=content,
+        timeout=httpx.Timeout(connect=10.0, read=None, write=120.0, pool=120.0))
+    # A stalled server must not hold the send lock forever before headers.
+    # After headers, thinking and SSE body reads remain unbounded.
+    async with asyncio.timeout(header_timeout):
+        response = await client.send(prepared, stream=True, follow_redirects=False)
+    try:
         content_type = response.headers.get('content-type', '').split(';', 1)[0].strip()
         status = response.status_code
         metadata = HTTPXGenerationResponse(status, content_type, b'', response.http_version,
@@ -97,3 +104,5 @@ async def post_browser_prepared_once(request: Request, client: httpx.AsyncClient
         return HTTPXGenerationResponse(status, content_type, b''.join(body_parts),
                                        response.http_version,
                                        'cf-mitigated' in response.headers)
+    finally:
+        await response.aclose()

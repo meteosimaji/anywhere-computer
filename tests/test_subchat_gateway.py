@@ -870,6 +870,93 @@ async def test_failed_preparation_can_retry_exact_id_and_does_not_block_recovery
 
 
 @pytest.mark.asyncio
+async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same_id_retry(
+    tmp_path, monkeypatch,
+):
+    from test_subchat_lifecycle import BrowserFixture
+
+    import anywhere_computer.subchat_gateway as gateway_module
+    from anywhere_computer import subchat_mcp
+
+    monkeypatch.setattr(subchat_mcp, "SEND_ACK_TIMEOUT", .02)
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+    attempts = 0
+
+    class Backend(BrowserFixture):
+        async def prepare(self, submission):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                entered.set()
+                await finish.wait()
+                raise ValueError("Ordinary Chat composer contains a draft")
+            return await super().prepare(submission)
+
+    ledger = Ledger(tmp_path / "ledger")
+    backend = Backend()
+    store = SubchatSubmissions(ledger.connection)
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "profile"), ledger=str(tmp_path / "ledger"),
+        account_id="account", consent="ordinary-chat-browser-control-approved")
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        assert config is selected and owner == "owner"
+        gateway = SubchatGateway(lambda grant: session(
+            Subchats(store, backend), owner=grant), owner=owner)
+        try:
+            yield gateway
+        finally:
+            await gateway.close()
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
+    operation_id = "a" * 32
+    send = Request(operation_id=operation_id, tool="subchat_send", arguments={
+        "prompt": "work", "model": "model", "effort": "effort"})
+    scopes = frozenset({"subchat_send", "subchat_status", "subchat_recover"})
+    try:
+        first = await gateway.execute("grant", send, scopes)
+        await entered.wait()
+        assert first.state == "running" and attempts == 1
+        finish.set()
+        core = gateway._gateway.cores["grant"]
+        with pytest.raises(subchat_mcp.SubchatPreparationFailed):
+            await core.sends[operation_id]
+        assert store.get(operation_id, owner="grant").state == "prepared"
+        assert backend.sends == 0
+        await asyncio.sleep(.04)
+        assert gateway._gateway is not None
+
+        for tool in ("subchat_status", "subchat_recover"):
+            observed = await gateway.execute("grant", Request(
+                operation_id="b" * 32 if tool == "subchat_status" else "c" * 32,
+                tool=tool, arguments={"operation_id": operation_id}), scopes)
+            assert observed.state == "failed"
+            assert observed.data == {"error_code": "preparation_failed",
+                                     "dispatched": False,
+                                     "reason": "composer_has_draft"}
+        private = await gateway.execute("other-grant", Request(
+            operation_id="d" * 32, tool="subchat_status",
+            arguments={"operation_id": operation_id}), scopes)
+        assert private.data["error_code"] == "unknown_operation"
+        conflict = await gateway.execute("grant", send.model_copy(update={
+            "arguments": {**send.arguments, "prompt": "different"}}), scopes)
+        assert conflict.state == "failed" and conflict.data["dispatched"] is False
+        assert attempts == 1 and backend.sends == 0
+        # Only this explicit same-ID send may attempt preparation again.
+        retried = await gateway.execute("grant", send, scopes)
+        assert retried.state == "unknown" and attempts == 2 and backend.sends == 1
+        duplicate = await gateway.execute("grant", send, scopes)
+        assert duplicate.state == "unknown" and backend.sends == 1
+    finally:
+        finish.set()
+        await gateway.close()
+        ledger.close()
+
+
+@pytest.mark.asyncio
 async def test_uncertain_sends_keep_recovery_available_at_capacity():
     class Core:
         async def catalog(self):

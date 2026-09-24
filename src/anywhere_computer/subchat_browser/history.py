@@ -238,9 +238,6 @@ def project_observation(payload: bytes, submission: SubchatSubmission
         if len(turn_users) != 1:
             return SubchatPendingObservation(operation_id=submission.operation_id,
                                              reason='correlation_ambiguous')
-    if len(images) > 1:
-        return SubchatPendingObservation(operation_id=submission.operation_id,
-                                         reason='final_ambiguous')
     answer_type: Literal['text', 'image', 'multimodal']
     if text is None:
         answer_type = 'image'

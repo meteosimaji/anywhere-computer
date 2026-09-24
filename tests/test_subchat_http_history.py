@@ -51,6 +51,19 @@ def test_finished_multipart_and_image_final(parts, content_type, expected_text, 
         'answer', expected_text, expected_type)
 
 
+@pytest.mark.parametrize(('caption', 'expected_type'), [
+    ('Caption', 'multimodal'), (None, 'image'),
+])
+def test_multiple_bound_images_still_form_one_finished_answer(caption, expected_type):
+    submission, payload = sample()
+    parts = ([caption] if caption is not None else []) + [IMAGE_PART.copy(), IMAGE_PART.copy()]
+    payload['messages'][1]['content'] = {'content_type': 'multimodal_text', 'parts': parts}
+    observed = project_history(json.dumps(payload).encode(), submission)
+    assert observed is not None
+    assert (observed.answer_message_id, observed.text, observed.answer_type) == (
+        'answer', caption, expected_type)
+
+
 async def test_finished_image_tool_and_empty_final_complete_without_invented_text(tmp_path):
     from anywhere_computer.state import Ledger
     from anywhere_computer.subchat import Subchats
