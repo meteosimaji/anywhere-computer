@@ -18,8 +18,11 @@ def _credential(path: Path) -> str:
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode):
         raise ValueError("Peer credential must be a regular file")
-    if os.name != "nt" and (info.st_uid != os.getuid() or info.st_mode & 0o077):
-        raise PermissionError("Peer credential must belong to this user with mode 0600")
+    if os.name != "nt":
+        # Windows' os typing omits getuid even when checking this POSIX branch.
+        current_uid = getattr(os, "getuid")()  # noqa: B009
+        if info.st_uid != current_uid or info.st_mode & 0o077:
+            raise PermissionError("Peer credential must belong to this user with mode 0600")
     value = path.read_text(encoding="ascii").strip()
     if not value or len(value) > 256:
         raise ValueError("Invalid peer credential file")
