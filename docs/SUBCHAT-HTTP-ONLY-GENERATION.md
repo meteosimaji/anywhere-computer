@@ -74,7 +74,7 @@ prepares the request once, checks the current branch for a follow-up, and
 dispatches generation once. It does not substitute newly observed protection
 values into the handed-off headers.
 
-A current ChatGPT UI control sent `openai-sentinel-chat-requirements-token` on
+A ChatGPT UI control sent `openai-sentinel-chat-requirements-token` on
 generation, together with the proof and Turnstile headers. The observed Sentinel
 and conversation preparation requests carried no `openai-sentinel-*` request
 headers. This controller therefore sends those handed-off headers only on the
@@ -92,6 +92,20 @@ That Sentinel prepare response marked Turnstile, proof of work, and the extra
 collector as required. These observations show a concrete previous-turn
 protection dependency, but do not establish a browser-free way to produce or
 renew its values or prove the cause of a later HTTPX 403 response.
+
+In a separate Chrome UI turn on 2026-09-24, the generation POST returned 200
+and the final answer appeared in saved history. CDP `requestWillBeSentExtraInfo`
+showed the actual sent header names, including Cookie and Origin, without
+retaining their values. The current request had 11 application header names
+outside the handoff allowlist, including `oai-device-id`, `oai-session-id`,
+`oai-client-version`, `x-conduit-token`, and `x-openai-target-route`; it lacked
+several old mandatory names, including `chatgpt-account-id` and `oai-did`.
+The current handoff validator therefore cannot accept this observed successful
+request shape. This is a demonstrated compatibility defect, not an isolated
+cause of the HTTPX 403. The observed request starts also differed: conversation
+prepare and one Sentinel prepare/finalize cycle started before generation; a
+second Sentinel cycle started while generation was in flight. These are dated
+observations, not a stable protocol specification.
 
 An earlier live acceptance on 2026-09-23 used an explicit in-memory handoff
 from a successful Chrome generation, then closed Chrome. The controller used
@@ -113,6 +127,21 @@ category (JSON/HTML/other). These fixed categories help distinguish a likely
 edge challenge from an application rejection; they do not prove the cause.
 The response body and credential or protection values are never logged.
 
+To compare the protocol shape of an accepted and a rejected generation request
+without handling values, write two files of the form
+`{"headers": ["accept", "..."], "body_keys": ["action", "..."]}`, containing only
+header names and top-level JSON body key names. Then run
+`python scripts/compare_chat_shapes.py accepted.json rejected.json`. It lists
+missing (in the first, not the second) and added names per field. Exit status is
+0 for matching shapes, 1 for differing shapes, and 2 for refused input. It refuses
+mappings, non-name entries, duplicates, and some credential-like strings, never
+prints file contents, and sends no requests. Its filter cannot recognize every
+value. Build the name lists yourself from observed metadata at the same capture
+layer; never copy header or body values into these files.
+Caveat: identical shapes do not show that a request is acceptable, and a
+difference does not prove the cause of a 403. Values, session state, TLS/HTTP
+fingerprint, and timing are outside the comparison.
+
 An HTTP success or streaming response alone does not prove completion. The
 controller correlates the saved input, final answer, and terminal markers in
 HTTP history before reporting `completed`. If an acknowledgement or answer is
@@ -126,6 +155,8 @@ The HTTP-only path uses HTTPX for catalog and history reads, preparation,
 branch checks, and generation. It does not automatically fall back to a
 browser or replay rejected requests. The browser-assisted controller described
 in the [Subchat guide](SUBCHAT-PROBE.md) is a separate mode.
+The only accepted HTTPX generation test above used Playwright for preparation;
+an all-HTTPX generation has not yet returned 200 in the recorded tests.
 
 `subchat_download_file` over MCP can return up to 512 KiB of base64 bytes for
 one exact sandbox link in a saved, verified final answer. It rechecks the
