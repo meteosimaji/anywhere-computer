@@ -8,6 +8,7 @@ from io import BytesIO
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from test_subchat_http_catalog import catalog
 from test_subchat_http_only import CATALOG_URL, SECRET, credentials, session_payload
 from test_subchat_http_only_cli import command, environment
@@ -20,11 +21,13 @@ from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
 from anywhere_computer.subchat_http_generation import (
     ObservedHTTPGeneration,
     _json_response,
+    dispatch_generation,
     read_http_generation_handoff,
 )
 from anywhere_computer.subchat_http_sender import HTTPGenerationPlan
 from anywhere_computer.subchat_mcp import session as mcp_session
 from anywhere_computer.subchat_state import (
+    SubchatAccountMismatch,
     SubchatHTTPSelection,
     SubchatSubmission,
     SubchatSubmissions,
@@ -591,7 +594,7 @@ def test_completed_outgoing_body_accepts_exact_byte_limit(template_name, monkeyp
     # template limit counts its less compact input serialization.
     def with_templates() -> ObservedHTTPGeneration:
         return ObservedHTTPGeneration(
-            json.dumps(data['headers']).encode(), data['sentinel_p'],
+            json.dumps(data['headers']).encode(), 'fixture-account', data['sentinel_p'],
             json.dumps(data['prepare_template']).encode(),
             json.dumps(data['generation_template']).encode())
 
@@ -812,6 +815,174 @@ def test_handoff_accepts_observed_token_variants_and_rejects_unknown_headers():
     with pytest.raises(ValueError, match='Invalid HTTP generation headers'):
         ObservedHTTPGeneration.from_data(
             data, authorization=SECRET, account_id='fixture-account')
+
+
+CURRENT_ONLY_HEADERS = (
+    'oai-client-build-number oai-client-version oai-device-id oai-genui-client-actions '
+    'oai-session-id oai-telemetry x-conduit-token x-oai-is-client-observation '
+    'x-oai-is-pending-updates x-openai-target-path x-openai-target-route').split()
+
+
+def current_shape_data():
+    data = handoff_data()
+    names = (
+        'accept accept-language authorization content-type cookie oai-echo-logs oai-language '
+        'openai-sentinel-chat-requirements-token openai-sentinel-proof-token '
+        'openai-sentinel-turnstile-token origin referer sec-ch-ua sec-ch-ua-mobile '
+        'sec-ch-ua-platform sec-fetch-dest sec-fetch-mode sec-fetch-site user-agent '
+        'x-oai-turn-trace-id x-openai-web-frontend x-openai-web-sse-compression'
+    ).split()
+    data['headers'] = dict.fromkeys([*names, *CURRENT_ONLY_HEADERS], 'fixture')
+    data['headers'].update({
+        'authorization': SECRET, 'accept': 'text/event-stream',
+        'content-type': 'application/json', 'cookie': 'session=' + PROOF,
+        'origin': 'https://chatgpt.com', 'referer': 'https://chatgpt.com/',
+        'openai-sentinel-proof-token': PROOF,
+        'openai-sentinel-turnstile-token': PROOF,
+    })
+    return data
+
+
+def test_current_shape_without_account_header_is_bound_to_the_session_account():
+    data = current_shape_data()
+    parsed = ObservedHTTPGeneration.from_data(
+        data, authorization=SECRET, account_id='fixture-account', cookie='session=' + PROOF)
+    assert 'chatgpt-account-id' not in parsed.headers
+    assert set(CURRENT_ONLY_HEADERS) <= set(parsed.headers)
+    assert parsed.account_id == 'fixture-account'
+    assert PROOF not in repr(parsed) and SECRET not in repr(parsed)
+
+
+def test_old_shape_with_account_header_is_still_accepted():
+    parsed = ObservedHTTPGeneration.from_data(
+        handoff_data(), authorization=SECRET, account_id='fixture-account')
+    assert parsed.headers['chatgpt-account-id'] == 'fixture-account'
+    assert parsed.headers['oai-did'] == 'fixture'
+    assert parsed.account_id == 'fixture-account'
+
+
+@pytest.mark.parametrize('shape,field', [
+    (handoff_data, 'account'), (handoff_data, 'authorization'), (handoff_data, 'cookie'),
+    (current_shape_data, 'authorization'), (current_shape_data, 'cookie')])
+def test_wrong_account_authorization_or_cookie_is_rejected(shape, field):
+    data = shape()
+    arguments = {'authorization': SECRET, 'account_id': 'fixture-account',
+                 'cookie': 'session=' + PROOF}
+    if field == 'account':
+        arguments['account_id'] = 'other-account'
+    elif field == 'authorization':
+        arguments['authorization'] = 'Bearer other-authorization'
+    else:
+        arguments['cookie'] = 'session=other'
+    with pytest.raises(ValueError, match='session or origin changed') as caught:
+        ObservedHTTPGeneration.from_data(data, **arguments)
+    assert PROOF not in str(caught.value) and SECRET not in str(caught.value)
+
+
+def test_expected_cookie_requires_a_cookie_header_and_mismatched_header_is_rejected():
+    data = current_shape_data()
+    del data['headers']['cookie']
+    with pytest.raises(ValueError, match='session or origin changed'):
+        ObservedHTTPGeneration.from_data(
+            data, authorization=SECRET, account_id='fixture-account', cookie='session=' + PROOF)
+    with pytest.raises(ValueError, match='session or origin changed'):
+        ObservedHTTPGeneration.from_data(
+            data, authorization=SECRET, account_id='fixture-account')
+
+
+def test_current_shape_requires_expected_cookie_without_account_header():
+    with pytest.raises(ValueError, match='session or origin changed'):
+        ObservedHTTPGeneration.from_data(
+            current_shape_data(), authorization=SECRET, account_id='fixture-account')
+
+
+@pytest.mark.parametrize('shape', [handoff_data, current_shape_data])
+@pytest.mark.parametrize('required_protection', [
+    'openai-sentinel-proof-token', 'openai-sentinel-turnstile-token'])
+def test_protection_headers_and_strict_origin_shape_remain_required(shape,
+                                                                   required_protection):
+    cookie = 'session=' + PROOF
+    data = shape()
+    del data['headers'][required_protection]
+    with pytest.raises(ValueError, match='Invalid HTTP generation headers'):
+        ObservedHTTPGeneration.from_data(data, authorization=SECRET,
+                                         account_id='fixture-account', cookie=cookie)
+    data = shape()
+    data['headers']['unobserved-header'] = 'fixture'
+    with pytest.raises(ValueError, match='Invalid HTTP generation headers'):
+        ObservedHTTPGeneration.from_data(data, authorization=SECRET,
+                                         account_id='fixture-account', cookie=cookie)
+    data = shape()
+    data['headers']['origin'] = 'https://example.invalid'
+    with pytest.raises(ValueError, match='session or origin changed'):
+        ObservedHTTPGeneration.from_data(data, authorization=SECRET,
+                                         account_id='fixture-account', cookie=cookie)
+
+
+def test_backend_compares_stored_account_and_cookie_with_the_login_session():
+    generation = ObservedHTTPGeneration.from_data(
+        current_shape_data(), authorization=SECRET, account_id='fixture-account',
+        cookie='session=' + PROOF)
+
+    async def factory():
+        raise AssertionError('No request is made at construction')
+
+    HTTPOnlySubchatBackend(factory, credentials(), generation=generation,
+                           store=object())
+    other_account = credentials().model_copy(update={'account_id': 'other-account'})
+    with pytest.raises(ValueError, match='does not match login session'):
+        HTTPOnlySubchatBackend(factory, other_account, generation=generation, store=object())
+    other_cookie = credentials().model_copy(update={'cookie': SecretStr('session=other')})
+    with pytest.raises(ValueError, match='does not match login session'):
+        HTTPOnlySubchatBackend(factory, other_cookie, generation=generation, store=object())
+
+
+async def test_current_shape_generation_dispatches_with_stored_account(tmp_path):
+    generation = ObservedHTTPGeneration.from_data(
+        current_shape_data(), authorization=SECRET, account_id='fixture-account',
+        cookie='session=' + PROOF)
+    async with LocalChat(prepare_token_present=False) as api:
+        async with httpx.AsyncClient(
+                trust_env=False, follow_redirects=False,
+                transport=httpx.AsyncHTTPTransport(retries=0)) as client:
+            ledger, _, service = await setup(tmp_path, api, client, generation=generation)
+            try:
+                sent = await service.send('6' * 32, 'current shape', 'Future Chat',
+                    'Future effort', owner=None, http_selection=SELECTION)
+                assert sent.state == 'sending' and sent.conversation_id == CHAT
+                post_headers = [headers for method, _, headers, _ in api.requests
+                                if method == 'POST']
+                assert len(post_headers) == 3
+                assert all('chatgpt-account-id' not in headers and 'oai-did' not in headers
+                           for headers in post_headers)
+                assert post_headers[2]['x-openai-target-path'] == 'fixture'
+                for headers in post_headers[:2]:
+                    assert not {'x-conduit-token', 'x-openai-target-path',
+                                'x-openai-target-route', 'x-oai-is-pending-updates',
+                                'x-oai-is-client-observation', 'oai-genui-client-actions'} & (
+                                    set(headers))
+            finally:
+                ledger.close()
+
+
+async def test_dispatch_rejects_a_plan_for_another_account_before_any_request(tmp_path):
+    generation = ObservedHTTPGeneration.from_data(
+        current_shape_data(), authorization=SECRET, account_id='fixture-account',
+        cookie='session=' + PROOF)
+    async with LocalChat() as api:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            ledger, store, _ = await setup(tmp_path, api, client, generation=generation)
+            try:
+                plan = HTTPGenerationPlan(
+                    operation_id='5' * 32, user_message_id='user-input', prompt='prompt',
+                    model_slug='future-chat', thinking_effort='future-effort',
+                    account_id='other-account', conversation_id=None, predecessor_id=None)
+                with pytest.raises(SubchatAccountMismatch):
+                    await dispatch_generation(plan, None, handoff=generation, client=client,
+                                              store=store, owner=None, origin=api.origin)
+                assert api.requests == []
+            finally:
+                ledger.close()
 
 
 def test_http_events_are_private_bounded_and_durable(tmp_path):

@@ -67,8 +67,8 @@ class HTTPOnlySubchatBackend:
         if generation is not None and session is not None:
             generation_headers = generation.headers
             if (generation_headers['authorization'] != session.authorization.get_secret_value()
-                    or generation_headers['chatgpt-account-id'] != session.account_id
-                    or (session.cookie is not None and generation_headers['cookie']
+                    or generation.account_id != session.account_id
+                    or (session.cookie is not None and generation_headers.get('cookie')
                         != session.cookie.get_secret_value())):
                 raise ValueError('HTTP generation handoff does not match login session')
         self._http_reader = ChatHTTPReader(

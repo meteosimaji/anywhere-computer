@@ -61,7 +61,7 @@ The handoff has exactly four fields:
 
 | Field | Content |
 | --- | --- |
-| `headers` | Recognized headers from a successful generation request. Authorization and account must match the read session; origin and referer must be `chatgpt.com`. The `openai-sentinel-chat-requirements-prepare-token` and `openai-sentinel-chat-requirements-token` headers are optional, according to what the observed request actually sent. |
+| `headers` | Recognized headers from a successful generation request. Authorization and account must match the read session; origin and referer must be `chatgpt.com`. If the request has no `chatgpt-account-id` header, a Cookie matching the authenticated HTTP session must be supplied and checked. The `openai-sentinel-chat-requirements-prepare-token` and `openai-sentinel-chat-requirements-token` headers are optional, according to what the observed request actually sent. |
 | `sentinel_p` | The observed value for Sentinel preparation. |
 | `prepare_template` | The complete successful conversation-preparation JSON body. |
 | `generation_template` | The complete successful ordinary-Chat generation JSON body. |
@@ -87,6 +87,8 @@ headers. This controller therefore sends those handed-off headers only on the
 generation request. The UI completed Sentinel prepare/finalize while generation
 was in flight; a later turn used the prior finalize response token. The
 controller does not implement that token lifecycle or the finalize request.
+It forwards generation route headers such as `x-openai-target-path` only on the
+generation POST, not on preparation or branch requests.
 In two successful turns in one hidden in-app Chat, the observed request starts
 were conversation prepare, generation, Sentinel prepare, then Sentinel
 finalize; all four responses were HTTP 200 and both final answers arrived.

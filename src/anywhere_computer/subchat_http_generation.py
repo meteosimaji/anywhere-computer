@@ -32,18 +32,31 @@ logger = logging.getLogger(__name__)
 
 
 _HEADERS = frozenset({
-    'accept', 'authorization', 'chatgpt-account-id', 'content-type', 'cookie', 'oai-did',
-    'oai-echo-logs', 'oai-language', 'openai-sentinel-chat-requirements-prepare-token',
+    'accept', 'accept-language', 'authorization', 'chatgpt-account-id', 'content-type', 'cookie',
+    'oai-client-build-number', 'oai-client-version', 'oai-device-id', 'oai-did',
+    'oai-echo-logs', 'oai-genui-client-actions', 'oai-language', 'oai-session-id',
+    'oai-telemetry', 'openai-sentinel-chat-requirements-prepare-token',
     'openai-sentinel-chat-requirements-token',
     'openai-sentinel-proof-token', 'openai-sentinel-turnstile-token', 'origin', 'originator',
     'referer', 'sec-ch-ua', 'sec-ch-ua-arch', 'sec-ch-ua-bitness', 'sec-ch-ua-full-version',
     'sec-ch-ua-full-version-list', 'sec-ch-ua-mobile', 'sec-ch-ua-model', 'sec-ch-ua-platform',
-    'sec-ch-ua-platform-version', 'user-agent', 'x-oai-turn-trace-id',
-    'x-openai-codex-window-type', 'x-openai-web-frontend', 'x-openai-web-sse-compression',
+    'sec-ch-ua-platform-version', 'sec-fetch-dest', 'sec-fetch-mode', 'sec-fetch-site',
+    'user-agent', 'x-conduit-token',
+    'x-oai-is-client-observation', 'x-oai-is-pending-updates', 'x-oai-turn-trace-id',
+    'x-openai-codex-window-type', 'x-openai-target-path', 'x-openai-target-route',
+    'x-openai-web-frontend', 'x-openai-web-sse-compression',
 })
-_OPTIONAL_HEADERS = frozenset({'openai-sentinel-chat-requirements-prepare-token',
-                               'openai-sentinel-chat-requirements-token'})
-_REQUIRED_HEADERS = _HEADERS - _OPTIONAL_HEADERS
+# Old and current observed UI requests differ in client-identity headers. Require only
+# what is bound or forwarded as proof; the account comes from the read session, so
+# a chatgpt-account-id header is optional (but must match when present).
+_REQUIRED_HEADERS = frozenset({'accept', 'authorization', 'content-type', 'origin', 'referer',
+                               'user-agent', 'openai-sentinel-proof-token',
+                               'openai-sentinel-turnstile-token'})
+_GENERATION_ONLY_HEADERS = frozenset({
+    'x-conduit-token', 'x-openai-target-path', 'x-openai-target-route',
+    'x-oai-is-client-observation', 'x-oai-is-pending-updates',
+    'x-openai-web-sse-compression', 'oai-genui-client-actions',
+})
 _CHAT = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
 _PATHS = {
     'sentinel': '/backend-api/sentinel/chat-requirements/prepare',
@@ -57,6 +70,7 @@ class ObservedHTTPGeneration:
     """Request-specific values held only for this process's lifetime."""
 
     _headers: bytes
+    account_id: str
     sentinel_p: str
     _prepare_template: bytes
     _generation_template: bytes
@@ -92,8 +106,9 @@ class ObservedHTTPGeneration:
                        for key, value in raw_headers.items())):
             raise ValueError('Invalid HTTP generation headers')
         if (raw_headers['authorization'] != authorization
-                or raw_headers['chatgpt-account-id'] != account_id
-                or (cookie is not None and raw_headers['cookie'] != cookie)
+                or raw_headers.get('chatgpt-account-id', account_id) != account_id
+                or (raw_headers.get('chatgpt-account-id') is None and cookie is None)
+                or (cookie is not None and raw_headers.get('cookie') != cookie)
                 or raw_headers['origin'] != 'https://chatgpt.com'
                 or urlsplit(raw_headers['referer']).scheme != 'https'
                 or urlsplit(raw_headers['referer']).netloc != 'chatgpt.com'
@@ -124,7 +139,7 @@ class ObservedHTTPGeneration:
             data['generation_template'])
         if not generation or len(json.dumps(generation).encode()) > 1_048_576:
             raise ValueError('Invalid generation template')
-        return cls(json.dumps(raw_headers).encode(), sentinel_p,
+        return cls(json.dumps(raw_headers).encode(), account_id, sentinel_p,
                    json.dumps(prepare).encode(), json.dumps(generation).encode())
 
     def prepare_body(self, plan: HTTPGenerationPlan) -> bytes:
@@ -252,7 +267,7 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
     A second call through Subchats will recover rather than repeat preparation.
     HTTP 200 and SSE markers are candidates only; history proves receipt/final.
     """
-    if plan.account_id != handoff.headers['chatgpt-account-id']:
+    if plan.account_id != handoff.account_id:
         raise SubchatAccountMismatch('HTTP generation account changed')
     try:
         body = handoff.generation_body(plan, submission)
@@ -266,11 +281,12 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
         raise ValueError('Chat preparation request is invalid') from None
     request_headers = handoff.headers
     if use_client_cookies:
-        request_headers.pop('cookie')
-    # The observed UI sends protection headers on generation, not on preparation
-    # or the branch read. Keep their handed-off values only for generation.
+        request_headers.pop('cookie', None)
+    # Generation route and protection headers do not belong on preparation or
+    # branch reads. The current UI uses distinct headers for those requests.
     headers = {key: value for key, value in request_headers.items()
-               if not key.startswith('openai-sentinel-')}
+               if not key.startswith('openai-sentinel-')
+               and key not in _GENERATION_ONLY_HEADERS}
     headers.update({'accept': 'application/json', 'accept-encoding': 'identity'})
     observed = await _preparation_post('sentinel', plan=plan, client=client, store=store,
         owner=owner, origin=origin, body=json.dumps({'p': handoff.sentinel_p}).encode(),
