@@ -125,6 +125,29 @@ async def test_completed_page_release_preserves_queued_delivery(tmp_path, queued
         ledger.close()
 
 
+async def test_completed_answer_survives_page_release_error(tmp_path, caplog):
+    ledger = Ledger(tmp_path)
+
+    class FailingRelease(Provider):
+        async def release_completed(self, submission, *, keep_for_queue):
+            raise RuntimeError('fixture cleanup failure')
+
+    provider = FailingRelease()
+    service = Subchats(SubchatSubmissions(ledger.connection), provider)
+    operation = '9' * 32
+    try:
+        assert (await service.send(operation, 'first', 'model', 'effort',
+                                   owner=None)).state == 'submitted'
+        provider.finished = True
+        completed = await service.recover(operation, owner=None)
+        assert completed.state == 'completed'
+        assert completed.answer == '42'
+        assert service.store.get(operation, owner=None).state == 'completed'
+        assert 'Completed Subchat cleanup failed error_type=RuntimeError' in caplog.text
+    finally:
+        ledger.close()
+
+
 async def test_queue_restart_pending_completion_and_lost_receipt(tmp_path):
     parent, message = '1' * 32, '2' * 32
     provider = Provider()

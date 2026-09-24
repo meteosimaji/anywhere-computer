@@ -56,6 +56,36 @@ window.finish=()=>{
 </script>'''
 
 
+async def test_prepare_preserves_original_error_when_page_close_fails(monkeypatch):
+    from anywhere_computer.subchat import SubchatAccessError
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmission
+
+    class Page:
+        async def close(self):
+            raise RuntimeError('fixture close failure')
+
+    async def context_factory():
+        return object()
+
+    backend = BrowserSubchatBackend(context_factory)
+    page = Page()
+
+    async def new_page():
+        return page
+
+    async def fail_prepare(*args, **kwargs):
+        raise SubchatAccessError(401)
+
+    monkeypatch.setattr(backend, '_new_page', new_page)
+    monkeypatch.setattr(backend, '_prepare_page', fail_prepare)
+    submission = SubchatSubmission(
+        operation_id='0' * 32, prompt='fixture', model='fixture', effort='fixture')
+    with pytest.raises(SubchatAccessError):
+        await backend.prepare(submission)
+    assert submission.operation_id not in backend.pages
+
+
 async def test_baseline_uses_latest_user_identity_in_current_chat_markup():
     playwright = pytest.importorskip('playwright.async_api')
     from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend

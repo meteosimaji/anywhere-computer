@@ -86,6 +86,7 @@ def test_plugin_reads_persistent_local_chrome_selection(tmp_path, monkeypatch):
     }))
     monkeypatch.delenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE', raising=False)
     monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'linux')
     observed = {}
 
     async def fake_run(_browser_profile, _state_dir, **options):
@@ -110,6 +111,62 @@ def test_plugin_reads_persistent_local_chrome_selection(tmp_path, monkeypatch):
     }))
     with pytest.raises(ValueError, match='nonempty account ID'):
         subchat_plugin.main()
+
+
+def test_pinned_macos_login_enables_background_httpx_send_by_default(
+    tmp_path, monkeypatch,
+):
+    profile, state = tmp_path / 'login', tmp_path / 'subchat/ledger'
+    source = tmp_path / 'Chrome/Default'
+    state.parent.mkdir()
+    (state.parent / 'login-selection.json').write_text(json.dumps({
+        'chrome_source_profile': str(source),
+        'expected_account_id': 'pinned-account',
+        'enable_background_send': True,
+    }))
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', raising=False)
+    monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'darwin')
+    observed = {}
+
+    async def fake_run(browser_profile, state_dir, **options):
+        observed.update(profile=browser_profile, state=state_dir, options=options)
+
+    monkeypatch.setattr(subchat_plugin, 'run', fake_run)
+    subchat_plugin.main()
+    assert observed == {
+        'profile': profile, 'state': state,
+        'options': {
+            'mcp': True, 'http_read': True, 'minimized': True,
+            'httpx_generation': True, 'browser_source_profile': source,
+            'expected_account_id': 'pinned-account',
+        },
+    }
+
+
+def test_pin_without_explicit_send_selection_remains_read_only(tmp_path, monkeypatch):
+    profile, state = tmp_path / 'login', tmp_path / 'subchat/ledger'
+    source = tmp_path / 'Chrome/Default'
+    state.parent.mkdir()
+    selection = state.parent / 'login-selection.json'
+    selection.write_text(json.dumps({
+        'chrome_source_profile': str(source), 'expected_account_id': 'pinned-account',
+    }))
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', raising=False)
+    monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'darwin')
+    observed = {}
+
+    async def fake_run(browser_profile, _state_dir, **options):
+        observed.update(profile=browser_profile, options=options)
+
+    monkeypatch.setattr(subchat_plugin, 'run', fake_run)
+    subchat_plugin.main()
+    assert observed['profile'] is None
+    assert observed['options']['read_only_mcp'] is True
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID', 'other-account')
+    subchat_plugin.main()
+    assert observed['options']['read_only_mcp'] is True
 
 
 def test_plugin_selection_stat_error_is_sanitized(tmp_path, monkeypatch):
@@ -227,7 +284,8 @@ async def test_plugin_read_only_catalog_rejects_mutations(tmp_path):
         assert listing is not None
         assert {tool['name'] for tool in listing['result']['tools']} == (
             READ_ONLY_TOOLS - {'subchat_capabilities', 'subchat_catalog',
-                               'subchat_download_file', 'subchat_refresh_auth'})
+                               'subchat_download_file', 'subchat_download_image',
+                               'subchat_refresh_auth'})
         for name in ('subchat_send', 'subchat_delete', 'subchat_message',
                      'subchat_cancel', 'subchat_queue_watch'):
             result = await server.handle({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call',

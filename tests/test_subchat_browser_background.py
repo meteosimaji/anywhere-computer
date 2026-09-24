@@ -124,6 +124,26 @@ def test_background_cleanup_reports_surviving_chrome(tmp_path, monkeypatch):
         background._stop_profile_processes(tmp_path, 'owner')
 
 
+def test_profile_process_classification_ignores_chrome_helpers(tmp_path, monkeypatch):
+    profile_arg = f'--user-data-dir={tmp_path}'
+    owner_arg = '--anywhere-background-owner=' + 'a' * 32
+
+    def process(pid, executable, *arguments):
+        return SimpleNamespace(
+            pid=pid, info={'cmdline': [executable, profile_arg, *arguments]})
+
+    owned = process(1, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+                    owner_arg)
+    helper = process(2, '/Applications/Google Chrome.app/Contents/Frameworks/'
+                     'Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper',
+                     '--type=renderer')
+    foreign = process(3, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
+    monkeypatch.setattr(background.psutil, 'process_iter',
+                        lambda attributes: [owned, helper, foreign])
+    assert background._profile_processes(tmp_path) == [owned, foreign]
+    assert background._owned_processes(tmp_path, 'a' * 32) == [owned]
+
+
 @pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
 async def test_background_launch_rejects_unowned_profile_process(tmp_path, monkeypatch):
     monkeypatch.setattr(background.sys, 'platform', 'darwin')

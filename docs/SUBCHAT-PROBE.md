@@ -10,15 +10,20 @@ Computer engine and the public OpenAI API.
 The Codex Plugin registers `anywhere-subchat` beside `anywhere-computer`. Its
 installation and `uv` prerequisite are described in the [README](../README.md#get-started).
 After installation, restart the Plugin session and confirm both MCP servers are
-available before using the Subchat tools. The Subchat server exposes seven
-read-only tools by default: `subchat_capabilities`,
+available before using the Subchat tools. In read-only mode the server exposes
+`subchat_capabilities`,
 `subchat_catalog`, `subchat_list`, `subchat_status`, `subchat_recover` and
-`subchat_wait`, plus `subchat_download_file`. A selected Chrome login profile adds
+`subchat_wait`, plus `subchat_download_file` and `subchat_download_image`. A selected Chrome login profile adds
 `subchat_refresh_auth`, which reacquires the same account through a headless
 snapshot and authenticated GETs. A 401 on an authenticated read also triggers one
-refresh and one repeat of that GET. Check `subchat_capabilities` first. The default
-`generation_transport=unavailable` means this server cannot create or send a
-Chat. Plugin installation does not configure generation for the separate CLI.
+refresh and one repeat of that GET. Check `subchat_capabilities` first. On macOS,
+a selected profile with an account ID pin and `"enable_background_send": true`
+in `subchat/login-selection.json` enables background browser-prepared HTTPX
+sending at Plugin startup. Without that explicit selection, or on other platforms, the
+default `generation_transport=unavailable` cannot create or send a Chat. Set
+`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=http-read-only` to keep a pinned macOS
+installation read-only. Plugin installation does not configure generation for
+the separate CLI.
 
 An older manual `codex mcp` registration with the same server name can shadow
 the installed Plugin and keep pointing to a removed wheel. Check `codex mcp
@@ -91,6 +96,18 @@ account and answer, then returns file metadata and at most 512 KiB of base64
 content. It writes no local file and does not upload into another Chat or Library.
 An unknown link, changed account, or oversized file fails explicitly. The
 source Chat's path alone does not give another Chat access to its sandbox.
+
+`subchat_download_image` takes a saved operation ID. It finds one generated image
+in the exact account, conversation and turn bound to that operation, then returns
+its PNG, JPEG or WebP bytes as bounded base64 content. The result includes
+`submission_state` and `final_answer_verified`; image availability alone does
+not prove a final assistant answer. A live macOS MCP call retrieved a 1254 × 1254
+PNG from a saved ChatGPT image turn while the operation was still `submitted`.
+The direct MCP response is capped at 2 MiB of image bytes. When calling through
+Anywhere Computer's plugin bridge, request `chunk_bytes` of at most 24 KiB and
+advance `offset` to each returned `next_offset`; the bridge limits individual
+tool results to 64 KiB of text. The image is rechecked against the saved Chat
+on each chunk request.
 
 The Plugin server uses an already logged-in, dedicated Chrome profile. By
 default, the profile and ledger are the `subchat/chrome-login` and

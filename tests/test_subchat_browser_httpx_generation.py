@@ -279,3 +279,4 @@ async def test_invalid_browser_generation_marks_preflight_without_http_post(monk
     with pytest.raises(ValueError, match='not confirmed'):
         await backend.send(submission)
     assert route.aborted and failures == [submission.operation_id]
+    assert page in backend._unreusable_pages

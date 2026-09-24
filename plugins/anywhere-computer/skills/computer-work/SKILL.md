@@ -101,9 +101,13 @@ availability must also be checked separately. Existing HTTP connections may need
 http-add-tools upgrade before newly introduced direct-MCP tools become discoverable.
 
 This Plugin also registers `anywhere-subchat` as a separate local MCP server. Its
-default mode uses a dedicated logged-in Chrome profile headlessly at startup,
+read-only mode uses a dedicated logged-in Chrome profile headlessly at startup,
 then HTTPX for Chat history and catalog reads. It closes Chrome before serving
 read-only MCP tools. `generation_transport=unavailable` means it cannot send.
+On macOS, a selected profile with an account ID pin and
+`"enable_background_send": true` in `subchat/login-selection.json` enables
+background browser-prepared HTTPX sending at Plugin startup. Set
+`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=http-read-only` to keep it read-only.
 If startup login fails, the server still exposes capabilities and saved state;
 `authentication_state` reports the rejection and HTTP reads stop with the same
 `authentication_required` or `access_denied` code. Restore login, then restart
@@ -121,7 +125,10 @@ model and effort labels, then recover the original send operation ID. Keep the
 controller running until a pending send is confirmed; a missing answer never
 authorizes replay with a new ID. `subchat_download_file` retrieves one exact
 saved final-answer sandbox link (up to 512 KiB of base64), without uploading it
-to another Chat or Library. The local profile and ledger are separate from the
+to another Chat or Library. `subchat_download_image` retrieves a bounded image
+from the exact saved account, conversation and turn. Its `final_answer_verified`
+field distinguishes an available image from a completed assistant answer. The
+local profile and ledger are separate from the
 main Anywhere engine. Set absolute paths in
 `ANYWHERE_SUBCHAT_CHROME_LOGIN_PROFILE` and `ANYWHERE_SUBCHAT_STATE_DIR` to
 choose other dedicated locations before starting the server. No account secrets

@@ -22,8 +22,13 @@ from anywhere_computer.subchat import (
     SubchatPreparationFailed,
     SubchatReceipt,
     SubchatStaleTarget,
+    SubchatUnsupported,
 )
-from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmission
+from anywhere_computer.subchat_state import (
+    SubchatHTTPSelection,
+    SubchatSubmission,
+    SubchatSubmissions,
+)
 
 from .catalog import (
     COMPOSER,
@@ -43,6 +48,8 @@ from .request_content import add_resources, generation_input
 if TYPE_CHECKING:
     from playwright.async_api import APIRequestContext, BrowserContext, Locator, Page, Route
 
+    from anywhere_computer.subchat_http_image import ImageDownload
+
 INPUT = Path(__file__).with_name('subchat_input.js').read_text(encoding="utf-8")
 STREAM = Path(__file__).with_name('subchat_stream.js').read_text(encoding='utf-8')
 COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")
@@ -61,6 +68,7 @@ class BrowserSubchatBackend:
                  record_rejection: Callable[[str, str, int, str], None] | None = None,
                  httpx_generation: bool = False,
                  background_pages: bool = False,
+                 store: SubchatSubmissions | None = None,
                  expected_account_id: str | None = None) -> None:
         if httpx_generation and not http_read:
             raise ValueError('Browser-prepared HTTPX generation requires HTTP history')
@@ -69,7 +77,9 @@ class BrowserSubchatBackend:
         self.http_read = http_read
         self._httpx_generation = httpx_generation
         self._background_pages = background_pages
+        self.image_download_available = background_pages and http_read
         self._expected_account_id = expected_account_id
+        self._store = store
         self._record_request = record_request
         self._record_preflight_failure = record_preflight_failure
         self._record_conversation = record_conversation
@@ -174,6 +184,31 @@ class BrowserSubchatBackend:
             result['generation_transport'] = ('browser_prepared_httpx'
                                               if self._httpx_generation else 'browser_prepared')
             return result
+
+    async def download_image(self, operation_id: str, *,
+                             max_bytes: int) -> ImageDownload:
+        """Read one image bound to this adapter's durable Chat operation."""
+        from ..subchat_chrome_login import chrome_http_session
+        from ..subchat_http_image import download_verified_image
+
+        if not self.image_download_available or self._store is None:
+            raise SubchatUnsupported('http_session_required')
+        saved = self._store.get(operation_id, owner=None)
+        if saved.state not in {'submitted', 'completed'}:
+            raise ValueError('Image download requires a confirmed submission')
+        async with httpx.AsyncClient(
+            trust_env=False, follow_redirects=False,
+            transport=httpx.AsyncHTTPTransport(retries=0),
+        ) as client:
+            auth = await chrome_http_session(
+                await self._browser(), client,
+                expected_account_id=self._expected_account_id,
+                page_factory=self._new_page if self._background_pages else None)
+            async with asyncio.timeout(20):
+                history = await self._http_reader._history_payload(
+                    await self._read_context(), saved)
+            return await download_verified_image(
+                saved, history, session=auth, client=client, max_bytes=max_bytes)
 
     async def verify_delete_target(self, submission: SubchatSubmission) -> None:
         async with asyncio.timeout(20):
@@ -403,7 +438,11 @@ class BrowserSubchatBackend:
                 if previous_kind is not None:
                     self._prepared_baseline_kinds[submission.operation_id] = previous_kind
             if not candidates:
-                await page.close()
+                try:
+                    await page.close()
+                except Exception as error:
+                    logger.warning('Failed prepared page cleanup error_type=%s',
+                                   type(error).__name__)
             raise
 
     async def _prepare_page(self, page: Page, submission: SubchatSubmission,
@@ -565,9 +604,13 @@ class BrowserSubchatBackend:
                 if str(error).startswith('Invalid browser request header types: '):
                     logger.warning('%s', error)
                 await route.abort()
-                if (stage in {'request_validation', 'account_binding'}
-                        and self._record_preflight_failure is not None):
-                    self._record_preflight_failure(submission.operation_id)
+                if stage in {'request_validation', 'account_binding'}:
+                    # The browser may have painted an optimistic user bubble
+                    # before its rejected POST. Never reuse this tab as a
+                    # verified conversation baseline.
+                    self._unreusable_pages.add(page)
+                    if self._record_preflight_failure is not None:
+                        self._record_preflight_failure(submission.operation_id)
             finally:
                 if not dispatched.done():
                     dispatched.set_result(accepted)
@@ -734,6 +777,7 @@ class BrowserSubchatBackend:
         work = page.get_by_role('button', name=re.compile(
             r'^(Work\s*で続ける|Continue in Work)$')).filter(visible=True)
         if (await stay.count() == 1 and await work.count() == 1
+                and submission.user_message_id is not None
                 and await stay.is_enabled()
                 and (await self._baseline_with_last_user(page))[1]
                     == submission.user_message_id

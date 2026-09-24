@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 
 from .state import state_directory
@@ -39,31 +40,13 @@ def browser_send_profile(profile: Path, state: Path) -> Path:
 
 def selected_chrome_login(state: Path) -> tuple[Path | None, str | None]:
     """Read an explicit profile and account pin without inferring either one."""
-    selection = state.parent / "login-selection.json"
-    record: dict[str, str] = {}
-    try:
-        selection_size = selection.stat().st_size
-    except FileNotFoundError:
-        selection_size = None
-    except OSError as error:
-        raise ValueError("Invalid Subchat login selection") from error
-    if selection_size is not None:
-        if selection_size > 4096:
-            raise ValueError("Subchat login selection exceeds the size limit")
-        try:
-            record = json.loads(selection.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as error:
-            raise ValueError("Invalid Subchat login selection") from error
-        if (not isinstance(record, dict)
-                or not set(record).issubset({"chrome_source_profile", "expected_account_id"})
-                or "chrome_source_profile" not in record
-                or not isinstance(record["chrome_source_profile"], str)
-                or not record["chrome_source_profile"]):
-            raise ValueError("Subchat login selection requires chrome_source_profile")
+    record = _selection_record(state)
     configured = os.environ.get("ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE")
     source_value = configured if configured is not None else record.get("chrome_source_profile")
     source = None
     if source_value is not None:
+        if not isinstance(source_value, str):
+            raise ValueError("Subchat Chrome source profile must be a path")
         source = Path(source_value).expanduser()
         if not source.is_absolute():
             raise ValueError("Subchat Chrome source profile must be an absolute path")
@@ -81,9 +64,47 @@ def selected_chrome_login(state: Path) -> tuple[Path | None, str | None]:
     return source, account_id
 
 
+def _selection_record(state: Path) -> dict[str, object]:
+    """Read local account selection and explicit send consent."""
+    selection = state.parent / "login-selection.json"
+    record: dict[str, object] = {}
+    try:
+        selection_size = selection.stat().st_size
+    except FileNotFoundError:
+        selection_size = None
+    except OSError as error:
+        raise ValueError("Invalid Subchat login selection") from error
+    if selection_size is not None:
+        if selection_size > 4096:
+            raise ValueError("Subchat login selection exceeds the size limit")
+        try:
+            record = json.loads(selection.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError("Invalid Subchat login selection") from error
+        if (not isinstance(record, dict)
+                or not set(record).issubset({"chrome_source_profile", "expected_account_id",
+                                             "enable_background_send"})
+                or "chrome_source_profile" not in record
+                or not isinstance(record["chrome_source_profile"], str)
+                or not record["chrome_source_profile"]
+                or ("enable_background_send" in record
+                    and type(record["enable_background_send"]) is not bool)):
+            raise ValueError("Subchat login selection requires chrome_source_profile")
+    return record
+
+
 def main() -> None:
     profile, state = plugin_paths()
-    transport = os.environ.get("ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT", "http-read-only")
+    transport = os.environ.get("ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT")
+    if transport is None:
+        # A local explicit send selection, account pin, and source profile
+        # are all required before exposing mutation tools by default.
+        source, pinned_account = selected_chrome_login(state)
+        transport = ('browser-prepared-httpx'
+                     if (sys.platform == 'darwin' and source is not None
+                         and pinned_account is not None
+                         and _selection_record(state).get('enable_background_send') is True)
+                     else 'http-read-only')
     if transport == "http-read-only":
         source, account_id = selected_chrome_login(state)
         asyncio.run(run(None, state, mcp=True, http_only=True,

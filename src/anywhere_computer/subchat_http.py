@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from httpx import AsyncClient
 
     from .subchat_http_download import SandboxDownload
+    from .subchat_http_image import ImageDownload
 
 CONVERSATION_ID = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
 _ReadResult = TypeVar('_ReadResult')
@@ -433,6 +434,36 @@ class HTTPOnlySubchatBackend:
             assert session is not None
             return await download_verified_sandbox_file(
                 saved, answer, sandbox_link,
+                session=(session.model_copy(update={'cookie': None})
+                         if session.cookie is not None and not self._chrome_login else session),
+                client=await request_factory(), max_bytes=max_bytes)
+
+        return await self._authenticated_read(read)
+
+    async def download_image(self, operation_id: str, *, max_bytes: int
+                             ) -> ImageDownload:
+        """Read one history-bound image tool result, including before final text."""
+        from .subchat_http_image import download_verified_image
+
+        if self._store is None or self._session is None:
+            if self._startup_account_mismatch:
+                raise SubchatAccountMismatch('Chrome login selected another Chat account')
+            if self._startup_access_status is not None:
+                raise SubchatAccessError(self._startup_access_status)
+            raise SubchatUnsupported('http_session_required')
+        saved = self._store.get(operation_id, owner=self._owner)
+        if saved.state not in {'submitted', 'completed'}:
+            raise ValueError('Image download requires a confirmed submission')
+
+        async def read() -> ImageDownload:
+            reader = self._http_reader
+            session = self._session
+            request_factory = self._request_factory
+            async with asyncio.timeout(20):
+                history_payload = await reader._history_payload(None, saved)
+            assert session is not None
+            return await download_verified_image(
+                saved, history_payload,
                 session=(session.model_copy(update={'cookie': None})
                          if session.cookie is not None and not self._chrome_login else session),
                 client=await request_factory(), max_bytes=max_bytes)

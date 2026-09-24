@@ -56,8 +56,14 @@ Codex Pluginの導入にはCodexから使える`uv`が必要です。このチ�
 subchatは、役割を分担した通常のChatGPT Chatです。ChatGPT Workタスクとは別です。
 親が作業範囲を指定し、複数の子から根拠付きの結果を集め、検証して統合する用途を目指します。
 このチェックアウトのCodex Pluginは、能力・モデル一覧・保存済み操作・結果回収と、
-保存済み回答のsandboxファイル1件を上限付きで取得する読み取り専用の7ツールを
-既定で提供します。Pluginプロセスに`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send`を
+保存済み回答のsandboxファイルと、保存済み会話に結び付く生成画像を
+上限付きで取得する読み取り専用ツールを
+提供します。macOSでログイン元プロファイルとアカウントIDを選択・固定し、
+`subchat/login-selection.json`に`"enable_background_send": true`を明示した場合は、
+起動時に背景Chrome準備とHTTPX送信のツールも提供します。未設定時と他のOSでは
+読み取り専用が既定です。固定済みでも読み取り専用にする場合は
+`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=http-read-only`を設定します。
+Pluginプロセスに`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send`を
 設定して再接続すると、ログイン済みの専用Chromeプロファイルを使う送信ツールが現れます。
 Chromeは最小化しますが、macOSでの実測では一時的に前面へ出ました。能力表示では
 `generation_transport=browser_prepared`となります。独立したHTTP専用の生成は
@@ -65,9 +71,12 @@ Chromeは最小化しますが、macOSでの実測では一時的に前面へ出
 既存のAnywhere ComputerエンジンとChatGPT向けリモート接続は、このSubchatサーバーと別です。
 macOSでは`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx`を選ぶと、
 指定したログイン済みChromeプロファイルの一時スナップショットで送信準備を行い、
-生成POSTだけをHTTPXで一回送ります。製品コマンドからGPT-5.6 Sol Instantの実生成と、
-別のHTTPX GETによる入力・回答の保存確認が通りました。準備には最小化したChromeが必要で、
-ブラウザなしの送信と前面表示が絶対に起きないことは未確認です。
+生成POSTだけをHTTPXで一回送ります。GPT-6 Proの新規送信と同一会話への追送で、
+両方の生成POSTがHTTPX `200 text/event-stream`となり、回答保存まで確認しました。
+別の画像生成Chatでは、送信操作に結び付いたPNG画像をMCP経由で取得できました。
+画像の取得と最終回答の確認は別の状態として返します。
+30fpsの録画とフォーカス記録では専用Chromeの前面化はありませんでした。
+準備には背景Chromeが必要で、どの環境でも前面化しない保証ではありません。
 `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE`でプロファイルを選び、複数アカウントを
 使う場合は`ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID`で対象を固定してください。
 対応する通信経路・操作・検証結果・未対応事項は、上のsubchatガイドを正本とします。

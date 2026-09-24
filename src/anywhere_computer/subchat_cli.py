@@ -413,6 +413,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     record_rejection=record_rejection if http_read else None,
                     httpx_generation=httpx_generation,
                     background_pages=httpx_generation and sys.platform == 'darwin',
+                    store=store,
                     expected_account_id=expected_account_id if httpx_generation else None)
             service = Subchats(store, backend)
             # Saved-state requests need no browser. Once needed, commands share
@@ -447,6 +448,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'a completed answer. Queued work is never sent by this adapter. '
                         'subchat_download_file retrieves one exact final-answer sandbox link '
                         'as bounded base64 bytes; it does not upload to another Chat or Library. '
+                        'subchat_download_image reads an image bound to a saved submitted or '
+                        'completed turn; image availability is not a final answer. '
                         'Deletion checks the saved conversation and bound account; an unknown '
                         'delete outcome is never replayed automatically.')
                     if http_generation is not None:
@@ -462,7 +465,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                             'must be supplied again by the operator in a new process. '
                             'subchat_download_file retrieves one exact final-answer sandbox '
                             'link as bounded base64 bytes; it does not upload to another Chat '
-                            'or Library. '
+                            'or Library. subchat_download_image reads an image bound to the '
+                            'saved turn without submitting another message. '
                             'Deletion checks the saved conversation and bound account; an '
                             'unknown delete outcome is never replayed automatically.')
                 if read_only_mcp:
@@ -476,6 +480,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'subchat_download_file retrieves one exact saved final-answer sandbox '
                         'link as bounded base64 bytes without writing a local file. It does '
                         'not upload to another Chat or Library. '
+                        'subchat_download_image reads one image bound to a saved submitted or '
+                        'completed turn; image availability is not a final answer. '
                         'Recover only the original operation ID; an unconfirmed or pending '
                         'state never permits resending. Login failure requires operator action.')
                 server = session(service, observe_catalog=backend.catalog,

@@ -110,10 +110,10 @@ ChatGPT Work task. The experimental adapter supports explicit model selection,
 submission tracking and correlated result recovery. The parent assigns scope,
 compares evidence and verifies proposed changes before integrating them.
 
-This checkout's Codex Plugin adds a separate Subchat MCP server. Its default
-mode has seven read-only tools for capabilities, catalog, saved operations,
-result recovery and a bounded download of one verified sandbox file. With a
-selected Chrome login profile it adds `subchat_refresh_auth` as an eighth tool.
+This checkout's Codex Plugin adds a separate Subchat MCP server. Its read-only
+mode has tools for capabilities, catalog, saved operations, result recovery,
+and bounded downloads of verified sandbox files and generated images. A selected
+Chrome login profile also enables `subchat_refresh_auth`.
 `subchat_capabilities.authentication_state` reports the current in-process
 authentication state. If login is missing or denied, the server still exposes
 its tools and saved operations; HTTP reads return `authentication_required` or
@@ -127,9 +127,15 @@ through a private headless snapshot (`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE`),
 without opening or activating the ordinary Chrome window. Authentication and
 model catalog GETs returned HTTP 200 in a live check; independent HTTP-only
 generation remains unverified. A local `subchat/login-selection.json` can retain
-the selected profile path and an optional Chat account ID pin across Plugin
+the selected profile path and a Chat account ID pin across Plugin
 updates. When the ledger location is overridden, place that file beside the
 selected ledger directory; see the Subchat guide.
+On macOS, a selected profile with an account ID pin and
+`"enable_background_send": true` in `subchat/login-selection.json` enables the
+background browser-prepared HTTPX send tools when the Plugin starts. Without
+this explicit selection, or on other platforms, the default remains read-only. Set
+`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=http-read-only` to keep a pinned macOS
+installation read-only.
 Set `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process to expose
 `subchat_send` and follow-up tools through the dedicated, logged-in Chrome
 profile. This mode minimizes Chrome but briefly activated its window in a live
@@ -149,8 +155,8 @@ with HTTPX. It starts a private Chrome profile in the background and uses a
 temporary loopback CDP connection for turn preparation. In one live macOS run
 observed at 30 frames per second, a new Chat and follow-up completed in the
 same conversation with the exact saved answers, without Chrome coming to the
-foreground. HTTPX 200 for the generation POST is inferred from the code path
-and completed result; an earlier direct measurement observed HTTPX 200. Neither
+foreground. A separate live GPT-6 Pro new-send and follow-up run recorded
+HTTPX `200 text/event-stream` for both generation POSTs. Neither
 result guarantees no focus change in every environment or browser-free sending.
 Select an existing profile with `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` and pin
 the account with `ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID` when multiple Chat

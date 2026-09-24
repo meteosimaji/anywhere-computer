@@ -1,5 +1,6 @@
 """Submission lifecycle shared by browser adapters; no model or provider defaults."""
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
@@ -17,6 +18,8 @@ from .subchat_state import (
     SubchatSubmissions,
     SubchatWorkContext,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SubchatReceipt(Contract):
@@ -237,8 +240,12 @@ class Subchats:
             operation_id, answer.answer_message_id, answer.text, owner=owner,
             reported_settings=answer.reported_settings)
         release = getattr(self.backend, 'release_completed', None)
-        if release is not None:
-            assert completed.conversation_id is not None
-            await release(completed, keep_for_queue=self.store.has_queued_for_conversation(
-                completed.conversation_id, owner=owner))
+        if release is not None and completed.conversation_id is not None:
+            try:
+                await release(completed, keep_for_queue=self.store.has_queued_for_conversation(
+                    completed.conversation_id, owner=owner))
+            except Exception as error:
+                # The final answer was committed before optional tab cleanup.
+                logger.warning('Completed Subchat cleanup failed error_type=%s',
+                               type(error).__name__)
         return completed

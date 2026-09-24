@@ -80,11 +80,17 @@ class SandboxFile(OperationId):
     max_bytes: int = Field(default=512 * 1024, ge=1, le=512 * 1024)
 
 
+class ChatImage(OperationId):
+    max_bytes: int = Field(default=2 * 1024 * 1024, ge=1, le=2 * 1024 * 1024)
+    offset: int = Field(default=0, ge=0)
+    chunk_bytes: int | None = Field(default=None, ge=1, le=24 * 1024)
+
+
 QUEUE_WATCH_INTERVAL = 5.0
 READ_ONLY_TOOLS = frozenset({
     'subchat_capabilities', 'subchat_catalog', 'subchat_list',
     'subchat_recover', 'subchat_status', 'subchat_wait', 'subchat_download_file',
-    'subchat_refresh_auth',
+    'subchat_download_image', 'subchat_refresh_auth',
 })
 
 _PREPARATION_REASONS = {
@@ -165,7 +171,10 @@ INSTRUCTIONS = (
     'A sandbox path alone does not grant cross-Chat access. HTTP-only sessions expose '
     'subchat_download_file for one exact saved final-answer link, returning at most 512 KiB '
     'of base64 bytes without local storage or a Library upload. Library materialization '
-    'remains Chat-driven. A queue follow-up does '
+    'remains Chat-driven. subchat_download_image reads the sole verified image tool result '
+    'from a saved submitted or completed input, even while final assistant text is pending. '
+    'It returns bounded image bytes without accepting an asset ID or URL. '
+    'A queue follow-up does '
     'not implicitly reattach resources. Reference local files with device ID and '
     'absolute path in the prompt and use the selected computer plugin to read them.'
 )
@@ -366,6 +375,15 @@ def session(service: Subchats, *,
             'writing a local file. Each call is limited to 512 KiB. '
             'This does not upload the file to another Chat or Library.')
 
+    download_image = getattr(service.backend, 'download_image', None)
+    if download_image is not None and getattr(service.backend, 'image_download_available', True):
+        definitions['subchat_download_image'] = (
+            ChatImage, 'Read the sole image in a finished tool result bound to a saved submitted '
+            'or completed Chat input. The final assistant answer may still be pending. '
+            'Returns at most 2 MiB of base64 image bytes without writing a local file; '
+            'use offset and chunk_bytes up to 24 KiB through bounded plugin bridges. '
+            'Accepts no asset ID or URL and never submits another message.')
+
     if read_only and observe_http_catalog is not None:
         definitions['subchat_catalog'] = (
             ReadOnlyHTTPCatalog,
@@ -391,7 +409,7 @@ def session(service: Subchats, *,
             'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
             'annotations': {'readOnlyHint': name in {
                 'subchat_capabilities', 'subchat_catalog', 'subchat_status', 'subchat_list',
-                'subchat_download_file', 'subchat_refresh_auth'},
+                'subchat_download_file', 'subchat_download_image', 'subchat_refresh_auth'},
                             'destructiveHint': name == 'subchat_delete', 'openWorldHint': True},
         }) for name, (schema, description) in definitions.items()]
 
@@ -426,6 +444,36 @@ def session(service: Subchats, *,
                     'mime_type': downloaded.mime_type,
                     'file_size_bytes': downloaded.file_size_bytes,
                     'content_base64': base64.b64encode(downloaded.content).decode('ascii'),
+                })
+            if (request.tool == 'subchat_download_image' and download_image is not None
+                    and 'subchat_download_image' in definitions):
+                target_image = ChatImage.model_validate(request.arguments)
+                try:
+                    downloaded_image = await download_image(
+                        target_image.operation_id, max_bytes=target_image.max_bytes)
+                except SandboxFileTooLarge:
+                    return Reply(operation_id=request.operation_id, state='failed',
+                                 error='The Chat image exceeds the requested byte limit.',
+                                 data={'error_code': 'file_too_large',
+                                       'max_bytes': target_image.max_bytes,
+                                       'automatic_retry': False})
+                if target_image.offset > downloaded_image.file_size_bytes:
+                    raise ValueError('Image offset exceeds file size')
+                end = (downloaded_image.file_size_bytes if target_image.chunk_bytes is None
+                       else min(downloaded_image.file_size_bytes,
+                                target_image.offset + target_image.chunk_bytes))
+                return Reply(operation_id=request.operation_id, state='completed', data={
+                    'submission_operation_id': target_image.operation_id,
+                    'submission_state': downloaded_image.submission_state,
+                    'final_answer_verified': downloaded_image.submission_state == 'completed',
+                    'mime_type': downloaded_image.mime_type,
+                    'file_size_bytes': downloaded_image.file_size_bytes,
+                    'width': downloaded_image.width,
+                    'height': downloaded_image.height,
+                    'offset': target_image.offset,
+                    'next_offset': end if end < downloaded_image.file_size_bytes else None,
+                    'content_base64': base64.b64encode(
+                        downloaded_image.content[target_image.offset:end]).decode('ascii'),
                 })
             if request.tool == 'subchat_queue_watch':
                 watch = QueueWatch.model_validate(request.arguments)
