@@ -238,6 +238,18 @@ not acquire generation protection values automatically and does not renew an
 expired login. Start read-only and check the reported capabilities before
 enabling generation.
 
+For this opt-in CLI mode, supply `--http-only --state-dir PATH` and exactly one
+session source: `--http-session-stdin`, `--chrome-login-profile PATH`, or (on
+macOS) `--chrome-login-source-profile PATH`. Sending also requires
+`--http-generation-stdin`; a Chrome login source additionally requires
+`--expected-account-id ID`. The generation handoff has four fields:
+`headers`, `sentinel_p`, `prepare_template` and `generation_template`. The
+controller checks the selected account against the authenticated read session
+before dispatch. Pass observed session and handoff data through a trusted
+anonymous stdin pipe. Keep credentials and protection values out of command
+arguments, files, logs, MCP calls and shell history. The controller does not
+refresh those values or retry an uncertain send.
+
 Personal ordinary-Chat HTTP access must stay within the permission and account
 scope granted to the owner. The experimental transport is not an official API;
 provider behavior can change. A completed operation is established by its
