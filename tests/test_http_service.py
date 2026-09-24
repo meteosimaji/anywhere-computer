@@ -149,7 +149,7 @@ async def test_subchat_login_failure_keeps_http_tools_and_recovers_without_resta
     selected = SubchatGatewayConfig(
         profile=str(tmp_path / "Default"), ledger=str(tmp_path / "subchat-ledger"),
         account_id="selected", consent="ordinary-chat-browser-control-approved")
-    scopes = SCOPES | {"subchat_status", "subchat_send"}
+    scopes = SCOPES | {"subchat_status", "subchat_send", "subchat_recover"}
     config = await setup(tmp_path, unused_tcp_port, scopes=scopes, subchat=selected)
     owner = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
     owner.initialize("synthetic owner password")
@@ -199,6 +199,15 @@ async def test_subchat_login_failure_keeps_http_tools_and_recovers_without_resta
                            "arguments": {"operation_id": "a" * 32}}})
             assert unavailable.status_code == 200
             assert unavailable.json()["result"]["structuredContent"]["state"] == "failed"
+            unavailable_data = unavailable.json()["result"]["structuredContent"]["data"]
+            assert unavailable_data["error_code"] == "unknown_operation"
+            assert opens == 0
+            blocked = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": "blocked", "method": "tools/call",
+                "params": {"name": "subchat_recover",
+                           "arguments": {"operation_id": "a" * 32}}})
+            assert blocked.status_code == 200
+            assert blocked.json()["result"]["structuredContent"]["state"] == "failed"
             assert opens == 1
             target = tmp_path / "available.txt"
             target.write_text("still available", encoding="utf-8")
@@ -218,7 +227,7 @@ async def test_subchat_login_failure_keeps_http_tools_and_recovers_without_resta
             assert missing_id.json()["error"]["code"] == -32602
             result = await http.post("/mcp", headers=headers, json={
                 "jsonrpc": "2.0", "id": "status", "method": "tools/call",
-                "params": {"name": "subchat_status",
+                "params": {"name": "subchat_recover",
                            "arguments": {"operation_id": "a" * 32}}})
             assert result.status_code == 200
             assert result.json()["result"]["structuredContent"]["data"] == {"ready": True}

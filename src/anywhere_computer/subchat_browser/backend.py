@@ -58,6 +58,21 @@ CHAT = re.compile(r'https://chatgpt\.com/c/'
 logger = logging.getLogger(__name__)
 
 
+def browser_capabilities(*, http_read: bool,
+                         httpx_generation: bool) -> dict[str, object]:
+    """Describe the configured browser transport without opening a browser."""
+    return {'queue_dispatch': 'recover_or_wait', 'background_dispatcher': False,
+            'native_steer': False, 'provider_stop': False,
+            'cancel_scope': 'local_queued_or_prepared',
+            'state': 'capabilities', 'transport': 'browser_prepared',
+            'browser_required': True,
+            'generation_transport': ('browser_prepared_httpx' if httpx_generation
+                                     else 'browser_prepared'),
+            'http_selection_send_supported': http_read,
+            'credential_refresh': False, 'independent_login': False,
+            'http_delete_supported': True, 'deletion_transport': 'authenticated_http'}
+
+
 class BrowserSubchatBackend:
     def __init__(self, context: BrowserContext | Callable[[], Awaitable[BrowserContext]],
                  *, http_read: bool = False,
@@ -102,16 +117,8 @@ class BrowserSubchatBackend:
             self._context.on('close', self._browser_closed)
 
     def capabilities(self) -> dict[str, object]:
-        return {'queue_dispatch': 'recover_or_wait', 'background_dispatcher': False,
-                'native_steer': False, 'provider_stop': False,
-                'cancel_scope': 'local_queued_or_prepared',
-                'state': 'capabilities', 'transport': 'browser_prepared',
-                'browser_required': True,
-                'generation_transport': ('browser_prepared_httpx' if self._httpx_generation
-                                         else 'browser_prepared'),
-                'http_selection_send_supported': self.http_read,
-                'credential_refresh': False, 'independent_login': False,
-                'http_delete_supported': True, 'deletion_transport': 'authenticated_http'}
+        return browser_capabilities(http_read=self.http_read,
+                                    httpx_generation=self._httpx_generation)
 
     def _browser_closed(self, context: BrowserContext) -> None:
         self._closed = True

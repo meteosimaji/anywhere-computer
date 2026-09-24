@@ -64,13 +64,13 @@ async def test_lazy_gateway_discovery_is_static_and_execute_retries_login(monkey
 
     monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
     gateway = LazySubchatGateway(selected, owner="owner")
-    granted = frozenset({"subchat_status"})
+    granted = frozenset({"subchat_recover"})
     assert await gateway.catalog("grant", frozenset()) == []
     assert entered == 0
     assert [item["name"] for item in await gateway.catalog("grant", granted)] == [
-        "subchat_status"]
+        "subchat_recover"]
     assert entered == 0
-    request = Request(operation_id="a" * 32, tool="subchat_status")
+    request = Request(operation_id="a" * 32, tool="subchat_recover")
     denied = await gateway.execute("grant", request, frozenset())
     assert denied.state == "failed" and denied.error == "Subchat tool is not granted"
     assert entered == 0
@@ -84,7 +84,7 @@ async def test_lazy_gateway_discovery_is_static_and_execute_retries_login(monkey
     assert entered == 1
     clock[0] += 11
     replies = await asyncio.gather(*(gateway.execute("grant", Request(
-        operation_id=f"{index:032x}", tool="subchat_status"), granted)
+        operation_id=f"{index:032x}", tool="subchat_recover"), granted)
         for index in range(8)))
     assert all(reply.state == "completed" for reply in replies)
     assert entered == 2
@@ -129,22 +129,22 @@ async def test_lazy_gateway_idle_closes_and_reopens_without_closing_active_calls
 
     monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
     gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
-    granted = frozenset({"subchat_status"})
+    granted = frozenset({"subchat_recover"})
     try:
         execute = asyncio.create_task(gateway.execute(
-            "grant", Request(operation_id="a" * 32, tool="subchat_status"), granted))
+            "grant", Request(operation_id="a" * 32, tool="subchat_recover"), granted))
         await execute_started.wait()
         await asyncio.sleep(.03)
         assert entered == 1 and exited == 0
-        assert (await gateway.catalog("grant", granted))[0]["name"] == "subchat_status"
+        assert (await gateway.catalog("grant", granted))[0]["name"] == "subchat_recover"
         assert exited == 0
         finish_execute.set()
         assert (await execute).state == "completed"
         await asyncio.wait_for(_until(lambda: exited == 1), timeout=1)
-        assert (await gateway.catalog("grant", granted))[0]["name"] == "subchat_status"
+        assert (await gateway.catalog("grant", granted))[0]["name"] == "subchat_recover"
         assert entered == 1  # Catalog alone never reopens Chrome.
         assert (await gateway.execute("grant", Request(
-            operation_id="b" * 32, tool="subchat_status"), granted)).state == "completed"
+            operation_id="b" * 32, tool="subchat_recover"), granted)).state == "completed"
         assert entered == 2
     finally:
         finish_execute.set()
@@ -197,15 +197,16 @@ async def test_lazy_gateway_idle_waits_for_detached_work_and_service_close(monke
 
     monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
     gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
-    granted = frozenset({"subchat_status"})
-    assert (await gateway.execute(
-        "grant", Request(operation_id="b" * 32, tool="subchat_status"), granted)).state == "running"
+    granted = frozenset({"subchat_recover"})
+    pending = await gateway.execute(
+        "grant", Request(operation_id="b" * 32, tool="subchat_recover"), granted)
+    assert pending.state == "running"
     await asyncio.sleep(.04)
     assert exited == 0
     work.set()
     await asyncio.wait_for(_until(lambda: exited == 1), timeout=1)
     again = await gateway.execute(
-        "grant", Request(operation_id="c" * 32, tool="subchat_status"), granted)
+        "grant", Request(operation_id="c" * 32, tool="subchat_recover"), granted)
     assert again.state == "completed"
     await gateway.close()
     assert exited == 2
@@ -321,9 +322,9 @@ async def test_lazy_gateway_service_close_waits_for_active_execute(monkeypatch, 
 
     monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
     gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
-    granted = frozenset({"subchat_status"})
+    granted = frozenset({"subchat_recover"})
     execute = asyncio.create_task(gateway.execute(
-        "grant", Request(operation_id="d" * 32, tool="subchat_status"), granted))
+        "grant", Request(operation_id="d" * 32, tool="subchat_recover"), granted))
     await execute_started.wait()
     closing = asyncio.create_task(gateway.close())
     await asyncio.sleep(.03)
@@ -485,6 +486,76 @@ async def test_static_discovery_matches_real_gateway_catalog_without_chrome(tmp_
         await lazy.close()
         await gateway.close()
     finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_local_status_and_capabilities_match_session_without_opening_chrome(
+    tmp_path, monkeypatch,
+):
+    import anywhere_computer.subchat_gateway as gateway_module
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    ledger_path = tmp_path / "ledger"
+    ledger = Ledger(ledger_path)
+    store = SubchatSubmissions(ledger.connection)
+    operation_id = "9" * 32
+    store.prepare(operation_id, "saved prompt", "model", "effort", owner="grant-a")
+    store.record_http_event(operation_id, "prepare_request", owner="grant-a")
+    bound_id = "8" * 32
+    store.prepare(bound_id, "bound prompt", "model", "effort", owner="grant-a")
+    store.begin_send(bound_id, owner="grant-a", user_message_id="user-bound",
+                     provider_account_id="account")
+    foreign_id = "7" * 32
+    store.prepare(foreign_id, "foreign prompt", "model", "effort", owner="grant-a")
+    store.begin_send(foreign_id, owner="grant-a", user_message_id="user-foreign",
+                     provider_account_id="another-account")
+
+    async def forbidden_browser():
+        raise AssertionError("Browser was opened")
+
+    backend = BrowserSubchatBackend(forbidden_browser, http_read=True,
+                                    httpx_generation=True, background_pages=True)
+    real = session(Subchats(store, backend), owner="grant-a")
+    direct = SubchatGateway(lambda _grant: real, owner="owner")
+
+    @asynccontextmanager
+    async def forbidden_gateway(config, *, owner):
+        raise AssertionError("Gateway was opened")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", forbidden_gateway)
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "selected" / "Default"), ledger=str(ledger_path),
+        account_id="account",
+        consent="ordinary-chat-browser-control-approved")
+    lazy = LazySubchatGateway(selected, owner="owner")
+    try:
+        for index, (tool, arguments) in enumerate((
+            ("subchat_status", {"operation_id": operation_id}),
+            ("subchat_status", {"operation_id": bound_id}),
+            ("subchat_capabilities", {}),
+        )):
+            request = Request(operation_id=f"{index + 10:032x}", tool=tool,
+                              arguments=arguments)
+            actual = await lazy.execute("grant-a", request, frozenset({tool}))
+            expected = await direct.execute("grant-a", request, frozenset({tool}))
+            assert actual == expected
+        private = await lazy.execute("grant-b", Request(
+            operation_id="b" * 32, tool="subchat_status",
+            arguments={"operation_id": operation_id}), frozenset({"subchat_status"}))
+        assert private.state == "failed" and private.data["error_code"] == "unknown_operation"
+        mismatch = await lazy.execute("grant-a", Request(
+            operation_id="d" * 32, tool="subchat_status",
+            arguments={"operation_id": foreign_id}), frozenset({"subchat_status"}))
+        assert mismatch.state == "failed" and mismatch.data["error_code"] == "account_mismatch"
+        denied = await lazy.execute("grant-a", Request(
+            operation_id="c" * 32, tool="subchat_status",
+            arguments={"operation_id": operation_id}), frozenset())
+        assert denied.state == "failed" and denied.error == "Subchat tool is not granted"
+    finally:
+        await lazy.close()
+        await direct.close()
         ledger.close()
 
 

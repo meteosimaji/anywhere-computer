@@ -146,6 +146,17 @@ def direct_gateway_catalog() -> list[JsonValue]:
     definitions['subchat_catalog'] = _GATEWAY_CATALOG_DEFINITION
     return _tool_catalog(definitions)
 
+
+def capability_report(reported: dict[str, object], *,
+                      queue_watch_supported: bool) -> dict[str, JsonValue]:
+    """Add the implementation identity to configured transport capabilities."""
+    return TypeAdapter(dict[str, JsonValue]).validate_python({
+        **reported,
+        'implementation_version': __version__,
+        'implementation_runtime_id': runtime_identity(),
+        'queue_watch_supported': queue_watch_supported,
+    })
+
 _PREPARATION_REASONS = {
     'Ordinary Chat composer contains a draft': 'composer_has_draft',
     'Ordinary Chat is generating': 'generation_active',
@@ -556,13 +567,9 @@ def session(service: Subchats, *,
                     # but this Plugin deliberately does not expose that tool.
                     reported = {**reported, 'http_delete_supported': False,
                                 'deletion_transport': 'unavailable'}
-                data = TypeAdapter(dict[str, JsonValue]).validate_python({
-                    **reported,
-                    'implementation_version': __version__,
-                    'implementation_runtime_id': runtime_identity(),
-                    'queue_watch_supported': (not read_only
-                                              and hasattr(service.backend, 'queue_watch_ready')),
-                })
+                data = capability_report(reported,
+                    queue_watch_supported=(not read_only
+                        and hasattr(service.backend, 'queue_watch_ready')))
                 return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_list':
                 page = service.store.list(SubchatList.model_validate(request.arguments),

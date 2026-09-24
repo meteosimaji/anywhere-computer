@@ -4,17 +4,24 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
 import sys
 import time
 from collections.abc import AsyncIterator, Callable
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, closing
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
 
-from .models import Reply, Request
-from .subchat_mcp import ReadOnlyHTTPCatalog, SubchatSession, direct_gateway_catalog
+from .models import Contract, OperationId, Reply, Request
+from .subchat_mcp import (
+    ReadOnlyHTTPCatalog,
+    SubchatSession,
+    capability_report,
+    direct_gateway_catalog,
+)
+from .subchat_state import SubchatAccountMismatch, SubchatOperationNotFound, SubchatSubmissions
 
 if TYPE_CHECKING:
     import httpx
@@ -151,7 +158,13 @@ class SubchatGateway:
                                        "another; the gateway has 128 unresolved operations",
                                  data={"dispatched": False})
             async def run() -> Reply:
-                return await self._core(grant_id).execute(request)
+                reply = await self._core(grant_id).execute(request)
+                if request.tool == "subchat_capabilities" and reply.state == "completed":
+                    # The direct HTTP gateway does not expose queue_watch.
+                    return reply.model_copy(update={"data": {
+                        **reply.data, "queue_watch_supported": False,
+                    }})
+                return reply
 
             task = asyncio.create_task(run())
             self.pending[key] = (request.tool, digest, task)
@@ -269,6 +282,8 @@ class LazySubchatGateway:
         if request.tool not in granted & SUBCHAT_GATEWAY_TOOLS:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Subchat tool is not granted")
+        if request.tool in {"subchat_status", "subchat_capabilities"}:
+            return await self._local_read(grant_id, request)
         gateway = await self._acquire()
         if gateway is None:
             return Reply(operation_id=request.operation_id, state="failed",
@@ -278,6 +293,77 @@ class LazySubchatGateway:
             return await gateway.execute(grant_id, request, granted)
         finally:
             await self._release()
+
+    async def _local_read(self, grant_id: str, request: Request) -> Reply:
+        """Read configured capabilities or one owned saved operation without Chrome."""
+        if self._closed:
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="Selected Subchat account is unavailable",
+                         data={"dispatched": False})
+        try:
+            if request.tool == "subchat_capabilities":
+                Contract.model_validate(request.arguments)
+                from .subchat_browser.backend import browser_capabilities
+
+                return Reply(operation_id=request.operation_id, state="completed",
+                             data=capability_report(browser_capabilities(
+                                 http_read=True, httpx_generation=True),
+                                 queue_watch_supported=False))
+            target = OperationId.model_validate(request.arguments)
+            queue_watch = None
+            gateway = self._gateway
+            if gateway is not None:
+                core = gateway.cores.get(grant_id)
+                if core is not None and target.operation_id in core.queue_watch_states:
+                    queue_watch = dict(core.queue_watch_states[target.operation_id])
+            return await asyncio.to_thread(self._saved_status, grant_id, request.operation_id,
+                                           target.operation_id, queue_watch)
+        except SubchatOperationNotFound:
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="No operation with this ID is visible in the selected ledger. "
+                               "Check the ID and ledger path, then use subchat_list.",
+                         data={"error_code": "unknown_operation", "dispatched": False,
+                               "automatic_retry": False})
+        except SubchatAccountMismatch:
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="The selected Chat account does not match the saved operation. "
+                               "Use the original account to inspect this operation.",
+                         data={"error_code": "account_mismatch", "automatic_retry": False})
+        except ValidationError as error:
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="Subchat input has invalid fields. Correct them before sending.",
+                         data={"error_code": "invalid_parameter",
+                               "invalid_params": [{"path": [str(part) for part in item["loc"]],
+                                                   "code": item["type"]}
+                                                  for item in error.errors(include_input=False,
+                                                                           include_context=False)],
+                               "dispatched": False})
+        except Exception as error:
+            logger.warning("Local Subchat read failed: %s", type(error).__name__)
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="Subchat call failed; inspect its saved status before retrying.",
+                         data={"error_type": type(error).__name__})
+
+    def _saved_status(self, grant_id: str, request_id: str, operation_id: str,
+                      queue_watch: dict[str, JsonValue] | None) -> Reply:
+        ledger_path = Path(self.config.ledger)
+        database = ledger_path / "operations.sqlite3"
+        if ledger_path.is_symlink() or database.is_symlink() or not database.is_file():
+            raise SubchatOperationNotFound("Unknown subchat submission")
+        with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro",
+                                     uri=True)) as connection:
+            store = SubchatSubmissions(connection, initialize=False)
+            result = store.get(operation_id, owner=grant_id)
+            if (result.provider_account_id is not None
+                    and result.provider_account_id != self.config.account_id):
+                raise SubchatAccountMismatch("Saved operation belongs to another account")
+            progress = store.http_progress(operation_id, owner=grant_id)
+        data = result.model_dump(mode="json")
+        if progress is not None:
+            data["http_progress"] = progress
+        if queue_watch is not None:
+            data["queue_watch"] = queue_watch
+        return Reply(operation_id=request_id, state="completed", data=data)
 
     async def close(self) -> None:
         async with self._idle_condition:
