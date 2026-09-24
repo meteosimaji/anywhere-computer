@@ -14,7 +14,7 @@ require a Codex model turn. Project code is [MIT licensed](LICENSE).
 
 Release assets and their receipts establish what was published. This README
 explains the checked-out source; a development feature is not automatically part
-of an older release. Dated test records describe the tested build and environment.
+of an older release. Historical test records are kept outside this repository.
 
 <!-- BEGIN GENERATED: project-reference -->
 This checkout (not a publication or installed-runtime claim):
