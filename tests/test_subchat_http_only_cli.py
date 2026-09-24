@@ -265,6 +265,67 @@ async def test_read_only_plugin_starts_when_chrome_login_is_rejected(
     ]
 
 
+async def test_read_only_plugin_explicit_refresh_after_startup_401(tmp_path, monkeypatch):
+    from playwright import async_api
+    from test_subchat_http_only import credentials
+
+    from anywhere_computer import mcp_server, subchat_chrome_login, subchat_cli, subchat_mcp
+    from anywhere_computer.subchat import SubchatAccessError
+
+    events = []
+
+    class Context:
+        async def close(self):
+            events.append('chrome_closed')
+
+    class PlaywrightManager:
+        async def __aenter__(self):
+            async def launch(*_args, **kwargs):
+                assert kwargs['headless'] is True
+                events.append('chrome_opened')
+                return Context()
+
+            return SimpleNamespace(chromium=SimpleNamespace(
+                launch_persistent_context=launch))
+
+        async def __aexit__(self, *_args):
+            events.append('playwright_closed')
+
+    async def login(_context, _client, *, expected_account_id):
+        events.append(('account_pin', expected_account_id))
+        if events.count('chrome_opened') == 1:
+            raise SubchatAccessError(401)
+        return credentials()
+
+    def session(service, **_kwargs):
+        async def close():
+            events.append('mcp_closed')
+
+        return SimpleNamespace(service=service, close=close)
+
+    async def serve(server, *_args):
+        backend = server.service.backend
+        assert backend.capabilities()['authentication_state'] == 'authentication_required'
+        result = await backend.refresh_auth()
+        assert result['authentication_state'] == 'authenticated'
+        assert backend.capabilities()['authentication_state'] == 'authenticated'
+        events.append('mcp_served')
+
+    monkeypatch.setattr(async_api, 'async_playwright', PlaywrightManager)
+    monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', login)
+    monkeypatch.setattr(subchat_mcp, 'session', session)
+    monkeypatch.setattr(mcp_server, 'serve_stdio', serve)
+    monkeypatch.setattr(subchat_cli.sys, 'stdin', TextIOWrapper(BytesIO()))
+    monkeypatch.setattr(subchat_cli.sys, 'stdout', TextIOWrapper(BytesIO()))
+    await subchat_cli.run(None, tmp_path / 'state', mcp=True, http_only=True,
+                          chrome_login_profile=tmp_path / 'profile', read_only_mcp=True)
+    assert events == [
+        'chrome_opened', ('account_pin', None), 'chrome_closed',
+        'chrome_opened', ('account_pin', None), 'chrome_closed',
+        'mcp_served', 'mcp_closed', 'playwright_closed',
+    ]
+
+
 async def test_http_only_real_httpx_request_uses_no_browser(tmp_path, monkeypatch):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread

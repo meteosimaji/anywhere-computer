@@ -95,11 +95,14 @@ compares evidence and verifies proposed changes before integrating them.
 
 This checkout's Codex Plugin adds a separate Subchat MCP server. Its default
 mode has seven read-only tools for capabilities, catalog, saved operations,
-result recovery and a bounded download of one verified sandbox file.
-`subchat_capabilities.authentication_state` reports whether startup found an
-authenticated session. If login is missing or denied, the server still exposes
+result recovery and a bounded download of one verified sandbox file. With a
+selected Chrome login profile it adds `subchat_refresh_auth` as an eighth tool.
+`subchat_capabilities.authentication_state` reports the current in-process
+authentication state. If login is missing or denied, the server still exposes
 its tools and saved operations; HTTP reads return `authentication_required` or
-`access_denied` until the operator logs in and restarts that Plugin session.
+`access_denied` until the operator logs in and calls `subchat_refresh_auth` or
+restarts that Plugin session. Authenticated reads that receive 401 refresh the
+selected profile once and retry only the GET; sends and deletes are never replayed.
 On macOS, an explicitly selected existing Chrome profile can supply the login
 through a private headless snapshot (`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE`),
 without opening or activating the ordinary Chrome window. Authentication and

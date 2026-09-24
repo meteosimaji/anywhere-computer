@@ -13,7 +13,10 @@ After installation, restart the Plugin session and confirm both MCP servers are
 available before using the Subchat tools. The Subchat server exposes seven
 read-only tools by default: `subchat_capabilities`,
 `subchat_catalog`, `subchat_list`, `subchat_status`, `subchat_recover` and
-`subchat_wait`, plus `subchat_download_file`. Check `subchat_capabilities` first. The default
+`subchat_wait`, plus `subchat_download_file`. A selected Chrome login profile adds
+`subchat_refresh_auth`, which reacquires the same account through a headless
+snapshot and authenticated GETs. A 401 on an authenticated read also triggers one
+refresh and one repeat of that GET. Check `subchat_capabilities` first. The default
 `generation_transport=unavailable` means this server cannot create or send a
 Chat. Plugin installation does not configure generation for the separate CLI.
 

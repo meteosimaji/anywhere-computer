@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import sys
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TextIO
@@ -261,37 +262,61 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         await cdp.detach()
                 return context
 
-            if chrome_login:
+            async def bootstrap_chrome_session(
+                    client: httpx.AsyncClient, account_id: str | None
+                    ) -> ObservedHTTPSession:
                 from .subchat_browser import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
-                from .subchat_chrome_login import chrome_generation_cookie, chrome_http_session
+                from .subchat_chrome_login import chrome_http_session
                 from .subchat_chrome_profile import temporary_chrome_profile
 
+                async with AsyncExitStack() as chrome_resources:
+                    profile_root = chrome_login_profile
+                    launch_args: list[str] = []
+                    if chrome_login_source_profile is not None:
+                        profile_root = await chrome_resources.enter_async_context(
+                            temporary_chrome_profile(chrome_login_source_profile))
+                        launch_args.append(
+                            f'--profile-directory={chrome_login_source_profile.name}')
+                    assert profile_root is not None
+                    chrome_context = await (await runtime()).chromium.launch_persistent_context(
+                        str(profile_root), channel='chrome', headless=True,
+                        ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
+                        args=launch_args)
+                    try:
+                        return await chrome_http_session(
+                            chrome_context, client, expected_account_id=account_id)
+                    finally:
+                        # HTTPX retains this account's session in memory only.
+                        await chrome_context.close()
+
+            async def refresh_chrome_session(account_id: str | None) -> tuple[
+                    ObservedHTTPSession, Callable[[], Awaitable[httpx.AsyncClient]]]:
+                candidate = httpx.AsyncClient(
+                    trust_env=False, follow_redirects=False,
+                    transport=httpx.AsyncHTTPTransport(retries=0))
                 try:
-                    async with AsyncExitStack() as chrome_resources:
-                        profile_root = chrome_login_profile
-                        launch_args: list[str] = []
-                        if chrome_login_source_profile is not None:
-                            profile_root = await chrome_resources.enter_async_context(
-                                temporary_chrome_profile(chrome_login_source_profile))
-                            launch_args.append(
-                                f'--profile-directory={chrome_login_source_profile.name}')
-                        assert profile_root is not None
-                        chrome_context = await (await runtime()).chromium.launch_persistent_context(
-                            str(profile_root), channel='chrome', headless=True,
-                            ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
-                            args=launch_args)
-                        try:
-                            http_session = await chrome_http_session(
-                                chrome_context, await open_standalone_http(),
-                                expected_account_id=expected_account_id)
-                        finally:
-                            # HTTPX retains this account's session in memory only.
-                            await chrome_context.close()
+                    session = await bootstrap_chrome_session(candidate, account_id)
+                except BaseException:
+                    await candidate.aclose()
+                    raise
+                resources.push_async_callback(candidate.aclose)
+                # Existing reads may still own the previous client. AsyncExitStack
+                # closes every generation when this controller exits.
+                async def candidate_factory() -> httpx.AsyncClient:
+                    return candidate
+
+                return session, candidate_factory
+
+            if chrome_login:
+                try:
+                    http_session = await bootstrap_chrome_session(
+                        await open_standalone_http(), expected_account_id)
                 except SubchatAccessError as error:
                     if not read_only_mcp:
                         raise
                     chrome_access_status = error.status
                 if chrome_generation_stdin:
+                    from .subchat_chrome_login import chrome_generation_cookie
                     from .subchat_http_generation import read_http_generation_handoff
 
                     assert http_session is not None
@@ -328,7 +353,9 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     open_standalone_http, http_session, generation=http_generation,
                     store=store,
                     chrome_login=chrome_login,
-                    startup_access_status=chrome_access_status)
+                    startup_access_status=chrome_access_status,
+                    refresh_session=refresh_chrome_session if read_only_mcp
+                    and chrome_login else None)
             else:
                 from .subchat_browser.backend import BrowserSubchatBackend
 
@@ -346,18 +373,26 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
 
                 instructions = None
                 if http_only:
+                    refresh_instructions = (
+                        'Authenticated GET reads can refresh the selected Chrome profile after '
+                        'a 401 and retry once; subchat_refresh_auth explicitly refreshes it '
+                        'without sending work. '
+                        if read_only_mcp and chrome_login else
+                        'Credential refresh is unavailable for this session. '
+                    )
                     instructions = (
                         'Ordinary Chat recovery and explicit deletion over HTTPX. A configured '
-                        'Chrome login profile is read headlessly at startup only. No browser '
-                        'fallback, '
-                        'independent login, credential refresh or generation is implemented. '
+                        'Chrome login profile is read headlessly at startup. '
+                        + refresh_instructions +
+                        'No browser fallback, independent login or generation is implemented. '
                         'Use subchat_catalog source=http, saved status/list and recover/wait '
                         'with the original operation ID. UI catalog is unsupported. '
                         'Send and queue dispatch return http_generation_unavailable. '
                         'Never resend an uncertain submission or supply credentials in tools. '
                         'Recovery requires known conversation/input identity and a session '
-                        'obtained at startup from Chrome login or an explicit handoff. Missing or '
-                        'expired authorization requires operator action, not a retry loop. '
+                        'obtained from Chrome login or an explicit handoff. Missing or '
+                        'expired authorization requires an existing login in the selected '
+                        'Chrome profile; refresh never performs interactive login. '
                         'A pending observation is not proof of Thinking. Interruption is not '
                         'a completed answer. Queued work is never sent by this adapter. '
                         'subchat_download_file retrieves one exact final-answer sandbox link '

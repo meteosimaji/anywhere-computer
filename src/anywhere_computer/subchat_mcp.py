@@ -83,6 +83,7 @@ QUEUE_WATCH_INTERVAL = 5.0
 READ_ONLY_TOOLS = frozenset({
     'subchat_capabilities', 'subchat_catalog', 'subchat_list',
     'subchat_recover', 'subchat_status', 'subchat_wait', 'subchat_download_file',
+    'subchat_refresh_auth',
 })
 
 _PREPARATION_REASONS = {
@@ -347,6 +348,14 @@ def session(service: Subchats, *,
         definitions['subchat_capabilities'] = (
             Contract, 'Read configured transport capabilities without network or browser work.')
 
+    refresh_auth = getattr(service.backend, 'refresh_auth', None)
+    if (read_only and refresh_auth is not None and capabilities is not None
+            and capabilities().get('credential_refresh') is True):
+        definitions['subchat_refresh_auth'] = (
+            Contract, 'Refresh the selected Chrome account through a headless temporary '
+            'profile snapshot and authenticated HTTP GETs. Keeps the same account; does not '
+            'send, recover or delete a Chat. No credentials are accepted as tool arguments.')
+
     download_sandbox_file = getattr(service.backend, 'download_sandbox_file', None)
     if download_sandbox_file is not None:
         definitions['subchat_download_file'] = (
@@ -381,7 +390,7 @@ def session(service: Subchats, *,
             'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
             'annotations': {'readOnlyHint': name in {
                 'subchat_capabilities', 'subchat_catalog', 'subchat_status', 'subchat_list',
-                'subchat_download_file'},
+                'subchat_download_file', 'subchat_refresh_auth'},
                             'destructiveHint': name == 'subchat_delete', 'openWorldHint': True},
         }) for name, (schema, description) in definitions.items()]
 
@@ -391,6 +400,12 @@ def session(service: Subchats, *,
                          error='This Subchat session permits observation only.',
                          data={'error_code': 'read_only', 'dispatched': False})
         try:
+            if request.tool == 'subchat_refresh_auth' and 'subchat_refresh_auth' in definitions:
+                assert refresh_auth is not None
+                Contract.model_validate(request.arguments)
+                refreshed = await refresh_auth()
+                return Reply(operation_id=request.operation_id, state='completed',
+                             data=TypeAdapter(dict[str, JsonValue]).validate_python(refreshed))
             if request.tool == 'subchat_download_file' and download_sandbox_file is not None:
                 target_file = SandboxFile.model_validate(request.arguments)
                 try:
@@ -605,10 +620,12 @@ def session(service: Subchats, *,
                          data={'error_code': 'account_mismatch', 'automatic_retry': False})
         except SubchatAccessError as error:
             return Reply(operation_id=request.operation_id, state='failed',
-                         error='Check the dedicated Chat login and account access. Saved '
-                               'submissions are preserved; recover their existing IDs after '
-                               'restoring access and restarting the subchat controller with the '
-                               'same profile and state directory, without sending them again.',
+                         error='Check the selected Chat login and account access. Saved '
+                               'submissions are preserved; after restoring access, '
+                               + ('call subchat_refresh_auth or restart the controller. '
+                                  if 'subchat_refresh_auth' in definitions else
+                                  'restart the controller with the same profile and state. ')
+                               + 'Recover existing IDs without sending them again.',
                          data={'error_code': error.code, 'automatic_retry': False})
         except SubchatInterrupted:
             return Reply(operation_id=request.operation_id, state='failed',

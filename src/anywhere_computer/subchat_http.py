@@ -3,8 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 from uuid import uuid4
 
 from .subchat import (
@@ -22,6 +23,7 @@ from .subchat_http_generation import ObservedHTTPGeneration, dispatch_generation
 from .subchat_http_sender import HTTPFollowupParent, HTTPGenerationPlan
 from .subchat_http_session import ObservedHTTPSession
 from .subchat_state import (
+    SubchatAccountMismatch,
     SubchatHTTPSelection,
     SubchatSelectionError,
     SubchatSubmission,
@@ -34,6 +36,7 @@ if TYPE_CHECKING:
     from .subchat_http_download import SandboxDownload
 
 CONVERSATION_ID = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
+_ReadResult = TypeVar('_ReadResult')
 
 
 class HTTPOnlySubchatBackend:
@@ -50,12 +53,17 @@ class HTTPOnlySubchatBackend:
                  owner: str | None = None,
                  generation_origin: str = 'https://chatgpt.com',
                  chrome_login: bool = False,
-                 startup_access_status: int | None = None) -> None:
+                 startup_access_status: int | None = None,
+                 refresh_session: Callable[[str | None], Awaitable[tuple[
+                     ObservedHTTPSession, Callable[[], Awaitable[AsyncClient]]]]]
+                 | None = None) -> None:
         if startup_access_status is not None and (startup_access_status not in (401, 403)
                                                   or not chrome_login or session is not None):
             raise ValueError('Chrome login rejection requires an unbound HTTP session')
         if generation is not None and (session is None or store is None):
             raise ValueError('HTTP generation requires a session and durable store')
+        if refresh_session is not None and (not chrome_login or generation is not None):
+            raise ValueError('Login refresh is limited to read-only Chrome sessions')
         if generation is not None and session is not None:
             generation_headers = generation.headers
             if (generation_headers['authorization'] != session.authorization.get_secret_value()
@@ -75,6 +83,52 @@ class HTTPOnlySubchatBackend:
         self._delete_session_available = session is not None
         self._chrome_login = chrome_login
         self._startup_access_status = startup_access_status
+        self._refresh_session = refresh_session
+        self._refresh_lock = asyncio.Lock()
+        self._last_auto_refresh_at = 0.0
+
+    async def _refresh_locked(self) -> None:
+        if self._refresh_session is None:
+            raise ValueError('Credential refresh unavailable')
+        previous_account = self._session.account_id if self._session is not None else None
+        session, request_factory = await self._refresh_session(previous_account)
+        if previous_account is not None and session.account_id != previous_account:
+            raise SubchatAccountMismatch('Chrome login selected another Chat account')
+        self._session = session
+        self._request_factory = request_factory
+        self._http_reader = ChatHTTPReader(request_factory, browser_free=True,
+                                           session=session)
+        self._startup_access_status = None
+        self._delete_session_available = True
+
+    async def refresh_auth(self) -> dict[str, object]:
+        """Refresh only the selected read session; never recover or dispatch work."""
+        async with self._refresh_lock:
+            await self._refresh_locked()
+            return {'authentication_state': 'authenticated',
+                    'generation_transport': 'unavailable',
+                    'credential_refresh': True}
+
+    async def _authenticated_read(self, read: Callable[[], Awaitable[_ReadResult]]
+                                  ) -> _ReadResult:
+        reader = self._http_reader
+        try:
+            return await read()
+        except SubchatAccessError as error:
+            if error.status == 401 and self._http_reader is reader:
+                self._startup_access_status = 401
+            if (error.status != 401 or self._refresh_session is None
+                    or self._session is None):
+                raise
+            async with self._refresh_lock:
+                if self._http_reader is reader:
+                    now = time.monotonic()
+                    if now - self._last_auto_refresh_at < 30:
+                        raise
+                    self._last_auto_refresh_at = now
+                    await self._refresh_locked()
+            # A concurrent refresh can satisfy this read too. Never retry twice.
+            return await read()
 
     def capabilities(self) -> dict[str, object]:
         enabled = self._generation is not None
@@ -86,14 +140,15 @@ class HTTPOnlySubchatBackend:
                 'transport': 'http_only' if enabled else 'http_read_only',
                 'browser_required': False,
                 'generation_transport': 'explicit_handoff_http' if enabled else 'unavailable',
-                'http_selection_send_supported': enabled, 'credential_refresh': False,
+                'http_selection_send_supported': enabled,
+                'credential_refresh': self._refresh_session is not None,
                 'independent_login': False, 'persistent_credentials': False,
                 'session_source': ('chrome_profile_http_get' if self._chrome_login
                                    else 'explicit_in_memory_handoff'),
                 'authentication_state': (
-                    'authenticated' if self._session is not None else
                     'authentication_required' if self._startup_access_status == 401 else
                     'access_denied' if self._startup_access_status == 403 else
+                    'authenticated' if self._session is not None else
                     'http_session_required'),
                 'authenticated_account_id': (self._session.account_id
                                              if self._session is not None else None),
@@ -169,12 +224,16 @@ class HTTPOnlySubchatBackend:
         raise SubchatUnsupported('ui_unavailable')
 
     async def http_catalog(self) -> dict[str, object]:
-        async with asyncio.timeout(20):
-            result = await self._http_reader.catalog(None)
-            result['http_selection_send_supported'] = self._generation is not None
-            result['generation_transport'] = ('explicit_handoff_http' if self._generation
-                                              is not None else 'unavailable')
-            return result
+        async def read() -> dict[str, object]:
+            reader = self._http_reader
+            async with asyncio.timeout(20):
+                return await reader.catalog(None)
+
+        result = await self._authenticated_read(read)
+        result['http_selection_send_supported'] = self._generation is not None
+        result['generation_transport'] = ('explicit_handoff_http' if self._generation
+                                          is not None else 'unavailable')
+        return result
 
     def _has_identity(self, submission: SubchatSubmission) -> bool:
         if submission.conversation_id is None or submission.user_message_id is None:
@@ -190,8 +249,12 @@ class HTTPOnlySubchatBackend:
                                               owner=self._owner)
             return None  # No history scan, fabricated identity, bootstrap tab or resend.
         try:
-            async with asyncio.timeout(20):
-                receipt = await self._http_reader.receipt(None, submission)
+            async def read() -> SubchatReceipt | None:
+                reader = self._http_reader
+                async with asyncio.timeout(20):
+                    return await reader.receipt(None, submission)
+
+            receipt = await self._authenticated_read(read)
         except Exception:
             if self._generation is not None and self._store is not None:
                 self._store.record_http_event(submission.operation_id, 'history_failed',
@@ -208,8 +271,12 @@ class HTTPOnlySubchatBackend:
         if not self._has_identity(submission):
             return None
         try:
-            async with asyncio.timeout(20):
-                answer = await self._http_reader.history(None, submission)
+            async def read() -> SubchatAnswer | SubchatPendingObservation | None:
+                reader = self._http_reader
+                async with asyncio.timeout(20):
+                    return await reader.history(None, submission)
+
+            answer = await self._authenticated_read(read)
         except Exception:
             if self._generation is not None and self._store is not None:
                 self._store.record_http_event(submission.operation_id, 'history_failed',
@@ -244,10 +311,17 @@ class HTTPOnlySubchatBackend:
         saved = self._store.get(operation_id, owner=self._owner)
         if saved.state != 'completed':
             raise ValueError('File download requires a completed operation')
-        async with asyncio.timeout(20):
-            answer = await self._http_reader.history(None, saved)
-        if not isinstance(answer, SubchatAnswer):
-            raise ValueError('A verified final answer is required for file download')
-        return await download_verified_sandbox_file(
-            saved, answer, sandbox_link, session=self._session,
-            client=await self._request_factory(), max_bytes=max_bytes)
+        async def read() -> SandboxDownload:
+            reader = self._http_reader
+            session = self._session
+            request_factory = self._request_factory
+            async with asyncio.timeout(20):
+                answer = await reader.history(None, saved)
+            if not isinstance(answer, SubchatAnswer):
+                raise ValueError('A verified final answer is required for file download')
+            assert session is not None
+            return await download_verified_sandbox_file(
+                saved, answer, sandbox_link, session=session,
+                client=await request_factory(), max_bytes=max_bytes)
+
+        return await self._authenticated_read(read)

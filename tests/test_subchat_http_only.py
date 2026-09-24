@@ -98,6 +98,102 @@ def backend(client, *, authenticated=True):
     return HTTPOnlySubchatBackend(factory, credentials() if authenticated else None)
 
 
+async def test_chrome_read_refreshes_once_after_401_without_resending():
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    _, payload = sample()
+    old, fresh = Client(payload), Client(payload)
+    old.status[CATALOG_URL] = 401
+    refreshes = []
+
+    async def factory():
+        return old
+
+    async def fresh_factory():
+        return fresh
+
+    async def refresh(expected_account):
+        refreshes.append(expected_account)
+        return credentials(), fresh_factory
+
+    adapter = HTTPOnlySubchatBackend(factory, credentials(), chrome_login=True,
+                                     refresh_session=refresh)
+    result = await adapter.http_catalog()
+    assert result['state'] == 'http_catalog_observed'
+    assert refreshes == ['fixture-account']
+    assert len(old.calls) == len(fresh.calls) == 1
+    assert old.disposed == fresh.disposed == 1
+    assert adapter.capabilities()['credential_refresh'] is True
+    assert adapter.capabilities()['authentication_state'] == 'authenticated'
+
+
+async def test_chrome_read_refresh_is_single_flight_for_concurrent_401():
+    import asyncio
+
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    _, payload = sample()
+    old, fresh = Client(payload), Client(payload)
+    old.status[CATALOG_URL] = 401
+    refreshes = 0
+
+    async def factory():
+        return old
+
+    async def fresh_factory():
+        return fresh
+
+    async def refresh(_expected_account):
+        nonlocal refreshes
+        refreshes += 1
+        await asyncio.sleep(0)
+        return credentials(), fresh_factory
+
+    adapter = HTTPOnlySubchatBackend(factory, credentials(), chrome_login=True,
+                                     refresh_session=refresh)
+    first, second = await asyncio.gather(adapter.http_catalog(), adapter.http_catalog())
+    assert first['state'] == second['state'] == 'http_catalog_observed'
+    assert refreshes == 1
+    assert len(fresh.calls) == 2
+
+
+async def test_chrome_refresh_rejects_other_account_and_403_does_not_refresh():
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+    from anywhere_computer.subchat_http_session import ObservedHTTPSession
+
+    _, payload = sample()
+    client = Client(payload)
+    client.status[CATALOG_URL] = 401
+    refreshes = 0
+
+    async def factory():
+        return client
+
+    async def changed_account(_expected_account):
+        nonlocal refreshes
+        refreshes += 1
+        return (ObservedHTTPSession.model_validate({
+            **session_payload(), 'account_id': 'another-account'}), factory)
+
+    adapter = HTTPOnlySubchatBackend(factory, credentials(), chrome_login=True,
+                                     refresh_session=changed_account)
+    with pytest.raises(SubchatAccountMismatch):
+        await adapter.http_catalog()
+    assert adapter.capabilities()['authenticated_account_id'] == 'fixture-account'
+    assert adapter.capabilities()['authentication_state'] == 'authentication_required'
+    with pytest.raises(SubchatAccessError):
+        await adapter.http_catalog()
+    assert refreshes == 1  # Cooldown prevents a snapshot loop.
+
+    client.status[CATALOG_URL] = 403
+    other = HTTPOnlySubchatBackend(factory, credentials(), chrome_login=True,
+                                   refresh_session=changed_account)
+    with pytest.raises(SubchatAccessError) as denied:
+        await other.http_catalog()
+    assert denied.value.status == 403
+    assert refreshes == 1
+
+
 @pytest.mark.parametrize(('resource', 'limit', 'error'), [
     ('catalog', 1_048_576, 'Model catalog is too large'),
     ('history', 4_194_304, 'Conversation response is too large'),

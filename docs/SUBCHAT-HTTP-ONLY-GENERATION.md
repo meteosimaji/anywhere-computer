@@ -35,10 +35,17 @@ Start in read-only mode and inspect `capabilities` (or
 `subchat_capabilities` in MCP) for the authenticated account and available
 transport. For Chrome-login generation, pin the reported account ID exactly;
 startup rejects a mismatch before accepting a generation handoff. The
-controller has no independent login, automatic session renewal, or automatic
-acquisition of Sentinel, proof, or Turnstile values. An expired login requires
-the owner to sign in through ordinary Chrome or the dedicated profile, then
-restart the controller. The existing-profile snapshot is verified on macOS;
+controller has no independent login or automatic acquisition of Sentinel,
+proof, or Turnstile values. In the Plugin's read-only Chrome mode, an
+authenticated GET that returns 401 triggers one new headless snapshot of the
+selected profile, checks the same account through auth and catalog GETs, then
+retries that GET once. A 403, generation POST, or deletion PATCH is never
+retried this way. The `subchat_refresh_auth` tool requests the same read-session
+refresh explicitly without sending or recovering a Chat. If Chrome itself is
+logged out, the owner must sign in there; a startup authentication failure
+requires `subchat_refresh_auth` after login or a controller restart. A fresh
+profile with a different account is rejected when the controller has already
+bound an account. The existing-profile snapshot is verified on macOS;
 Windows and Linux retain the dedicated-profile or explicit-session paths.
 On 2026-09-24 the macOS snapshot path returned HTTP 200 for both auth and model
 catalog GETs, without opening a visible Chrome window. This is not generation

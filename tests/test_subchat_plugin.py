@@ -185,7 +185,7 @@ async def test_plugin_read_only_catalog_rejects_mutations(tmp_path):
         assert listing is not None
         assert {tool['name'] for tool in listing['result']['tools']} == (
             READ_ONLY_TOOLS - {'subchat_capabilities', 'subchat_catalog',
-                               'subchat_download_file'})
+                               'subchat_download_file', 'subchat_refresh_auth'})
         for name in ('subchat_send', 'subchat_delete', 'subchat_message',
                      'subchat_cancel', 'subchat_queue_watch'):
             result = await server.handle({'jsonrpc': '2.0', 'id': 3, 'method': 'tools/call',
@@ -256,8 +256,51 @@ async def test_cli_read_only_mode_wires_filtered_stdio_session(tmp_path, monkeyp
     monkeypatch.setattr(mcp_server, 'serve_stdio', inspect)
     await subchat_cli.run(None, tmp_path, http_only=True, http_session=credentials(),
                           mcp=True, read_only_mcp=True)
-    assert observed['tools'] == READ_ONLY_TOOLS
+    assert observed['tools'] == READ_ONLY_TOOLS - {'subchat_refresh_auth'}
     assert 'generation_transport=unavailable' in observed['instructions']
+
+
+async def test_plugin_explicit_refresh_only_reauthenticates_selected_read_session(tmp_path):
+    from test_subchat_http_history import sample
+    from test_subchat_http_only import Client, credentials
+
+    from anywhere_computer.models import Request
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    ledger = Ledger(tmp_path)
+    _, payload = sample()
+    client = Client(payload)
+    refreshed = []
+
+    async def factory():
+        return client
+
+    async def refresh(account_id):
+        refreshed.append(account_id)
+        return credentials(), factory
+
+    backend = HTTPOnlySubchatBackend(factory, credentials(), chrome_login=True,
+                                     refresh_session=refresh)
+    server = session(Subchats(SubchatSubmissions(ledger.connection), backend),
+                     observe_http_catalog=backend.http_catalog, read_only=True)
+    try:
+        definitions = {item['name']: item for item in await server.catalog()}
+        assert set(definitions) == READ_ONLY_TOOLS
+        assert definitions['subchat_refresh_auth']['annotations']['readOnlyHint'] is True
+        response = await server.execute(Request(operation_id='a' * 32,
+                                                tool='subchat_refresh_auth', arguments={}))
+        assert response.state == 'completed'
+        assert response.data == {
+            'authentication_state': 'authenticated',
+            'generation_transport': 'unavailable', 'credential_refresh': True}
+        assert refreshed == ['fixture-account']
+        assert client.calls == []
+        count = ledger.connection.execute(
+            'SELECT COUNT(*) FROM subchat_submissions').fetchone()[0]
+        assert count == 0
+    finally:
+        await server.close()
+        ledger.close()
 
 
 async def test_plugin_capabilities_describe_exposed_read_only_tools(tmp_path):

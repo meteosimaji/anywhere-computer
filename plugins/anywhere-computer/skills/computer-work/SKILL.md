@@ -107,7 +107,9 @@ read-only MCP tools. `generation_transport=unavailable` means it cannot send.
 If startup login fails, the server still exposes capabilities and saved state;
 `authentication_state` reports the rejection and HTTP reads stop with the same
 `authentication_required` or `access_denied` code. Restore login, then restart
-the Plugin session. It does not refresh credentials automatically.
+the Plugin session or call `subchat_refresh_auth`. In read-only Chrome mode,
+an authenticated GET that returns 401 refreshes the selected profile and retries
+that GET once. Refresh never performs interactive login or retries a send or delete.
 Set `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process and
 restart its MCP session to expose `subchat_send` through the same dedicated
 profile. Check `subchat_capabilities`: this mode reports
