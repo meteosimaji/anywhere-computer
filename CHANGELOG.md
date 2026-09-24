@@ -3,6 +3,16 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a18 / Plugin 0.2.0-alpha.18 — unpublished candidate (2026-09-24)
+
+- Add a Claude Code marketplace and local MCP Plugin configuration. The
+  installed Claude Code CLI can reach GitHub and local sources, and its bundled
+  computer and Subchat MCP servers connect. Claude cloud sessions and Chat/Cowork
+  still require a separately configured HTTPS endpoint.
+- Log only fixed response categories for an HTTP-only generation 401/403 to
+  support diagnosis without retaining the response body or secrets. Independent
+  HTTP-only generation remains unverified.
+
 ## 0.2.0a17 / Plugin 0.2.0-alpha.17 — unpublished candidate (2026-09-23)
 
 - Preserve exact pre-a16 autostart definitions when inspecting and upgrading
