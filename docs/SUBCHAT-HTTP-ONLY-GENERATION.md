@@ -104,13 +104,17 @@ renew its values or prove the cause of a later HTTPX 403 response.
 In a separate Chrome UI turn on 2026-09-24, the generation POST returned 200
 and the final answer appeared in saved history. CDP `requestWillBeSentExtraInfo`
 showed the actual sent header names, including Cookie and Origin, without
-retaining their values. The current request had 11 application header names
-outside the handoff allowlist, including `oai-device-id`, `oai-session-id`,
-`oai-client-version`, `x-conduit-token`, and `x-openai-target-route`; it lacked
-several old mandatory names, including `chatgpt-account-id` and `oai-did`.
-The current handoff validator therefore cannot accept this observed successful
-request shape. This is a demonstrated compatibility defect, not an isolated
-cause of the HTTPX 403. The observed request starts also differed: conversation
+retaining their values. At observation time, the request had 11 application
+header names outside the then-current handoff allowlist, including
+`oai-device-id`, `oai-session-id`, `oai-client-version`, `x-conduit-token`, and
+`x-openai-target-route`; it lacked several then-mandatory names, including
+`chatgpt-account-id` and `oai-did`. The a19 allowlist was updated afterward.
+The a19 handoff validator accepts these observed header names, but the current
+UI request shape has not passed the complete handoff and generation path. In
+particular, a request without `chatgpt-account-id` requires a matching Cookie
+binding, which the explicit stdin session currently cannot supply. This is a
+remaining compatibility gap, not an isolated cause of the HTTPX 403. The
+observed request starts also differed: conversation
 prepare and one Sentinel prepare/finalize cycle started before generation; a
 second Sentinel cycle started while generation was in flight. These are dated
 observations, not a stable protocol specification.
