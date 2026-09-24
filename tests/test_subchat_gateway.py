@@ -40,6 +40,9 @@ async def test_lazy_gateway_retries_login_and_opens_once_for_concurrent_discover
     exited = 0
 
     class Core:
+        def has_live_work(self):
+            return False
+
         async def catalog(self, grant_id, granted):
             return [{"name": "subchat_status", "inputSchema": {"type": "object"}}]
 
@@ -77,6 +80,177 @@ async def test_lazy_gateway_retries_login_and_opens_once_for_concurrent_discover
     await gateway.close()
     await gateway.close()
     assert exited == 1
+
+
+@pytest.mark.asyncio
+async def test_lazy_gateway_idle_closes_and_reopens_without_closing_active_calls(monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    selected = SubchatGatewayConfig(
+        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        consent="ordinary-chat-browser-control-approved")
+    entered = 0
+    exited = 0
+    catalog_started = asyncio.Event()
+    finish_catalog = asyncio.Event()
+    execute_started = asyncio.Event()
+    finish_execute = asyncio.Event()
+
+    class Core:
+        def has_live_work(self):
+            return False
+
+        async def catalog(self, grant_id, granted):
+            catalog_started.set()
+            await finish_catalog.wait()
+            return [{"name": "subchat_status"}]
+
+        async def execute(self, grant_id, request, granted):
+            execute_started.set()
+            await finish_execute.wait()
+            return Reply(operation_id=request.operation_id, state="completed")
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        nonlocal entered, exited
+        assert config is selected and owner == "owner"
+        entered += 1
+        try:
+            yield Core()
+        finally:
+            exited += 1
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
+    granted = frozenset({"subchat_status"})
+    try:
+        catalog = asyncio.create_task(gateway.catalog("grant", granted))
+        await catalog_started.wait()
+        await asyncio.sleep(.03)
+        assert entered == 1 and exited == 0
+        execute = asyncio.create_task(gateway.execute(
+            "grant", Request(operation_id="a" * 32, tool="subchat_status"), granted))
+        await execute_started.wait()
+        finish_catalog.set()
+        assert (await catalog)[0]["name"] == "subchat_status"
+        await asyncio.sleep(.03)
+        assert exited == 0  # The overlapping execute still owns the gateway.
+        finish_execute.set()
+        assert (await execute).state == "completed"
+        await asyncio.wait_for(_until(lambda: exited == 1), timeout=1)
+        assert (await gateway.catalog("grant", granted))[0]["name"] == "subchat_status"
+        assert entered == 2
+    finally:
+        finish_catalog.set()
+        finish_execute.set()
+        await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_lazy_gateway_idle_waits_for_detached_work_and_service_close(monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    selected = SubchatGatewayConfig(
+        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        consent="ordinary-chat-browser-control-approved")
+    work = asyncio.Event()
+    exited = 0
+
+    class Core:
+        def __init__(self):
+            self.calls = {}
+            self.recoveries = {}
+            self.queue_watches = {}
+
+        async def catalog(self):
+            return [{"name": "subchat_status"}]
+
+        async def execute(self, request):
+            if work.is_set():
+                return Reply(operation_id=request.operation_id, state="completed")
+            async def recover():
+                await work.wait()
+
+            task = asyncio.create_task(recover())
+            self.recoveries[request.operation_id] = task
+            task.add_done_callback(lambda _: self.recoveries.pop(request.operation_id))
+            return Reply(operation_id=request.operation_id, state="running")
+
+        async def close(self):
+            assert not self.recoveries
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        nonlocal exited
+        actual = SubchatGateway(lambda _grant: Core(), owner=owner)
+        try:
+            yield actual
+        finally:
+            await actual.close()
+            exited += 1
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
+    granted = frozenset({"subchat_status"})
+    assert (await gateway.execute(
+        "grant", Request(operation_id="b" * 32, tool="subchat_status"), granted)).state == "running"
+    await asyncio.sleep(.04)
+    assert exited == 0
+    work.set()
+    await asyncio.wait_for(_until(lambda: exited == 1), timeout=1)
+    again = await gateway.execute(
+        "grant", Request(operation_id="c" * 32, tool="subchat_status"), granted)
+    assert again.state == "completed"
+    await gateway.close()
+    assert exited == 2
+    await asyncio.sleep(.03)
+    assert exited == 2
+    assert await gateway.catalog("grant", granted) == []
+
+
+@pytest.mark.asyncio
+async def test_lazy_gateway_service_close_waits_for_active_catalog(monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    selected = SubchatGatewayConfig(
+        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        consent="ordinary-chat-browser-control-approved")
+    catalog_started = asyncio.Event()
+    finish_catalog = asyncio.Event()
+    exited = 0
+
+    class Core:
+        async def catalog(self, grant_id, granted):
+            catalog_started.set()
+            await finish_catalog.wait()
+            return [{"name": "subchat_status"}]
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        nonlocal exited
+        try:
+            yield Core()
+        finally:
+            exited += 1
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
+    granted = frozenset({"subchat_status"})
+    catalog = asyncio.create_task(gateway.catalog("grant", granted))
+    await catalog_started.wait()
+    closing = asyncio.create_task(gateway.close())
+    await asyncio.sleep(.03)
+    assert not closing.done() and exited == 0
+    assert await gateway.catalog("grant", granted) == []
+    finish_catalog.set()
+    assert (await catalog)[0]["name"] == "subchat_status"
+    await closing
+    assert exited == 1
+
+
+async def _until(predicate):
+    while not predicate():
+        await asyncio.sleep(.005)
 
 
 @pytest.mark.asyncio

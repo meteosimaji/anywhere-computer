@@ -24,6 +24,7 @@ SUBCHAT_GATEWAY_TOOLS = frozenset({
     "subchat_capabilities", "subchat_catalog", "subchat_send", "subchat_message",
     "subchat_recover", "subchat_wait", "subchat_status",
 })
+_IDLE_CLOSE_SECONDS = 15.0
 logger = logging.getLogger(__name__)
 
 
@@ -180,24 +181,40 @@ class SubchatGateway:
         self.pending.clear()
         self.cores.clear()
 
+    def has_live_work(self) -> bool:
+        """Keep the browser while a dispatch or its detached recovery is running."""
+        return (any(not entry[2].done() for entry in self.pending.values())
+                or any(not task.done() for core in self.cores.values()
+                       for task in (*core.calls, *core.recoveries.values(),
+                                    *core.queue_watches.values())))
+
 
 class LazySubchatGateway:
     """Open a selected account only when discovered; retry failed preparation."""
 
-    def __init__(self, config: SubchatGatewayConfig, *, owner: str) -> None:
+    def __init__(self, config: SubchatGatewayConfig, *, owner: str,
+                 idle_close_seconds: float = _IDLE_CLOSE_SECONDS) -> None:
         self.config = config
         self.owner = owner
         self._lock = asyncio.Lock()
+        self._idle_condition = asyncio.Condition(self._lock)
         self._gateway: SubchatGateway | None = None
         self._resources: AsyncExitStack | None = None
         self._closed = False
         self._retry_after = 0.0
+        self._active_calls = 0
+        self._idle_task: asyncio.Task[None] | None = None
+        self._idle_close_seconds = idle_close_seconds
 
-    async def _ready(self) -> SubchatGateway | None:
+    async def _acquire(self) -> SubchatGateway | None:
         async with self._lock:
             if self._closed:
                 return None
+            if self._idle_task is not None:
+                self._idle_task.cancel()
+                self._idle_task = None
             if self._gateway is not None:
+                self._active_calls += 1
                 return self._gateway
             if time.monotonic() < self._retry_after:
                 return None
@@ -205,6 +222,9 @@ class LazySubchatGateway:
             try:
                 gateway = await resources.enter_async_context(
                     open_subchat_gateway(self.config, owner=self.owner))
+            except asyncio.CancelledError:
+                await resources.aclose()
+                raise
             except Exception as error:
                 await resources.aclose()
                 # Provider errors can carry private URLs or account data.
@@ -213,26 +233,68 @@ class LazySubchatGateway:
                 return None
             self._resources = resources
             self._gateway = gateway
+            self._active_calls += 1
             return gateway
+
+    async def _release(self) -> None:
+        async with self._idle_condition:
+            self._active_calls -= 1
+            self._idle_condition.notify_all()
+            if not self._closed and self._active_calls == 0 and self._resources is not None:
+                self._idle_task = asyncio.create_task(self._close_when_idle())
+
+    async def _close_when_idle(self) -> None:
+        try:
+            await asyncio.sleep(self._idle_close_seconds)
+            while True:
+                async with self._lock:
+                    if self._closed or self._active_calls:
+                        return
+                    gateway = self._gateway
+                    if gateway is not None and not gateway.has_live_work():
+                        assert self._resources is not None
+                        await self._resources.aclose()
+                        self._resources = None
+                        self._gateway = None
+                        return
+                await asyncio.sleep(.1)
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._idle_task is asyncio.current_task():
+                self._idle_task = None
 
     async def catalog(self, grant_id: str, granted: frozenset[str]) -> list[JsonValue]:
         if not granted & SUBCHAT_GATEWAY_TOOLS:
             return []
-        gateway = await self._ready()
-        return await gateway.catalog(grant_id, granted) if gateway is not None else []
+        gateway = await self._acquire()
+        if gateway is None:
+            return []
+        try:
+            return await gateway.catalog(grant_id, granted)
+        finally:
+            await self._release()
 
     async def execute(self, grant_id: str, request: Request,
                       granted: frozenset[str]) -> Reply:
-        gateway = await self._ready()
+        gateway = await self._acquire()
         if gateway is None:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Selected Subchat account is unavailable",
                          data={"dispatched": False})
-        return await gateway.execute(grant_id, request, granted)
+        try:
+            return await gateway.execute(grant_id, request, granted)
+        finally:
+            await self._release()
 
     async def close(self) -> None:
-        async with self._lock:
+        async with self._idle_condition:
             self._closed = True
+            if self._idle_task is not None:
+                self._idle_task.cancel()
+                self._idle_task = None
+            while self._active_calls:
+                await self._idle_condition.wait()
             if self._resources is not None:
                 await self._resources.aclose()
                 self._resources = None
