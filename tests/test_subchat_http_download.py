@@ -9,8 +9,9 @@ from test_subchat_http_only import credentials, seed
 
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat import Subchats
+from anywhere_computer.subchat import SubchatAnswer, Subchats
 from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+from anywhere_computer.subchat_http_download import download_verified_sandbox_file
 from anywhere_computer.subchat_mcp import session as mcp_session
 from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatSubmissions
 
@@ -42,6 +43,26 @@ def completed(store: SubchatSubmissions, *, account: str = 'fixture-account'):
     payload['messages'][1]['content']['parts'] = [answer]
     store.complete(submission.operation_id, 'answer', answer, owner=None)
     return submission, payload
+
+
+async def test_image_only_final_has_no_sandbox_text_link(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, _ = seed(store)
+        saved = store.complete(submission.operation_id, 'answer', None,
+                               answer_type='image', owner=None)
+        answer = SubchatAnswer(conversation_id=saved.conversation_id,
+                               user_message_id=saved.user_message_id,
+                               prompt=saved.prompt, answer_message_id='answer',
+                               text=None, answer_type='image')
+        async with httpx.AsyncClient(transport=httpx.MockTransport(
+                lambda request: pytest.fail('No download request expected'))) as client:
+            with pytest.raises(ValueError, match='no text'):
+                await download_verified_sandbox_file(saved, answer, LINK,
+                                                     session=credentials(), client=client)
+    finally:
+        ledger.close()
 
 
 @pytest.mark.parametrize('bad_url', [

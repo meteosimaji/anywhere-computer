@@ -3,6 +3,23 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a25 / Plugin 0.2.0-alpha.25 — unpublished candidate (2026-09-24)
+
+- Keep a browser-prepared HTTPX generation stream alive after its HTTP 200/SSE
+  headers so other Subchats can progress. Save the root conversation identity
+  as it arrives and recover the final answer through authenticated history.
+- Preserve late send preparation errors for status and recovery instead of
+  leaving an unexplained `prepared` result. Report known model picker errors
+  without exposing provider request contents.
+- Bind generated images to the exact final turn, including image-only and
+  text-plus-image answers. Add bounded image download verification.
+- Add a macOS account-pinned Subchat setup command and clarify that UI model
+  labels differ from HTTP catalog display versions.
+- In a live source checkout, a new and follow-up Chat turn completed with
+  HTTPX generation and history recovery. Sampled recording frames kept the
+  user's fullscreen video in front. The installed Plugin and other OSes still
+  require separate verification.
+
 ## 0.2.0a24 / Plugin 0.2.0-alpha.24 — unpublished candidate (2026-09-24)
 
 - Add opt-in, account-pinned direct Subchat tools to the authenticated HTTPS

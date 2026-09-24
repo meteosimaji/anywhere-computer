@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a24` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.24` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a25` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.25` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -63,6 +63,9 @@ subchatは、役割を分担した通常のChatGPT Chatです。ChatGPT Workタ�
 起動時に背景Chrome準備とHTTPX送信のツールも提供します。未設定時と他のOSでは
 読み取り専用が既定です。固定済みでも読み取り専用にする場合は
 `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=http-read-only`を設定します。
+macOSでは`anywhere-subchat-setup inspect PROFILE`で背景スナップショットから
+アカウントIDを確認し、`select`でプロファイルとIDを保存できます。具体的な指定方法は
+[Subchatガイド](docs/SUBCHAT-PROBE.md)を参照してください。
 Pluginプロセスに`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send`を
 設定して再接続すると、ログイン済みの専用Chromeプロファイルを使う送信ツールが現れます。
 Chromeは最小化しますが、macOSでの実測では一時的に前面へ出ました。能力表示では

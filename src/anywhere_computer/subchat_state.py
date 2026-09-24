@@ -102,6 +102,7 @@ class SubchatSubmission(Contract):
     user_message_id: str | None = None
     answer_message_id: str | None = None
     answer: str | None = None
+    answer_type: Literal['text', 'image', 'multimodal'] | None = None
     generation_http_status: int | None = Field(default=None, ge=400, le=599)
     reported_settings: SubchatReportedSettings | None = None
     provider_account_id: str | None = Field(default=None, min_length=1, max_length=256)
@@ -603,21 +604,26 @@ class SubchatSubmissions:
             'state': 'submitted', 'conversation_id': conversation_id,
             'user_message_id': user_message_id}), owner)
 
-    def complete(self, operation_id: str, answer_message_id: str, answer: str,
+    def complete(self, operation_id: str, answer_message_id: str, answer: str | None,
                  *, owner: str | None,
+                 answer_type: Literal['text', 'image', 'multimodal'] = 'text',
                  reported_settings: SubchatReportedSettings | None = None) -> SubchatSubmission:
         old = self.get(operation_id, owner=owner)
-        if not answer_message_id.strip() or not answer or answer_message_id == old.user_message_id:
-            raise ValueError('A distinct observed answer identity and text are required')
+        if (not answer_message_id.strip() or answer_message_id == old.user_message_id
+                or answer_type == 'image' and answer is not None
+                or answer_type != 'image' and not answer):
+            raise ValueError('A distinct observed answer identity and content are required')
         if old.state == 'completed':
-            if (old.answer_message_id, old.answer, old.reported_settings) != (
-                    answer_message_id, answer, reported_settings):
+            if (old.answer_message_id, old.answer, old.answer_type or 'text',
+                    old.reported_settings) != (
+                    answer_message_id, answer, answer_type, reported_settings):
                 raise ValueError('Completed subchat answer cannot be replaced')
             return old
         if old.state != 'submitted':
             raise ValueError('Submission identity must be observed before its answer')
         return self._replace(old, old.model_copy(update={
             'state': 'completed', 'answer_message_id': answer_message_id, 'answer': answer,
+            'answer_type': answer_type,
             'reported_settings': reported_settings}), owner, http_event='history_final')
 
     def has_queued_for_conversation(self, conversation_id: str, *, owner: str | None) -> bool:

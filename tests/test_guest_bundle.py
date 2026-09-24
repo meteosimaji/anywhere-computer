@@ -20,6 +20,7 @@ def test_guest_bundle_includes_runtime_assets_but_not_local_state(tmp_path, monk
              "src/anywhere_computer/subchat_browser/input.js"]
     names += ["plugins/anywhere-computer/" + name for name in (
         ".codex-plugin/plugin.json", ".mcp.json", "LICENSE", "skills/computer-work/SKILL.md",
+        "skills/subchat/SKILL.md",
         "bundled/checksums.json", "bundled/dependencies.txt", "bundled/release.json",
         "bundled/anywhere_computer-0.9.7-py3-none-any.whl",
     )]

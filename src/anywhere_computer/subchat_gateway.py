@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import sqlite3
@@ -14,6 +15,7 @@ from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
 
+from .authorization import GrantIdentity
 from .models import Contract, OperationId, Reply, Request
 from .subchat_mcp import (
     ReadOnlyHTTPCatalog,
@@ -35,6 +37,13 @@ _IDLE_CLOSE_SECONDS = 15.0
 logger = logging.getLogger(__name__)
 
 
+def subchat_ledger_owner(grant: GrantIdentity, account_id: str) -> str:
+    """Stable, isolated owner for new submissions across fresh OAuth consents."""
+    scope = json.dumps((grant.owner, grant.device, grant.client, grant.resource, account_id),
+                       separators=(",", ":"), ensure_ascii=False)
+    return "http-subchat:" + hashlib.sha256(scope.encode("utf-8")).hexdigest()
+
+
 class SubchatGatewayConfig(BaseModel):
     model_config = ConfigDict(strict=True, frozen=True, extra="forbid",
                               hide_input_in_errors=True)
@@ -54,9 +63,11 @@ class SubchatGatewayConfig(BaseModel):
 class SubchatGateway:
     """One controller per service lifetime; HTTP sessions are lightweight grant views."""
 
-    def __init__(self, core_factory: Callable[[str], SubchatSession], *, owner: str) -> None:
+    def __init__(self, core_factory: Callable[[str], SubchatSession], *, owner: str,
+                 account_id: str = "") -> None:
         self.core_factory = core_factory
         self.owner = owner
+        self.account_id = account_id
         self.cores: dict[str, SubchatSession] = {}
         self.pending: dict[tuple[str, str], tuple[str, str, asyncio.Task[Reply]]] = {}
 
@@ -189,11 +200,14 @@ class SubchatGateway:
         self.cores.clear()
 
     def has_live_work(self) -> bool:
-        """Retain detached recovery failures until the next explicit observer."""
+        """Keep owned sends and detached observations alive across HTTP idle gaps."""
         return (any(not entry[2].done() for entry in self.pending.values())
                 or any(core.recoveries for core in self.cores.values())
+                or any((live := getattr(core, 'live_transport', None)) is not None and live()
+                       for core in self.cores.values())
                 or any(not task.done() for core in self.cores.values()
-                       for task in (*core.calls, *core.queue_watches.values())))
+                       for task in (*core.calls, *getattr(core, 'sends', {}).values(),
+                                    *core.queue_watches.values())))
 
 
 class LazySubchatGateway:
@@ -203,6 +217,7 @@ class LazySubchatGateway:
                  idle_close_seconds: float = _IDLE_CLOSE_SECONDS) -> None:
         self.config = config
         self.owner = owner
+        self.account_id = config.account_id
         self._lock = asyncio.Lock()
         self._idle_condition = asyncio.Condition(self._lock)
         self._gateway: SubchatGateway | None = None
@@ -276,6 +291,36 @@ class LazySubchatGateway:
             return []
         return [item for item in direct_gateway_catalog()
                 if isinstance(item, dict) and item.get("name") in granted & SUBCHAT_GATEWAY_TOOLS]
+
+    def owner_for_request(self, request: Request, *, stable_owner: str,
+                          legacy_grant_id: str) -> str:
+        """Keep exact old-grant operations usable without migrating their rows."""
+        if legacy_grant_id == stable_owner:
+            return stable_owner
+        target: object = request.operation_id
+        if request.tool in {"subchat_status", "subchat_recover", "subchat_wait"}:
+            target = request.arguments.get("operation_id")
+        elif request.tool == "subchat_message":
+            target = request.arguments.get("target_operation_id")
+        elif request.tool != "subchat_send":
+            return stable_owner
+        if not isinstance(target, str):
+            return stable_owner
+        ledger_path = Path(self.config.ledger)
+        database = ledger_path / "operations.sqlite3"
+        if ledger_path.is_symlink() or database.is_symlink() or not database.is_file():
+            return stable_owner
+        try:
+            with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro",
+                                         uri=True)) as connection:
+                saved = SubchatSubmissions(connection, initialize=False).get(
+                    target, owner=legacy_grant_id)
+        except (sqlite3.Error, SubchatOperationNotFound):
+            return stable_owner
+        if (saved.provider_account_id is not None
+                and saved.provider_account_id != self.config.account_id):
+            return stable_owner
+        return legacy_grant_id
 
     async def execute(self, grant_id: str, request: Request,
                       granted: frozenset[str]) -> Reply:
@@ -487,7 +532,7 @@ async def open_subchat_gateway(config: SubchatGatewayConfig, *, owner: str
                            observe_http_catalog=http_catalog,
                            owner=grant_id, serialize_recovery=True)
 
-        gateway = SubchatGateway(core_factory, owner=owner)
+        gateway = SubchatGateway(core_factory, owner=owner, account_id=config.account_id)
         try:
             yield gateway
         finally:

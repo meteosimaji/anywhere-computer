@@ -4,23 +4,25 @@ from __future__ import annotations
 import re
 import struct
 import zlib
-from collections.abc import Mapping
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlencode, urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
-from .subchat import SubchatAccessError
-from .subchat_browser.history import matched_input
+from .subchat import SubchatAccessError, SubchatAnswer
+from .subchat_browser.history import (
+    bound_final_images,
+    bound_tool_images,
+    matched_input,
+    project_observation,
+)
 from .subchat_http_download import SandboxFileTooLarge, _content_url
 from .subchat_http_session import ObservedHTTPSession
 from .subchat_state import SubchatAccountMismatch, SubchatSubmission
 
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 _CONVERSATION = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
-_POINTER = re.compile(r'sediment://(file_[0-9a-f]{32})\Z')
-_MIMES = frozenset({'image/png', 'image/jpeg', 'image/webp'})
 
 
 class _ImageMetadata(BaseModel):
@@ -160,37 +162,35 @@ async def download_verified_image(saved: SubchatSubmission, history_payload: byt
                       and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
     if len(matching_users) != 1:
         raise ValueError('Saved Chat turn identity is ambiguous')
-    user_index = history.messages.index(user)
-    parts: list[Mapping[str, object]] = []
-    for message in history.messages[user_index + 1:]:
-        if (message.author.get('role') != 'tool' or message.channel != 'final'
-                or message.status != 'finished_successfully'
-                or not isinstance(message.metadata.get('async_source'), str)
-                or not message.metadata['async_source']
-                or any(message.metadata.get(key) != user.metadata[key] for key in keys)):
-            continue
-        if message.content.get('content_type') != 'multimodal_text':
-            continue
-        items = message.content.get('parts')
-        if not isinstance(items, list):
-            raise ValueError('Image tool parts are invalid')
-        parts.extend(item for item in items if isinstance(item, dict)
-                     and item.get('content_type') == 'image_asset_pointer')
-    if len(parts) != 1:
+    observation = project_observation(history_payload, saved)
+    if not isinstance(observation, SubchatAnswer) and any(
+        message.author.get('role') == 'assistant' and message.channel == 'final'
+        and all(message.metadata.get(key) == user.metadata[key] for key in keys)
+        for message in history.messages[history.messages.index(user) + 1:]
+    ):
+        raise ValueError('Saved Chat final is not verified')
+    final = None
+    if saved.state == 'completed':
+        if (not isinstance(observation, SubchatAnswer)
+                or observation.answer_message_id != saved.answer_message_id
+                or observation.answer_type != saved.answer_type
+                or observation.text != saved.answer):
+            raise ValueError('Saved Chat final does not match current history')
+    if isinstance(observation, SubchatAnswer):
+        final = next(message for message in history.messages
+                     if message.id == observation.answer_message_id)
+    images = (*bound_tool_images(history, user, before=final),
+              *(bound_final_images(final) if final is not None else ()))
+    if len(images) != 1:
         raise ValueError('Exactly one bound image is required')
-    image = parts[0]
-    pointer = image.get('asset_pointer')
-    match = _POINTER.fullmatch(pointer) if isinstance(pointer, str) else None
-    mime = image.get('mime_type')
-    size = image.get('size_bytes')
-    width = image.get('width')
-    height = image.get('height')
-    if (match is None or mime not in _MIMES or type(size) is not int or size <= 0
-            or type(width) is not int or width <= 0 or type(height) is not int or height <= 0):
-        raise ValueError('Saved image metadata is invalid')
+    image = images[0]
+    mime = image.mime_type
+    size = image.size_bytes
+    width = image.width
+    height = image.height
     if size > max_bytes:
         raise SandboxFileTooLarge('Chat image exceeds the requested byte limit')
-    file_id = match[1]
+    file_id = image.pointer.removeprefix('sediment://')
     metadata_url = ('https://chatgpt.com/backend-api/files/download/' + file_id
                     + '?' + urlencode({'conversation_id': saved.conversation_id,
                                        'inline': 'false'}))

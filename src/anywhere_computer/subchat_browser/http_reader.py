@@ -249,6 +249,24 @@ class ChatHTTPReader:
         if (submission.provider_account_id is not None
                 and (self._context is not context or not self._headers)):
             await self.catalog(context)
+        if (submission.provider_account_id is not None and not self._browser_free
+                and self._verified_account_id is None
+                and self._headers.get('chatgpt-account-id') is None):
+            # Current app GETs may omit the account header. A fresh reader has
+            # no send-time binding, so verify the logged-in Chrome identity on
+            # the auth endpoint before touching this saved conversation.
+            assert context is not None
+            import httpx
+
+            from ..subchat_chrome_login import chrome_http_session
+
+            async with httpx.AsyncClient(
+                    trust_env=False, follow_redirects=False,
+                    transport=httpx.AsyncHTTPTransport(retries=0)) as client:
+                session = await chrome_http_session(
+                    context, client, expected_account_id=submission.provider_account_id,
+                    page_factory=self._page_factory)
+            self.bind_verified_account(context, session.account_id)
         self._check_account(submission.provider_account_id)
 
         async def observe(page: Page) -> Response:

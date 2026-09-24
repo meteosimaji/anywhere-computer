@@ -129,6 +129,7 @@ def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
         plugin / ".claude-mcp.json",
         plugin / "LICENSE",
         plugin / "skills/computer-work/SKILL.md",
+        plugin / "skills/subchat/SKILL.md",
         bundled / wheel.name,
         bundled / "dependencies.txt",
         bundled / "checksums.json",

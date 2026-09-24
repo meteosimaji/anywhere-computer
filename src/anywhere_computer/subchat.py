@@ -1,11 +1,13 @@
 """Submission lifecycle shared by browser adapters; no model or provider defaults."""
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from .models import Contract
 from .subchat_content import SubchatResources
@@ -40,8 +42,17 @@ class SubchatPreparedSend:
 
 class SubchatAnswer(SubchatReceipt):
     answer_message_id: str = Field(min_length=1)
-    text: str = Field(min_length=1)
+    text: str | None = None
+    answer_type: Literal['text', 'image', 'multimodal'] = 'text'
     reported_settings: SubchatReportedSettings | None = None
+
+    @model_validator(mode='after')
+    def validate_content(self) -> SubchatAnswer:
+        if (self.answer_type == 'text' and not self.text
+                or self.answer_type == 'image' and self.text is not None
+                or self.answer_type == 'multimodal' and not self.text):
+            raise ValueError('Final answer type and text disagree')
+        return self
 
 
 class SubchatPendingObservation(Contract):
@@ -249,7 +260,7 @@ class Subchats:
         self._accept(submission, answer, owner)
         completed = self.store.complete(
             operation_id, answer.answer_message_id, answer.text, owner=owner,
-            reported_settings=answer.reported_settings)
+            answer_type=answer.answer_type, reported_settings=answer.reported_settings)
         release = getattr(self.backend, 'release_completed', None)
         if release is not None and completed.conversation_id is not None:
             try:

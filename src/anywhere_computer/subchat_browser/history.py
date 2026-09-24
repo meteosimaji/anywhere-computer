@@ -1,7 +1,9 @@
 """Read-only ordinary-Chat history projection; never replay generation requests."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import re
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -76,6 +78,81 @@ def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAns
     return observed if isinstance(observed, SubchatAnswer) else None
 
 
+_IMAGE_POINTER = re.compile(r'sediment://file_[0-9a-f]{32}\Z')
+_IMAGE_MIMES = frozenset({'image/png', 'image/jpeg', 'image/webp'})
+
+
+@dataclass(frozen=True, slots=True)
+class BoundImage:
+    pointer: str
+    mime_type: str
+    size_bytes: int
+    width: int
+    height: int
+
+
+def _image_asset(part: dict[str, JsonValue]) -> BoundImage:
+    pointer = part.get('asset_pointer')
+    mime = part.get('mime_type')
+    size = part.get('size_bytes')
+    width = part.get('width')
+    height = part.get('height')
+    if (not isinstance(pointer, str) or not _IMAGE_POINTER.fullmatch(pointer)
+            or not isinstance(mime, str) or mime not in _IMAGE_MIMES
+            or type(size) is not int or size <= 0
+            or type(width) is not int or width <= 0
+            or type(height) is not int or height <= 0):
+        raise ValueError('Saved image metadata is invalid')
+    return BoundImage(pointer, mime, size, width, height)
+
+
+def _final_parts(content: dict[str, JsonValue]
+                 ) -> tuple[str | None, tuple[BoundImage, ...]] | None:
+    """Keep exact text fragments and recognize only explicit image asset parts."""
+    if content.get('content_type') not in {'text', 'multimodal_text'}:
+        return None
+    parts = content.get('parts')
+    if not isinstance(parts, list) or not parts:
+        return None
+    fragments: list[str] = []
+    images: list[BoundImage] = []
+    for part in parts:
+        if isinstance(part, str):
+            fragments.append(part)
+        elif isinstance(part, dict) and part.get('content_type') == 'image_asset_pointer':
+            images.append(_image_asset(part))
+        else:
+            return None
+    text = ''.join(fragments) or None
+    return (text, tuple(images)) if text is not None or images else None
+
+
+def bound_tool_images(history: HistoryPage, user: HistoryMessage, *,
+                      before: HistoryMessage | None = None) -> tuple[BoundImage, ...]:
+    """Find finished image tool results after the verified input in this exact turn."""
+    keys = ('turn_exchange_id', 'working_turn_id')
+    stop = history.messages.index(before) if before is not None else len(history.messages)
+    images: list[BoundImage] = []
+    for message in history.messages[history.messages.index(user) + 1:stop]:
+        async_source = message.metadata.get('async_source')
+        if (message.author.get('role') != 'tool' or message.channel != 'final'
+                or message.status != 'finished_successfully'
+                or not isinstance(async_source, str) or not async_source.strip()
+                or any(message.metadata.get(key) != user.metadata.get(key) for key in keys)):
+            continue
+        if message.content.get('content_type') != 'multimodal_text':
+            continue
+        parsed = _final_parts(message.content)
+        if parsed is not None:
+            images.extend(parsed[1])
+    return tuple(images)
+
+
+def bound_final_images(message: HistoryMessage) -> tuple[BoundImage, ...]:
+    parsed = _final_parts(message.content)
+    return parsed[1] if parsed is not None else ()
+
+
 def project_observation(payload: bytes, submission: SubchatSubmission
                         ) -> SubchatAnswer | SubchatPendingObservation:
     matched = matched_input(payload, submission)
@@ -128,6 +205,9 @@ def project_observation(payload: bytes, submission: SubchatSubmission
         return SubchatPendingObservation(operation_id=submission.operation_id,
             reason='final_not_observed' if not answers else 'final_ambiguous')
     answer = answers[0]
+    if history.messages.index(answer) <= history.messages.index(user):
+        return SubchatPendingObservation(operation_id=submission.operation_id,
+                                         reason='final_not_observed')
     finish = answer.metadata.get('finish_details')
     if isinstance(finish, dict) and finish.get('type') == 'interrupted':
         raise SubchatInterrupted('Provider recorded an interrupted response; do not resend')
@@ -137,11 +217,37 @@ def project_observation(payload: bytes, submission: SubchatSubmission
                 and (not isinstance(finish, dict) or finish.get('type') != 'stop'))):
         return SubchatPendingObservation(operation_id=submission.operation_id,
                                          reason='final_not_complete')
-    parts = answer.content.get('parts')
-    if (answer.content.get('content_type') != 'text' or not isinstance(parts, list)
-            or len(parts) != 1 or not isinstance(parts[0], str) or not parts[0]):
+    try:
+        parsed = _final_parts(answer.content)
+        tool_images = bound_tool_images(history, user, before=answer)
+    except ValueError:
         return SubchatPendingObservation(operation_id=submission.operation_id,
                                          reason='final_text_unavailable')
+    empty_final = (answer.content.get('content_type') == 'text'
+                   and answer.content.get('parts') == [''])
+    if parsed is None and not (empty_final and tool_images):
+        return SubchatPendingObservation(operation_id=submission.operation_id,
+                                         reason='final_text_unavailable')
+    text, final_images = parsed if parsed is not None else (None, ())
+    images = (*final_images, *tool_images)
+    if images:
+        turn_users = [message for message in history.messages
+                      if message.author.get('role') == 'user'
+                      and all(message.metadata.get(key) == user.metadata.get(key)
+                              for key in ('turn_exchange_id', 'working_turn_id'))]
+        if len(turn_users) != 1:
+            return SubchatPendingObservation(operation_id=submission.operation_id,
+                                             reason='correlation_ambiguous')
+    if len(images) > 1:
+        return SubchatPendingObservation(operation_id=submission.operation_id,
+                                         reason='final_ambiguous')
+    answer_type: Literal['text', 'image', 'multimodal']
+    if text is None:
+        answer_type = 'image'
+    elif images:
+        answer_type = 'multimodal'
+    else:
+        answer_type = 'text'
     assert submission.conversation_id is not None and submission.user_message_id is not None
     # Optional evidence: retain only bounded provider settings, never arbitrary metadata.
     settings = {key: value for key in ('model_slug', 'thinking_effort')
@@ -150,7 +256,8 @@ def project_observation(payload: bytes, submission: SubchatSubmission
     reported = SubchatReportedSettings.model_validate(settings) if settings else None
     return SubchatAnswer(conversation_id=submission.conversation_id,
                          user_message_id=submission.user_message_id, prompt=submission.prompt,
-                         answer_message_id=answer.id, text=parts[0], reported_settings=reported)
+                         answer_message_id=answer.id, text=text,
+                         answer_type=answer_type, reported_settings=reported)
 
 
 async def observe_history(page: Page, submission: SubchatSubmission) -> Response:

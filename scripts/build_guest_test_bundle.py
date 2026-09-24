@@ -19,6 +19,7 @@ def build_guest_bundle(root: Path, output: Path) -> Path:
     plugin = root / "plugins/anywhere-computer"
     files += [plugin / name for name in (
         ".codex-plugin/plugin.json", ".mcp.json", "LICENSE", "skills/computer-work/SKILL.md",
+        "skills/subchat/SKILL.md",
         "bundled/checksums.json", "bundled/dependencies.txt", "bundled/release.json",
     )]
     checksums = json.loads((plugin / "bundled/checksums.json").read_text())

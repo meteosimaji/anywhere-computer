@@ -48,6 +48,31 @@ def test_restart_retains_uncertain_send_and_completed_reply(tmp_path):
         ledger.close()
 
 
+def test_legacy_completed_text_without_answer_type_remains_idempotent(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        operation = 'f' * 32
+        store.prepare(operation, 'prompt', 'model', 'effort', owner=None)
+        store.begin_send(operation, owner=None)
+        store.submitted(operation, 'conversation', 'user', owner=None)
+        store.complete(operation, 'answer', 'existing text', owner=None)
+        body = json.loads(ledger.connection.execute(
+            'SELECT body FROM subchat_submissions WHERE operation_id=?',
+            (operation,)).fetchone()[0])
+        body.pop('answer_type')
+        with ledger.connection:
+            ledger.connection.execute(
+                'UPDATE subchat_submissions SET body=? WHERE operation_id=?',
+                (json.dumps(body), operation))
+        saved = store.get(operation, owner=None)
+        assert saved.state == 'completed' and saved.answer == 'existing text'
+        assert saved.answer_type is None
+        assert store.complete(operation, 'answer', 'existing text', owner=None) == saved
+    finally:
+        ledger.close()
+
+
 def test_distinct_controllers_cannot_send_to_one_conversation_concurrently(tmp_path):
     first_ledger = Ledger(tmp_path)
     second_ledger = Ledger(tmp_path)
