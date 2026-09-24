@@ -74,6 +74,27 @@ def test_token_identity_persists_without_raw_secrets(authority, tmp_path):
             assert VERIFIER.encode() not in data
 
 
+def test_historical_grant_identity_requires_same_owner_device_and_client(authority):
+    old = redeem(authority, approve(authority))
+    current = redeem(authority, approve(authority))
+    old_id = authority.verify(old.value, resource=RESOURCE).grant_id
+    current_identity = authority.verify(current.value, resource=RESOURCE)
+    assert authority.same_principal_grant(current_identity, old_id)
+    authority.revoke(owner="owner", grant=old_id)
+    assert authority.current_grant(old_id) is None
+    assert authority.same_principal_grant(current_identity, old_id)
+    authority.register_client("other-client", frozenset({REDIRECT}))
+    other_client = redeem(authority, approve(authority, client="other-client"),
+                          client="other-client")
+    other_client_id = authority.verify(other_client.value, resource=RESOURCE).grant_id
+    authority.enroll_device("owner", "other-device", TOOLS)
+    other_device = redeem(authority, approve(authority, device="other-device"))
+    other_device_id = authority.verify(other_device.value, resource=RESOURCE).grant_id
+    assert not authority.same_principal_grant(current_identity, other_client_id)
+    assert not authority.same_principal_grant(current_identity, other_device_id)
+    assert not authority.same_principal_grant(current_identity, "unknown")
+
+
 @pytest.mark.parametrize(
     "override",
     [

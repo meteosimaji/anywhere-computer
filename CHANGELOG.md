@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a27 / Plugin 0.2.0-alpha.27 — unpublished candidate (2026-09-25)
+
+- Let a freshly authorized grant recover an exact legacy Subchat operation
+  saved under an older grant of the same owner, device, and OAuth client.
+  Require the saved Chat account binding to match before crossing grants;
+  unbound or other-client operations remain private.
+
 ## 0.2.0a26 / Plugin 0.2.0-alpha.26 — unpublished candidate (2026-09-24)
 
 - Preserve compatibility with older submission readers by moving completed

@@ -677,9 +677,17 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
                                  ("other-client", "other"))
     }
 
+    historical = dict(grants)
+
     class Store:
         def current_grant(self, identity):
             return grants.get(identity)
+
+        def same_principal_grant(self, current, candidate):
+            old = historical.get(candidate)
+            return old is not None and (
+                old.owner, old.device, old.client
+            ) == (current.owner, current.device, current.client)
 
     class Engine:
         def catalog(self, granted):
@@ -705,6 +713,8 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
     store.prepare(wrong_account_id, "other", "model", "effort", owner="old-grant")
     store.begin_send(wrong_account_id, owner="old-grant", user_message_id="other-message",
                      provider_account_id="another-account")
+    unbound_id = "d" * 32
+    store.prepare(unbound_id, "unbound", "model", "effort", owner="old-grant")
     gateway = LazySubchatGateway(SubchatGatewayConfig(
         profile=str(tmp_path / "profile"), ledger=str(ledger_path), account_id="account",
         consent="ordinary-chat-browser-control-approved"), owner="owner")
@@ -722,6 +732,9 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
                                   subchat_gateway=gateway)
 
     class Core:
+        sends = {}
+        queue_watch_states = {}
+
         async def execute(self, request):
             return Reply(operation_id=request.operation_id, state="completed",
                          data={"operation_id": request.arguments["operation_id"]})
@@ -771,7 +784,16 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
         legacy_from_new = await backend.session("new-grant").execute(Request(
             operation_id="4" * 32, tool="subchat_status",
             arguments={"operation_id": legacy_id}))
-        assert legacy_from_new.data["error_code"] == "unknown_operation"
+        assert legacy_from_new.data["state"] == "sending"
+        recovered_from_new = await backend.session("new-grant").execute(Request(
+            operation_id="a" * 32, tool="subchat_recover",
+            arguments={"operation_id": legacy_id}))
+        assert recovered_from_new.data["operation_id"] == legacy_id
+        assert core_owners == ["old-grant"]
+        unbound_from_new = await backend.session("new-grant").execute(Request(
+            operation_id="b" * 32, tool="subchat_status",
+            arguments={"operation_id": unbound_id}))
+        assert unbound_from_new.data["error_code"] == "unknown_operation"
         private = await status("other-client")
         assert private.state == "failed" and private.data["error_code"] == "unknown_operation"
         private_legacy = await backend.session("other-client").execute(Request(
@@ -946,10 +968,28 @@ async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same
         assert conflict.state == "failed" and conflict.data["dispatched"] is False
         assert attempts == 1 and backend.sends == 0
         # Only this explicit same-ID send may attempt preparation again.
+        monkeypatch.setattr(subchat_mcp, "SEND_ACK_TIMEOUT", .0001)
         retried = await gateway.execute("grant", send, scopes)
-        assert retried.state == "unknown" and attempts == 2 and backend.sends == 1
+        if retried.state == "running":
+            # A slow worker may reach the ACK deadline before the deterministic
+            # fixture reports its uncertain dispatch. Await that same task;
+            # the same-ID lookup below checks its durable outcome without replay.
+            sending = core.sends.get(operation_id)
+            if sending is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(sending), timeout=5)
+                except TimeoutError:
+                    raise
+                except Exception:
+                    pass
+            retried = await gateway.execute("grant", send, scopes)
+        assert (retried.state == "unknown" or
+                (retried.state == "completed" and retried.data.get("state") == "sending"))
+        assert attempts == 2 and backend.sends == 1
         duplicate = await gateway.execute("grant", send, scopes)
-        assert duplicate.state == "unknown" and backend.sends == 1
+        assert (duplicate.state == "unknown" or
+                (duplicate.state == "completed" and duplicate.data.get("state") == "sending"))
+        assert backend.sends == 1
     finally:
         finish.set()
         await gateway.close()

@@ -304,8 +304,9 @@ class LazySubchatGateway:
                 if isinstance(item, dict) and item.get("name") in granted & SUBCHAT_GATEWAY_TOOLS]
 
     def owner_for_request(self, request: Request, *, stable_owner: str,
-                          legacy_grant_id: str) -> str:
-        """Keep exact old-grant operations usable without migrating their rows."""
+                          legacy_grant_id: str,
+                          same_principal_grant: Callable[[str], bool] | None = None) -> str:
+        """Resolve an exact legacy operation within the authenticated principal."""
         if legacy_grant_id == stable_owner:
             return stable_owner
         target: object = request.operation_id
@@ -324,14 +325,27 @@ class LazySubchatGateway:
         try:
             with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro",
                                          uri=True)) as connection:
+                row = connection.execute(
+                    "SELECT owner FROM subchat_submissions WHERE operation_id=?",
+                    (target,),
+                ).fetchone()
+                if row is None or not isinstance(row[0], str):
+                    return stable_owner
+                legacy_owner = row[0]
+                if legacy_owner != legacy_grant_id and (
+                    same_principal_grant is None
+                    or not same_principal_grant(legacy_owner)
+                ):
+                    return stable_owner
                 saved = SubchatSubmissions(connection, initialize=False).get(
-                    target, owner=legacy_grant_id)
+                    target, owner=legacy_owner)
         except (sqlite3.Error, SubchatOperationNotFound):
             return stable_owner
-        if (saved.provider_account_id is not None
-                and saved.provider_account_id != self.config.account_id):
+        if (saved.provider_account_id != self.config.account_id
+                and (legacy_owner != legacy_grant_id
+                     or saved.provider_account_id is not None)):
             return stable_owner
-        return legacy_grant_id
+        return legacy_owner
 
     async def execute(self, grant_id: str, request: Request,
                       granted: frozenset[str]) -> Reply:

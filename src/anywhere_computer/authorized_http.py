@@ -154,7 +154,10 @@ class AuthorizedDeviceMCP:
                         and isinstance(self.subchat_gateway, LazySubchatGateway)):
                     subchat_owner = await asyncio.to_thread(
                         self.subchat_gateway.owner_for_request, request,
-                        stable_owner=subchat_owner, legacy_grant_id=grant.grant_id)
+                        stable_owner=subchat_owner, legacy_grant_id=grant.grant_id,
+                        same_principal_grant=lambda candidate: self.store.same_principal_grant(
+                            grant, candidate),
+                    )
                 return await self.subchat_gateway.execute(
                     subchat_owner, request, grant.tools)
             if request.tool not in ROUTER_TOOLS:
