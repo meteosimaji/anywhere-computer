@@ -64,16 +64,6 @@ SSHプロトコル試験はOpenSSH自体や二台の物理端末を実証する�
 CLIの `remote-mcp` / `http-mcp` は引き続き単一端末接続として使える。
 Web dashboard、照合コードpairing、遠隔agent停止、二台の実機・各OSの認証操作検証は残る。
 
-以下は端末ルーター導入時点の検証記録であり、最新版のツール件数ではない。
-導入時の全体pytestは **486 passed / 5 skipped**。Ruff、mypy通常/Windows対象
-（52 source files）、plugin構造検証、同梱wheelとソース一致が成功。
-新しい版のCodex pluginインストール先からuv tool runで実行環境を作成し、
-その環境で43ツールと明示localのファイル作成を確認した。インストール済み7ファイルも一致。
-同じ開発用wheelパスを使ったuvの確認では旧環境が選ばれたため、その結果を合格扱いせず、
-版付きの実インストール先を使って確認した。現在開いているCodexタスクのtool定義更新や
-ChatGPT接続を実証したものではない。
-
-
 ## Selective catalogs (development)
 
 `devices_tools` accepts optional `name`, `query` and `summary` fields. Use
@@ -89,8 +79,4 @@ is not an upstream bandwidth optimization, schema cache or latency guarantee.
 Changing authorization or removing a tool is reflected on the next request.
 No prior schema response grants permission for a later operation.
 
-A 2026-09-14 isolated local-engine measurement serialized the returned `data`
-using compact JSON and UTF-8: all 59 tools = 67,123 bytes; summary of 59 tools =
-11,330 bytes; exact `files_read` schema = 992 bytes. These are response-data
-bytes, not model tokens, total network traffic or an end-to-end latency benchmark.
 The caller can request an exact schema directly when it already knows the name.

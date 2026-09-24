@@ -8,6 +8,8 @@ from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import Subchats
 from anywhere_computer.subchat_state import SubchatSubmissions
 
+CONVERSATION_ID = '11111111-2222-3333-4444-555555555555'
+
 HTML = '''<button aria-pressed="true">Chat</button>
 <button data-composer-navigation-target="reasoning"
  onclick="menu.hidden=false">Model</button>
@@ -52,6 +54,285 @@ window.finish=()=>{
  new ClipboardItem({'text/plain':new Blob(['日本語 answer 42'],{type:'text/plain'})})]);
 };
 </script>'''
+
+
+async def test_prepare_preserves_original_error_when_page_close_fails(monkeypatch):
+    from anywhere_computer.subchat import SubchatAccessError
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmission
+
+    class Page:
+        async def close(self):
+            raise RuntimeError('fixture close failure')
+
+    async def context_factory():
+        return object()
+
+    backend = BrowserSubchatBackend(context_factory)
+    page = Page()
+
+    async def new_page():
+        return page
+
+    async def fail_prepare(*args, **kwargs):
+        raise SubchatAccessError(401)
+
+    monkeypatch.setattr(backend, '_new_page', new_page)
+    monkeypatch.setattr(backend, '_prepare_page', fail_prepare)
+    submission = SubchatSubmission(
+        operation_id='0' * 32, prompt='fixture', model='fixture', effort='fixture')
+    with pytest.raises(SubchatAccessError):
+        await backend.prepare(submission)
+    assert submission.operation_id not in backend.pages
+
+
+async def test_baseline_uses_latest_user_identity_in_current_chat_markup():
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            context = await browser.new_context()
+            page = await context.new_page()
+            backend = BrowserSubchatBackend(context)
+            await page.set_content('''<main>
+                <div data-turn-id-container="user-a"><div data-message-author-role="user"
+                     data-message-id="user-a"></div></div>
+                <div data-turn-id-container="assistant-a">
+                     <div data-message-author-role="assistant"
+                          data-message-id="assistant-a"></div></div>
+            </main>''')
+            assert await backend._baseline_with_last_user(page) == (
+                ('user-a', 'assistant-a'), 'user-a')
+            await page.locator('main').evaluate('''main => main.insertAdjacentHTML(
+                'beforeend', '<div data-message-author-role="user" '
+                + 'data-message-id="user-b"></div>')''')
+            assert await backend._baseline_with_last_user(page) == (
+                ('user-a', 'assistant-a', 'user-b'), 'user-b')
+            await page.locator('main').evaluate('''main => main.insertAdjacentHTML(
+                'beforeend', '<div data-message-author-role="assistant" '
+                + 'data-message-id="assistant-a"></div>')''')
+            with pytest.raises(ValueError, match='ambiguous'):
+                await backend._baseline_with_last_user(page)
+        finally:
+            await browser.close()
+
+
+async def test_failed_prepare_closes_new_tabs_and_does_not_reuse_touched_tab(tmp_path):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            history = HTML + '''<script>document.querySelector('main').innerHTML =
+              '<div data-turn-key="prior"></div>';</script>'''
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=history))
+            backend = BrowserSubchatBackend(context)
+            store = SubchatSubmissions(ledger.connection)
+            failed = store.prepare('1' * 32, 'prompt', 'Missing model', 'Initial effort',
+                                   owner=None, conversation_id=CONVERSATION_ID)
+            for _ in range(2):
+                with pytest.raises(ValueError, match='Requested model'):
+                    await backend.prepare(failed)
+                assert context.pages == []
+                assert failed.operation_id not in backend.pages
+
+            first = store.prepare('2' * 32, 'prompt', 'Future model', 'Initial effort',
+                                  owner=None, conversation_id=CONVERSATION_ID)
+            assert await backend.prepare(first) == ('prior',)
+            owned = backend.pages[first.operation_id]
+            second = store.prepare('3' * 32, 'prompt', 'Missing model', 'Initial effort',
+                                   owner=None, conversation_id=CONVERSATION_ID)
+            with pytest.raises(ValueError, match='Requested model'):
+                await backend.prepare(second)
+            assert backend.pages[first.operation_id] is owned
+            assert second.operation_id not in backend.pages
+            third = store.prepare('4' * 32, 'prompt', 'Future model', 'Initial effort',
+                                  owner=None, conversation_id=CONVERSATION_ID)
+            assert await backend.prepare(third) == ('prior',)
+            assert backend.pages[third.operation_id] is not owned
+            assert not owned.is_closed()
+            assert len(context.pages) == 2
+        finally:
+            ledger.close()
+            await browser.close()
+
+
+async def test_work_handoff_uses_latest_user_when_assistant_id_follows():
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmission
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            context = await browser.new_context()
+            html = HTML + '''<script>
+              document.querySelector('main').innerHTML =
+                '<div data-turn-id-container="user"><div data-message-author-role="user" '+
+                'data-message-id="user"><div data-user-message-bubble="true">prompt</div>'+
+                '<button aria-label="Copy message">'+
+                'copy</button></div></div>'+
+                '<div data-turn-id-container="assistant">'+
+                '<div data-message-author-role="assistant" '+
+                'data-message-id="assistant"></div></div>';
+              document.querySelector('[aria-label="Copy message"]').onclick = () =>
+                navigator.clipboard.writeText('prompt');
+              window.stayClicks = 0;
+              document.body.insertAdjacentHTML('beforeend',
+                '<button id="stay">Stay in Chat</button><button>Continue in Work</button>');
+              stay.onclick = () => window.stayClicks++;
+            </script>'''
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=html))
+            page = await context.new_page()
+            await page.goto('https://chatgpt.com/c/' + CONVERSATION_ID)
+            submission = SubchatSubmission(operation_id='5' * 32, prompt='prompt',
+                model='Future model', effort='Initial effort', state='submitted',
+                requested_conversation_id=CONVERSATION_ID, conversation_id=CONVERSATION_ID,
+                user_message_id='user', baseline_identity_kind='message_id')
+            backend = BrowserSubchatBackend(context)
+            backend.pages[submission.operation_id] = page
+            assert await backend.read_answer(submission) is None
+            assert await page.evaluate('window.stayClicks') == 1
+        finally:
+            await browser.close()
+
+
+async def test_resource_recovery_ignores_assistant_ids_and_unversioned_history():
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_content import SubchatResources
+    from anywhere_computer.subchat_state import SubchatSubmission
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            context = await browser.new_context()
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=HTML))
+            page = await context.new_page()
+            await page.goto('https://chatgpt.com/c/' + CONVERSATION_ID)
+            backend = BrowserSubchatBackend(context, http_read=True)
+            submission = SubchatSubmission(operation_id='6' * 32, prompt='prompt',
+                model='Future model', effort='Initial effort', state='sending',
+                requested_conversation_id=CONVERSATION_ID, conversation_id=CONVERSATION_ID,
+                baseline_message_ids=('prior-user', 'prior-assistant'),
+                baseline_identity_kind='message_id', resources=SubchatResources())
+            backend.pages[submission.operation_id] = page
+            observed = []
+
+            async def receipt(_context, candidate):
+                observed.append(candidate.user_message_id)
+                return None
+
+            backend._http_reader.receipt = receipt
+            await page.locator('main').evaluate('''node => node.innerHTML =
+                '<div data-message-author-role="user" data-message-id="prior-user"></div>'+
+                '<div data-message-author-role="assistant" '+
+                'data-message-id="prior-assistant"></div>'+
+                '<div data-message-author-role="user" data-message-id="new-user"></div>'+
+                '<div data-message-author-role="assistant" '+
+                'data-message-id="new-assistant"></div>' ''')
+            assert await backend.find_submission(submission) is None
+            assert observed == ['new-user']
+            observed.clear()
+            legacy = submission.model_copy(update={'baseline_identity_kind': None})
+            assert await backend.find_submission(legacy) is None
+            assert observed == []
+        finally:
+            await browser.close()
+
+
+async def test_completed_page_release_waits_for_queue_and_live_aliases():
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmission
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            context = await browser.new_context()
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=HTML))
+            page = await context.new_page()
+            await page.goto('https://chatgpt.com/c/' + CONVERSATION_ID)
+            backend = BrowserSubchatBackend(context)
+            parent = SubchatSubmission(operation_id='a' * 32, prompt='first',
+                model='Future model', effort='Initial effort', state='completed',
+                requested_conversation_id=CONVERSATION_ID,
+                conversation_id=CONVERSATION_ID, user_message_id='first')
+            child = parent.model_copy(update={'operation_id': 'b' * 32,
+                                              'state': 'sending', 'prompt': 'next'})
+            backend.pages[parent.operation_id] = page
+            await backend.release_completed(parent, keep_for_queue=True)
+            assert backend.queue_watch_ready(child)
+            assert not page.is_closed()
+
+            backend.pages[child.operation_id] = page
+            await backend.release_completed(parent, keep_for_queue=False)
+            assert parent.operation_id not in backend.pages
+            assert backend.pages[child.operation_id] is page
+            assert not page.is_closed()
+
+            completed_child = child.model_copy(update={'state': 'completed'})
+            await backend.release_completed(completed_child, keep_for_queue=False)
+            assert backend.pages == {}
+            assert page.is_closed()
+        finally:
+            await browser.close()
+
+
+@pytest.mark.parametrize('late_element', ['composer', 'menu', 'model_rows', 'control'])
+async def test_prepare_waits_for_delayed_chat_ui_without_dispatch(tmp_path, late_element):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            if late_element == 'composer':
+                delayed = '''<script>
+                  const composer = document.querySelector('form');
+                  composer.remove();
+                  setTimeout(() => document.body.append(composer), 100);
+                </script>'''
+                html = HTML + delayed
+            elif late_element == 'menu':
+                html = HTML.replace('onclick="menu.hidden=false"',
+                                    'onclick="setTimeout(()=>menu.hidden=false, 100)"')
+            elif late_element == 'model_rows':
+                html = HTML + '''<script>
+                  models.hidden=true; control.hidden=false;
+                  document.querySelector('[data-model-picker-view-toggle]').onclick=()=>
+                    setTimeout(()=>{models.hidden=false; control.hidden=true}, 100);
+                </script>'''
+            else:
+                html = HTML + '''<script>
+                  models.hidden=true; control.hidden=true;
+                  setTimeout(()=>control.hidden=false, 100);
+                </script>'''
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=html))
+            store = SubchatSubmissions(ledger.connection)
+            draft = store.prepare('5' * 32, 'delayed input', 'Future model',
+                                  'Initial effort', owner=None)
+            backend = BrowserSubchatBackend(context)
+            assert await backend.prepare(draft) == ()
+            page = backend.pages[draft.operation_id]
+            assert await page.evaluate('window.sends') == 0
+            assert not (await page.get_by_role('textbox').inner_text()).strip()
+            assert store.get(draft.operation_id, owner=None).state == 'prepared'
+        finally:
+            ledger.close()
+            await browser.close()
 
 
 @pytest.mark.parametrize('followup', [False, True])
@@ -180,30 +461,32 @@ async def test_browser_send_pending_completion_and_database_recovery(
             result = await service.recover(operation, owner=None)
             assert result.state == 'completed'
             assert result.answer == '日本語 answer 42'
+            assert recovered_page.is_closed()
+            assert operation not in service.backend.pages
             follow = service.store.prepare('7' * 32, 'next', 'Future model',
                                            'Initial effort', owner=None,
                                            conversation_id=result.conversation_id)
-            await recovered_page.evaluate('window.reuseMarker=42')
             assert await service.backend.prepare(follow) == (
                 ('old', 'user') if followup else ('user',))
-            assert service.backend.pages[follow.operation_id] is recovered_page
-            assert await recovered_page.evaluate('window.reuseMarker') == 42
+            follow_page = service.backend.pages[follow.operation_id]
+            assert follow_page is not recovered_page
+            assert await follow_page.evaluate('window.sends') == 0
             assert len(context.pages) == 2
-            await recovered_page.locator('[role=textbox]').fill('user draft')
-            with pytest.raises(ValueError, match='idle empty composer'):
+            await follow_page.locator('[role=textbox]').fill('user draft')
+            with pytest.raises(ValueError, match='contains a draft'):
                 await service.backend.prepare(follow)
-            assert await recovered_page.locator('[role=textbox]').inner_text() == 'user draft'
+            assert await follow_page.locator('[role=textbox]').inner_text() == 'user draft'
             assert len(context.pages) == 2
-            await recovered_page.locator('[role=textbox]').fill('')
-            await recovered_page.evaluate('''() => {
+            await follow_page.locator('[role=textbox]').fill('')
+            await follow_page.evaluate('''() => {
                 const button=document.createElement('button');
                 button.id='generating'; button.setAttribute('aria-label','Stop');
                 document.body.append(button);
             }''')
-            with pytest.raises(ValueError, match='idle empty composer'):
+            with pytest.raises(ValueError, match='is generating'):
                 await service.backend.prepare(follow)
             assert len(context.pages) == 2
-            await recovered_page.locator('#generating').evaluate('node=>node.remove()')
+            await follow_page.locator('#generating').evaluate('node=>node.remove()')
             ledger.close()
             ledger = Ledger(tmp_path)
             service = Subchats(SubchatSubmissions(ledger.connection),
@@ -215,8 +498,8 @@ async def test_browser_send_pending_completion_and_database_recovery(
             assert len(context.pages) == 2
             assert await page.evaluate('window.sends') == 1
             assert await page.evaluate('window.osWrites') == 0
-            assert await recovered_page.evaluate('window.osWrites') == 0
-            assert await recovered_page.evaluate('window.sends') == 0
+            assert await follow_page.evaluate('window.osWrites') == 0
+            assert await follow_page.evaluate('window.sends') == 0
             await context.unroute('**/*')
             await context.route('**/*', lambda route: route.fulfill(
                 content_type='text/html; charset=utf-8', body=HTML))
@@ -304,8 +587,8 @@ async def test_browser_queue_stale_target_fails_before_draft(tmp_path):
             with pytest.raises(ValueError, match='stale'):
                 await service.recover('8' * 32, owner=None)
             assert store.get('8' * 32, owner=None).state == 'queued'
-            assert await context.pages[0].evaluate('window.sends') == 0
-            assert not (await context.pages[0].locator('[role=textbox]').inner_text()).strip()
+            assert context.pages == []
+            assert '8' * 32 not in service.backend.pages
         finally:
             ledger.close()
             await browser.close()

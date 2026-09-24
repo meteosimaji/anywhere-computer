@@ -31,13 +31,6 @@ coordinated restart. A pass without an actual VM restart proves only current
 connectivity and data continuity. It does not prove automatic VM recovery, GUI,
 HVCI, EAC, or VRChat operation.
 
-On the current development Windows-for-Mac VM, SSH still uses a loopback
-forwarding rule added to the running QEMU instance. Windows-for-Mac commit
-`e4c0c2b` adds an explicit `--ssh-forward-port` launch option, restricted to
-shared NAT and loopback binding. A new app and a hash-bound launch profile have
-been prepared, but the running VM has not yet switched to them. Actual
-VM-restart connectivity therefore remains unqualified.
-
 The guest also needs its local engine available after interactive login.
 Anywhere Computer's existing `autostart-install` starts the HTTP/tunnel service;
 it is not a local-only SSH-agent startup command. Do not apply it to an
@@ -69,8 +62,3 @@ Remove the registration with the same command and `-Action Remove`. Repeated
 installation is supported. A shortcut with a different target or arguments is
 left untouched rather than overwritten or removed. Registration does not start
 the engine immediately and is not evidence of a successful subsequent login.
-
-On the development Windows VM, install/status/reinstall/remove/status/install
-and execution of the saved target and arguments passed on 2026-09-13. The
-command returned the existing Windows `0.1.0a9` engine without replacing it.
-Cold login and full VM restart remain separate acceptance checks.

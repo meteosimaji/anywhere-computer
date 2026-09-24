@@ -94,9 +94,73 @@ Inspect its schema, keep the same session, and target the requested application 
 After each input action, observe the actual result. If the UI has not settled, repeat only
 the observation within a short deadline, never blindly repeat input. Peekaboo's agent/analyze
 tools can invoke another model; do not use them for a local-only GUI request.
-capabilities.gui=false refers to the absent built-in GUI backend; an external MCP's
-availability must be checked separately. Existing HTTP connections may need the local
+`capabilities.gui=false` does not by itself deny the separately registered native
+macOS Accessibility tools. Check the actual `gui_native_*` catalog entries, helper
+verification, OS permission, and target app before using them. An external MCP's
+availability must also be checked separately. Existing HTTP connections may need the local
 http-add-tools upgrade before newly introduced direct-MCP tools become discoverable.
+
+This Plugin also registers `anywhere-subchat` as a separate local MCP server. Its
+read-only mode uses a dedicated logged-in Chrome profile headlessly at startup,
+then HTTPX for Chat history and catalog reads. It closes Chrome before serving
+read-only MCP tools. `generation_transport=unavailable` means it cannot send.
+On macOS, a selected profile with an account ID pin and
+`"enable_background_send": true` in `subchat/login-selection.json` enables
+background browser-prepared HTTPX sending at Plugin startup. Set
+`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=http-read-only` to keep it read-only.
+If startup login fails, the server still exposes capabilities and saved state;
+`authentication_state` reports the rejection and HTTP reads stop with the same
+`authentication_required` or `access_denied` code. Restore login, then restart
+the Plugin session or call `subchat_refresh_auth`. In read-only Chrome mode,
+an authenticated GET that returns 401 refreshes the selected profile and retries
+that GET once. Refresh never performs interactive login or retries a send or delete.
+Set `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process and
+restart its MCP session to expose `subchat_send` through the same dedicated
+profile. Check `subchat_capabilities`: this mode reports
+`generation_transport=browser_prepared`, opens minimized Chrome for sends, and
+may briefly take focus. It is not independent HTTP-only generation. The profile
+must already be logged in and must not be open in another Chrome process. Use
+an exact available `http_selection` from `subchat_catalog`, plus observed UI
+model and effort labels, then recover the original send operation ID. Keep the
+controller running until a pending send is confirmed; a missing answer never
+authorizes replay with a new ID. `subchat_download_file` retrieves one exact
+saved final-answer sandbox link (up to 512 KiB of base64), without uploading it
+to another Chat or Library. `subchat_download_image` retrieves a bounded image
+from the exact saved account, conversation and turn. Its `final_answer_verified`
+field distinguishes an available image from a completed assistant answer. The
+local profile and ledger are separate from the
+main Anywhere engine. Set absolute paths in
+`ANYWHERE_SUBCHAT_CHROME_LOGIN_PROFILE` and `ANYWHERE_SUBCHAT_STATE_DIR` to
+choose other dedicated locations before starting the server. No account secrets
+belong in tool calls, Plugin files or environment variables.
+On macOS, the read-only HTTP mode can instead use an explicitly selected
+ordinary Chrome profile through `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE`. The
+Plugin snapshots only its ChatGPT cookies into a private temporary headless
+profile and leaves the ordinary Chrome window alone. Check the authenticated
+account in `subchat_capabilities`; this does not enable HTTP-only generation.
+`browser-send` still uses a separate dedicated profile and may take focus.
+On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` enables
+background Chrome preparation and one HTTPX generation POST. It snapshots the
+selected logged-in ordinary Chrome profile when configured, or uses the dedicated
+profile. It launches a private Chrome process
+without activating it, and connects through an ephemeral loopback CDP port.
+Chrome is required, and local processes can reach that debugging port while it
+runs. A 30 fps live observation of a new Chat and follow-up in the same
+conversation found exact saved answers and no foreground activation; this is
+not a universal focus guarantee. HTTPX 200 for that run follows from the
+successful code path rather than a stored status; an earlier run measured it
+directly. This transport does not upload local files into the Chat.
+For a natural-language request to use a Subchat, inspect
+`subchat_capabilities` and `subchat_catalog` first. Select exact available UI
+`model` and `effort` labels and, for HTTP-read sends, copy the matching
+available `http_selection`. If the user asks for GPT-6 Pro, use it only when
+the current catalog offers it with the requested effort; never silently
+substitute another model. Send with a fresh request ID, then call
+`subchat_wait` or `subchat_recover` with that operation ID until the saved
+answer is final. A submission receipt alone is not a final answer.
+To recover an operation created by a separate `anywhere-subchat` controller,
+start that controller with `--state-dir` set to the same absolute ledger path.
+Check the account and operation ID; this Plugin does not import other ledgers.
 
 Codex Computer Use currently exposes a discoverable MCP catalog, but direct execution
 has returned "Sender process is not authenticated" in local verification. Catalog
@@ -186,9 +250,11 @@ public connectivity evidence. tunnel-forget removes local credentials only;
 provider revocation and DNS are separate. These commands do not provision a public endpoint
 or managed internet relay. http-doctor probes only configured loopback metadata;
 metadata_reachable does not prove authenticated readiness or public HTTPS reachability.
-Built-in GUI interaction and OCR are not implemented; use the explicit external MCP
-adapter described above when available. Explain
-those limits when they affect the requested task.
+Native macOS Accessibility interaction is available only with its verified helper
+and OS permission; inspect the running engine and use exact window/element references.
+OCR and general cross-platform GUI control are not qualified. The explicit external
+MCP adapter above is another provider when installed and authorized. Explain these
+limits when they affect the requested task.
 
 
 Resolve a selected skill's relative references, scripts, and assets against the

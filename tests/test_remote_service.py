@@ -43,7 +43,8 @@ async def test_remote_connector_exit_closes_http(remote_profile, monkeypatch, ex
     children = []
 
     def launch(command, **options):
-        assert command[1:7] == ["-I", "-X", "utf8", "-m", "anywhere_computer.cli", "tunnel-run"]
+        assert command[1:8] == ["-B", "-I", "-X", "utf8", "-m",
+                                "anywhere_computer.cli", "tunnel-run"]
         assert str(directory) in command
         child = original(
             [getattr(sys, "_base_executable", sys.executable), "-c",
@@ -87,7 +88,7 @@ async def test_shared_remote_service_owns_update_monitor(
     original_service = remote_service.http_service
     original_popen = subprocess.Popen
     started, stopped = asyncio.Event(), asyncio.Event()
-    listening = asyncio.Event()
+    listening, launched = asyncio.Event(), asyncio.Event()
 
     @asynccontextmanager
     async def service(path):
@@ -107,28 +108,41 @@ async def test_shared_remote_service_owns_update_monitor(
             stopped.set()
 
     def launch(command, **options):
-        return original_popen([sys.executable, '-I', '-c', 'import time; time.sleep(60)'],
-                              **options)
+        child = original_popen([sys.executable, '-I', '-c', 'import time; time.sleep(60)'],
+                               **options)
+        launched.set()
+        return child
 
     monkeypatch.setattr(remote_service, 'http_service', service)
     monkeypatch.setattr(remote_service, 'monitor_release_updates', monitor)
     monkeypatch.setattr(remote_service.subprocess, 'Popen', launch)
     task = asyncio.create_task(remote_service.serve_remote(directory))
-    ready = asyncio.create_task((started if enabled else listening).wait())
+
+    async def expect_stage(event, stage, timeout):
+        ready = asyncio.create_task(event.wait())
+        try:
+            done, _ = await asyncio.wait({task, ready}, timeout=timeout,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if task in done:
+                code = await task  # Surface a startup exception instead of hiding it in cleanup.
+                pytest.fail(f'Remote service exited before {stage}: {code}')
+            assert ready in done, f'Remote service did not reach {stage} within {timeout}s'
+        finally:
+            ready.cancel()
+            await asyncio.gather(ready, return_exceptions=True)
+
     try:
-        done, _ = await asyncio.wait({task, ready}, timeout=5,
-                                     return_when=asyncio.FIRST_COMPLETED)
-        if task in done:
-            code = await task  # Surface a startup exception instead of hiding it in cleanup.
-            pytest.fail(f'Remote service exited before readiness: {code}')
-        assert ready in done, 'Remote service did not become ready within five seconds'
-        await ready
+        # The real HTTP startup and process creation are separate from the
+        # monitor's scheduling deadline, especially on loaded Windows CI.
+        await expect_stage(listening, 'HTTP listening', 20)
+        await expect_stage(launched, 'connector launch', 10)
+        if enabled:
+            await expect_stage(started, 'update monitor start', 5)
         assert (await diagnose_http(directory))['state'] == 'metadata_reachable'
         assert started.is_set() == enabled
     finally:
-        ready.cancel()
         task.cancel()
-        await asyncio.gather(ready, task, return_exceptions=True)
+        await asyncio.gather(task, return_exceptions=True)
     assert stopped.is_set() == enabled
 
 

@@ -50,7 +50,11 @@ async def test_internet_probe_only_exposes_disposable_file(tmp_path, monkeypatch
             ("download_begin", {"path": str(outside), "transfer_id": uuid.uuid4().hex}),
         ]:
             result = await call(tool, **args)
-            assert result.state == "failed" and "Probe only permits" in result.error
+            assert result.state == "failed"
+            assert result.data["error_code"] == "operation_failed"
+            assert "operations_get" in result.data["next_action"]
+            assert "dispatched" not in result.data
+            assert "Probe only permits" not in result.error
         assert outside.read_text(encoding="utf-8") == "private fixture"
         assert (
             await call("terminal_start", command="echo forbidden", cwd=str(tmp_path))

@@ -40,7 +40,8 @@ async def test_worker_and_cli_ignore_workspace_python(tmp_path, monkeypatch, pla
 def test_internal_launch_isolation_keeps_selected_venv():
     executable = str(Path("/trusted/venv/bin/python"))
     command = python_module_command("anywhere_computer.cli", "--help", executable=executable)
-    assert command == [executable, "-I", "-X", "utf8", "-m", "anywhere_computer.cli", "--help"]
+    assert command == [executable, "-B", "-I", "-X", "utf8", "-m",
+                       "anywhere_computer.cli", "--help"]
 
 
 async def test_regex_real_worker_handles_syntax_and_word_boundaries():

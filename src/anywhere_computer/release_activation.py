@@ -73,7 +73,7 @@ def activate_release(app: Path, control: Path, expected_version: str) -> dict[st
         # stop boundary. The earlier status read is not permission to force-stop.
         try:
             result = subprocess.run(
-                [str(executable.absolute()), '-I', '-m', 'anywhere_computer',
+                [str(executable.absolute()), '-B', '-I', '-m', 'anywhere_computer',
                  'start', '--state-dir', str(control.absolute())],
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, timeout=45, check=False,

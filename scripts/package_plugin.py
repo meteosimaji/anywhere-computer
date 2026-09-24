@@ -1,5 +1,6 @@
 """Build a portable plugin containing our wheel and pinned runtime dependencies."""
 
+import argparse
 import ast
 import hashlib
 import json
@@ -22,13 +23,15 @@ def plugin_version(python_version: str) -> str:
     return f"{match[1]}-{label}.{match[3]}"
 
 
-def package_plugin(root: Path) -> Path:
+def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     if re.fullmatch(r"[a-f0-9]{40}", commit) is None:
         raise ValueError("Build needs an identifiable Git commit")
     dirty = bool(subprocess.check_output(
         ["git", "status", "--porcelain", "--untracked-files=normal"], cwd=root, text=True,
     ).strip())
+    if dirty and not allow_dirty:
+        raise ValueError("Refusing to package a dirty source tree; commit source changes first")
     plugin = root / "plugins/anywhere-computer"
     bundled = plugin / "bundled"
     bundled.mkdir(exist_ok=True)
@@ -52,11 +55,26 @@ def package_plugin(root: Path) -> Path:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["version"] = version
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    claude_manifest_path = plugin / ".claude-plugin/plugin.json"
+    claude_manifest = json.loads(claude_manifest_path.read_text(encoding="utf-8"))
+    claude_manifest["version"] = version
+    claude_manifest_path.write_text(
+        json.dumps(claude_manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8",
+    )
     config_path = plugin / ".mcp.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    arguments = config["mcpServers"]["anywhere-computer"]["args"]
-    arguments[arguments.index("--from") + 1] = "./bundled/" + wheel.name
+    for server_name in ("anywhere-computer", "anywhere-subchat"):
+        arguments = config["mcpServers"][server_name]["args"]
+        arguments[arguments.index("--from") + 1] = "./bundled/" + wheel.name
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    claude_config_path = plugin / ".claude-mcp.json"
+    claude_config = json.loads(claude_config_path.read_text(encoding="utf-8"))
+    for server_name in ("anywhere-computer", "anywhere-subchat"):
+        arguments = claude_config["mcpServers"][server_name]["args"]
+        arguments[arguments.index("--from") + 1] = (
+            "${CLAUDE_PLUGIN_ROOT}/bundled/" + wheel.name
+        )
+    claude_config_path.write_text(json.dumps(claude_config, indent=2) + "\n", encoding="utf-8")
     subprocess.run(
         [
             "uv",
@@ -106,7 +124,9 @@ def package_plugin(root: Path) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     members = [
         plugin / ".codex-plugin/plugin.json",
+        plugin / ".claude-plugin/plugin.json",
         plugin / ".mcp.json",
+        plugin / ".claude-mcp.json",
         plugin / "LICENSE",
         plugin / "skills/computer-work/SKILL.md",
         bundled / wheel.name,
@@ -123,4 +143,9 @@ def package_plugin(root: Path) -> Path:
 
 
 if __name__ == "__main__":
-    print(package_plugin(Path(__file__).resolve().parents[1]))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--allow-dirty", action="store_true",
+                        help="Build an explicitly marked, unverified development artifact")
+    options = parser.parse_args()
+    print(package_plugin(Path(__file__).resolve().parents[1],
+                         allow_dirty=options.allow_dirty))

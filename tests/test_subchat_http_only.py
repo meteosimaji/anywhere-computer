@@ -1,8 +1,9 @@
 """Browser-free controller acceptance with synthetic sessions, never live generation."""
 import json
+from contextlib import asynccontextmanager
 from io import BytesIO, StringIO
-from types import SimpleNamespace
 
+import httpx
 import pytest
 from test_subchat_http_catalog import catalog
 from test_subchat_http_history import sample
@@ -14,6 +15,39 @@ from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatSubmi
 
 CATALOG_URL = 'https://chatgpt.com/backend-api/models?language=ja'
 SECRET = 'Bearer fixture-secret-not-a-live-token'
+
+
+@pytest.mark.parametrize('status', [401, 403])
+async def test_chrome_login_rejection_keeps_capabilities_but_blocks_http(status):
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    async def no_request():
+        raise AssertionError('Rejected startup must not make another HTTP request')
+
+    backend = HTTPOnlySubchatBackend(
+        no_request, chrome_login=True, startup_access_status=status)
+    capabilities = backend.capabilities()
+    assert capabilities['authentication_state'] == (
+        'authentication_required' if status == 401 else 'access_denied')
+    assert capabilities['authenticated_account_id'] is None
+    assert capabilities['generation_transport'] == 'unavailable'
+    with pytest.raises(SubchatAccessError) as rejected:
+        await backend.http_catalog()
+    assert rejected.value.status == status
+
+
+async def test_pinned_account_mismatch_keeps_tools_and_reports_specific_state():
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    async def no_request():
+        raise AssertionError('Mismatched account must not make a catalog request')
+
+    backend = HTTPOnlySubchatBackend(
+        no_request, chrome_login=True, startup_access_status=401,
+        startup_account_mismatch=True)
+    assert backend.capabilities()['authentication_state'] == 'account_mismatch'
+    with pytest.raises(SubchatAccountMismatch):
+        await backend.http_catalog()
 
 
 def session_payload():
@@ -36,23 +70,37 @@ class Client:
         self.status = {}
         self.disposed = 0
 
-    async def get(self, url, **kwargs):
+    @asynccontextmanager
+    async def stream(self, method, url, **kwargs):
+        assert method == 'GET'
         self.calls.append((url, kwargs))
         assert kwargs == {'headers': {'authorization': SECRET,
                                      'chatgpt-account-id': 'fixture-account',
                                      'oai-language': 'ja'},
-                          'timeout': 15000, 'max_redirects': 0, 'max_retries': 0}
+                          'timeout': 15.0, 'follow_redirects': False}
 
-        async def body():
-            assert self.status.get(url, 200) == 200, 'Never read a refusal body'
-            return json.dumps(catalog() if url == CATALOG_URL else self.payload).encode()
+        payload_value = self.payload
+        response_status = self.status.get(url, 200)
+        owner = self
 
-        async def dispose():
-            self.disposed += 1
+        class Response:
+            status_code = response_status
+            headers = {'content-type': 'application/json'}
 
-        return SimpleNamespace(status=self.status.get(url, 200),
-                               headers={'content-type': 'application/json'},
-                               body=body, dispose=dispose)
+            async def aiter_bytes(self, *, chunk_size):
+                assert self.status_code == 200, 'Never read a refusal body'
+                body = json.dumps(catalog() if url == CATALOG_URL else payload_value).encode()
+                for offset in range(0, len(body), chunk_size):
+                    yield body[offset:offset + chunk_size]
+
+            async def aclose(inner_self):
+                owner.disposed += 1
+
+        response = Response()
+        try:
+            yield response
+        finally:
+            await response.aclose()
 
 
 def backend(client, *, authenticated=True):
@@ -62,6 +110,144 @@ def backend(client, *, authenticated=True):
         return client
 
     return HTTPOnlySubchatBackend(factory, credentials() if authenticated else None)
+
+
+async def test_chrome_read_refreshes_once_after_401_without_resending():
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    _, payload = sample()
+    old, fresh = Client(payload), Client(payload)
+    old.status[CATALOG_URL] = 401
+    refreshes = []
+
+    async def factory():
+        return old
+
+    async def fresh_factory():
+        return fresh
+
+    async def refresh(expected_account):
+        refreshes.append(expected_account)
+        return credentials(), fresh_factory
+
+    adapter = HTTPOnlySubchatBackend(factory, credentials(), chrome_login=True,
+                                     refresh_session=refresh)
+    result = await adapter.http_catalog()
+    assert result['state'] == 'http_catalog_observed'
+    assert refreshes == ['fixture-account']
+    assert len(old.calls) == len(fresh.calls) == 1
+    assert old.disposed == fresh.disposed == 1
+    assert adapter.capabilities()['credential_refresh'] is True
+    assert adapter.capabilities()['authentication_state'] == 'authenticated'
+
+
+async def test_chrome_read_refresh_is_single_flight_for_concurrent_401():
+    import asyncio
+
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    _, payload = sample()
+    old, fresh = Client(payload), Client(payload)
+    old.status[CATALOG_URL] = 401
+    refreshes = 0
+
+    async def factory():
+        return old
+
+    async def fresh_factory():
+        return fresh
+
+    async def refresh(_expected_account):
+        nonlocal refreshes
+        refreshes += 1
+        await asyncio.sleep(0)
+        return credentials(), fresh_factory
+
+    adapter = HTTPOnlySubchatBackend(factory, credentials(), chrome_login=True,
+                                     refresh_session=refresh)
+    first, second = await asyncio.gather(adapter.http_catalog(), adapter.http_catalog())
+    assert first['state'] == second['state'] == 'http_catalog_observed'
+    assert refreshes == 1
+    assert len(fresh.calls) == 2
+
+
+async def test_chrome_refresh_rejects_other_account_and_403_does_not_refresh():
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+    from anywhere_computer.subchat_http_session import ObservedHTTPSession
+
+    _, payload = sample()
+    client = Client(payload)
+    client.status[CATALOG_URL] = 401
+    refreshes = 0
+
+    async def factory():
+        return client
+
+    async def changed_account(_expected_account):
+        nonlocal refreshes
+        refreshes += 1
+        return (ObservedHTTPSession.model_validate({
+            **session_payload(), 'account_id': 'another-account'}), factory)
+
+    adapter = HTTPOnlySubchatBackend(factory, credentials(), chrome_login=True,
+                                     refresh_session=changed_account)
+    with pytest.raises(SubchatAccountMismatch):
+        await adapter.http_catalog()
+    assert adapter.capabilities()['authenticated_account_id'] == 'fixture-account'
+    assert adapter.capabilities()['authentication_state'] == 'authentication_required'
+    with pytest.raises(SubchatAccessError):
+        await adapter.http_catalog()
+    assert refreshes == 1  # Cooldown prevents a snapshot loop.
+
+    client.status[CATALOG_URL] = 403
+    other = HTTPOnlySubchatBackend(factory, credentials(), chrome_login=True,
+                                   refresh_session=changed_account)
+    with pytest.raises(SubchatAccessError) as denied:
+        await other.http_catalog()
+    assert denied.value.status == 403
+    assert refreshes == 1
+
+
+@pytest.mark.parametrize(('resource', 'limit', 'error'), [
+    ('catalog', 1_048_576, 'Model catalog is too large'),
+    ('history', 4_194_304, 'Conversation response is too large'),
+])
+async def test_http_reader_stops_stream_at_resource_limit(resource, limit, error):
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+
+    class Stream(httpx.AsyncByteStream):
+        chunks = 0
+        closed = False
+
+        async def __aiter__(self):
+            for _ in range(limit // 65_536 + 10):
+                self.chunks += 1
+                yield b'x' * 65_536
+
+        async def aclose(self):
+            self.closed = True
+
+    stream = Stream()
+
+    def serve(_request):
+        return httpx.Response(200, stream=stream,
+                              headers={'content-type': 'application/json'})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+        async def factory():
+            return client
+
+        reader = ChatHTTPReader(factory, browser_free=True, session=credentials())
+        url = CATALOG_URL if resource == 'catalog' else (
+            'https://chatgpt.com/backend-api/conversations/fixture')
+
+        async def no_browser(_page):
+            raise AssertionError('Browser was opened')
+
+        with pytest.raises(ValueError, match=error):
+            await reader._read(None, url, no_browser)
+    assert stream.chunks == limit // 65_536 + 1
+    assert stream.closed
 
 
 def seed(store, *, receipt=True, account='fixture-account'):
@@ -231,15 +417,18 @@ async def test_http_only_no_session_is_explicit_and_does_not_request(tmp_path):
         ledger.close()
 
 
-@pytest.mark.parametrize('change', ['cookie', 'protection_token', 'foreign_origin', 'userinfo',
+@pytest.mark.parametrize('change', ['cookie_newline', 'cookie_del', 'protection_token',
+                                  'foreign_origin', 'userinfo',
                                   'port', 'fragment', 'other_path', 'header_newline', 'oversized',
                                   'duplicate', 'bad_json', 'missing_account'])
 def test_session_input_rejects_unsafe_envelopes_without_secret_diagnostics(change):
     from anywhere_computer.subchat_http_session import read_http_session
 
     data = session_payload()
-    if change == 'cookie':
-        data['cookie'] = 'fixture'
+    if change == 'cookie_newline':
+        data['cookie'] = 'session=fixture\r\nInjected: bad'
+    elif change == 'cookie_del':
+        data['cookie'] = 'session=fixture\x7f'
     elif change == 'protection_token':
         data['openai-sentinel-proof-token'] = 'fixture'
     elif change in {'foreign_origin', 'userinfo', 'port', 'fragment', 'other_path'}:

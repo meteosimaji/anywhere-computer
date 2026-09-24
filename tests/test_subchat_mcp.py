@@ -23,6 +23,8 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
                                                'capabilities': {},
                                                'clientInfo': {'name': 'test', 'version': '1'}})
         assert 'subchat_recover' in initialized['result']['instructions']
+        assert 'generation_transport=browser_prepared_httpx' in (
+            initialized['result']['instructions'])
         await server.handle({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         catalog = await call('tools/list', {})
         names = {tool['name'] for tool in catalog['result']['tools']}
@@ -264,7 +266,9 @@ async def test_wait_rejects_transport_exceeding_budget_before_observation(tmp_pa
             reply = await server.execute(Request(operation_id='e' * 32, tool='subchat_wait',
                 arguments={'operation_id': 'a' * 32, 'wait_ms': duration}))
             assert reply.state == 'failed'
-            assert reply.data['error_type'] == 'ValidationError'
+            assert reply.data['error_code'] == 'invalid_parameter'
+            assert any('wait_ms' in item['path'] for item in reply.data['invalid_params'])
+            assert reply.data['dispatched'] is False
         assert backend.sends == 0
     finally:
         ledger.close()
@@ -303,6 +307,29 @@ async def test_preparation_failure_is_unsent_and_same_request_can_retry(tmp_path
         duplicate = await server.execute(request)
         assert duplicate.data['state'] == 'sending'
         assert backend.sends == 1
+    finally:
+        await server.close()
+        ledger.close()
+
+
+async def test_preparation_failure_reports_only_a_known_local_reason(tmp_path):
+    from anywhere_computer.models import Request
+
+    class DraftBrowser(BrowserFixture):
+        async def prepare(self, submission):
+            raise ValueError('Ordinary Chat composer contains a draft')
+
+    ledger = Ledger(tmp_path)
+    backend = DraftBrowser()
+    server = session(Subchats(SubchatSubmissions(ledger.connection), backend))
+    try:
+        request = Request(operation_id='e' * 32, tool='subchat_send', arguments={
+            'prompt': 'work', 'model': 'model', 'effort': 'effort'})
+        failed = await server.execute(request)
+        assert failed.state == 'failed'
+        assert failed.data == {'error_code': 'preparation_failed',
+                               'dispatched': False, 'reason': 'composer_has_draft'}
+        assert backend.sends == 0
     finally:
         await server.close()
         ledger.close()

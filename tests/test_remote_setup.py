@@ -259,7 +259,7 @@ def test_setup_command_preserves_special_path_without_shell_execution(tmp_path):
     commands = remote_setup.setup_commands(directory, "chatgpt")
     import shlex
     arguments = shlex.split(commands["resume"])
-    assert arguments == [sys.executable, "-I", "-X", "utf8", "-m", "anywhere_computer.cli",
+    assert arguments == [sys.executable, "-B", "-I", "-X", "utf8", "-m", "anywhere_computer.cli",
                          "chatgpt-setup", "--state-dir", str(directory.resolve())]
     # Replace the module invocation with a harmless argv recorder, keeping the generated
     # state-path quoting intact. The shell must pass it literally, never execute its text.

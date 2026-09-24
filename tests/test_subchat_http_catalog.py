@@ -130,17 +130,24 @@ async def test_actual_http_catalog_request_without_picker_or_send(authenticated,
             await browser.close()
 
 
-@pytest.mark.parametrize('change', ['none', 'model', 'effort', 'disabled', 'work'])
-def test_exact_http_selection_is_revalidated(change):
+@pytest.mark.parametrize(('change', 'field', 'reason'), [
+    ('none', None, None), ('version', 'version_id', 'not_found'),
+    ('preset', 'preset_id', 'not_found'), ('model', 'model_slug', 'mismatch'),
+    ('effort', 'thinking_effort', 'mismatch'),
+    ('disabled', 'preset_id', 'unavailable'), ('work', 'preset_id', 'not_found'),
+])
+def test_exact_http_selection_is_revalidated(change, field, reason):
     from anywhere_computer.subchat_browser.catalog import require_http_selection
-    from anywhere_computer.subchat_state import SubchatHTTPSelection
+    from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSelectionError
 
     payload = catalog()
     selected = SubchatHTTPSelection.model_validate(project_http_catalog(
         json.dumps(payload).encode())['versions'][0]['choices'][0]['http_selection'])
-    if change in ('model', 'effort'):
+    if change in ('version', 'preset', 'model', 'effort'):
         selected = selected.model_copy(update={
-            'model_slug' if change == 'model' else 'thinking_effort': 'different'})
+            {'version': 'version_id', 'preset': 'preset_id',
+             'model': 'model_slug', 'effort': 'thinking_effort'}[change]:
+            -1 if change == 'preset' else 'different'})
     elif change == 'disabled':
         payload['versions'][0]['enabled'] = False
     elif change == 'work':
@@ -149,8 +156,20 @@ def test_exact_http_selection_is_revalidated(change):
     if change == 'none':
         require_http_selection(projected, selected)
     else:
-        with pytest.raises(ValueError, match='unavailable or changed'):
+        with pytest.raises(SubchatSelectionError) as caught:
             require_http_selection(projected, selected)
+        assert (caught.value.field, caught.value.reason) == (field, reason)
+
+
+@pytest.mark.parametrize('preset_id', ['7', 7.0, True])
+def test_http_selection_does_not_coerce_preset_id(preset_id):
+    from pydantic import ValidationError
+
+    from anywhere_computer.subchat_state import SubchatHTTPSelection
+
+    with pytest.raises(ValidationError):
+        SubchatHTTPSelection.model_validate({'version_id': 'future',
+            'preset_id': preset_id, 'model_slug': 'future-chat', 'thinking_effort': None})
 
 
 async def test_http_send_without_selection_does_not_open_browser(tmp_path):

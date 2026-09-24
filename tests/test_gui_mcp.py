@@ -504,7 +504,11 @@ async def test_missing_window_cannot_dispatch_foreground_input():
                 peer="owner",
             )
             assert result.state == "failed"
-            assert "window_id" in result.error
+            assert result.data["error_code"] == "invalid_parameter"
+            assert result.data["invalid_params"] == [
+                {"path": ["window_id"], "code": "missing"},
+            ]
+            assert result.data["dispatched"] is False
             assert not peer.calls and not engine.gui_mcp.observations
         finally:
             await engine.close()

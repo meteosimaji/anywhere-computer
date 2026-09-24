@@ -11,16 +11,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeVar, cast
 
-from pydantic import JsonValue
+from pydantic import JsonValue, ValidationError
 
 from . import __version__, codex_context, codex_plugins, skills_context
 from .audio_capture import AudioCapture, AudioCaptureUnknown, capture_audio
 from .audio_status import inspect_audio, verified_audio_helper
 from .authorization import GrantIdentity, current_grant_read_only
+from .browser_control import BrowserActionUnknown, BrowserControl, BrowserNavigationUnknown
+from .capability_contract import CAPABILITY_TOOLS
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
-from .document_writer import write_document
+from .document_writer import edit_document_paragraph, write_document
 from .documents import read_document
 from .downloads import Downloads
 from .files import Files, absolute_path, inspect_file
@@ -29,6 +31,10 @@ from .mcp_results import normalize_tool_result
 from .models import (
     BeginDownload,
     BeginUpload,
+    BrowserClick,
+    BrowserFill,
+    BrowserNavigate,
+    BrowserSession,
     CodexPluginCall,
     CodexPluginPage,
     CodexSkillRead,
@@ -40,6 +46,7 @@ from .models import (
     DirectMCPSessionId,
     DirectMCPTools,
     DownloadRange,
+    EditDocumentParagraph,
     EditFile,
     Empty,
     FilePath,
@@ -78,8 +85,10 @@ from .models import (
     WriteFile,
 )
 from .native_gui import (
+    HELPER_ERROR_CODES,
     NativeApp,
     NativeGUI,
+    NativeGUIInputRefused,
     NativeGUIOutcomeUnknown,
     NativeObserve,
     NativePress,
@@ -114,6 +123,9 @@ _PREFLIGHT_FAILURES: dict[str, tuple[str, str]] = {
     "Direct MCP session not found for this connection": (
         "session_unavailable",
         "Use a session ID returned to this connection; no session was changed.",
+    ),
+    "Search not found for this connection": (
+        "search_unavailable", "Use a search ID returned to this connection; no search was changed."
     ),
     "GUI is busy; observe again after the current interaction finishes": (
         "session_busy", "Wait for the current GUI interaction, then observe again."
@@ -152,6 +164,24 @@ _PREFLIGHT_FAILURES: dict[str, tuple[str, str]] = {
         "helper_unavailable", "Check the verified portable installation; no recording was made."
     ),
 }
+_TERMINAL_INPUT_REJECTIONS: dict[str, tuple[str, str]] = {
+    "Session is not accepting input": (
+        "session_not_accepting_input",
+        "Inspect the terminal session and start a new one if needed; no input was sent.",
+    ),
+    "Session input is busy; no input was sent": (
+        "session_busy",
+        "Wait for the active terminal input to finish before retrying; no input was sent.",
+    ),
+}
+_NATIVE_GUI_FAILURES: dict[str, str] = {
+    "Native GUI request exceeds limit": "native_gui_request_too_large",
+    "Invalid native GUI response framing": "native_gui_invalid_response",
+    "Invalid native GUI response JSON": "native_gui_invalid_response",
+    "Native GUI response identity mismatch": "native_gui_invalid_response",
+    "Invalid native observation": "native_gui_invalid_observation",
+    "Native GUI observation unavailable; observe again": "native_gui_observation_unavailable",
+}
 OBSERVER_WAIT_SECONDS = 5.0
 
 
@@ -185,6 +215,7 @@ class Engine:
         )
         self.gui_mcp = GUIMCP(self.direct_mcp_sessions)
         self.native_gui = NativeGUI()
+        self.browser = BrowserControl()
         # Transport-owned identity, inherited by the durable execution task only.
         # Tool arguments cannot set this value; None is the local execution scope.
         self._plugin_owner: ContextVar[str | None] = ContextVar("plugin_owner", default=None)
@@ -195,6 +226,8 @@ class Engine:
         self.tools: dict[str, Tool] = {}
         self.inflight: dict[str, asyncio.Task[Reply]] = {}
         self.inflight_owners: dict[str, str | None] = {}
+        self._terminal_owners: dict[str, str | None] = {}
+        self._search_owners: dict[str, str | None] = {}
         self._register_tools()
 
     def bind_http_watch_grant(self, grant_id: str, database: Path) -> None:
@@ -250,6 +283,45 @@ class Engine:
         )
 
     def _register_tools(self) -> None:
+        async def browser_open(_: Empty) -> Result:
+            return await self.browser.open(owner=self._plugin_owner.get())
+
+        async def browser_navigate(args: BrowserNavigate) -> Result:
+            return await self.browser.navigate(args, owner=self._plugin_owner.get())
+
+        async def browser_observe(args: BrowserSession) -> Result:
+            return await self.browser.observe(args, owner=self._plugin_owner.get())
+
+        async def browser_click(args: BrowserClick) -> Result:
+            return await self.browser.click(args, owner=self._plugin_owner.get())
+
+        async def browser_fill(args: BrowserFill) -> Result:
+            return await self.browser.fill(args, owner=self._plugin_owner.get())
+
+        async def browser_close(args: BrowserSession) -> Result:
+            return await self.browser.stop(args, owner=self._plugin_owner.get())
+
+        self.register("browser_open", "Open one isolated, ephemeral headless browser tab. "
+                      "Returns owner-bound session and tab IDs; no existing profile is attached.",
+                      Empty, browser_open, open_world=True)
+        self.register("browser_navigate", "Navigate the exact owned tab to an HTTP or HTTPS "
+                      "URL and return its observed URL, title and bounded visible text. "
+                      "Navigation may have web side effects; never replay an unknown outcome.",
+                      BrowserNavigate, browser_navigate, destructive=True, open_world=True)
+        self.register("browser_observe", "Observe the exact owned tab without navigating. "
+                      "Returns URL, title and bounded visible text.", BrowserSession,
+                      browser_observe, read_only=True, open_world=True)
+        self.register("browser_click", "Click one visible, enabled element matching an exact "
+                      "CSS selector in the owned tab. May have web side effects; inspect an "
+                      "unknown outcome before another action.", BrowserClick, browser_click,
+                      destructive=True, open_world=True)
+        self.register("browser_fill", "Replace the value of one visible, enabled editable element "
+                      "matching an exact CSS selector in the owned tab. May have web side "
+                      "effects; inspect an unknown outcome before another action.", BrowserFill,
+                      browser_fill, destructive=True, open_world=True)
+        self.register("browser_close", "Close the exact owned isolated browser session.",
+                      BrowserSession, browser_close)
+
         async def native_windows(args: NativeApp) -> Result:
             return await self.native_gui.windows(args, owner=self._plugin_owner.get())
 
@@ -647,6 +719,9 @@ class Engine:
         async def document_write(args: WriteDocument) -> Result:
             return await asyncio.to_thread(write_document, self.files, args)
 
+        async def document_edit(args: EditDocumentParagraph) -> Result:
+            return await asyncio.to_thread(edit_document_paragraph, self.files, args)
+
         async def read(args: ReadFile) -> Result:
             args = args.model_copy(
                 update={"limit": min(args.limit, self.settings().file_read_line_limit)}
@@ -724,19 +799,32 @@ class Engine:
             return await asyncio.to_thread(self.files.move, args)
 
         async def search(args: StartSearch) -> Result:
-            return self.searches.start(args)
+            result = self.searches.start(args)
+            self._search_owners = {key: owner for key, owner in self._search_owners.items()
+                                   if key in self.searches.searches}
+            self._search_owners[str(result["search_id"])] = self._plugin_owner.get()
+            return result
+
+        def require_search_owner(search_id: str) -> None:
+            owner = self._plugin_owner.get()
+            if owner is not None and self._search_owners.get(search_id) != owner:
+                raise ValueError("Search not found for this connection")
 
         async def page(args: SearchPage) -> Result:
+            require_search_owner(args.search_id)
             return self.searches.page(args)
 
         async def search_stop(args: SearchId) -> Result:
+            require_search_owner(args.search_id)
             return await self.searches.stop(args.search_id)
 
         async def search_list(_: Empty) -> Result:
+            owner = self._plugin_owner.get()
             return {
                 "searches": [
                     {"search_id": entry.search_id, "state": entry.state}
                     for entry in self.searches.searches.values()
+                    if owner is None or self._search_owners.get(entry.search_id) == owner
                 ]
             }
 
@@ -754,12 +842,18 @@ class Engine:
             }
 
         async def stop(args: SessionId) -> Result:
-            return await self.sessions.stop(args.session_id)
+            result = await self.sessions.stop(args.session_id)
+            self._terminal_owners.pop(args.session_id, None)
+            return result
 
         async def start_terminal(args: StartSession) -> Result:
             if args.shell is None:
                 args = args.model_copy(update={"shell": self.settings().default_shell})
-            return await self.sessions.start(args)
+            result = await self.sessions.start(args)
+            self._terminal_owners = {key: owner for key, owner in self._terminal_owners.items()
+                                     if key in self.sessions.sessions}
+            self._terminal_owners[str(result["session_id"])] = self._plugin_owner.get()
+            return result
 
         async def operation(args: OperationId) -> Result:
             return cast(Result, self.ledger.get(args.operation_id).model_dump(mode="json"))
@@ -790,6 +884,12 @@ class Engine:
             "Replace regenerates the entire document, requires its current hash, "
             "and retains backup.",
             WriteDocument, document_write, destructive=True,
+        )
+        self.register(
+            "documents_edit_paragraph",
+            "Replace one plain-text DOCX paragraph by number, requiring the file hash and "
+            "exact old text. Return a before/after diff and retain a backup.",
+            EditDocumentParagraph, document_edit, destructive=True,
         )
         self.register(
             "computer_status",
@@ -1061,14 +1161,58 @@ class Engine:
         searches = sum(entry.state == "running" for entry in self.searches.searches.values())
         direct_mcp = self.direct_mcp_sessions.active_count
         subchat_watches = self.direct_mcp_sessions.active_watch_count
-        resources: dict[str, JsonValue] = {
+        global_resources: dict[str, int] = {
+            "browser_sessions": len(self.browser.entries),
             "terminal_sessions": terminals, "plugin_sessions": plugins,
             "direct_mcp_sessions": direct_mcp,
             "subchat_queue_watches": subchat_watches,
             "native_gui_sessions": len(self.native_gui.entries),
             "searches": searches, "operations": operations,
         }
+        if owner is None:
+            resources = global_resources
+        else:
+            resources = {
+                "browser_sessions": sum(entry.owner == owner
+                                        for entry in self.browser.entries.values()),
+                "terminal_sessions": sum(
+                    session.process.returncode is None
+                    and self._terminal_owners.get(session_id) == owner
+                    for session_id, session in self.sessions.sessions.items()
+                ),
+                "plugin_sessions": sum(
+                    entry.owner == owner and not entry.cleanup_confirmed
+                    for entry in self.plugin_sessions.entries.values()
+                ),
+                "direct_mcp_sessions": sum(
+                    entry.owner == owner and (entry.state == "opening"
+                                              or not entry.context.cleanup_confirmed)
+                    for entry in self.direct_mcp_sessions.entries.values()
+                ),
+                "subchat_queue_watches": sum(
+                    entry.owner == owner and watch.state == "watching"
+                    for entry in self.direct_mcp_sessions.entries.values()
+                    for watch in entry.watches.values()
+                ),
+                "native_gui_sessions": sum(
+                    entry.owner == owner for entry in self.native_gui.entries.values()
+                ),
+                "searches": sum(
+                    entry.state == "running" and self._search_owners.get(search_id) == owner
+                    for search_id, entry in self.searches.searches.items()
+                ),
+                "operations": sum(
+                    not task.done() and task.get_name() not in {"computer_status", "operations_get"}
+                    and self.inflight_owners.get(operation_id) == owner
+                    for operation_id, task in self.inflight.items()
+                ),
+            }
         capabilities: dict[str, JsonValue] = {
+            "browser_isolated_adapter": {
+                "available": True,
+                "requires": "Playwright with installed Chromium or Chrome",
+                "runtime_verified": False,
+            },
             "files": True,
             "terminal": True,
             "literal_search": True,
@@ -1109,21 +1253,17 @@ class Engine:
                 "os_permission": "not_checked",
                 "acceptance": "not_verified",
             }
-        implementation_tools = {
-            "skills": ("skills_list", "skills_read"),
-            "audio_capture": ("audio_status", "audio_capture"),
-            "gui_native": ("gui_native_windows", "gui_native_observe"),
-            "gui_mcp": ("gui_observe",),
-        }
-        for name, required_tools in implementation_tools.items():
+        for name in ("skills", "codex_skills", "audio_capture", "gui_native", "gui_mcp",
+                     "browser_isolated"):
+            required_tools = CAPABILITY_TOOLS[name]
             capability_diagnostics[name] = {
                 "running_implementation": (
                     "present" if all(tool in self.tools for tool in required_tools) else "absent"
                 ),
                 "runtime_available": "unknown",
                 "connection_authorization": "not_observed",
-                "helper": "not_required",
-                "os_permission": "not_required",
+                "helper": "not_checked" if name == "browser_isolated" else "not_required",
+                "os_permission": ("not_checked" if name == "gui_mcp" else "not_required"),
                 "acceptance": "not_verified",
             }
         for capability, check in (
@@ -1158,26 +1298,32 @@ class Engine:
                     "permission request or recording was made."
                 )
         blocker_details: list[JsonValue] = []
-        # Owner-scoped resources are disclosed only to their authenticated owner.
+        # Local status can explain every update blocker; remote peers see only
+        # resources owned by their authenticated connection.
         for session_id, plugin_entry in self.plugin_sessions.entries.items():
-            if plugin_entry.owner == owner and not plugin_entry.cleanup_confirmed:
+            if ((owner is None or plugin_entry.owner == owner)
+                    and not plugin_entry.cleanup_confirmed):
                 busy = plugin_entry.lock.locked()
                 blocker_details.append({
                     "resource": "plugin_session", "id": session_id,
                     "state": ("busy" if busy and plugin_entry.state == "open"
                               else plugin_entry.state),
                     "stop_tool": "codex_plugin_session_close",
-                    "stop_available": not busy,
+                    "stop_available": not busy and plugin_entry.owner == owner,
                 })
         for session_id, direct_entry in self.direct_mcp_sessions.entries.items():
-            if direct_entry.owner == owner and not direct_entry.context.cleanup_confirmed:
+            if ((owner is None or direct_entry.owner == owner)
+                    and not direct_entry.context.cleanup_confirmed):
                 busy = direct_entry.lock.locked()
                 blocker_details.append({
                     "resource": "direct_mcp_session", "id": session_id,
                     "state": direct_entry.state, "stop_tool": "mcp_session_close",
-                    "stop_available": not busy,
+                    "stop_available": not busy and direct_entry.owner == owner,
                 })
-        for watch in self.direct_mcp_sessions.watch_history(owner=owner):
+        watch_owners = ({entry.owner for entry in self.direct_mcp_sessions.entries.values()}
+                        if owner is None else {owner})
+        for watch in (watch for watch_owner in watch_owners
+                      for watch in self.direct_mcp_sessions.watch_history(owner=watch_owner)):
             if watch.get("state") != "watching":
                 continue
             watch_session_raw = watch.get("session_id")
@@ -1202,29 +1348,54 @@ class Engine:
                 "inspect_tool": "mcp_watch_list", "stop_available": stop_available,
             })
         for session_id, gui_entry in self.native_gui.entries.items():
-            if gui_entry.owner == owner and gui_entry.process.returncode is None:
+            if owner is None or gui_entry.owner == owner:
                 busy = self.native_gui.lock.locked()
                 blocker_details.append({
                     "resource": "native_gui_session", "id": session_id,
-                    "state": "busy" if busy else "running",
-                    "stop_tool": "gui_native_close", "stop_available": not busy,
+                    "state": ("exited" if gui_entry.process.returncode is not None
+                              else "busy" if busy else "running"),
+                    "stop_tool": "gui_native_close",
+                    "stop_available": not busy and gui_entry.owner == owner,
                 })
-        if owner is None:
-            for session_id, session in self.sessions.sessions.items():
-                if session.process.returncode is None:
-                    blocker_details.append({
-                        "resource": "terminal_session", "id": session_id,
-                        "state": "running", "stop_tool": "terminal_stop",
-                        "stop_available": not session.input_lock.locked(),
-                    })
+        for session_id, browser_entry in self.browser.entries.items():
+            if owner is None or browser_entry.owner == owner:
+                blocker_details.append({
+                    "resource": "browser_session", "id": session_id,
+                    "state": ("running" if browser_entry.browser.is_connected() else "ended"),
+                    "stop_tool": "browser_close", "tab_id": browser_entry.tab_id,
+                    "stop_available": (not browser_entry.lock.locked()
+                                       and browser_entry.owner == owner),
+                })
+        for search_id, search_entry in self.searches.searches.items():
+            if (search_entry.state == "running"
+                    and (owner is None or self._search_owners.get(search_id) == owner)):
+                blocker_details.append({
+                    "resource": "search", "id": search_id, "state": "running",
+                    "stop_tool": "search_stop", "stop_available": True,
+                })
+        for session_id, session in self.sessions.sessions.items():
+            if (session.process.returncode is None
+                    and (owner is None or self._terminal_owners.get(session_id) == owner)):
+                blocker_details.append({
+                    "resource": "terminal_session", "id": session_id,
+                    "state": "running", "stop_tool": "terminal_stop",
+                    "stop_available": not session.input_lock.locked(),
+                })
         for operation_id, task in self.inflight.items():
             if (not task.done() and task.get_name() not in {"computer_status", "operations_get"}
-                    and self.inflight_owners.get(operation_id) == owner):
+                    and (owner is None or self.inflight_owners.get(operation_id) == owner)):
                 blocker_details.append({
                     "resource": "operation", "id": operation_id,
                     "state": "running", "inspect_tool": "operations_get",
                     "stop_available": False,
                 })
+        active_resources: dict[str, JsonValue] = {
+            name: count for name, count in resources.items()
+        }
+        blocker_names: list[JsonValue] = [name for name, count in resources.items() if count]
+        if owner is not None and any(global_resources[name] > resources[name]
+                                     for name in global_resources):
+            blocker_names.append("other_active_resources")
         return {
             "state": "ready",
             "version": __version__,
@@ -1233,11 +1404,14 @@ class Engine:
             "runtime_id": self.runtime_id,
             "uptime_seconds": time.monotonic() - self.started,
             "platform": platform.system(),
-            "active_sessions": terminals + plugins + direct_mcp + len(self.native_gui.entries),
-            "active_operations": operations,
-            "active_resources": resources,
-            "update_blocked": any(bool(count) for count in resources.values()),
-            "update_blockers": [name for name, count in resources.items() if count],
+            "active_sessions": (resources["browser_sessions"]
+                                + resources["terminal_sessions"] + resources["plugin_sessions"]
+                                + resources["direct_mcp_sessions"]
+                                + resources["native_gui_sessions"]),
+            "active_operations": resources["operations"],
+            "active_resources": active_resources,
+            "update_blocked": any(global_resources.values()),
+            "update_blockers": blocker_names,
             "update_blocker_details": blocker_details,
             "tools": len(self.tools),
             "transport": "authenticated-loopback",
@@ -1252,9 +1426,42 @@ class Engine:
             return Reply(operation_id=request.operation_id, state="failed", error="Unknown tool")
         try:
             arguments = tool.schema.model_validate(request.arguments)
+        except ValidationError as error:
+            # Pydantic's formatted error includes rejected input values. Error locations can
+            # also contain user-supplied dictionary keys, so expose only declared fields.
+            fields = tool.schema.model_fields
+            issues = error.errors(include_input=False, include_context=False)
+            invalid_params: list[JsonValue] = [
+                {
+                    "path": [str(part) if isinstance(part, int) or part in fields
+                             else "<unknown>" for part in item["loc"]],
+                    "code": item["type"],
+                }
+                for item in issues
+            ]
+            return Reply(
+                operation_id=request.operation_id, state="failed",
+                error="Tool arguments are invalid.",
+                data={"error_code": "invalid_parameter", "invalid_params": invalid_params,
+                      "dispatched": False,
+                      "next_action": "Correct the listed arguments and use a new operation ID."},
+            )
+        try:
             previous = self.ledger.claim(request)
         except ValueError as error:
-            return Reply(operation_id=request.operation_id, state="failed", error=str(error))
+            if str(error) == "Operation ID was already used for different arguments":
+                return Reply(
+                    operation_id=request.operation_id, state="failed",
+                    error="Operation ID was already used for different arguments.",
+                    data={"error_code": "operation_id_conflict", "dispatched": False,
+                          "next_action": "Use a new operation ID for the changed arguments."},
+                )
+            return Reply(
+                operation_id=request.operation_id, state="failed",
+                error="Operation could not be claimed.",
+                data={"error_code": "operation_claim_failed", "dispatched": False,
+                      "next_action": "Inspect the operation ledger before retrying."},
+            )
         if previous is not None:
             running = self.inflight.get(request.operation_id)
             return await self._observe(request.operation_id, running) if running else previous
@@ -1302,6 +1509,22 @@ class Engine:
                           "next_action": "Recover with operations_get and inspect the target; "
                                          "do not resend input"},
                 )
+            except BrowserNavigationUnknown as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state="unknown", error=str(error),
+                    data={"error_code": "browser_navigation_outcome_unknown",
+                          "execution_state": "unknown", "dispatched": None,
+                          "next_action": "Observe the same browser tab and inspect this operation "
+                                         "before navigating again."},
+                )
+            except BrowserActionUnknown as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state="unknown", error=str(error),
+                    data={"error_code": "browser_action_outcome_unknown",
+                          "execution_state": "unknown", "dispatched": None,
+                          "next_action": "Observe the same browser tab and inspect this operation "
+                                         "before another action."},
+                )
             except DirectMCPOutcomeUnknown as error:
                 reply = Reply(
                     operation_id=request.operation_id, state='unknown', error=str(error),
@@ -1332,6 +1555,13 @@ class Engine:
                                   "upload_status and the destination; do not automatically "
                                   "publish again.",
                               })
+            except NativeGUIInputRefused:
+                reply = Reply(
+                    operation_id=request.operation_id, state="failed",
+                    error="Native GUI target changed since observation; input was not attempted",
+                    data={"error_code": "native_gui_input_refused", "dispatched": False,
+                          "next_action": "Observe the target again before sending new input."},
+                )
             except Exception as error:
                 fixed = _PREFLIGHT_FAILURES.get(str(error))
                 if fixed is not None and type(error) in (RuntimeError, ValueError):
@@ -1342,9 +1572,50 @@ class Engine:
                         data={"error_code": code, "dispatched": False,
                               "execution_state": "not_dispatched", "next_action": action},
                     )
-                else:
+                elif request.tool.startswith("gui_native_") and type(error) is ValueError and (
+                    (native_code := _NATIVE_GUI_FAILURES.get(str(error))) is not None
+                    or (str(error).startswith("Native GUI helper rejected request: ")
+                        and str(error).removeprefix("Native GUI helper rejected request: ")
+                        in HELPER_ERROR_CODES | {"invalid_response"})
+                ):
+                    helper_code = (str(error).removeprefix(
+                        "Native GUI helper rejected request: ")
+                        if str(error).startswith("Native GUI helper rejected request: ")
+                        else None)
+                    session_id = request.arguments.get("session_id")
+                    session_live = (isinstance(session_id, str)
+                                    and session_id in self.native_gui.entries)
                     reply = Reply(
                         operation_id=request.operation_id, state="failed", error=str(error),
+                        data={"error_code": native_code or helper_code
+                              or "native_gui_helper_rejected",
+                              "next_action": (
+                                  "Grant the native GUI helper macOS Accessibility access, "
+                                  "then observe the target again."
+                                  if helper_code == "accessibility_required" and session_live else
+                                  "Observe the target again before further input."
+                                  if session_live else
+                                  "Open a new native GUI session and observe the target before "
+                                  "further input."
+                              )},
+                    )
+                elif (request.tool == "terminal_input" and type(error) is ValueError
+                      and (fixed := _TERMINAL_INPUT_REJECTIONS.get(str(error))) is not None):
+                    code, action = fixed
+                    reply = Reply(
+                        operation_id=request.operation_id, state="failed", error=str(error),
+                        data={"error_code": code, "dispatched": False,
+                              "execution_state": "not_dispatched", "next_action": action},
+                    )
+                else:
+                    reply = Reply(
+                        operation_id=request.operation_id, state="failed",
+                        error="Operation failed; the underlying error was withheld.",
+                        data={
+                            "error_code": "operation_failed",
+                            "next_action": "Inspect this operation with operations_get and check "
+                            "the target state before retrying.",
+                        },
                     )
             self.ledger.finish(reply)
             return reply
@@ -1383,6 +1654,7 @@ class Engine:
         await self.plugin_sessions.close()
         await self.direct_mcp_sessions.close()
         await self.native_gui.close()
+        await self.browser.close()
         await self.searches.close()
         await self.sessions.close()
         self.ledger.close()

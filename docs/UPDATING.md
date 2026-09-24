@@ -1,8 +1,7 @@
 # 更新と接続の引き継ぎ
 
-2026-09-19時点の公開版はPython `0.1.0b1` / Codex Plugin `0.1.0-beta.1`です。
-[Beta 1の配布物](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.1.0b1)は
-プレリリースです。mainの `0.2.0a1` / `0.2.0-alpha.1` は開発版で、公開betaとは異なります。
+公開済みの版と配布物は[GitHub Releases](https://github.com/meteosimaji/anywhere-computer/releases)で確認します。
+このチェックアウトの版数はREADMEのソース版表記を参照してください。ソース版数だけでは公開済み・稼働中とは判断できません。
 正式stableリリースと一般向け自動更新の受け入れは未完了です。
 
 ## 公開beta／alphaを手動で更新する
@@ -54,7 +53,7 @@ PATHに接続子がない環境では、`autostart-upgrade`に
 起動し直したりする挙動があります。共通化は通常更新とは別の一度きりの移行です。
 `engine-unify`は両サービスの停止を前提とし、元のデータを残して新しい保存先へ移行
 します。既に共通化した環境で繰り返す手順ではありません。
-[共通化の検証記録](UPDATE-VERIFICATION-2026-09-12.md#shared-engine-live-migration-follow-up)
+当時の共通化の検証記録はローカルの履歴資料に保管しています。
 
 macOSでは更新後も既存のHTTP認証・URLを使って接続し、旧操作結果を回収できました。
 一方、Pluginを更新しただけでは、既に起動している全CodexタスクのMCPプロセスが
@@ -69,10 +68,8 @@ HTTP設定保存先と、実際の操作を実行する共通エンジンの状�
 instance IDが異なるのが正常です。同じalpha版の修正でもruntime IDは変わるため、
 版番号だけで更新済みと判定しないでください。
 
-2026-09-13の実検証では、HTTP設定先だけ更新され、共通エンジンが旧ビルドのまま
-残っている事例を確認しました。実際の共通エンジンの状態保存先に対して、新しい
-インストールの `start` を実行し、両入口の応答で更新を確認しています。
-[検証記録](research/2026-09-13-final-acceptance-progress.md)
+共通エンジンが旧ビルドのまま残る場合は、実際の状態保存先に対して新しい
+インストールの `start` を実行し、両入口の応答で更新を確認してください。
 
 ## stable向け更新コマンド
 
@@ -120,8 +117,8 @@ uv run --locked anywhere autostart-start --state-dir <既存のHTTP設定保存�
 
 ## 証拠と未確認事項
 
-- 公開alphaのmacOS常駐更新・再接続: [更新検証記録](UPDATE-VERIFICATION-2026-09-12.md)。
-- 開発中の取得・検証・中断復旧・監視: [実装記録](EXECUTION-ROADMAP.md)。
+- 公開alphaのmacOS常駐更新・再接続: ローカルの履歴資料に保管した更新検証記録。
+- 開発中の取得・検証・中断復旧・監視: ローカルの履歴資料に保管した実装記録。
 - 配布ZIPの構造・CIと実機の違い: [配布ガイド](PORTABLE.md)。
 
 合成候補による中断復旧、CI配布物の出所証明検証、正式stableの実機更新は異なる検証

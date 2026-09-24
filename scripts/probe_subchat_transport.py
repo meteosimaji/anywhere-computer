@@ -18,6 +18,7 @@ from playwright.async_api import Error, Page, Request, Response, async_playwrigh
 PATHS = frozenset({
     '/backend-api/f/conversation', '/backend-api/f/conversation/prepare',
     '/backend-api/stop_conversation', '/backend-api/sentinel/chat-requirements/prepare',
+    '/backend-api/sentinel/chat-requirements/finalize',
 })
 CHAT = re.compile(r'https://chatgpt\.com/(?:c/[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})?\Z')
 MAX_EVENTS = 1000

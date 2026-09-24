@@ -187,6 +187,6 @@ Tests exercise explicit session expiry, access expiry, revocation, observer
 cancellation, dropped and malformed write responses, same-ID duplicate/conflict
 handling, and a stdio proxy whose lost write result is recovered over HTTP.
 Real TLS tests cover JSON/SSE parsing, redirects and hostname validation. The
-[public HTTPS client receipt](research/2026-09-09-internet-http-client-verification.json)
+public HTTPS client receipt in the local historical archive
 records one file-write POST, an injected lost response followed by result lookup,
 automatic renewal, session recovery, Keychain persistence and cleanup on macOS.

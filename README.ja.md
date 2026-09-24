@@ -3,7 +3,7 @@
 [English](README.md) | 日本語
 
 ChatGPTやCodexなどのMCPクライアントから、自分のPCを操作するための実行エージェントです。
-接続したAIが作業を判断し、Anywhere Computerが指定されたPCでファイル・検索・文書・端末の操作を実行します。
+接続したAIが作業を判断し、Anywhere Computerが指定されたPCでファイル・検索・文書・端末・隔離されたヘッドレスブラウザの操作を実行します。
 ファイルや端末の基本機能にCodexのモデル実行は必要ありません。自作コードは[MIT License](LICENSE)です。
 
 [リリースを入手](https://github.com/meteosimaji/anywhere-computer/releases) ·
@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a1` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.1` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a23` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.23` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -32,8 +32,7 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 - [更新と復旧](docs/UPDATING.md)
 - [複数PCの操作](docs/DEVICE-ROUTING.md)
 - [GUIの導入条件と制限](docs/GUI-MCP.md)
-- [subchatの契約と検証記録](docs/SUBCHAT-PROBE.md)
-- [公開ベータの対応範囲と証拠](docs/BETA1.md)
+- [subchatの使い方と制限](docs/SUBCHAT-PROBE.md)
 - [今後の開発方針](docs/PRODUCT-ROADMAP.md)
 - [文書の正本と更新方法](docs/DOCUMENTATION.md)
 <!-- END GENERATED: project-reference -->
@@ -47,13 +46,58 @@ GitHubの「Download ZIP」はソースコードです。CodexへのPlugin導入
 コマンド列をこの翻訳へ重複掲載せず、同じ手順を参照します。OS資格情報ストアが必要で、
 ChatGPT接続には公開HTTPS URL・認証・ChatGPT側の登録も必要です。
 日常の起動・診断・常駐設定は日本語の運用ガイドを参照してください。
+Codex Pluginの導入にはCodexから使える`uv`が必要です。このチェックアウトを使う場合は
+[英語READMEの導入コマンド](README.md#get-started)でローカルmarketplaceを登録し、
+`anywhere-computer`を導入します。再接続後、独立した`anywhere-computer`と
+`anywhere-subchat`のMCPサーバーを確認し、`subchat_capabilities`で実際の版とモードを確認します。
 
 ## subchatで共同作業する
 
 subchatは、役割を分担した通常のChatGPT Chatです。ChatGPT Workタスクとは別です。
 親が作業範囲を指定し、複数の子から根拠付きの結果を集め、検証して統合する用途を目指します。
+このチェックアウトのCodex Pluginは、能力・モデル一覧・保存済み操作・結果回収と、
+保存済み回答のsandboxファイルと、保存済み会話に結び付く生成画像を
+上限付きで取得する読み取り専用ツールを
+提供します。macOSでログイン元プロファイルとアカウントIDを選択・固定し、
+`subchat/login-selection.json`に`"enable_background_send": true`を明示した場合は、
+起動時に背景Chrome準備とHTTPX送信のツールも提供します。未設定時と他のOSでは
+読み取り専用が既定です。固定済みでも読み取り専用にする場合は
+`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=http-read-only`を設定します。
+Pluginプロセスに`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send`を
+設定して再接続すると、ログイン済みの専用Chromeプロファイルを使う送信ツールが現れます。
+Chromeは最小化しますが、macOSでの実測では一時的に前面へ出ました。能力表示では
+`generation_transport=browser_prepared`となります。独立したHTTP専用の生成は
+別途設定する`anywhere-subchat` CLI/MCPの実験機能で、実生成の合格はまだです。
+既存のAnywhere ComputerエンジンとChatGPT向けリモート接続は、このSubchatサーバーと別です。
+macOSでは`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx`を選ぶと、
+指定したログイン済みChromeプロファイルの一時スナップショットで送信準備を行い、
+生成POSTだけをHTTPXで一回送ります。GPT-6 Proの新規送信と同一会話への追送で、
+両方の生成POSTがHTTPX `200 text/event-stream`となり、回答保存まで確認しました。
+別の画像生成Chatでは、送信操作に結び付いたPNG画像をMCP経由で取得できました。
+画像の取得と最終回答の確認は別の状態として返します。
+30fpsの録画とフォーカス記録では専用Chromeの前面化はありませんでした。
+準備には背景Chromeが必要で、どの環境でも前面化しない保証ではありません。
+`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE`でプロファイルを選び、複数アカウントを
+使う場合は`ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID`で対象を固定してください。
 対応する通信経路・操作・検証結果・未対応事項は、上のsubchatガイドを正本とします。
 Macのパスを書くだけでアクセス権が増えるわけではなく、選択したPCと接続ツールの権限が必要です。
+
+隔離ブラウザには、所有するタブで一意の可視要素を対象にする`browser_click`と
+`browser_fill`もあります。操作後の確認に失敗した場合は結果不明を返すので、
+同じ操作を繰り返す前にタブを観測してください。既存Chromeのプロファイルや
+タブへの接続は、この隔離ブラウザ機能には含まれません。
+
+ローカルのエージェント同士で明示的に文章を送る`anywhere-peer` MCPもあります。
+`anywhere-peer --help`に所有者による登録と起動方法を示します。各peerの資格情報は
+権限0600の別ファイルで持ち、同じ所有者・アカウント・プロジェクトに限定します。
+送信先が接続している必要があります。配送と受領を記録しますが、モデルのターンを
+開始したり、ChatGPT・Codex・Claudeの会話本文へ自動挿入したりはしません。
+
+通常ChatへのHTTPアクセスは、本人に認められたアカウントと利用範囲でのみ使ってください。
+モデル蒸留を目的とする大量取得や第三者へのアクセス販売などの不正利用は禁止です。
+この実験的経路はOpenAIが文書化したAPIではありません。許可範囲外の利用で
+アカウントの制限・停止などが生じても、Plugin作成者はその責任を負いかねます。
+使用前に許可の正確な条件と適用される規約を確認してください。
 
 ## 開発と文書の更新
 

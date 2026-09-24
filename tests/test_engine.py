@@ -51,12 +51,38 @@ def test_status_separates_capability_evidence_without_claiming_acceptance(tmp_pa
             "os_permission": "not_required",
             "acceptance": "not_verified",
         }
+        assert diagnostics["codex_skills"] == {
+            "running_implementation": "present",
+            "runtime_available": "unknown",
+            "connection_authorization": "not_observed",
+            "helper": "not_required",
+            "os_permission": "not_required",
+            "acceptance": "not_verified",
+        }
         assert diagnostics["gui_native"]["running_implementation"] == "present"
         assert diagnostics["gui_native"]["helper"] in {
             "verified_available", "unavailable", "unsupported_platform", "verification_failed",
         }
         assert diagnostics["gui_native"]["os_permission"] == "not_checked"
         assert diagnostics["gui_native"]["acceptance"] == "not_verified"
+        assert diagnostics["gui_mcp"]["os_permission"] == "not_checked"
+        assert diagnostics["gui_mcp_adapter"]["os_permission"] == "not_checked"
+    finally:
+        asyncio.run(engine.close())
+
+
+@pytest.mark.parametrize("capability,missing_tool", [
+    ("gui_native", "gui_native_close"),
+    ("gui_mcp", "gui_key"),
+])
+def test_status_does_not_claim_partial_gui_implementation(
+    tmp_path, capability, missing_tool,
+):
+    engine = Engine(tmp_path / "state")
+    try:
+        engine.tools.pop(missing_tool)
+        diagnostics = engine.status()["capability_diagnostics"]
+        assert diagnostics[capability]["running_implementation"] == "absent"
     finally:
         asyncio.run(engine.close())
 
@@ -73,6 +99,7 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
     )
     engine.plugin_sessions.entries[other] = SimpleNamespace(
         owner="owner-b", state="open", lock=asyncio.Lock(), cleanup_confirmed=False,
+        private_context="other-owner-secret-must-stay-private",
     )
     release = asyncio.Event()
     own_task = asyncio.create_task(release.wait(), name="files_write")
@@ -82,7 +109,9 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
     try:
         result = engine.status(owner="owner-a")
         assert result["update_blocked"] is True
-        assert result["update_blockers"] == ["plugin_sessions", "operations"]
+        assert result["update_blockers"] == [
+            "plugin_sessions", "operations", "other_active_resources",
+        ]
         assert result["update_blocker_details"] == [
             {
                 "resource": "plugin_session", "id": current, "state": "busy",
@@ -95,7 +124,29 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
         ]
         assert other not in repr(result["update_blocker_details"])
         assert other_operation not in repr(result["update_blocker_details"])
-        assert engine.status(owner="owner-c")["update_blocker_details"] == []
+        assert "other-owner-secret-must-stay-private" not in repr(result)
+        local = engine.status()
+        assert local["active_resources"]["plugin_sessions"] == 2
+        assert local["active_resources"]["operations"] == 2
+        assert {item["id"] for item in local["update_blocker_details"]} == {
+            current, other, own_operation, other_operation,
+        }
+        assert all(item["stop_available"] is False
+                   for item in local["update_blocker_details"]
+                   if item["resource"] == "plugin_session")
+        assert "other-owner-secret-must-stay-private" not in repr(local)
+        unrelated = engine.status(owner="owner-c")
+        assert unrelated["update_blocker_details"] == []
+        assert unrelated["active_resources"] == {
+            name: 0 for name in result["active_resources"]
+        }
+        assert unrelated["active_sessions"] == 0
+        assert unrelated["active_operations"] == 0
+        assert unrelated["update_blocked"] is True
+        assert unrelated["update_blockers"] == ["other_active_resources"]
+        assert result["active_resources"]["plugin_sessions"] == 1
+        assert result["active_resources"]["operations"] == 1
+        assert "other_active_resources" in result["update_blockers"]
     finally:
         release.set()
         await asyncio.gather(own_task, other_task)
@@ -103,6 +154,126 @@ async def test_status_lists_only_current_owners_update_blockers(engine):
         engine.inflight_owners.clear()
         busy_lock.release()
         engine.plugin_sessions.entries.clear()
+
+
+async def test_status_explains_owned_exited_native_gui_blocker(engine):
+    owned = "e" * 32
+    foreign = "f" * 32
+    engine.native_gui.entries[owned] = SimpleNamespace(
+        owner="owner-a", process=SimpleNamespace(returncode=1),
+    )
+    engine.native_gui.entries[foreign] = SimpleNamespace(
+        owner="owner-b", process=SimpleNamespace(returncode=1),
+    )
+    try:
+        status = engine.status(owner="owner-a")
+        assert status["update_blocked"] is True
+        assert status["active_resources"]["native_gui_sessions"] == 1
+        assert status["update_blockers"] == [
+            "native_gui_sessions", "other_active_resources",
+        ]
+        assert status["update_blocker_details"] == [{
+            "resource": "native_gui_session", "id": owned, "state": "exited",
+            "stop_tool": "gui_native_close", "stop_available": True,
+        }]
+        assert {item["id"] for item in engine.status()["update_blocker_details"]} == {
+            owned, foreign,
+        }
+        assert all(item["stop_available"] is False
+                   for item in engine.status()["update_blocker_details"])
+        assert foreign not in repr(status)
+        await engine.native_gui.lock.acquire()
+        assert engine.status(owner="owner-a")["update_blocker_details"][0][
+            "stop_available"] is False
+    finally:
+        if engine.native_gui.lock.locked():
+            engine.native_gui.lock.release()
+        engine.native_gui.entries.clear()
+
+
+async def test_remote_terminal_status_lists_only_owned_live_blockers(engine, tmp_path):
+    started = []
+    try:
+        for owner in ("owner-a", "owner-b"):
+            reply = await engine.execute(request(
+                "terminal_start", command=python_command("import time; time.sleep(30)"),
+                cwd=str(tmp_path),
+            ), peer=owner)
+            assert reply.state == "completed"
+            started.append(reply.data["session_id"])
+
+        owned = await engine.execute(request("computer_status"), peer="owner-a")
+        assert owned.state == "completed"
+        assert owned.data["active_resources"]["terminal_sessions"] == 1
+        assert owned.data["active_sessions"] == 1
+        assert owned.data["update_blocked"] is True
+        assert owned.data["update_blocker_details"] == [{
+            "resource": "terminal_session", "id": started[0], "state": "running",
+            "stop_tool": "terminal_stop", "stop_available": True,
+        }]
+        assert started[1] not in repr(owned.data)
+        assert engine.status()["active_resources"]["terminal_sessions"] == 2
+
+        await engine.sessions.stop(started[0])
+        unrelated = await engine.execute(request("computer_status"), peer="owner-a")
+        assert unrelated.data["active_resources"]["terminal_sessions"] == 0
+        assert unrelated.data["update_blockers"] == ["other_active_resources"]
+        assert unrelated.data["update_blocker_details"] == []
+    finally:
+        for session_id in started:
+            await engine.sessions.stop(session_id)
+
+
+async def test_remote_status_counts_only_owned_searches(engine, tmp_path, monkeypatch):
+    release = asyncio.Event()
+
+    async def paused_search(*_args):
+        await release.wait()
+
+    monkeypatch.setattr(engine.searches, "_run_with_deadline", paused_search)
+    try:
+        search_ids = []
+        for owner in ("owner-a", "owner-b"):
+            reply = await engine.execute(request(
+                "search_start", path=str(tmp_path), pattern="needle",
+            ), peer=owner)
+            assert reply.state == "completed"
+            search_ids.append(reply.data["search_id"])
+        assert engine.status()["active_resources"]["searches"] == 2
+        assert {item["id"] for item in engine.status()["update_blocker_details"]
+                if item["resource"] == "search"} == set(search_ids)
+        own_status = engine.status(owner="owner-a")
+        assert own_status["active_resources"]["searches"] == 1
+        assert own_status["update_blocker_details"] == [{
+            "resource": "search", "id": search_ids[0], "state": "running",
+            "stop_tool": "search_stop", "stop_available": True,
+        }]
+        assert search_ids[1] not in repr(own_status)
+        listed = await engine.execute(request("search_list"), peer="owner-a")
+        assert listed.data["searches"] == [{
+            "search_id": search_ids[0], "state": "running",
+        }]
+        for tool in ("search_results", "search_stop"):
+            refused = await engine.execute(request(tool, search_id=search_ids[1]),
+                                           peer="owner-a")
+            assert refused.state == "failed"
+            assert refused.data["error_code"] == "search_unavailable"
+            assert search_ids[1] not in repr(refused)
+            assert engine.searches.searches[search_ids[1]].state == "running"
+        unrelated = engine.status(owner="owner-c")
+        assert unrelated["active_resources"]["searches"] == 0
+        assert unrelated["update_blockers"] == ["other_active_resources"]
+        assert unrelated["update_blocker_details"] == []
+        stopped = await engine.execute(request("search_stop", search_id=search_ids[0]),
+                                       peer="owner-a")
+        assert stopped.state == "completed"
+        recovered = await engine.execute(request("search_results", search_id=search_ids[0]),
+                                         peer="owner-a")
+        assert recovered.state == "completed"
+        assert recovered.data["state"] == "cancelled"
+    finally:
+        release.set()
+        await engine.searches.close()
 
 
 async def test_capacity_failure_has_fixed_code_and_safe_action(engine, tmp_path, monkeypatch):
@@ -118,6 +289,79 @@ async def test_capacity_failure_has_fixed_code_and_safe_action(engine, tmp_path,
     assert reply.data["error_code"] == "session_capacity"
     assert reply.data["dispatched"] is False
     assert reply.data["next_action"]
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, ValueError, OSError])
+async def test_unclassified_provider_errors_are_withheld_and_recoverable(
+    engine, tmp_path, monkeypatch, failure_type,
+):
+    secret = "synthetic-provider-credential-Bearer-ABC123"
+
+    async def rejected(*args, **kwargs):
+        raise failure_type(f"provider rejected request with {secret}")
+
+    monkeypatch.setattr(engine.direct_mcp_sessions, "open", rejected)
+    operation = request("mcp_session_open", command=[sys.executable], cwd=str(tmp_path))
+    reply = await engine.execute(operation)
+    assert reply.state == "failed"
+    assert reply.error == "Operation failed; the underlying error was withheld."
+    assert reply.data["error_code"] == "operation_failed"
+    assert "operations_get" in reply.data["next_action"]
+    assert "dispatched" not in reply.data
+    assert secret not in reply.model_dump_json()
+    assert engine.ledger.get(operation.operation_id) == reply
+    assert await engine.execute(operation) == reply
+
+
+async def test_plugin_catalog_transport_error_does_not_expose_credentials(
+    engine, tmp_path, monkeypatch,
+):
+    secret = "synthetic-plugin-token-XYZ789"
+
+    async def failed_catalog(*args, **kwargs):
+        raise ConnectionError(f"app-server 401: {secret}")
+
+    monkeypatch.setattr(
+        "anywhere_computer.codex_plugins.list_codex_plugin_tools", failed_catalog,
+    )
+    reply = await engine.execute(request("codex_plugin_tools", cwd=str(tmp_path)))
+    assert reply.state == "failed"
+    assert reply.data["error_code"] == "operation_failed"
+    assert "operations_get" in reply.data["next_action"]
+    assert secret not in reply.model_dump_json()
+
+
+async def test_invalid_arguments_do_not_echo_values_or_unknown_field_names(engine):
+    secret = "synthetic-validation-secret-ABC123"
+    operation = request("files_read", path=secret, limit=secret, **{secret: "value"})
+    reply = await engine.execute(operation)
+    assert reply.state == "failed"
+    assert reply.error == "Tool arguments are invalid."
+    assert reply.data["error_code"] == "invalid_parameter"
+    assert reply.data["dispatched"] is False
+    assert {item["code"] for item in reply.data["invalid_params"]} == {
+        "int_parsing", "extra_forbidden",
+    }
+    assert {tuple(item["path"]) for item in reply.data["invalid_params"]} == {
+        ("limit",), ("<unknown>",),
+    }
+    assert secret not in reply.model_dump_json()
+    with pytest.raises(ValueError, match="Unknown operation ID"):
+        engine.ledger.get(operation.operation_id)
+
+
+async def test_changed_arguments_have_fixed_idempotency_conflict(engine):
+    operation = request("workspace_open")
+    first = await engine.execute(operation)
+    secret = "synthetic-conflict-secret-XYZ789"
+    changed = operation.model_copy(update={"arguments": {"path": secret}})
+    conflict = await engine.execute(changed)
+    assert first.state == "completed"
+    assert conflict.state == "failed"
+    assert conflict.data["error_code"] == "operation_id_conflict"
+    assert conflict.data["dispatched"] is False
+    assert secret not in conflict.model_dump_json()
+    assert engine.ledger.get(operation.operation_id) == first
 
 
 async def test_status_shows_owned_live_watch_stop_contract(engine, monkeypatch):
@@ -151,6 +395,9 @@ async def test_status_shows_owned_live_watch_stop_contract(engine, monkeypatch):
             },
             "inspect_tool": "mcp_watch_list", "stop_available": True,
         }
+        local_detail = next(row for row in engine.status()["update_blocker_details"]
+                            if row["resource"] == "subchat_queue_watch")
+        assert local_detail == {**detail, "stop_available": False}
         assert engine.status(owner="owner-b")["update_blocker_details"] == []
     finally:
         engine.direct_mcp_sessions.entries.clear()
@@ -292,7 +539,9 @@ async def test_literal_search_pagination(engine, tmp_path):
 async def test_registry_schemas_validation_and_duplicate_guard(engine):
     from anywhere_computer.models import Empty
 
-    assert len(engine.tools) == 70
+    assert len(engine.tools) == 77
+    document_edit = engine.tools["documents_edit_paragraph"]
+    assert document_edit.destructive and not document_edit.read_only
     capture = engine.tools["audio_capture"]
     assert capture.destructive and capture.open_world and not capture.read_only
     press = engine.tools["gui_native_press"]

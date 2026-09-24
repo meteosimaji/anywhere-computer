@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import os
 from pathlib import Path
@@ -50,7 +51,7 @@ async def test_catalog_is_ephemeral_and_exposes_schema_digest(fake_codex, tmp_pa
     tool = result["servers"][0]["tools"][0]
     assert set(tool) == {
         "name", "description", "inputSchema", "annotations", "server", "catalog_sha256",
-        "call_arguments",
+        "call_arguments", "availability",
     }
     assert len(tool["catalog_sha256"]) == 64
 
@@ -230,7 +231,10 @@ async def test_unavailable_server_never_dispatches(
     assert not any(method == 'mcpServer/tool/call' for method, _ in stub_catalog['calls'])
 
 
-async def test_absent_tool_and_stale_catalog_have_distinct_codes(stub_catalog, tmp_path):
+async def test_absent_tool_and_stale_catalog_have_distinct_codes(
+    stub_catalog, tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(codex_plugins, "STARTUP_TIMEOUT", 0.1)
     for tool, expected in [('missing', 'tool_not_found'), ('echo', 'catalog_stale')]:
         with pytest.raises(codex_plugins.PluginPreflightError) as caught:
             await call_codex_plugin_tool(str(tmp_path), 'demo', tool, {}, '0' * 64)
@@ -418,8 +422,9 @@ async def test_computer_use_reports_context_and_blocks_before_runtime(
     }}]
     catalog = await list_codex_plugin_tools(str(tmp_path), server=server, tool=tool)
     row = catalog["servers"][0]
-    assert row["availability"] == "ready_to_call"
+    assert row["availability"] == "unsupported_execution_context"
     descriptor = row["tools"][0]
+    assert descriptor["availability"] == "unsupported_execution_context"
     assert descriptor["compatibility"]["screen_read"] == "unverified"
     assert descriptor["compatibility"]["native_actions"] == "unsupported_execution_context"
     assert descriptor["compatibility"]["browser_actions"] == "unsupported_execution_context"
@@ -430,6 +435,17 @@ async def test_computer_use_reports_context_and_blocks_before_runtime(
         await call_codex_plugin_tool(**descriptor["call_arguments"], arguments={"code": "1+1"})
     assert caught.value.code == "unsupported_execution_context"
     assert stub_catalog["calls"] == []
+
+
+async def test_computer_use_search_alias_exposes_unsupported_route(stub_catalog, tmp_path):
+    stub_catalog["rows"] = [{"name": "cua_repl", "runtimeStatus": "connected", "tools": {
+        "js": {"description": "Execute JavaScript", "inputSchema": {}},
+    }}]
+    result = await list_codex_plugin_tools(str(tmp_path), query="computer use", summary=True)
+    assert result["servers"][0]["tool_names_preview"] == ["js"]
+    assert result["servers"][0]["availability"] == "unsupported_execution_context"
+    assert result["servers"][0]["computer_use_compatibility"]["state"] == (
+        "unsupported_execution_context")
 
 
 @pytest.mark.parametrize("method,stage", [
@@ -567,6 +583,116 @@ async def test_call_waits_for_same_runtime_startup(
     assert methods.count("mcpServer/tool/call") == (0 if expected else 1)
 
 
+@pytest.mark.parametrize("partial_catalog", [False, True])
+async def test_call_waits_for_connected_server_to_publish_tools(
+    stub_catalog, tmp_path, monkeypatch, partial_catalog,
+):
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    digest = catalog["servers"][0]["tools"][0]["catalog_sha256"]
+    original = codex_plugins._Session.request
+    polls = []
+
+    async def empty_then_published(self, method, params):
+        if method == "mcpServerStatus/list":
+            polls.append(params["threadId"])
+            stub_catalog["rows"][0]["runtimeStatus"] = "connected"
+            if len(polls) == 1:
+                stub_catalog["rows"][0]["tools"] = ({"other": {
+                    "name": "other", "description": "Other",
+                    "inputSchema": {"type": "object"},
+                }} if partial_catalog else {})
+        result = copy.deepcopy(await original(self, method, params))
+        if method == "mcpServerStatus/list" and len(polls) == 1:
+            stub_catalog["rows"][0]["tools"] = {"echo": {
+                "name": "echo", "description": "Echo",
+                "inputSchema": {"type": "object"},
+                "annotations": {"readOnlyHint": True},
+            }}
+        return result
+
+    monkeypatch.setattr(codex_plugins._Session, "request", empty_then_published)
+    result = await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
+    assert result["content"][0]["text"] == "ok"
+    assert polls == ["isolated", "isolated"]
+    assert sum(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"]) == 1
+
+
+async def test_connected_server_without_published_tools_is_not_tool_absence(
+    stub_catalog, tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(codex_plugins, "STARTUP_TIMEOUT", 0.02)
+    stub_catalog["rows"][0].update(runtimeStatus="connected", tools={})
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, "0" * 64)
+    assert caught.value.code == "runtime_not_ready"
+    assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])
+
+
+async def test_connected_empty_catalog_does_not_mask_authentication_failure(
+    stub_catalog, tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(codex_plugins, "STARTUP_TIMEOUT", 0.1)
+    stub_catalog["rows"][0].update(
+        runtimeStatus="connected", authStatus="notLoggedIn", tools={},
+    )
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, "0" * 64)
+    assert caught.value.code == "authentication_required"
+    assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])
+
+
+async def test_exact_tool_inspection_waits_for_same_runtime_startup(
+    stub_catalog, tmp_path, monkeypatch,
+):
+    original = codex_plugins._Session.request
+    polls = []
+
+    async def starting_then_ready(self, method, params):
+        if method == 'mcpServerStatus/list':
+            polls.append(params['threadId'])
+            stub_catalog['rows'][0]['runtimeStatus'] = (
+                'starting' if len(polls) == 1 else 'connected')
+            if len(polls) == 1:
+                stub_catalog['rows'][0]['tools'] = {}
+            else:
+                stub_catalog['rows'][0]['tools'] = {'echo': {
+                    'name': 'echo', 'description': 'Echo',
+                    'inputSchema': {'type': 'object'},
+                }}
+        return await original(self, method, params)
+
+    monkeypatch.setattr(codex_plugins._Session, 'request', starting_then_ready)
+    result = await list_codex_plugin_tools(str(tmp_path), server='demo', tool='echo')
+    row = result['servers'][0]
+    assert row['availability'] == 'ready_to_call'
+    assert [tool['name'] for tool in row['tools']] == ['echo']
+    assert polls == ['isolated', 'isolated']
+    assert sum(method == 'thread/start' for method, _ in stub_catalog['calls']) == 1
+
+
+async def test_exact_tool_inspection_waits_for_connected_catalog(
+    stub_catalog, tmp_path, monkeypatch,
+):
+    original = codex_plugins._Session.request
+    polls = []
+
+    async def empty_then_published(self, method, params):
+        if method == 'mcpServerStatus/list':
+            polls.append(params['threadId'])
+            stub_catalog['rows'][0]['runtimeStatus'] = 'connected'
+            stub_catalog['rows'][0]['tools'] = {} if len(polls) == 1 else {'echo': {
+                'name': 'echo', 'description': 'Echo',
+                'inputSchema': {'type': 'object'},
+            }}
+        return await original(self, method, params)
+
+    monkeypatch.setattr(codex_plugins._Session, 'request', empty_then_published)
+    result = await list_codex_plugin_tools(str(tmp_path), server='demo', tool='echo')
+    assert result['servers'][0]['availability'] == 'ready_to_call'
+    assert [tool['name'] for tool in result['servers'][0]['tools']] == ['echo']
+    assert polls == ['isolated', 'isolated']
+
+
 async def test_startup_catalog_transport_failure_is_not_retried(
     stub_catalog, tmp_path, monkeypatch,
 ):
@@ -589,4 +715,28 @@ async def test_startup_catalog_transport_failure_is_not_retried(
     with pytest.raises(codex_plugins.PluginPreflightError, match="plugin_catalog_failed"):
         await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
     assert polls == 2
+    assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])
+
+
+async def test_catalog_timeout_reports_rpc_progress_without_dispatch(
+    stub_catalog, tmp_path, monkeypatch,
+):
+    catalog = await list_codex_plugin_tools(str(tmp_path))
+    digest = catalog["servers"][0]["tools"][0]["catalog_sha256"]
+    original = codex_plugins._Session.request
+    monkeypatch.setattr(codex_plugins, "STARTUP_TIMEOUT", 0.02)
+
+    async def stalled_catalog(self, method, params):
+        if method == "mcpServerStatus/list":
+            await asyncio.sleep(1)
+        return await original(self, method, params)
+
+    monkeypatch.setattr(codex_plugins._Session, "request", stalled_catalog)
+    stub_catalog["calls"].clear()
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
+    assert caught.value.code == "plugin_catalog_failed"
+    assert caught.value.details["catalog_progress"] == {
+        "catalog_poll": 1, "catalog_page": 1, "catalog_rpc_state": "waiting",
+    }
     assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])

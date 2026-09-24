@@ -27,7 +27,7 @@ def matches_prompt(content: JsonValue, prompt: str) -> bool:
 
 
 def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, JsonValue]:
-    if len(payload) > 1_048_576:
+    if len(payload.encode('utf-8')) > 1_048_576:
         raise ValueError('A bounded request is required')
     body = TypeAdapter(dict[str, JsonValue]).validate_json(payload)
     messages = body.get('messages')
@@ -45,8 +45,31 @@ def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, J
         raise ValueError('Generation input or conversation changed')
     if submission.http_selection is not None:
         selected = submission.http_selection
-        if (body.get('model') != selected.model_slug
-                or body.get('thinking_effort') != selected.thinking_effort):
+        # The current GPT-5.6 Sol Instant composer emits the version model ID
+        # for both its version and Latest picker entries, although the
+        # authenticated catalog preset names the Instant slug.
+        observed_instant_alias = (
+            selected.version_id in {'5.6', 'latest'} and selected.preset_id == 0
+            and selected.model_slug == 'gpt-5-6-instant'
+            and selected.thinking_effort is None
+            and submission.model == ('最新' if selected.version_id == 'latest'
+                                     else 'GPT-5.6 Sol')
+            and submission.effort == 'Instant'
+            and body.get('model') == 'gpt-5-6'
+        )
+        # The current Latest > Pro composer sends standard on the wire, while
+        # the authenticated catalog's Pro preset has a null effort field.
+        observed_pro_effort = (
+            selected.version_id == 'latest' and selected.preset_id == 3
+            and selected.model_slug == 'gpt-6-pro'
+            and selected.thinking_effort is None
+            and submission.model == '最新' and submission.effort == 'Pro'
+            and body.get('model') == 'gpt-6-pro'
+            and body.get('thinking_effort') == 'standard'
+        )
+        if (body.get('model') != selected.model_slug and not observed_instant_alias
+                or (body.get('thinking_effort') != selected.thinking_effort
+                    and not observed_pro_effort)):
             raise ValueError('Generation model or effort changed')
     # Do not silently merge an unrelated draft's attachments or plugin selection.
     if (metadata.get('attachments') or metadata.get('system_hints')

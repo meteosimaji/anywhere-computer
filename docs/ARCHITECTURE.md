@@ -55,14 +55,16 @@ problem, distinct from network reachability.
 Authenticated TLS and HTTP MCP adapters, OAuth grant/rotation endpoints and an
 OS-keyring client renewal manager are implemented. macOS checks include public
 HTTPS roundtrips, credential renewal, shared-engine migration and reconnection
-after actual native-service upgrades. See the dated [update receipts](UPDATE-VERIFICATION-2026-09-12.md).
+after actual native-service upgrades. The dated receipts are in the local historical archive.
 An embedded browser password/consent route is implemented with native-keyring
 owner verification. An optional cloudflared child adapter can use an owner-provisioned
 constant tunnel with native-keyring/OS-pipe credential handoff and bounded restarts;
 it does not provision the public route. Complete first-run onboarding, graphical
 desktop operations and standalone graphical installers remain unfinished.
-The direct-MCP prototype has exercised an isolated browser through Playwright MCP,
-but existing logged-in browser sessions and public browser tools remain unfinished.
+The direct-MCP prototype has exercised an isolated browser through Playwright MCP.
+The public browser tools can open, navigate, observe and close an isolated, ephemeral
+headless tab. They do not attach to existing logged-in browser sessions or provide
+clicking and typing.
 Explicit per-user service
 registration adapters exist for all three OSes; actual login/reboot remote recovery
 is not yet certified.

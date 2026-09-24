@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import re
+from http.cookiejar import Cookie
 from typing import BinaryIO
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import ConfigDict, Field, SecretStr, field_validator
 
 from .models import Contract
@@ -16,7 +18,9 @@ class ObservedHTTPSession(Contract):
 
     Possession is not provider approval for automation. Only an operator-authorized,
     already established session may be handed off; this module acquires no credentials.
-    Cookies, refresh credentials and request-preparation/protection tokens are unsupported.
+    Chrome-login mode retains cookies in the HTTPX client jar and may attach its
+    User-Agent here. Refresh credentials and request-preparation/protection
+    tokens are not stored here.
     """
 
     model_config = ConfigDict(extra='forbid', strict=True, frozen=True, hide_input_in_errors=True)
@@ -25,6 +29,12 @@ class ObservedHTTPSession(Contract):
     account_id: str = Field(min_length=1, max_length=256, repr=False)
     catalog_url: str = Field(min_length=1, max_length=4096, repr=False)
     language: str | None = Field(default=None, min_length=1, max_length=64)
+    cookie: SecretStr | None = Field(default=None, min_length=1, max_length=32_768,
+                                      repr=False)
+    user_agent: str | None = Field(default=None, min_length=1, max_length=1024,
+                                   repr=False)
+    user_email: str | None = Field(default=None, min_length=3, max_length=320,
+                                   repr=False)
 
     @field_validator('authorization')
     @classmethod
@@ -47,6 +57,21 @@ class ObservedHTTPSession(Contract):
             raise ValueError('Invalid language envelope')
         return value
 
+    @field_validator('cookie')
+    @classmethod
+    def cookie_header(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and any(
+                ord(char) < 32 or ord(char) > 126 for char in value.get_secret_value()):
+            raise ValueError('Invalid Cookie envelope')
+        return value
+
+    @field_validator('user_email')
+    @classmethod
+    def email_envelope(cls, value: str | None) -> str | None:
+        if value is not None and ('@' not in value or any(ord(char) < 33 for char in value)):
+            raise ValueError('Invalid login email envelope')
+        return value
+
     @field_validator('catalog_url')
     @classmethod
     def catalog(cls, value: str) -> str:
@@ -57,12 +82,44 @@ class ObservedHTTPSession(Contract):
             raise ValueError('Only the exact observed HTTPS model-catalog URL is supported')
         return value
 
-    def headers(self) -> dict[str, str]:
+    def headers(self, *, include_cookie: bool = True) -> dict[str, str]:
         result = {'authorization': self.authorization.get_secret_value(),
                   'chatgpt-account-id': self.account_id}
         if self.language is not None:
             result['oai-language'] = self.language
+        if include_cookie and self.cookie is not None:
+            result['cookie'] = self.cookie.get_secret_value()
+        if self.user_agent is not None:
+            result['user-agent'] = self.user_agent
+            result['referer'] = 'https://chatgpt.com/'
         return result
+
+
+_COOKIE_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
+
+
+def seed_cookie_jar(client: httpx.AsyncClient, header: str, *, domain: str
+                    ) -> frozenset[str]:
+    """Seed an exact-origin client once from a validated observed Cookie header."""
+    if domain not in {'chatgpt.com', '127.0.0.1'} or list(client.cookies.jar):
+        raise ValueError('Explicit Cookie jar is unavailable')
+    pairs: list[tuple[str, str]] = []
+    names: set[str] = set()
+    for component in header.split(';'):
+        name, separator, value = component.strip().partition('=')
+        if (not separator or _COOKIE_NAME.fullmatch(name) is None or name in names
+                or not value or any(ord(char) < 33 or ord(char) > 126 for char in value)):
+            raise ValueError('Invalid explicit Cookie header')
+        names.add(name)
+        pairs.append((name, value))
+    for name, value in pairs:
+        client.cookies.jar.set_cookie(Cookie(
+            version=0, name=name, value=value, port=None, port_specified=False,
+            domain=domain, domain_specified=True, domain_initial_dot=False,
+            path='/', path_specified=True, secure=domain == 'chatgpt.com',
+            expires=None, discard=True, comment=None, comment_url=None,
+            rest={}, rfc2109=False))
+    return frozenset(names)
 
 
 def read_http_session(source: BinaryIO) -> ObservedHTTPSession:
@@ -86,6 +143,9 @@ def read_http_session(source: BinaryIO) -> ObservedHTTPSession:
         if not raw.endswith(b'\n') or len(raw) > 32_768:
             raise ValueError('Session envelope is missing or oversized')
         data = json.loads(raw.decode('utf-8'), object_pairs_hook=unique)
+        if not isinstance(data, dict) or set(data) - {
+                'authorization', 'account_id', 'catalog_url', 'language', 'cookie'}:
+            raise ValueError('Unsupported explicit session field')
         return ObservedHTTPSession.model_validate(data)
     except (ValueError, TypeError, OSError, RecursionError):
         raise ValueError('Invalid HTTP session envelope; no request was made') from None

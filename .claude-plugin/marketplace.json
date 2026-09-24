@@ -1,0 +1,12 @@
+{
+  "name": "anywhere-computer-local",
+  "description": "Anywhere Computer tools for Claude Code",
+  "owner": {"name": "めてお"},
+  "plugins": [
+    {
+      "name": "anywhere-computer",
+      "source": "./plugins/anywhere-computer",
+      "description": "Local computer tools and optional ChatGPT Subchat access"
+    }
+  ]
+}

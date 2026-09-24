@@ -105,13 +105,10 @@ screen_read=unverified、native_actions / browser_actions=unsupported_execution_
 JavaScript 本文を推測して読取だけ許可する実装ではない。その他の通常の Plugin は
 従来どおり呼び出せるが、その内部から Computer Use を間接使用できることは保証しない。
 
-2026-09-12 に Codex 0.154.0-alpha.6.2 の generate-ts --experimental で生成した
-McpServerToolCallParams は threadId/server/tool/arguments/_meta を持つ。
-_meta は任意の JSON を渡す欄であり、正規の turn 文脈を発行・有効化できる証拠ではない。
-生成定義と公式仕様の確認では、モデルを開始せず Computer Use に必要な文脈を用意する
-正式な経路を確認できなかった。架空の session_id/turn_id の注入、既存会話の再開、
-turn/start による回避は行わない。新しい Codex 版でこの互換性判定を解除する前に、
-正式 API と読取後の実操作を再検証する必要がある。
+CodexのMCPツール呼び出しに `_meta` 欄があっても、それだけで正規のturn文脈を
+発行・有効化できるとは判断しない。モデルを開始せずComputer Useに必要な文脈を
+用意する経路は、対応するCodex版の公式APIと実操作で確認する必要がある。
+架空のsession_id/turn_idの注入やturn/startによる回避は行わない。
 
 自己呼び出し検査は、サーバー名に加え、anywhere_computer.tool、
 anywhere-computer.tool、mcp__anywhere_computer__tool などの提供元成分を
@@ -173,10 +170,6 @@ MCP プラグインの共通検索処理が使用する。相対パス、作業�
 拒否し、指定が壊れているときに PATH の別プログラムへ切り替えない。Codex 未導入時の
 登録は引き続き可能だが、その場合の Codex 連携は利用できない。旧登録をこの更新だけで
 書き換えることはしない。アプリを移動した際は自動起動登録を解除してから再登録する。
-
-2026-09-09: 同梱版の短い PATH では Codex を発見できないことを再現。修正したコードで
-絶対パスを指定し、同じ短い PATH のまま公式 app-server の会話一覧取得が成功した。
-会話本文や一覧内容は検証ログに保存していない。OS ログイン後の実起動とは別の試験。
 
 ## 操作 ID の照合
 

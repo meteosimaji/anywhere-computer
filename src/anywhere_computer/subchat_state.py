@@ -8,7 +8,7 @@ import sqlite3
 import time
 from typing import Literal
 
-from pydantic import Field, JsonValue
+from pydantic import ConfigDict, Field, JsonValue
 
 from .models import Contract
 from .subchat_content import SubchatResources
@@ -18,6 +18,36 @@ class SubchatAccountMismatch(ValueError):
     """The observed account does not match a saved operation or active reader."""
 
     code = 'account_mismatch'
+
+
+class SubchatOperationNotFound(ValueError):
+    """No operation with this ID is visible in the selected owner and ledger."""
+
+    code = 'unknown_operation'
+
+
+class SubchatConcurrentSend(ValueError):
+    """Another durable operation is active in the same conversation."""
+
+    code = 'concurrent_send'
+
+    def __init__(self, blocking_operation_id: str | None) -> None:
+        self.blocking_operation_id = blocking_operation_id
+        super().__init__('Conversation has another active send; recover it first')
+
+
+class SubchatSelectionError(ValueError):
+    """Safe, field-specific local catalog validation failure before dispatch."""
+
+    code = 'invalid_parameter'
+
+    def __init__(self, field: Literal['http_selection', 'version_id', 'preset_id',
+                                     'model_slug', 'thinking_effort', 'model', 'effort'],
+                 reason: Literal['required', 'not_found', 'unavailable', 'mismatch',
+                                 'ambiguous']) -> None:
+        self.field = field
+        self.reason = reason
+        super().__init__(f'{field}: {reason}')
 
 
 class SubchatInputReference(Contract):
@@ -38,6 +68,8 @@ class SubchatWorkContext(Contract):
 class SubchatHTTPSelection(Contract):
     """Exact observed catalog choice; null effort is an explicit value, not a wildcard."""
 
+    model_config = ConfigDict(extra='forbid', strict=True)
+
     version_id: str = Field(min_length=1, max_length=256)
     preset_id: int
     model_slug: str = Field(min_length=1, max_length=256)
@@ -57,13 +89,16 @@ class SubchatSubmission(Contract):
     model: str = Field(min_length=1, max_length=256)
     effort: str = Field(min_length=1, max_length=256)
     state: Literal[
-        'queued', 'prepared', 'sending', 'submitted', 'completed', 'cancelled', 'interrupted'
+        'queued', 'prepared', 'sending', 'submitted', 'completed', 'cancelled',
+        'interrupted', 'preflight_failed'
     ] = 'prepared'
     after_operation_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
     expected_last_user_message_id: str | None = None
     requested_conversation_id: str | None = None
     conversation_id: str | None = None
     baseline_message_ids: tuple[str, ...] = ()
+    # Absent on saved operations created before baseline identities were versioned.
+    baseline_identity_kind: Literal['legacy_turn_key', 'message_id', 'empty'] | None = None
     user_message_id: str | None = None
     answer_message_id: str | None = None
     answer: str | None = None
@@ -220,13 +255,37 @@ class SubchatSubmissions:
                 self._insert_http_event(operation_id, 'dispatch_claimed', None)
             return cursor.rowcount == 1
 
+    def fail_http_before_dispatch(self, operation_id: str, *, owner: str | None) -> bool:
+        """Finish an HTTP send only when no generation dispatch was claimed.
+
+        The claim and this transition use the same SQLite write lock. Never
+        make a failed operation retryable: preparation may have remote effects.
+        """
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            saved = self.get(operation_id, owner=owner)
+            if saved.http_selection is None or saved.state != 'sending':
+                return False
+            if self.connection.execute(
+                    'SELECT 1 FROM subchat_http_dispatch_claims WHERE operation_id=?',
+                    (operation_id,)).fetchone() is not None:
+                return False
+            updated = saved.model_copy(update={'state': 'preflight_failed'})
+            self.connection.execute(
+                'UPDATE subchat_submissions SET body=? WHERE operation_id=? AND owner IS ?',
+                (updated.model_dump_json(exclude={
+                    'reported_settings', 'provider_account_id', 'generation_http_status'}),
+                 operation_id, owner),
+            )
+            return True
+
     def get(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
         row = self.connection.execute(
             'SELECT owner, body FROM subchat_submissions WHERE operation_id=?',
             (operation_id,),
         ).fetchone()
         if row is None or row[0] != owner:
-            raise ValueError('Unknown subchat submission')
+            raise SubchatOperationNotFound('Unknown subchat submission')
         saved = SubchatSubmission.model_validate_json(row[1])
         binding = self.connection.execute(
             'SELECT account_id FROM subchat_account_bindings WHERE operation_id=? '
@@ -329,6 +388,19 @@ class SubchatSubmissions:
                         'SELECT 1 FROM subchat_http_deletions WHERE conversation_id=?',
                         (new.conversation_id,)).fetchone() is not None:
                     raise ValueError('Conversation has a pending or confirmed deletion')
+                # Separate Codex and Claude MCP processes share this SQLite
+                # ledger but not their in-memory browser locks. Serialize
+                # distinct sends to one Chat before either may dispatch.
+                peers = self.connection.execute(
+                    'SELECT owner, body FROM subchat_submissions WHERE operation_id != ?',
+                    (old.operation_id,),
+                )
+                for peer_row in peers:
+                    peer = SubchatSubmission.model_validate_json(peer_row[1])
+                    if (peer.conversation_id == new.conversation_id
+                            and peer.state in {'sending', 'submitted'}):
+                        raise SubchatConcurrentSend(
+                            peer.operation_id if peer_row[0] == owner else None)
             if new.user_message_id is not None:
                 peers = self.connection.execute(
                     'SELECT body FROM subchat_submissions WHERE owner IS ? AND operation_id != ?',
@@ -400,6 +472,8 @@ class SubchatSubmissions:
     def begin_send(self, operation_id: str, *, owner: str | None,
                    conversation_id: str | None = None,
                    baseline_message_ids: tuple[str, ...] = (),
+                   baseline_identity_kind: Literal[
+                       'legacy_turn_key', 'message_id', 'empty'] | None = None,
                    user_message_id: str | None = None,
                    provider_account_id: str | None = None) -> SubchatSubmission:
         old = self.get(operation_id, owner=owner)
@@ -417,6 +491,10 @@ class SubchatSubmissions:
                 or len(set(baseline_message_ids)) != len(baseline_message_ids)
                 or any(not item.strip() or len(item) > 256 for item in baseline_message_ids)):
             raise ValueError('Invalid baseline message identities')
+        if baseline_identity_kind not in (None, 'legacy_turn_key', 'message_id', 'empty'):
+            raise ValueError('Invalid baseline identity kind')
+        if baseline_identity_kind == 'empty' and baseline_message_ids:
+            raise ValueError('Empty baseline identity kind requires empty history')
         if (user_message_id is None) != (provider_account_id is None):
             raise ValueError('Outgoing identity and account must be reserved together')
         if user_message_id is not None:
@@ -435,6 +513,7 @@ class SubchatSubmissions:
         return self._replace(old, old.model_copy(update={
             'state': 'sending', 'conversation_id': old.conversation_id or conversation_id,
             'baseline_message_ids': baseline_message_ids,
+            'baseline_identity_kind': baseline_identity_kind,
             'user_message_id': user_message_id,
             'provider_account_id': provider_account_id}), owner)
 
@@ -538,3 +617,13 @@ class SubchatSubmissions:
         return self._replace(old, old.model_copy(update={
             'state': 'completed', 'answer_message_id': answer_message_id, 'answer': answer,
             'reported_settings': reported_settings}), owner, http_event='history_final')
+
+    def has_queued_for_conversation(self, conversation_id: str, *, owner: str | None) -> bool:
+        """Keep an owned browser page only while a saved child awaits dispatch."""
+        for (body,) in self.connection.execute(
+            'SELECT body FROM subchat_submissions WHERE owner IS ?', (owner,)
+        ):
+            submission = SubchatSubmission.model_validate_json(body)
+            if submission.state == 'queued' and submission.conversation_id == conversation_id:
+                return True
+        return False

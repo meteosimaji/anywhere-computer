@@ -10,7 +10,7 @@ from anywhere_computer.subchat import (
     Subchats,
 )
 from anywhere_computer.subchat_mcp import session
-from anywhere_computer.subchat_state import SubchatSubmissions
+from anywhere_computer.subchat_state import SubchatConcurrentSend, SubchatSubmissions
 
 
 class Provider:
@@ -72,6 +72,116 @@ async def test_prepared_http_identity_is_durable_before_dispatch(tmp_path):
             await service.send(other, 'another', 'model', 'effort', owner=None)
         assert store.get(other, owner=None).state == 'prepared'
         assert provider.sends == [operation]
+    finally:
+        ledger.close()
+
+
+async def test_competing_send_discards_prepared_page_before_dispatch(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+
+    class CompetingProvider(Provider):
+        def __init__(self):
+            super().__init__()
+            self.discarded = []
+
+        async def send(self, submission):
+            self.sends.append(submission.operation_id)
+            return None
+
+        async def discard_prepared(self, submission):
+            self.discarded.append(submission.operation_id)
+
+    provider = CompetingProvider()
+    service = Subchats(store, provider)
+    try:
+        first = await service.send('a' * 32, 'first', 'model', 'effort', owner=None,
+                                   conversation_id='shared')
+        assert first.state == 'sending'
+        reply = await session(service).execute(Request(
+            operation_id='b' * 32, tool='subchat_send', arguments={
+                'prompt': 'second', 'model': 'model', 'effort': 'effort',
+                'conversation_id': 'shared',
+            }))
+        assert reply.state == 'failed' and reply.data is not None
+        assert reply.data['error_code'] == SubchatConcurrentSend.code
+        assert reply.data['dispatched'] is False
+        assert reply.data['blocking_operation_id'] == 'a' * 32
+        assert provider.prepares == ['a' * 32, 'b' * 32]
+        assert provider.sends == provider.prepares[:1]
+        assert provider.discarded == ['b' * 32]
+    finally:
+        ledger.close()
+
+
+async def test_browser_baseline_identity_kind_is_saved_before_dispatch(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+
+    class IdentifiedProvider(Provider):
+        def baseline_identity_kind(self, submission):
+            return 'empty'
+
+        async def send(self, submission):
+            saved = store.get(submission.operation_id, owner=None)
+            assert saved.baseline_identity_kind == 'empty'
+            return None
+
+    try:
+        submission = await Subchats(store, IdentifiedProvider()).send(
+            '9' * 32, 'prompt', 'model', 'effort', owner=None)
+        assert submission.state == 'sending'
+        assert store.get(submission.operation_id, owner=None).baseline_identity_kind == 'empty'
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('queued', [False, True])
+async def test_completed_page_release_preserves_queued_delivery(tmp_path, queued):
+    ledger = Ledger(tmp_path)
+
+    class ReleasingProvider(Provider):
+        def __init__(self):
+            super().__init__()
+            self.releases = []
+
+        async def release_completed(self, submission, *, keep_for_queue):
+            self.releases.append((submission.operation_id, keep_for_queue))
+
+    provider = ReleasingProvider()
+    service = Subchats(SubchatSubmissions(ledger.connection), provider)
+    parent = '8' * 32
+    try:
+        submitted = await service.send(parent, 'first', 'model', 'effort', owner=None)
+        assert submitted.state == 'submitted'
+        if queued:
+            service.queue('7' * 32, parent, 'follow-up', owner=None)
+        provider.finished = True
+        assert (await service.recover(parent, owner=None)).state == 'completed'
+        assert provider.releases == [(parent, queued)]
+    finally:
+        ledger.close()
+
+
+async def test_completed_answer_survives_page_release_error(tmp_path, caplog):
+    ledger = Ledger(tmp_path)
+
+    class FailingRelease(Provider):
+        async def release_completed(self, submission, *, keep_for_queue):
+            raise RuntimeError('fixture cleanup failure')
+
+    provider = FailingRelease()
+    service = Subchats(SubchatSubmissions(ledger.connection), provider)
+    operation = '9' * 32
+    try:
+        assert (await service.send(operation, 'first', 'model', 'effort',
+                                   owner=None)).state == 'submitted'
+        provider.finished = True
+        completed = await service.recover(operation, owner=None)
+        assert completed.state == 'completed'
+        assert completed.answer == '42'
+        assert service.store.get(operation, owner=None).state == 'completed'
+        assert 'Completed Subchat cleanup failed error_type=RuntimeError' in caplog.text
     finally:
         ledger.close()
 

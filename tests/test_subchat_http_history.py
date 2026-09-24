@@ -1,4 +1,5 @@
 """Saved final answers must match the original input, not merely look complete."""
+import asyncio
 import json
 
 import pytest
@@ -543,6 +544,35 @@ async def test_unknown_conversation_recovery_does_not_launch_browser():
     assert await backend.find_submission(unknown) is None
 
 
+def test_browser_auth_account_binding_recovers_without_catalog_account_header():
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+    from anywhere_computer.subchat_state import SubchatAccountMismatch
+
+    context = object()
+    reader = ChatHTTPReader()
+    reader._headers = {'authorization': 'Bearer fixture'}
+    reader.bind_verified_account(context, 'account-a')
+    reader.check_generation_account('account-a')
+    with pytest.raises(SubchatAccountMismatch):
+        reader.check_generation_account('account-b')
+    reader._headers['chatgpt-account-id'] = 'account-b'
+    with pytest.raises(SubchatAccountMismatch):
+        reader.check_generation_account('account-a')
+
+
+def test_browser_auth_account_binding_resets_on_context_change():
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+    from anywhere_computer.subchat_state import SubchatAccountMismatch
+
+    reader = ChatHTTPReader()
+    first, second = object(), object()
+    reader.bind_verified_account(first, 'account-a')
+    reader.bind_verified_account(second, 'account-b')
+    reader.check_generation_account('account-b')
+    with pytest.raises(SubchatAccountMismatch):
+        reader.check_generation_account('account-a')
+
+
 @pytest.mark.parametrize('status', [401, 403])
 async def test_bootstrap_access_rejection_does_not_reopen_tabs(status):
     from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
@@ -580,6 +610,54 @@ async def test_bootstrap_access_rejection_does_not_reopen_tabs(status):
     with pytest.raises(SubchatAccessError):
         await reader._read(replacement, None, observe)
     assert len(observations) == 2 and replacement.pages[0].closed
+
+
+@pytest.mark.parametrize('observer_fails', [False, True])
+async def test_bootstrap_close_timeout_retries_without_masking_read(observer_fails):
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+
+    class Page:
+        def __init__(self):
+            self.close_calls = 0
+            self.closed = asyncio.Event()
+
+        async def close(self):
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise TimeoutError('temporary close stalled')
+            self.closed.set()
+
+    class Context:
+        def __init__(self):
+            self.page = Page()
+
+        async def new_page(self):
+            return self.page
+
+    class Request:
+        async def header_value(self, name):
+            return 'fixture' if name == 'authorization' else None
+
+    class Response:
+        request = Request()
+
+        async def body(self):
+            return b'{"ok":true}'
+
+    async def observe(page):
+        if observer_fails:
+            raise ValueError('observation failed')
+        return Response()
+
+    reader, context = ChatHTTPReader(), Context()
+    if observer_fails:
+        with pytest.raises(ValueError, match='observation failed'):
+            await reader._read(context, None, observe)
+    else:
+        assert await reader._read(context, None, observe) == b'{"ok":true}'
+        assert reader._headers == {'authorization': 'fixture'}
+    await asyncio.wait_for(context.page.closed.wait(), timeout=1)
+    assert context.page.close_calls == 2
 
 
 @pytest.mark.parametrize("new_chat", [False, True])

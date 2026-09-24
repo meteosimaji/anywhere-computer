@@ -8,12 +8,13 @@ from xml.etree import ElementTree as ET
 
 from pydantic import JsonValue
 
-from .documents import REL, SHEET, WORD
-from .files import Files, absolute_path
-from .models import FormulaCell, SpreadsheetValue, WriteDocument
+from .documents import REL, SHEET, WORD, OfficePackage, word_paragraphs
+from .files import Files, absolute_path, read_bytes, sha256
+from .models import EditDocumentParagraph, FormulaCell, SpreadsheetValue, WriteDocument
 
 CONTENT_TYPES = "http://schemas.openxmlformats.org/package/2006/content-types"
 OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+MARKUP_COMPATIBILITY = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
 
 
 def write_document(files: Files, args: WriteDocument) -> dict[str, JsonValue]:
@@ -31,37 +32,118 @@ def write_document(files: Files, args: WriteDocument) -> dict[str, JsonValue]:
     return files._write_bytes(args.path, content, args.mode, args.expected_sha256)
 
 
+def edit_document_paragraph(files: Files, args: EditDocumentParagraph) -> dict[str, JsonValue]:
+    """Edit one plain DOCX paragraph while retaining other package parts and a backup."""
+    path = absolute_path(args.path)
+    if path.suffix.lower() != ".docx":
+        raise ValueError("Paragraph editing requires a DOCX file")
+    if any(char in args.new_text for char in "\r\n\t"):
+        raise ValueError("Use a single plain-text paragraph without tabs or line breaks")
+    checked_text(args.new_text)
+    original = read_bytes(path)
+    if sha256(original) != args.expected_sha256:
+        raise ValueError("Document changed; read it again")
+    package = OfficePackage(original)
+    try:
+        if any(name.casefold().startswith("_xmlsignatures/")
+               for name in package.archive.namelist()):
+            raise ValueError("Signed documents cannot be edited by this tool")
+        part = package.main_part()
+        root = package.xml(part)
+        if root.tag != WORD + "document":
+            raise ValueError("Paragraph editing requires a Word document")
+        # ElementTree drops namespace declarations used only in mc:Ignorable's
+        # prefix list, which can make the rewritten document invalid for Word.
+        if any(
+            element.tag.startswith(MARKUP_COMPATIBILITY)
+            or any(name.startswith(MARKUP_COMPATIBILITY) for name in element.attrib)
+            for element in root.iter()
+        ):
+            raise ValueError("Markup compatibility content cannot be edited by this tool")
+        body = root.find(WORD + "body")
+        if body is None:
+            raise ValueError("Word document has no body")
+        before = word_paragraphs(body, package.budget)
+        if args.paragraph > len(before):
+            raise ValueError("Paragraph was not found")
+        entry = before[args.paragraph - 1]
+        assert isinstance(entry, dict)
+        if entry["text"] != args.expected_text:
+            raise ValueError("Paragraph changed; read it again")
+        if args.expected_text == args.new_text:
+            raise ValueError("New paragraph text matches existing text")
+        paragraph = list(body.iter(WORD + "p"))[args.paragraph - 1]
+        runs = [child for child in paragraph if child.tag == WORD + "r"]
+        if (any(child.tag not in {WORD + "pPr", WORD + "r"} for child in paragraph)
+                or len(runs) != 1):
+            raise ValueError("Only a single plain-text run can be edited")
+        run = runs[0]
+        text_nodes = [child for child in run if child.tag == WORD + "t"]
+        if (any(child.tag not in {WORD + "rPr", WORD + "t"} for child in run)
+                or len(text_nodes) != 1):
+            raise ValueError("Only a single plain-text run can be edited")
+        text_nodes[0].text = args.new_text
+        text_nodes[0].set("{http://www.w3.org/XML/1998/namespace}space", "preserve")
+        after = word_paragraphs(body, package.budget)
+        expected_after = [dict(item) for item in before if isinstance(item, dict)]
+        expected_after[args.paragraph - 1]["text"] = args.new_text
+        if after != expected_after:
+            raise ValueError("Paragraph preservation check failed")
+        output = io.BytesIO()
+        with zipfile.ZipFile(output, "w") as archive:
+            for info in package.archive.infolist():
+                payload = xml_bytes(root) if info.filename == part else package.archive.read(info)
+                archive.writestr(info, payload)
+        edited = output.getvalue()
+        with zipfile.ZipFile(io.BytesIO(edited)) as check:
+            for info in package.archive.infolist():
+                if (info.filename != part
+                        and check.read(info.filename) != package.archive.read(info)):
+                    raise ValueError("Document part preservation check failed")
+        result = files._write_bytes(args.path, edited, "replace", args.expected_sha256)
+        return {**result, "format": "docx", "changed_part": part,
+                "preserved_parts": len(package.archive.namelist()) - 1,
+                "diff": {"paragraph": args.paragraph, "before": args.expected_text,
+                         "after": args.new_text}}
+    except (KeyError, zipfile.BadZipFile, ET.ParseError) as error:
+        raise ValueError("Office package is malformed or references an unavailable part") from error
+    finally:
+        package.archive.close()
+
+
 def xml_bytes(root: ET.Element) -> bytes:
     return cast(bytes, ET.tostring(root, encoding="utf-8", xml_declaration=True))
 
 
 def package_document(main: str, content_type: str, parts: dict[str, bytes]) -> bytes:
-    types = ET.Element(f"{{{CONTENT_TYPES}}}Types")
+    # OPC package metadata uses default namespaces. Prefixing these roots as
+    # ns0 produces files that LibreOffice cannot open, despite valid XML.
+    types = ET.Element("Types", xmlns=CONTENT_TYPES)
     ET.SubElement(
         types,
-        f"{{{CONTENT_TYPES}}}Default",
+        "Default",
         Extension="rels",
         ContentType="application/vnd.openxmlformats-package.relationships+xml",
     )
     ET.SubElement(
-        types, f"{{{CONTENT_TYPES}}}Default", Extension="xml", ContentType="application/xml"
+        types, "Default", Extension="xml", ContentType="application/xml"
     )
     ET.SubElement(
-        types, f"{{{CONTENT_TYPES}}}Override", PartName="/" + main, ContentType=content_type
+        types, "Override", PartName="/" + main, ContentType=content_type
     )
     for name in parts:
         if name.startswith("xl/worksheets/"):
             ET.SubElement(
                 types,
-                f"{{{CONTENT_TYPES}}}Override",
+                "Override",
                 PartName="/" + name,
                 ContentType="application/vnd.openxmlformats-officedocument."
                 "spreadsheetml.worksheet+xml",
             )
-    relationships = ET.Element(f"{{{REL}}}Relationships")
+    relationships = ET.Element("Relationships", xmlns=REL)
     ET.SubElement(
         relationships,
-        f"{{{REL}}}Relationship",
+        "Relationship",
         Id="document",
         Type=OFFICE_REL + "/officeDocument",
         Target=main,

@@ -1,11 +1,57 @@
+import io
+import shutil
+import subprocess
 import uuid
+import zipfile
 
 import pytest
 
-from anywhere_computer.document_writer import create_word, create_workbook, create_workbooks
-from anywhere_computer.documents import read_document
+from anywhere_computer.document_writer import (
+    create_word,
+    create_workbook,
+    create_workbooks,
+    edit_document_paragraph,
+)
+from anywhere_computer.documents import WORD, read_document
 from anywhere_computer.engine import Engine
-from anywhere_computer.models import FormulaCell, ReadDocument, Request
+from anywhere_computer.files import Files, sha256
+from anywhere_computer.models import EditDocumentParagraph, FormulaCell, ReadDocument, Request
+
+
+def test_generated_office_packages_use_default_opc_namespaces():
+    for content in (create_word("hello"), create_workbook([["hello"]])):
+        with zipfile.ZipFile(io.BytesIO(content)) as package:
+            types = package.read("[Content_Types].xml")
+            relationships = package.read("_rels/.rels")
+        assert (b'<Types xmlns="http://schemas.openxmlformats.org/package/2006/'
+                b'content-types"') in types
+        assert (b'<Relationships xmlns="http://schemas.openxmlformats.org/'
+                b'package/2006/relationships"') in relationships
+
+
+def test_generated_word_opens_in_libreoffice(tmp_path):
+    office = shutil.which("soffice")
+    if office is None:
+        pytest.skip("LibreOffice is not installed")
+    source = tmp_path / "document.docx"
+    source.write_bytes(create_word("日本語 & <text>\nsecond"))
+    output = tmp_path / "rendered"
+    output.mkdir()
+    profile = (tmp_path / "libreoffice-profile").as_uri()
+    completed = subprocess.run(
+        [office, f"-env:UserInstallation={profile}", "--headless", "--convert-to", "pdf",
+         "--outdir", str(output), str(source)],
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    pdf = output / "document.pdf"
+    assert pdf.stat().st_size > 0
+    extract = shutil.which("pdftotext")
+    if extract is not None:
+        rendered = subprocess.run([extract, str(pdf), "-"], capture_output=True,
+                                  text=True, timeout=30, check=True)
+        assert "日本語 & <text>" in rendered.stdout
+        assert "second" in rendered.stdout
 
 
 def test_generated_word_and_workbook_roundtrip(tmp_path):
@@ -140,3 +186,162 @@ async def test_public_multiple_sheets_and_range_read(tmp_path):
         assert invalid.state == "failed" and path.read_bytes() == before
     finally:
         await engine.close()
+
+
+async def test_targeted_docx_edit_reports_diff_and_preserves_other_parts(tmp_path):
+    engine = Engine(tmp_path / "state")
+    path = tmp_path / "paragraphs.docx"
+    path.write_bytes(create_word("first\n日本語 42\nlast"))
+    original = path.read_bytes()
+    digest = sha256(original)
+    try:
+        conflict = await engine.execute(Request(operation_id=uuid.uuid4().hex,
+            tool="documents_edit_paragraph", arguments={"path": str(path), "paragraph": 2,
+                "expected_sha256": "0" * 64, "expected_text": "日本語 42",
+                "new_text": "日本語 43"}))
+        assert conflict.state == "failed" and path.read_bytes() == original
+        edited = await engine.execute(Request(operation_id=uuid.uuid4().hex,
+            tool="documents_edit_paragraph", arguments={"path": str(path), "paragraph": 2,
+                "expected_sha256": digest, "expected_text": "日本語 42",
+                "new_text": "日本語 43"}))
+        assert edited.state == "completed", edited.error
+        assert edited.data["diff"] == {
+            "paragraph": 2, "before": "日本語 42", "after": "日本語 43",
+        }
+        assert edited.data["backup_id"] == digest
+        entries = read_document(ReadDocument(path=str(path)))["entries"]
+        assert [entry["text"] for entry in entries] == [
+            "first", "日本語 43", "last",
+        ]
+        with zipfile.ZipFile(io.BytesIO(original)) as before, zipfile.ZipFile(path) as after:
+            assert before.namelist() == after.namelist()
+            for name in before.namelist():
+                if name != "word/document.xml":
+                    assert before.read(name) == after.read(name)
+        restored = await engine.execute(Request(operation_id=uuid.uuid4().hex,
+            tool="files_restore", arguments={"path": str(path), "backup_id": digest,
+                "expected_sha256": edited.data["sha256"]}))
+        assert restored.state == "completed" and path.read_bytes() == original
+    finally:
+        await engine.close()
+
+
+def test_targeted_docx_edit_rejects_mismatch_and_rich_paragraph(tmp_path):
+    path = tmp_path / "paragraphs.docx"
+    path.write_bytes(create_word("first\nsecond"))
+    original = path.read_bytes()
+    (tmp_path / "state").mkdir()
+    files = Files(tmp_path / "state")
+    base = {"path": str(path), "paragraph": 2, "expected_sha256": sha256(original)}
+    with pytest.raises(ValueError, match="Paragraph changed"):
+        edit_document_paragraph(files, EditDocumentParagraph(**base, expected_text="wrong",
+                             new_text="changed"))
+    with pytest.raises(ValueError, match="single plain-text paragraph"):
+        edit_document_paragraph(files, EditDocumentParagraph(**base, expected_text="second",
+                             new_text="with\nline break"))
+    assert path.read_bytes() == original
+
+    rich = tmp_path / "rich.docx"
+    with zipfile.ZipFile(io.BytesIO(create_word("second"))) as source:
+        with zipfile.ZipFile(rich, "w") as destination:
+            for info in source.infolist():
+                payload = source.read(info)
+                if info.filename == "word/document.xml":
+                    payload = (
+                        f'<w:document xmlns:w="{WORD[1:-1]}"><w:body><w:p>'
+                        '<w:r><w:t>sec</w:t></w:r><w:r><w:t>ond</w:t></w:r>'
+                        '</w:p></w:body></w:document>'
+                    ).encode()
+                destination.writestr(info, payload)
+    rich_original = rich.read_bytes()
+    with pytest.raises(ValueError, match="single plain-text run"):
+        edit_document_paragraph(files, EditDocumentParagraph(
+            path=str(rich), paragraph=1, expected_sha256=sha256(rich_original),
+            expected_text="second", new_text="changed",
+        ))
+    assert rich.read_bytes() == rich_original
+
+
+def test_targeted_docx_edit_selects_nested_text_box_paragraph(tmp_path):
+    path = tmp_path / "textbox.docx"
+    vml = "urn:schemas-microsoft-com:vml"
+    document = (
+        f'<w:document xmlns:w="{WORD[1:-1]}" xmlns:v="{vml}"><w:body>'
+        '<w:p><w:r><w:t>Outer</w:t></w:r><w:r><w:pict><v:shape>'
+        '<v:textbox><w:txbxContent><w:p><w:r><w:t>Inner</w:t></w:r></w:p>'
+        '</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>'
+        '</w:body></w:document>'
+    ).encode()
+    with zipfile.ZipFile(io.BytesIO(create_word("placeholder"))) as source:
+        with zipfile.ZipFile(path, "w") as destination:
+            for info in source.infolist():
+                destination.writestr(info, document if info.filename == "word/document.xml"
+                                     else source.read(info))
+    original = path.read_bytes()
+    (tmp_path / "state").mkdir()
+    files = Files(tmp_path / "state")
+    result = edit_document_paragraph(files, EditDocumentParagraph(
+        path=str(path), paragraph=2, expected_sha256=sha256(original),
+        expected_text="Inner", new_text="Changed",
+    ))
+    assert result["diff"] == {"paragraph": 2, "before": "Inner", "after": "Changed"}
+    assert [entry["text"] for entry in read_document(ReadDocument(path=str(path)))["entries"]] == [
+        "Outer", "Changed",
+    ]
+    with zipfile.ZipFile(io.BytesIO(original)) as before, zipfile.ZipFile(path) as after:
+        for name in before.namelist():
+            if name != "word/document.xml":
+                assert after.read(name) == before.read(name)
+
+
+def test_targeted_docx_edit_refuses_signed_package(tmp_path):
+    path = tmp_path / "signed.docx"
+    with zipfile.ZipFile(io.BytesIO(create_word("original"))) as source:
+        with zipfile.ZipFile(path, "w") as destination:
+            for info in source.infolist():
+                destination.writestr(info, source.read(info))
+            destination.writestr("_xmlsignatures/sig1.xml", b"<Signature/>")
+    original = path.read_bytes()
+    (tmp_path / "state").mkdir()
+    files = Files(tmp_path / "state")
+    with pytest.raises(ValueError, match="Signed documents"):
+        edit_document_paragraph(files, EditDocumentParagraph(
+            path=str(path), paragraph=1, expected_sha256=sha256(original),
+            expected_text="original", new_text="changed",
+        ))
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("compatibility", [
+    'mc:Ignorable="w14"',
+    '<mc:AlternateContent/>',
+])
+def test_targeted_docx_edit_refuses_markup_compatibility_without_changing_file(
+    tmp_path, compatibility,
+):
+    path = tmp_path / "compatible.docx"
+    mc = "http://schemas.openxmlformats.org/markup-compatibility/2006"
+    if compatibility.startswith("mc:Ignorable"):
+        opening = f'<w:document xmlns:w="{WORD[1:-1]}" xmlns:mc="{mc}" '
+        opening += f'xmlns:w14="urn:word-2010" {compatibility}>'
+        inner = ""
+    else:
+        opening = f'<w:document xmlns:w="{WORD[1:-1]}" xmlns:mc="{mc}">'
+        inner = compatibility
+    xml = (opening + '<w:body><w:p><w:r><w:t>original</w:t></w:r></w:p>'
+           + inner + '</w:body></w:document>').encode()
+    with zipfile.ZipFile(io.BytesIO(create_word("original"))) as source:
+        with zipfile.ZipFile(path, "w") as destination:
+            for info in source.infolist():
+                destination.writestr(
+                    info, xml if info.filename == "word/document.xml" else source.read(info)
+                )
+    original = path.read_bytes()
+    (tmp_path / "state").mkdir()
+    files = Files(tmp_path / "state")
+    with pytest.raises(ValueError, match="Markup compatibility"):
+        edit_document_paragraph(files, EditDocumentParagraph(
+            path=str(path), paragraph=1, expected_sha256=sha256(original),
+            expected_text="original", new_text="changed",
+        ))
+    assert path.read_bytes() == original

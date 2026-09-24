@@ -81,6 +81,8 @@ async def test_live_diagnosis_does_not_restart_or_modify_agent(tmp_path, monkeyp
         monkeypatch.setattr("anywhere_computer.diagnostics.runtime_identity", lambda: "new")
         different = await diagnose(tmp_path)
         assert different["state"] == "different_build"
+        assert different["update_readiness"]["state"] == "idle"
+        assert "run anywhere start" in different["update_readiness"]["action"]
         assert different["runtime_comparison"] == {
             "state": "different",
             "version_matches": True,
@@ -98,6 +100,154 @@ async def test_live_diagnosis_does_not_restart_or_modify_agent(tmp_path, monkeyp
     finally:
         shutdown.set()
         await asyncio.wait_for(task, 5)
+
+
+async def test_same_version_different_runtime_reports_source_runtime_and_catalog_separately(
+    tmp_path, monkeypatch,
+):
+    from anywhere_computer import diagnostics
+    from anywhere_computer.models import Reply
+
+    (tmp_path / "agent.json").write_text(json.dumps({
+        "pid": os.getpid(), "process_started": psutil.Process().create_time(),
+        "instance_id": "fixture-instance",
+    }), encoding="utf-8")
+    monkeypatch.setattr(diagnostics, "local_credential", lambda *_: "fixture-credential")
+    monkeypatch.setattr(diagnostics, "runtime_identity", lambda: "source-runtime")
+
+    async def fixture_exchange(_directory, tool, **_kwargs):
+        if tool == "__status":
+            return Reply(operation_id="a" * 32, state="completed", data={
+                "state": "ready", "instance_id": "fixture-instance",
+                "version": __version__, "runtime_id": "running-runtime",
+                "update_blocked": True,
+                "update_blockers": ["terminal_sessions", "other_active_resources"],
+                "update_blocker_details": [{
+                    "resource": "terminal_session", "id": "owned-session",
+                    "state": "running", "stop_available": True,
+                }],
+                "capability_diagnostics": {
+                    "skills": {"running_implementation": "absent", "acceptance": "not_verified"},
+                    "audio_capture": {"running_implementation": "present", "helper": "unavailable"},
+                },
+            })
+        assert tool == "__catalog"
+        return Reply(operation_id="b" * 32, state="completed", data={"tools": [
+            {"name": "audio_status"}, {"name": "audio_capture"},
+        ]})
+
+    monkeypatch.setattr(diagnostics, "exchange", fixture_exchange)
+    result = await diagnostics.diagnose(tmp_path)
+    assert result["state"] == "different_build"
+    assert result["update_readiness"]["state"] == "blocked"
+    assert "update_blocker_details" in result["update_readiness"]["action"]
+    assert "owned-session" in json.dumps(result["agent"]["update_blocker_details"])
+    assert "other_active_resources" in result["agent"]["update_blockers"]
+    assert result["runtime_comparison"]["version_matches"] is True
+    skills = result["agent"]["capability_diagnostics"]["skills"]
+    assert skills["source_implementation"] == "present"
+    assert skills["running_implementation"] == "absent"
+    assert skills["connection_publication"] == "not_published"
+    assert skills["connection_authorization"] == "not_observed"
+    audio = result["agent"]["capability_diagnostics"]["audio_capture"]
+    assert audio["source_implementation"] == "present"
+    assert audio["running_implementation"] == "present"
+    assert audio["connection_publication"] == "published"
+    assert audio["helper"] == "unavailable"
+    assert audio["acceptance"] == "not_verified"
+
+
+async def test_filtered_catalog_does_not_imply_missing_running_implementation(
+    tmp_path, monkeypatch,
+):
+    from anywhere_computer import diagnostics
+    from anywhere_computer.models import Reply
+
+    (tmp_path / "agent.json").write_text(json.dumps({
+        "pid": os.getpid(), "process_started": psutil.Process().create_time(),
+        "instance_id": "fixture-instance",
+    }), encoding="utf-8")
+    monkeypatch.setattr(diagnostics, "local_credential", lambda *_: "fixture-credential")
+    monkeypatch.setattr(diagnostics, "runtime_identity", lambda: "source-runtime")
+
+    async def fixture_exchange(_directory, tool, **_kwargs):
+        if tool == "__status":
+            return Reply(operation_id="a" * 32, state="completed", data={
+                "state": "ready", "instance_id": "fixture-instance",
+                "version": __version__, "runtime_id": "running-runtime",
+                "capability_diagnostics": {
+                    "audio_capture": {
+                        "running_implementation": "present",
+                        "connection_authorization": "denied",
+                    },
+                },
+            })
+        assert tool == "__catalog"
+        return Reply(operation_id="b" * 32, state="completed", data={"tools": []})
+
+    monkeypatch.setattr(diagnostics, "exchange", fixture_exchange)
+    result = await diagnostics.diagnose(tmp_path)
+    assert result["state"] == "different_build"
+    assert result["update_readiness"]["state"] == "unknown"
+    assert "did not report" in result["update_readiness"]["action"]
+    assert result["runtime_comparison"]["version_matches"] is True
+    skills = result["agent"]["capability_diagnostics"]["skills"]
+    assert skills["source_implementation"] == "present"
+    assert skills["running_implementation"] == "unknown"
+    assert skills["connection_publication"] == "not_published"
+    assert skills["connection_authorization"] == "not_observed"
+    audio = result["agent"]["capability_diagnostics"]["audio_capture"]
+    assert audio["running_implementation"] == "present"
+    assert audio["connection_publication"] == "not_published"
+    assert audio["connection_authorization"] == "denied"
+
+
+@pytest.mark.parametrize("second_status", ["restarted", "unavailable"])
+async def test_diagnosis_does_not_attribute_catalog_across_agent_change(
+    tmp_path, monkeypatch, second_status,
+):
+    from anywhere_computer import diagnostics
+    from anywhere_computer.models import Reply
+
+    (tmp_path / "agent.json").write_text(json.dumps({
+        "pid": os.getpid(), "process_started": psutil.Process().create_time(),
+        "instance_id": "first-instance",
+    }), encoding="utf-8")
+    monkeypatch.setattr(diagnostics, "local_credential", lambda *_: "fixture-credential")
+    calls = []
+
+    async def fixture_exchange(_directory, tool, **_kwargs):
+        calls.append(tool)
+        if calls == ["__status"]:
+            return Reply(operation_id="a" * 32, state="completed", data={
+                "state": "ready", "instance_id": "first-instance",
+                "runtime_id": "first-runtime", "version": __version__,
+                "capability_diagnostics": {
+                    "audio_capture": {"running_implementation": "present"},
+                },
+            })
+        if tool == "__catalog":
+            return Reply(operation_id="b" * 32, state="completed", data={"tools": [
+                {"name": "audio_status"}, {"name": "audio_capture"},
+            ]})
+        assert tool == "__status"
+        if second_status == "unavailable":
+            raise ConnectionError("second status unavailable")
+        return Reply(operation_id="c" * 32, state="completed", data={
+            "state": "ready", "instance_id": "second-instance",
+            "runtime_id": "second-runtime", "version": __version__,
+        })
+
+    monkeypatch.setattr(diagnostics, "exchange", fixture_exchange)
+    result = await diagnose(tmp_path)
+    assert calls == ["__status", "__catalog", "__status"]
+    assert result["state"] == (
+        "snapshot_unconfirmed" if second_status == "unavailable" else "endpoint_changed"
+    )
+    assert result["changed"] is False
+    assert result["agent"]["capability_diagnostics"]["audio_capture"][
+        "connection_publication"
+    ] == "unknown"
 
 
 def test_runtime_diagnosis_exposes_path_resolution_without_environment(tmp_path, monkeypatch):

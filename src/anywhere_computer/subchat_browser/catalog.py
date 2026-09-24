@@ -16,16 +16,22 @@ from urllib.parse import urlsplit
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..subchat import SubchatAccessError
-from ..subchat_state import SubchatHTTPSelection
+from ..subchat_state import SubchatHTTPSelection, SubchatSelectionError
 from .efforts import collect_efforts
 
 if TYPE_CHECKING:
-    from playwright.async_api import CDPSession, Page, Response
+    from playwright.async_api import CDPSession, Locator, Page, Response
 
 SOURCE = Path(__file__).with_name("subchat_model_menu.js").read_text(encoding="utf-8")
-TRIGGER = '[data-composer-navigation-target="reasoning"]'
-TOGGLE = '[data-model-picker-view-toggle="true"]:visible'
-CONTROL = '[data-reasoning-slider="true"]:visible'
+COMPOSER = 'form[data-type="unified-composer"], form[data-chatgpt-composer]'
+EDITOR = ('form[data-type="unified-composer"] #prompt-textarea[role="textbox"], '
+          '[data-composer-markdown][role="textbox"]')
+TRIGGER = ('form[data-type="unified-composer"] button.__composer-pill[aria-haspopup="menu"], '
+           '[data-composer-navigation-target="reasoning"]')
+TOGGLE = ('[role="menu"] [role="menuitem"][aria-label="モデルを選択"]:visible, '
+          '[data-model-picker-view-toggle="true"]:visible')
+CONTROL = ('[role="menu"] [role="menuitem"][aria-label="パワー"]:visible, '
+           '[data-reasoning-slider="true"]:visible')
 
 
 class HTTPModel(BaseModel):
@@ -98,15 +104,34 @@ def require_http_selection(catalog: dict[str, object], selected: SubchatHTTPSele
     versions = catalog.get('versions')
     if catalog.get('state') != 'http_catalog_observed' or not isinstance(versions, list):
         raise ValueError('HTTP model catalog is unavailable')
-    matches = 0
+    version_matches: list[dict[str, object]] = []
     for version in versions:
         if not isinstance(version, dict) or not isinstance(version.get('choices'), list):
             raise ValueError('HTTP model catalog shape changed')
-        matches += sum(1 for choice in version['choices']
-                       if isinstance(choice, dict) and choice.get('available') is True
-                       and choice.get('http_selection') == selected.model_dump())
-    if matches != 1:
-        raise ValueError('Selected HTTP model or effort is unavailable or changed')
+        if version.get('id') == selected.version_id:
+            version_matches.append(version)
+    if not version_matches:
+        raise SubchatSelectionError('version_id', 'not_found')
+    if len(version_matches) != 1:
+        raise SubchatSelectionError('version_id', 'ambiguous')
+    choices = version_matches[0]['choices']
+    assert isinstance(choices, list)
+    matches = [choice for choice in choices
+               if isinstance(choice, dict) and isinstance(choice.get('http_selection'), dict)
+               and choice['http_selection'].get('preset_id') == selected.preset_id]
+    if not matches:
+        raise SubchatSelectionError('preset_id', 'not_found')
+    if len(matches) != 1:
+        raise SubchatSelectionError('preset_id', 'ambiguous')
+    choice = matches[0]
+    if choice.get('available') is not True:
+        raise SubchatSelectionError('preset_id', 'unavailable')
+    identity = choice['http_selection']
+    assert isinstance(identity, dict)
+    if identity.get('model_slug') != selected.model_slug:
+        raise SubchatSelectionError('model_slug', 'mismatch')
+    if identity.get('thinking_effort') != selected.thinking_effort:
+        raise SubchatSelectionError('thinking_effort', 'mismatch')
 
 
 async def observe_http_catalog(page: Page) -> Response:
@@ -136,22 +161,44 @@ async def empty_chat(page: Page) -> bool:
     if page.url.rstrip("/") != "https://chatgpt.com":
         return False
     chat = page.get_by_role("button", name="Chat", exact=True)
-    editors = page.locator('[data-composer-markdown][role="textbox"]')
-    return (await chat.count() == 1 and await chat.get_attribute("aria-pressed") == "true"
+    editors = page.locator(EDITOR)
+    radio = page.locator('[role="radio"][data-tpp-toggle-value="chatgpt"][data-state="on"]'
+                         '[aria-checked="true"]')
+    radios = page.locator('[role="radio"][data-tpp-toggle-value="chatgpt"]')
+    ordinary = (await radio.count() == 1 if await radios.count() else
+                await chat.count() == 1 and await chat.get_attribute("aria-pressed") == "true")
+    return (ordinary
             and await editors.count() == 1 and not (await editors.inner_text()).strip())
 
 
-async def collect_page(page: Page, model: str | None = None) -> dict[str, object]:
+async def collect_page(page: Page, model: str | None = None, *,
+                       background_input: bool = False) -> dict[str, object]:
+    async def click(locator: Locator) -> None:
+        if background_input:
+            from .background import background_pointer_click
+
+            await background_pointer_click(locator)
+        else:
+            await locator.click()
+
+    async def press(locator: Locator, key: str) -> None:
+        if background_input:
+            from .background import background_key_press
+
+            await background_key_press(locator, key)
+        else:
+            await locator.press(key)
+
     if not await empty_chat(page):
         return {"state": "empty_chat_unconfirmed"}
     trigger = page.locator(TRIGGER)
     if await trigger.count() != 1 or await trigger.get_attribute("aria-expanded") != "false":
         return {"state": "closed_picker_unconfirmed"}
     try:
-        await trigger.click()
+        await click(trigger)
         models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
         if models.get("state") == "model_list_not_visible":
-            await page.locator(TOGGLE).click()
+            await click(page.locator(TOGGLE))
             models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
         if models.get("state") != "models_observed":
             return {"state": "models_unconfirmed"}
@@ -161,20 +208,20 @@ async def collect_page(page: Page, model: str | None = None) -> dict[str, object
             if len(choices) != 1:
                 return {'state': 'requested_model_unavailable', 'models': models['models'],
                         'submitted': False}
-            await page.get_by_role('menuitemradio', name=model, exact=True).click()
-            await page.locator(TOGGLE).click()
+            await click(page.get_by_role('menuitemradio', name=model, exact=True))
+            await click(page.locator(TOGGLE))
             models = await page.evaluate(SOURCE + '\nobserveSubchatModelMenu(document)')
             if [item['label'] for item in models.get('models', [])
                     if item['selected']] != [model]:
                 return {'state': 'model_selection_unconfirmed', 'submitted': False}
             # Selecting the verified row opens its effort view. No label table
             # or assumed number of effort choices is involved.
-            await page.get_by_role('menuitemradio', name=model, exact=True).click()
+            await click(page.get_by_role('menuitemradio', name=model, exact=True))
         else:
             # Some UI versions remember the model-list view on reopening.
             # In that case return the verified models as a partial catalog.
-            await page.get_by_role("menu").press("Escape")
-            await trigger.click()
+            await press(page.get_by_role("menu"), "Escape")
+            await click(trigger)
 
         async def read() -> dict[str, object]:
             if not await empty_chat(page):
@@ -186,12 +233,12 @@ async def collect_page(page: Page, model: str | None = None) -> dict[str, object
         async def step(key: str) -> None:
             if not await empty_chat(page):
                 raise ConnectionError("empty Chat changed before keyboard input")
-            await page.locator(CONTROL).press(key)
+            await press(page.locator(CONTROL), key)
 
         efforts = await collect_efforts(read, step)
         final_models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
         if final_models.get("state") == "model_list_not_visible":
-            await page.locator(TOGGLE).click()
+            await click(page.locator(TOGGLE))
             final_models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
         if final_models != models:
             return {"state": "model_selection_changed", "submitted": False}
@@ -200,7 +247,7 @@ async def collect_page(page: Page, model: str | None = None) -> dict[str, object
                 "efforts_for_selected_model": efforts, "submitted": False}
     finally:
         if await trigger.get_attribute("aria-expanded") == "true":
-            await page.get_by_role("menu").press("Escape")
+            await press(page.get_by_role("menu"), "Escape")
         if await trigger.get_attribute("aria-expanded") != "false":
             raise ConnectionError("picker closure was not confirmed")
 
@@ -238,9 +285,12 @@ async def minimize_window(
 async def probe(profile: Path, headed: bool, minimized: bool = False) -> dict[str, object]:
     from playwright.async_api import async_playwright
 
+    from . import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
+
     async with async_playwright() as driver:
         context = await driver.chromium.launch_persistent_context(
             str(profile), channel="chrome", headless=not (headed or minimized),
+            ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
             args=["--start-minimized"] if minimized else [])
         try:
             page = context.pages[0] if minimized and context.pages else await context.new_page()

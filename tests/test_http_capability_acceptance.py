@@ -19,6 +19,7 @@ from test_audio_capture import audio_helper as audio_helper
 from test_http_service import initialize
 from test_native_gui import helper_process as helper_process
 
+from anywhere_computer import engine as engine_module
 from anywhere_computer.authorization import LOCAL_ONLY_TOOLS, AuthorizationStore, pkce_s256
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
 from anywhere_computer.engine import Engine
@@ -95,6 +96,20 @@ for line in sys.stdin:
     backend = AuthorizedDeviceMCP(authority, engine, owner="owner", device="fixture", client="chat")
     adapter = HTTPMCP(backend.authenticate, backend.session)
     port = await adapter.start()
+    async def browser_fixture(reader, writer):
+        await reader.readuntil(b"\r\n\r\n")
+        body = (b"<html><head><title>Browser fixture</title></head><body>Ready"
+                b"<input id='entry' oninput=\"document.querySelector('#result').textContent"
+                b"=this.value\"><button id='go' onclick=\"document.querySelector('#result')"
+                b".textContent+=' clicked'\">Go</button><p id='result'></p></body></html>")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+                     + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                     + body)
+        await writer.drain()
+        writer.close()
+
+    browser_server = await asyncio.start_server(browser_fixture, "127.0.0.1", 0)
+    browser_url = f"http://127.0.0.1:{browser_server.sockets[0].getsockname()[1]}/"
     covered = set()
     process = None
     try:
@@ -113,8 +128,7 @@ for line in sys.stdin:
 
             discovered = await discover()
 
-            async def call(name, args=None, *, operation=None, expected="completed"):
-                assert name in discovered, f'Tool was not discovered in this session: {name}'
+            async def dispatch(name, args, operation_id):
                 response = await http.post(
                     "/mcp",
                     headers=headers,
@@ -126,20 +140,57 @@ for line in sys.stdin:
                             "name": name,
                             "arguments": args or {},
                             "_meta": {
-                                "io.github.meteosimaji.anywhere-computer/operation_id": operation
-                                or uuid.uuid4().hex,
+                                "io.github.meteosimaji.anywhere-computer/operation_id":
+                                    operation_id,
                             },
                         },
                     },
                 )
                 assert response.status_code == 200
-                result = response.json()["result"]["structuredContent"]
+                return response.json()["result"]["structuredContent"]
+
+            async def call(name, args=None, *, operation=None, expected="completed"):
+                assert name in discovered, f'Tool was not discovered in this session: {name}'
+                operation_id = operation or uuid.uuid4().hex
+                result = await dispatch(name, args or {}, operation_id)
+                if result["state"] == "running" and expected == "completed":
+                    # A slow tool has only acknowledged the operation. Recover its
+                    # original reply without issuing the side effect a second time.
+                    async with asyncio.timeout(40):
+                        while result["state"] == "running":
+                            recovered = await dispatch(
+                                "operations_get", {"operation_id": operation_id},
+                                uuid.uuid4().hex,
+                            )
+                            if recovered["state"] == "running":
+                                await asyncio.sleep(0.1)
+                                continue
+                            assert recovered["state"] == "completed", recovered
+                            result = recovered["data"]
+                            if result["state"] == "running":
+                                await asyncio.sleep(0.1)
                 assert result["state"] == expected, (name, result)
                 covered.add(name)
                 return result["data"]
 
             status = await call("computer_status")
             assert status["active_sessions"] == 0
+            with monkeypatch.context() as patch:
+                patch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", 0.001)
+                browser = await call("browser_open")
+            browser_ids = {"session_id": browser["session_id"], "tab_id": browser["tab_id"]}
+            navigated = await call("browser_navigate", {**browser_ids, "url": browser_url})
+            assert navigated["url"] == browser_url
+            assert navigated["http_status"] == 200
+            assert navigated["title"] == "Browser fixture"
+            assert (await call("browser_observe", browser_ids))["tab_id"] == browser["tab_id"]
+            filled = await call("browser_fill", {**browser_ids, "selector": "#entry",
+                                                 "value": "日本語 ✅"})
+            assert "日本語 ✅" in filled["text"]
+            assert filled["value_verified"] is True
+            clicked = await call("browser_click", {**browser_ids, "selector": "#go"})
+            assert "日本語 ✅ clicked" in clicked["text"]
+            assert (await call("browser_close", browser_ids))["state"] == "closed"
             audio = await call("audio_status")
             assert audio["state"] in {"available", "unavailable", "unsupported"}
             assert audio["capture_started"] is False
@@ -245,6 +296,19 @@ for line in sys.stdin:
                 await call("documents_write", {"path": document, "format": format_, **content})
                 result = await call("documents_read", {"path": document})
                 assert "Document" in str(result) if format_ == "docx" else "42" in str(result)
+                if format_ == "docx":
+                    edited = await call("documents_edit_paragraph", {
+                        "path": document, "paragraph": 1,
+                        "expected_sha256": result["sha256"],
+                        "expected_text": "Document 日本語", "new_text": "Document 更新済み",
+                    })
+                    assert edited["diff"] == {
+                        "paragraph": 1, "before": "Document 日本語",
+                        "after": "Document 更新済み",
+                    }
+                    assert (await call("documents_read", {"path": document}))["entries"][0][
+                        "text"
+                    ] == "Document 更新済み"
             search = await call(
                 "search_start",
                 {"path": str(tmp_path / "work"), "pattern": "日本語", "kind": "text"},
@@ -399,6 +463,8 @@ for line in sys.stdin:
             await call('files_write', {'path': fresh_path, 'text': '新規チャット 🚀'})
             assert (await call('files_read', {'path': fresh_path}))['text'] == '新規チャット 🚀'
     finally:
+        browser_server.close()
+        await browser_server.wait_closed()
         if process is not None and process.returncode is None:
             process.kill()
             await process.wait()

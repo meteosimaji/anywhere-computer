@@ -5,7 +5,11 @@ import sqlite3
 import pytest
 
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatSubmissions
+from anywhere_computer.subchat_state import (
+    SubchatAccountMismatch,
+    SubchatConcurrentSend,
+    SubchatSubmissions,
+)
 
 
 def test_restart_retains_uncertain_send_and_completed_reply(tmp_path):
@@ -18,6 +22,8 @@ def test_restart_retains_uncertain_send_and_completed_reply(tmp_path):
         store.begin_send(operation, owner='peer', conversation_id='conversation')
     finally:
         ledger.close()
+
+
     ledger = Ledger(tmp_path)
     store = SubchatSubmissions(ledger.connection)
     try:
@@ -38,6 +44,49 @@ def test_restart_retains_uncertain_send_and_completed_reply(tmp_path):
         recovered = SubchatSubmissions(ledger.connection).get(operation, owner='peer')
         assert recovered.answer == '結果42'
         assert recovered.user_message_id == 'user'
+    finally:
+        ledger.close()
+
+
+def test_distinct_controllers_cannot_send_to_one_conversation_concurrently(tmp_path):
+    first_ledger = Ledger(tmp_path)
+    second_ledger = Ledger(tmp_path)
+    try:
+        first = SubchatSubmissions(first_ledger.connection)
+        second = SubchatSubmissions(second_ledger.connection)
+        conversation = 'same-conversation'
+        first.prepare('a' * 32, 'first', 'model', 'effort', owner=None,
+                      conversation_id=conversation)
+        second.prepare('b' * 32, 'second', 'model', 'effort', owner=None,
+                       conversation_id=conversation)
+        first.begin_send('a' * 32, owner=None)
+        with pytest.raises(SubchatConcurrentSend, match='another active send') as blocked:
+            second.begin_send('b' * 32, owner=None)
+        assert blocked.value.blocking_operation_id == 'a' * 32
+        assert second.get('b' * 32, owner=None).state == 'prepared'
+        first.submitted('a' * 32, conversation, 'first-user', owner=None)
+        with pytest.raises(SubchatConcurrentSend, match='another active send') as blocked:
+            second.begin_send('b' * 32, owner=None)
+        assert blocked.value.blocking_operation_id == 'a' * 32
+        first.complete('a' * 32, 'first-answer', 'done', owner=None)
+        assert second.begin_send('b' * 32, owner=None).state == 'sending'
+    finally:
+        second_ledger.close()
+        first_ledger.close()
+
+
+def test_concurrent_send_does_not_disclose_another_owner_operation(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    try:
+        store.prepare('a' * 32, 'first', 'model', 'effort', owner='first-owner',
+                      conversation_id='shared')
+        store.prepare('b' * 32, 'second', 'model', 'effort', owner='second-owner',
+                      conversation_id='shared')
+        store.begin_send('a' * 32, owner='first-owner')
+        with pytest.raises(SubchatConcurrentSend) as blocked:
+            store.begin_send('b' * 32, owner='second-owner')
+        assert blocked.value.blocking_operation_id is None
     finally:
         ledger.close()
 
@@ -159,6 +208,7 @@ def test_baseline_survives_restart_and_legacy_json_can_advance(tmp_path):
                 'SELECT body FROM subchat_submissions WHERE operation_id=?',
                 (operation,)).fetchone()[0])
             body.pop('baseline_message_ids')
+            body.pop('baseline_identity_kind', None)
             ledger.connection.execute('UPDATE subchat_submissions SET body=? WHERE operation_id=?',
                                       (json.dumps(body), operation))
         with pytest.raises(ValueError, match='baseline'):
@@ -170,9 +220,35 @@ def test_baseline_survives_restart_and_legacy_json_can_advance(tmp_path):
     try:
         store = SubchatSubmissions(ledger.connection)
         assert store.get(operation, owner=None).baseline_message_ids == ('old',)
+        assert store.get(operation, owner=None).baseline_identity_kind is None
         with pytest.raises(ValueError, match='predates'):
             store.submitted(operation, 'conversation', 'old', owner=None)
         assert store.submitted(operation, 'conversation', 'new', owner=None).state == 'submitted'
+    finally:
+        ledger.close()
+
+
+def test_versioned_baseline_identity_survives_restart(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    operation = '8' * 32
+    try:
+        store.prepare(operation, 'prompt', 'model', 'effort', owner=None)
+        with pytest.raises(ValueError, match='kind'):
+            store.begin_send(operation, owner=None, baseline_identity_kind='unrecognized')
+        with pytest.raises(ValueError, match='empty history'):
+            store.begin_send(operation, owner=None, baseline_message_ids=('old',),
+                             baseline_identity_kind='empty')
+        sent = store.begin_send(operation, owner=None, baseline_message_ids=('old',),
+                                baseline_identity_kind='message_id')
+        assert sent.baseline_identity_kind == 'message_id'
+    finally:
+        ledger.close()
+    ledger = Ledger(tmp_path)
+    try:
+        restored = SubchatSubmissions(ledger.connection).get(operation, owner=None)
+        assert restored.baseline_message_ids == ('old',)
+        assert restored.baseline_identity_kind == 'message_id'
     finally:
         ledger.close()
 

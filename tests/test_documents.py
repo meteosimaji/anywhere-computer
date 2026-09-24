@@ -26,7 +26,7 @@ def test_repeated_slide_expansion_is_bounded_before_pagination(tmp_path, monkeyp
         read_document(ReadDocument(path=str(path), limit=1))
 
 
-def test_nested_paragraph_expansion_is_bounded(tmp_path, monkeypatch):
+def test_nested_paragraph_traversal_is_bounded(tmp_path, monkeypatch):
     import anywhere_computer.documents as documents
 
     path = package(tmp_path / "nested.docx", "word/document.xml", {
@@ -34,8 +34,8 @@ def test_nested_paragraph_expansion_is_bounded(tmp_path, monkeypatch):
         + '<w:p>' * 32 + '<w:t>' + 'x' * 1024 + '</w:t>'
         + '</w:p>' * 32 + '</w:body></w:document>',
     })
-    monkeypatch.setattr(documents, "EXTRACTION_TEXT_LIMIT", 8192, raising=False)
-    with pytest.raises(ValueError, match="extraction.*limit"):
+    monkeypatch.setattr(documents, "EXTRACTION_NODE_LIMIT", 100)
+    with pytest.raises(ValueError, match="traversal limit"):
         read_document(ReadDocument(path=str(path), limit=1))
 
 
@@ -71,6 +71,25 @@ def test_docx_paragraph_pagination_tab_table_and_unchanged_input(tmp_path):
     assert path.read_bytes() == before
 
 
+def test_docx_text_box_paragraph_is_not_duplicated_in_outer_paragraph(tmp_path):
+    vml = "urn:schemas-microsoft-com:vml"
+    path = package(tmp_path / "textbox.docx", "word/document.xml", {
+        "word/document.xml": (
+            f'<w:document xmlns:w="{WORD[1:-1]}" xmlns:v="{vml}"><w:body>'
+            '<w:p><w:r><w:t>Outer</w:t></w:r><w:r><w:pict><v:shape>'
+            '<v:textbox><w:txbxContent><w:p><w:r><w:t>Inner</w:t></w:r></w:p>'
+            '</w:txbxContent></v:textbox></v:shape></w:pict></w:r></w:p>'
+            '</w:body></w:document>'
+        ),
+    })
+    original = path.read_bytes()
+    entries = read_document(ReadDocument(path=str(path)))["entries"]
+    assert [(entry["paragraph"], entry["text"]) for entry in entries] == [
+        (1, "Outer"), (2, "Inner"),
+    ]
+    assert path.read_bytes() == original
+
+
 def test_xlsx_shared_inline_formula_and_sheet_selection(tmp_path):
     path = package(
         tmp_path / "book.xlsx",
@@ -102,6 +121,35 @@ def test_xlsx_shared_inline_formula_and_sheet_selection(tmp_path):
     assert path.read_bytes() == original
     with pytest.raises(ValueError, match="not found"):
         read_document(ReadDocument(path=str(path), section="Missing"))
+
+
+def test_xlsx_phonetic_hints_do_not_change_cell_values(tmp_path):
+    path = package(
+        tmp_path / "phonetic.xlsx",
+        "xl/workbook.xml",
+        {
+            "xl/workbook.xml": f'<workbook xmlns="{SHEET[1:-1]}" xmlns:r="{R}">'
+            '<sheets><sheet name="Data" sheetId="1" r:id="sheet"/></sheets></workbook>',
+            "xl/_rels/workbook.xml.rels": f'<Relationships xmlns="{REL}">'
+            f'<Relationship Id="sheet" Type="{R}/worksheet" Target="worksheets/data.xml"/>'
+            f'<Relationship Id="strings" Type="{R}/sharedStrings" Target="sharedStrings.xml"/>'
+            '</Relationships>',
+            "xl/sharedStrings.xml": f'<sst xmlns="{SHEET[1:-1]}">'
+            '<si><t>漢字</t><rPh sb="0" eb="2"><t>かんじ</t></rPh></si>'
+            '<si><r><t>東</t></r><r><t>京</t></r>'
+            '<rPh sb="0" eb="2"><t>とうきょう</t></rPh></si></sst>',
+            "xl/worksheets/data.xml": f'<worksheet xmlns="{SHEET[1:-1]}">'
+            '<sheetData><row r="1"><c r="A1" t="s"><v>0</v></c>'
+            '<c r="B1" t="s"><v>1</v></c><c r="C1" t="inlineStr">'
+            '<is><r><t>大</t></r><r><t>阪</t></r>'
+            '<rPh sb="0" eb="2"><t>おおさか</t></rPh></is></c>'
+            '</row></sheetData></worksheet>',
+        },
+    )
+    original = path.read_bytes()
+    result = read_document(ReadDocument(path=str(path)))
+    assert [entry["value"] for entry in result["entries"]] == ["漢字", "東京", "大阪"]
+    assert path.read_bytes() == original
 
 
 @pytest.mark.parametrize("value", ["A0", "B2:A1", "A1:B2:C3", "Sheet!A1", "XFE1"])

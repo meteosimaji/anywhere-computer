@@ -170,6 +170,13 @@ class WriteDocument(FilePath):
     expected_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
+class EditDocumentParagraph(FilePath):
+    paragraph: int = Field(ge=1, le=100000)
+    expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    expected_text: str = Field(max_length=32768)
+    new_text: str = Field(max_length=32768)
+
+
 class ReadFiles(Contract):
     paths: list[str] = Field(min_length=1, max_length=20)
     limit: int = Field(default=200, ge=1, le=1000)
@@ -243,6 +250,23 @@ class StartSession(Contract):
 
 class SessionId(Contract):
     session_id: str
+
+
+class BrowserSession(Contract):
+    session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    tab_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class BrowserNavigate(BrowserSession):
+    url: str = Field(min_length=1, max_length=4096)
+
+
+class BrowserClick(BrowserSession):
+    selector: str = Field(min_length=1, max_length=1024)
+
+
+class BrowserFill(BrowserClick):
+    value: str = Field(max_length=100000)
 
 
 class SessionInput(SessionId):

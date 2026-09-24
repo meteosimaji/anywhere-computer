@@ -1,5 +1,6 @@
 """Submission lifecycle shared by browser adapters; no model or provider defaults."""
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
@@ -9,12 +10,17 @@ from pydantic import Field
 from .models import Contract
 from .subchat_content import SubchatResources
 from .subchat_state import (
+    SubchatAccountMismatch,
+    SubchatConcurrentSend,
     SubchatHTTPSelection,
     SubchatReportedSettings,
+    SubchatSelectionError,
     SubchatSubmission,
     SubchatSubmissions,
     SubchatWorkContext,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class SubchatReceipt(Contract):
@@ -105,6 +111,10 @@ class SubchatPreparationFailed(ValueError):
     """Preparation failed before dispatch; provider details remain local."""
 
 
+class SubchatPreflightFailed(ValueError):
+    """HTTP preparation ended before any generation POST was claimed."""
+
+
 class SubchatUnsupported(ValueError):
     """An explicit unavailable capability; no fallback or automatic retry is allowed."""
 
@@ -159,19 +169,36 @@ class Subchats:
             return submission
         try:
             prepared = await self.backend.prepare(submission)
-        except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError, SubchatUnsupported):
+            identity_kind = getattr(self.backend, 'baseline_identity_kind', None)
+            baseline_identity_kind = (
+                identity_kind(submission) if identity_kind is not None else None)
+        except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError,
+                SubchatAccountMismatch,
+                SubchatUnsupported, SubchatSelectionError):
             raise
         except Exception as error:
             raise SubchatPreparationFailed(str(error)) from error
-        if isinstance(prepared, SubchatPreparedSend):
-            submission = self.store.begin_send(
-                submission.operation_id, owner=owner,
-                baseline_message_ids=prepared.baseline_message_ids,
-                user_message_id=prepared.user_message_id,
-                provider_account_id=prepared.provider_account_id)
-        else:
-            submission = self.store.begin_send(submission.operation_id, owner=owner,
-                                               baseline_message_ids=prepared)
+        try:
+            if isinstance(prepared, SubchatPreparedSend):
+                submission = self.store.begin_send(
+                    submission.operation_id, owner=owner,
+                    baseline_message_ids=prepared.baseline_message_ids,
+                    baseline_identity_kind=baseline_identity_kind,
+                    user_message_id=prepared.user_message_id,
+                    provider_account_id=prepared.provider_account_id)
+            else:
+                submission = self.store.begin_send(submission.operation_id, owner=owner,
+                                                   baseline_message_ids=prepared,
+                                                   baseline_identity_kind=baseline_identity_kind)
+        except SubchatConcurrentSend:
+            discard = getattr(self.backend, 'discard_prepared', None)
+            if discard is not None:
+                try:
+                    await discard(submission)
+                except Exception as error:
+                    logger.warning('Concurrent Subchat page cleanup failed error_type=%s',
+                                   type(error).__name__)
+            raise
         try:
             receipt = await self.backend.send(submission)
             if receipt is None:
@@ -180,9 +207,12 @@ class Subchats:
                 return self.store.get(submission.operation_id, owner=owner)
             return self._accept(submission, receipt, owner)
         except Exception as error:
+            if self.store.get(submission.operation_id, owner=owner).state == 'preflight_failed':
+                raise SubchatPreflightFailed('HTTP generation stopped before dispatch') from error
             # Provider errors may contain account data; retain only the cause locally.
             raise SubchatOutcomeUnknown(submission.operation_id) from error
-        # Cancellation also leaves the committed 'sending' record intact.
+        # Browser sends and claimed HTTP generation retain an uncertain outcome
+        # after cancellation; unclaimed HTTP preflight is terminalized by backend.send.
 
     async def recover(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
         submission = self.store.get(operation_id, owner=owner)
@@ -197,7 +227,7 @@ class Subchats:
                                                      observation=target.observation)
                 return submission
             return await self._dispatch(submission, owner=owner)
-        if submission.state in {'prepared', 'completed', 'cancelled'}:
+        if submission.state in {'prepared', 'completed', 'cancelled', 'preflight_failed'}:
             return submission
         if submission.state == 'sending':
             receipt = await self.backend.find_submission(submission)
@@ -217,5 +247,16 @@ class Subchats:
             # Thinking or unavailable observation: leave the submission untouched.
             return submission
         self._accept(submission, answer, owner)
-        return self.store.complete(operation_id, answer.answer_message_id, answer.text, owner=owner,
-                                   reported_settings=answer.reported_settings)
+        completed = self.store.complete(
+            operation_id, answer.answer_message_id, answer.text, owner=owner,
+            reported_settings=answer.reported_settings)
+        release = getattr(self.backend, 'release_completed', None)
+        if release is not None and completed.conversation_id is not None:
+            try:
+                await release(completed, keep_for_queue=self.store.has_queued_for_conversation(
+                    completed.conversation_id, owner=owner))
+            except Exception as error:
+                # The final answer was committed before optional tab cleanup.
+                logger.warning('Completed Subchat cleanup failed error_type=%s',
+                               type(error).__name__)
+        return completed

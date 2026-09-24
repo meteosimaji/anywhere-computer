@@ -20,8 +20,7 @@ GUIDES = (
     ('docs/UPDATING.md', 'Updates and recovery', '更新と復旧'),
     ('docs/DEVICE-ROUTING.md', 'Multiple computers', '複数PCの操作'),
     ('docs/GUI-MCP.md', 'GUI provider setup and limits', 'GUIの導入条件と制限'),
-    ('docs/SUBCHAT-PROBE.md', 'Subchat contract and scoped evidence', 'subchatの契約と検証記録'),
-    ('docs/BETA1.md', 'Published beta scope and evidence', '公開ベータの対応範囲と証拠'),
+    ('docs/SUBCHAT-PROBE.md', 'Subchat usage and limits', 'subchatの使い方と制限'),
     ('docs/PRODUCT-ROADMAP.md', 'Future milestones', '今後の開発方針'),
     ('docs/DOCUMENTATION.md', 'Documentation ownership and checks', '文書の正本と更新方法'),
 )

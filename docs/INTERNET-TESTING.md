@@ -67,31 +67,16 @@ retried for readiness. Lost/malformed operation responses and token refresh
 requests are not retried. The product HTTP client can recover once from an
 explicit pre-dispatch HTTP 401/404; this probe records its write POST count.
 
-## Observed result and limits
+## Verification limits
 
-The September 9, 2026 macOS run completed metadata retrieval, token exchange,
-write/read across MCP sessions and rejection after device revocation through
-Cloudflare's public addresses. The first attempt timed out because the OS
-resolver did not resolve the new hostname even when a separate DNS query did;
-the runner now waits for DNS publication and records its fallback explicitly.
-See the sanitized [verification receipt](research/2026-09-09-internet-verification.json).
-
-The requesting client and agent ran on the **same Mac**, with requests leaving
-through the public HTTPS edge and returning through the outbound tunnel. This
-is evidence of that internet path, not a second physical device, a Windows or
-Linux internet test, or a ChatGPT browser connection. The initial receipt used
-internal approval and a placeholder authorization URL. The later browser-consent
-and native-login receipts below use the implemented authorization route and
-actual HTTP form submission. Their browser interaction is driven programmatically;
-visual rendering and a human browser login are not claimed. In default temporary
-mode the URL is retired when the runner exits and should not be configured as a live connector.
-
-Production work remains: a complete server provisioning/installation
-workflow, public client registration policy, combined startup, network outage/sleep recovery,
-operational limits and platform-specific live validation. Client token renewal
-and explicit expired-session recovery are now implemented. `remote_ready` therefore remains
-false for the normal agent. Cloudflare describes Quick Tunnels as a testing
-facility, not a production service:
+The temporary route is retired when the runner exits and must not be configured
+as a live connector. A successful run checks a public HTTPS path from the same
+host as the test agent; it does not establish a second physical device, a
+ChatGPT browser connection, or production hosting. Browser consent is driven by
+an HTTP form driver, so visual rendering and human browser login are not tested.
+Provisioning, combined startup, network outage and sleep recovery, and
+platform-specific live acceptance need separate checks. Cloudflare describes
+Quick Tunnels as a testing facility:
 [Quick Tunnels documentation](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/).
 
 ## Dedicated constant tunnel mode
@@ -127,14 +112,6 @@ run fails instead of claiming a crash was injected. This tests a connector proce
 crash, not a physical network interruption, OS sleep or host reboot. The HTTP
 engine remains alive throughout this fault.
 
-The final run recorded **17 MiB / 68 chunks in 17.64 seconds**, full SHA-256
-agreement, and **6.60 seconds** from connector termination to the successful
-same-session read. It also verified no-store response headers for metadata,
-consent, token exchange/refresh and MCP responses. See the
-[constant-route receipt](research/2026-09-09-constant-internet-verification.json)
-for the exact runtime/script hashes and individual checks. These timings are one
-macOS observation, not a throughput or recovery-time guarantee.
-
 Cleanup revokes the disposable grants, removes both disposable OS-store entries,
 stops the owned runner/observed connector identities, and closes the adapter,
 authorization store and engine. Every cleanup is attempted even if another fails;
@@ -142,47 +119,8 @@ failure classes and flags are recorded without credential values. Tests cover a
 late child-identity event, refusal to kill a reused PID, rejection of an unbound or
 changed profile, and credential cleanup despite connector-stop failure.
 
-The **constant DNS record, provider tunnel, development binding and tunnel token
-are retained** for subsequent work. The probe server and connector are stopped
-after the test, so this receipt is not evidence of a currently online production
-endpoint. OS autostart, health monitoring, full browser onboarding, two physical
-devices and live Windows/Linux internet paths remain unverified.
-The separate [post-test route readback](research/2026-09-09-constant-route-setup.json)
-confirms the retained DNS/ingress/native credential binding, zero provider
-connections, released loopback port, and absence of a permanent HTTP owner password.
-
-The subsequent [refresh verification receipt](research/2026-09-09-internet-refresh-verification.json)
-also records public token rotation and continuing the same MCP session. Each
-receipt retains its tested implementation and script hashes; older receipts
-remain historical evidence and are not claims about newer revisions.
-
-The [client credential verification receipt](research/2026-09-09-internet-client-credentials-verification.json)
-records the native macOS keyring save/reopen, automatic client renewal over public
-HTTPS, continued MCP session, and deletion of the disposable credential. This
-probe supplies its DNS-resolved, hostname-verified HTTPS callback to the client;
-the default client HTTPS transport is exercised separately against a local TLS
-server. Neither test establishes a production connector or browser login.
-
-The [native login receipt](research/2026-09-09-internet-native-login-verification.json)
-uses `native_login.login` to obtain and install the credentials used by `HTTPBackend`.
-It records the owner-password consent flow and closure of the dynamically assigned
-loopback callback. Browser rendering remains explicitly false. The injected code
-exchange transport performs public HTTPS with the DNS resolution described above;
-the default code exchange transport separately has real TLS tests for hostname
-verification, bounded responses, and no redirects or retries. On success, the
-same probe continues through file operations, refresh, reconnect and revocation.
-
-The [HTTP client verification receipt](research/2026-09-09-internet-http-client-verification.json)
-uses `HTTPBackend` itself for tool calls. Its injected lost write response is
-recovered by operation ID without replay (one write POST); automatic token renewal
-and explicit HTTP-session-expiry recovery are also verified. This test does not
-claim a naturally occurring network outage or a browser authorization flow.
-
-
-The [public download receipt](research/2026-09-09-internet-download-verification.json)
-adds a complete 17 MiB transfer and midpoint client recreation through the same
-public edge. Download time includes range retrieval, client recreation and close,
-not initial authorization or copy preparation. It verifies Engine operation
-recording and the HTTP transport path in addition to the local copy API tests.
-It retains the same single-Mac, synthetic consent-driver and temporary-route
-limitations described above. The published endpoint is stopped after testing.
+The constant DNS record, provider tunnel, development binding and tunnel token
+remain after a probe run. The probe server and connector stop, so a successful
+receipt does not show that a production endpoint remains online. OS autostart,
+health monitoring, full browser onboarding, two physical devices and live
+Windows/Linux internet paths require separate verification.

@@ -296,6 +296,7 @@ async def _start_and_catalog(
     session: _Session, cwd: str, *, limit: int, cursor: str | None = None,
     max_pages: int = MAX_PAGES, thread_id: str | None = None,
     target_server: str | None = None, target_tool: str | None = None,
+    progress: dict[str, JsonValue] | None = None,
 ) -> tuple[list[dict[str, JsonValue]], str | None, str]:
     if thread_id is None:
         thread_id = await _start_thread(session, cwd)
@@ -303,13 +304,18 @@ async def _start_and_catalog(
     seen_servers: set[str] = set()
     page_cursor = cursor
     seen_cursors: set[str] = set()
-    for _ in range(max_pages):
+    for page in range(max_pages):
         params: dict[str, JsonValue] = {
             "threadId": thread_id, "detail": "toolsAndAuthOnly", "limit": limit,
         }
         if page_cursor is not None:
             params["cursor"] = page_cursor
+        if progress is not None:
+            progress["catalog_page"] = page + 1
+            progress["catalog_rpc_state"] = "waiting"
         result = await session.request("mcpServerStatus/list", params)
+        if progress is not None:
+            progress["catalog_rpc_state"] = "received"
         rows = result.get("data", result.get("servers", []))
         if isinstance(rows, dict):
             rows = [dict(value, server=key) for key, value in rows.items()
@@ -387,12 +393,21 @@ async def _start_and_catalog(
                 }
                 if _computer_use_route(server, name):
                     clean["compatibility"] = _computer_use_compatibility()
+                    clean["availability"] = "unsupported_execution_context"
+                else:
+                    clean["availability"] = _availability(row, True)
                 tools.append(clean)
+            server_availability = _availability(row, bool(tools))
+            if (server_availability == "ready_to_call" and tools
+                    and all(isinstance(item, dict) and item.get("availability")
+                            == "unsupported_execution_context"
+                            for item in tools)):
+                server_availability = "unsupported_execution_context"
             servers.append({
                 "server": server, "tools": tools,
                 "catalog_complete": complete, "received_tool_count": received_count,
                 "omitted_tool_count": max(0, received_count - 1000) if not complete else 0,
-                "availability": _availability(row, bool(tools)),
+                "availability": server_availability,
                 "runtime_status": row.get("runtimeStatus")
                 if row.get("runtimeStatus") in {
                     "notStarted", "starting", "connected", "authenticationRequired",
@@ -428,13 +443,37 @@ async def _inspect_tools(
     _validate_inspection(limit, server, tool)
     clean_cwd = context.cwd
     bounded_cursor = _cursor(cursor)
-    servers, next_cursor, _ = await asyncio.wait_for(
-        _start_and_catalog(
-            context.session, clean_cwd, limit=limit, cursor=bounded_cursor,
-            max_pages=MAX_PAGES if server else 1, thread_id=context.thread_id,
-            target_server=server, target_tool=tool,
-        ), timeout=STARTUP_TIMEOUT,
-    )
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + STARTUP_TIMEOUT
+    empty_tools_since: float | None = None
+    while True:
+        context._catalog_poll += 1
+        context._catalog_progress = {"catalog_poll": context._catalog_poll}
+        servers, next_cursor, _ = await asyncio.wait_for(
+            _start_and_catalog(
+                context.session, clean_cwd, limit=limit, cursor=bounded_cursor,
+                max_pages=MAX_PAGES if server else 1, thread_id=context.thread_id,
+                target_server=server, target_tool=tool,
+                progress=context._catalog_progress,
+            ), timeout=max(0.001, deadline - loop.time()),
+        )
+        selected_server = next((row for row in servers if row.get('server') == server), None)
+        starting = selected_server is not None and selected_server.get(
+            'availability') == 'runtime_not_ready'
+        empty_tools = (selected_server is not None
+                       and selected_server.get('runtime_status') == 'connected'
+                       and selected_server.get('received_tool_count') == 0)
+        now = loop.time()
+        if empty_tools and empty_tools_since is None:
+            empty_tools_since = now
+        if (not starting and not empty_tools) or now >= deadline or (
+                empty_tools and empty_tools_since is not None
+                and now - empty_tools_since >= 5):
+            break
+        # Keep the same Codex process and ephemeral thread while its MCP server
+        # starts. A connected server may also publish its tool catalog shortly
+        # after its runtime status changes.
+        await asyncio.sleep(min(0.25, max(0, deadline - loop.time())))
     selected_servers: list[dict[str, JsonValue]] = []
     for row in servers:
         if server is not None and row["server"] != server:
@@ -443,7 +482,8 @@ async def _inspect_tools(
         selected = [item for item in descriptors if
                     (tool is None or item["name"] == tool) and
                     (query is None or query.casefold() in
-                     f"{row['server']} {item['name']} {item['description']}".casefold())]
+                     (f"{row['server']} {item['name']} {item['description']} "
+                      f"{'computer use' if 'compatibility' in item else ''}").casefold())]
         if (query is not None and not selected
                 and query.casefold() not in str(row["server"]).casefold()):
             continue
@@ -490,15 +530,32 @@ async def _call_tool(
     session, thread_id = context.session, context.thread_id
     loop = asyncio.get_running_loop()
     deadline = loop.time() + STARTUP_TIMEOUT
+    missing_tool_since: float | None = None
     while True:
+        context._catalog_poll += 1
+        context._catalog_progress = {"catalog_poll": context._catalog_poll}
         servers, remaining_cursor, _ = await asyncio.wait_for(
             _start_and_catalog(
                 session, clean_cwd, limit=MAX_CATALOG, max_pages=MAX_PAGES,
                 thread_id=thread_id, target_server=server, target_tool=tool,
+                progress=context._catalog_progress,
             ), timeout=max(0.001, deadline - loop.time()),
         )
         selected_server = next((row for row in servers if row.get("server") == server), None)
-        if selected_server is None or selected_server.get("availability") != "runtime_not_ready":
+        starting = (selected_server is not None and
+                    selected_server.get("availability") == "runtime_not_ready")
+        missing_connected_tool = (
+            selected_server is not None and
+            selected_server.get("runtime_status") == "connected" and
+            selected_server.get("availability") == "unverified" and
+            not selected_server.get("tools") and remaining_cursor is None
+        )
+        now = loop.time()
+        if missing_connected_tool and missing_tool_since is None:
+            missing_tool_since = now
+        if (not starting and not missing_connected_tool) or now >= deadline or (
+                missing_connected_tool and missing_tool_since is not None and
+                now - missing_tool_since >= 5):
             break
         # Observe startup in this process only. Never replay a dispatched tool or
         # retry a failed catalog RPC, which can leave an unread response behind.
@@ -517,6 +574,12 @@ async def _call_tool(
                 if selected is not None:
                     raise ValueError("Plugin catalog contains duplicate tool names")
                 selected = candidate
+    if (missing_connected_tool and selected_server is not None and
+            selected_server.get("received_tool_count") == 0):
+        raise PluginPreflightError(
+            "runtime_not_ready",
+            "The connected plugin has not published its tools; inspect this server again",
+        )
     if selected_server is not None and selected_server.get("availability") in {
         "authentication_required", "runtime_not_ready", "unavailable",
     }:
@@ -574,6 +637,8 @@ class PluginContext:
         self.cwd = _cwd(cwd)
         self._session: _Session | None = None
         self.thread_id: str | None = None
+        self._catalog_poll = 0
+        self._catalog_progress: dict[str, JsonValue] = {}
 
     @property
     def session(self) -> _Session:
@@ -647,6 +712,8 @@ class PluginContext:
 
     def failure_details(self, error: BaseException, stage: str) -> dict[str, JsonValue]:
         details = failure_diagnostic(error, stage)
+        if stage == "catalog" and self._catalog_progress:
+            details["catalog_progress"] = dict(self._catalog_progress)
         if self._session is not None:
             # Test doubles may implement only the transport interface.
             diagnostics = getattr(self._session, "diagnostics", None)
