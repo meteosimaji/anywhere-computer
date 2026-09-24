@@ -82,6 +82,7 @@ def test_invalid_json_oversize_and_missing_files_are_refused(tmp_path):
             shapes.load_shape(path)
 
 
+@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='POSIX FIFO required')
 def test_non_regular_input_is_refused_without_reading(tmp_path):
     fifo = tmp_path / 'input.pipe'
     os.mkfifo(fifo)
