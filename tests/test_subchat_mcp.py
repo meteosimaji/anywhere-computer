@@ -23,6 +23,8 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
                                                'capabilities': {},
                                                'clientInfo': {'name': 'test', 'version': '1'}})
         assert 'subchat_recover' in initialized['result']['instructions']
+        assert 'generation_transport=browser_prepared_httpx' in (
+            initialized['result']['instructions'])
         await server.handle({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         catalog = await call('tools/list', {})
         names = {tool['name'] for tool in catalog['result']['tools']}
