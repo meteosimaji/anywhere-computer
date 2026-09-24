@@ -49,7 +49,13 @@ bound an account. The existing-profile snapshot is verified on macOS;
 Windows and Linux retain the dedicated-profile or explicit-session paths.
 On 2026-09-24 the macOS snapshot path returned HTTP 200 for both auth and model
 catalog GETs, without opening a visible Chrome window. This is not generation
-acceptance.
+acceptance. A separate headless navigation using the same selected `Default`
+profile snapshot returned HTML HTTP 403 with `cf-mitigated` present and no Chat
+composer. Thus this snapshot can supply authenticated HTTP reads while the
+headless Chat page cannot prepare a UI send. The test does not isolate whether
+the challenge is caused by headless browser characteristics or omitted profile
+state. A browser-assisted send still requires a verified ready composer;
+authenticated GETs alone must not be used to claim that readiness.
 
 The handoff has exactly four fields:
 
