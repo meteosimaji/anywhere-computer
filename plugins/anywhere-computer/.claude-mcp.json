@@ -3,18 +3,29 @@
     "anywhere-computer": {
       "command": "uv",
       "args": [
-        "tool", "run", "--python", "3.12", "--from",
+        "tool",
+        "run",
+        "--python",
+        "3.12",
+        "--from",
         "${CLAUDE_PLUGIN_ROOT}/bundled/anywhere_computer-0.2.0a17-py3-none-any.whl",
-        "--with-requirements", "${CLAUDE_PLUGIN_ROOT}/bundled/dependencies.txt",
-        "anywhere", "mcp"
+        "--with-requirements",
+        "${CLAUDE_PLUGIN_ROOT}/bundled/dependencies.txt",
+        "anywhere",
+        "mcp"
       ]
     },
     "anywhere-subchat": {
       "command": "uv",
       "args": [
-        "tool", "run", "--python", "3.12", "--from",
+        "tool",
+        "run",
+        "--python",
+        "3.12",
+        "--from",
         "${CLAUDE_PLUGIN_ROOT}/bundled/anywhere_computer-0.2.0a17-py3-none-any.whl",
-        "--with-requirements", "${CLAUDE_PLUGIN_ROOT}/bundled/dependencies.txt",
+        "--with-requirements",
+        "${CLAUDE_PLUGIN_ROOT}/bundled/dependencies.txt",
         "anywhere-subchat-plugin"
       ]
     }
