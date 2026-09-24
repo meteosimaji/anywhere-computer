@@ -132,6 +132,25 @@ Plugin snapshots only its ChatGPT cookies into a private temporary headless
 profile and leaves the ordinary Chrome window alone. Check the authenticated
 account in `subchat_capabilities`; this does not enable HTTP-only generation.
 `browser-send` still uses a separate dedicated profile and may take focus.
+On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` enables
+background Chrome preparation and one HTTPX generation POST. It snapshots the
+selected logged-in ordinary Chrome profile when configured, or uses the dedicated
+profile. It launches a private Chrome process
+without activating it, and connects through an ephemeral loopback CDP port.
+Chrome is required, and local processes can reach that debugging port while it
+runs. A 30 fps live observation of a new Chat and follow-up in the same
+conversation found exact saved answers and no foreground activation; this is
+not a universal focus guarantee. HTTPX 200 for that run follows from the
+successful code path rather than a stored status; an earlier run measured it
+directly. This transport does not upload local files into the Chat.
+For a natural-language request to use a Subchat, inspect
+`subchat_capabilities` and `subchat_catalog` first. Select exact available UI
+`model` and `effort` labels and, for HTTP-read sends, copy the matching
+available `http_selection`. If the user asks for GPT-6 Pro, use it only when
+the current catalog offers it with the requested effort; never silently
+substitute another model. Send with a fresh request ID, then call
+`subchat_wait` or `subchat_recover` with that operation ID until the saved
+answer is final. A submission receipt alone is not a final answer.
 To recover an operation created by a separate `anywhere-subchat` controller,
 start that controller with `--state-dir` set to the same absolute ledger path.
 Check the account and operation ID; this Plugin does not import other ledgers.

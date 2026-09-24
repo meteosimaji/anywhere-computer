@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a22` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.22` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a23` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.23` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -143,14 +143,18 @@ existing Anywhere Computer engine and its remote ChatGPT connection are separate
 from this Subchat server.
 
 On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` selects an
-experimental sender that snapshots the explicitly selected logged-in Chrome
-profile, lets ChatGPT prepare one turn, and makes the generation POST once with
-HTTPX. In a local product-path test, GPT-5.6 Sol Instant completed and a
-separate HTTPX history GET returned 200 with the exact input and final answer.
-This mode still launches a minimized Chrome window for preparation; a completely
-browser-free sender and a no-focus guarantee remain unverified. Select the
-profile with `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` and pin the account with
-`ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID` when multiple Chat accounts are used.
+experimental sender that snapshots a selected logged-in Chrome profile when
+configured, lets ChatGPT prepare one turn, and makes the generation POST once
+with HTTPX. It starts a private Chrome profile in the background and uses a
+temporary loopback CDP connection for turn preparation. In one live macOS run
+observed at 30 frames per second, a new Chat and follow-up completed in the
+same conversation with the exact saved answers, without Chrome coming to the
+foreground. HTTPX 200 for the generation POST is inferred from the code path
+and completed result; an earlier direct measurement observed HTTPX 200. Neither
+result guarantees no focus change in every environment or browser-free sending.
+Select an existing profile with `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` and pin
+the account with `ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID` when multiple Chat
+accounts are used.
 
 The subchat guide is the authority for supported transports, CLI/MCP usage,
 attachments, plugin selection, parallel-work evidence and remaining limitations.

@@ -104,3 +104,104 @@ async def test_copy_reads_selected_message_and_restores_clipboard():
             assert await page.evaluate('navigator.clipboard.writeText === window.originalWrite')
         finally:
             await browser.close()
+
+
+async def test_copy_and_recovery_use_current_message_ids_without_resending():
+    playwright = pytest.importorskip('playwright.async_api')
+    source = (Path(__file__).parents[1] /
+              'src/anywhere_computer/subchat_browser/subchat_copy.js').read_text(encoding='utf-8')
+    async with playwright.async_playwright() as driver:
+        try:
+            browser = await driver.chromium.launch(channel='chrome', headless=True)
+        except playwright.Error as error:
+            if 'not found' in str(error) or "doesn't exist" in str(error):
+                pytest.skip('Chrome required')
+            raise
+        try:
+            page = await browser.new_page()
+            await page.route('**/*', lambda route: route.fulfill(
+                content_type='text/html', body='''<main>
+                <div data-turn-id-container="old"><div data-message-author-role="user"
+                  data-message-id="old"><div data-user-message-bubble="true">old</div>
+                  <button aria-label="Copy message">copy</button></div></div>
+                <div data-turn-id-container="reply-old"><div data-message-author-role="assistant"
+                  data-message-id="reply-old"></div></div>
+                <div data-turn-id-container="new"><div data-message-author-role="user"
+                  data-message-id="new"><div data-user-message-bubble="true">rendered</div>
+                  <button aria-label="Copy message">copy</button></div></div>
+                <div data-turn-id-container="reply-new"><div data-message-author-role="assistant"
+                  data-message-id="reply-new"><div data-content-search-unit-key="unit:2:assistant">
+                  <div data-markdown-text-style="assistant-message">rendered answer</div></div>
+                  <div class="turn-action-controls"><button aria-label="Copy">copy</button>
+                  <button aria-label="Regenerate response">regenerate</button></div></div></div>
+                </main>'''))
+            await page.goto('https://chatgpt.com/c/conversation')
+            prompt = '```python\nprint("日本語 🚀")\n```'
+            await page.evaluate('''prompt => {
+                window.osWrites = 0;
+                window.copyClicks = 0;
+                window.originalWrite = async () => { window.osWrites++; };
+                Object.defineProperty(navigator.clipboard, 'writeText',
+                    {configurable: true, value: window.originalWrite});
+                document.querySelector('[data-message-id="new"] button').onclick = () => {
+                    window.copyClicks++;
+                    navigator.clipboard.writeText(prompt);
+                };
+                document.querySelector('[data-message-id="old"] button').onclick = () => {
+                    window.copyClicks++;
+                    navigator.clipboard.writeText('old');
+                };
+                document.querySelector('[data-message-id="reply-new"] [aria-label="Copy"]')
+                    .onclick = () => navigator.clipboard.writeText('answer');
+            }''', prompt)
+            async def recover(previous):
+                return await page.evaluate(source + '''\nargs =>
+                    recoverSubchatSubmission(document,"conversation",...args)''',
+                                           [prompt, previous])
+            assert await recover(['old', 'reply-old']) == {
+                'state': 'submission_observed', 'conversation_id': 'conversation',
+                'user_message_id': 'new'}
+            assert await recover(['old', 'reply-old', 'new', 'reply-new']) == {
+                'state': 'submission_unconfirmed'}
+            assert await page.evaluate('window.copyClicks') == 1
+            assert await page.evaluate(source + '''\n() =>
+                copySubchatMessageText(document,"conversation","new","assistant")''') == {
+                    'state': 'answer_text_observed', 'conversation_id': 'conversation',
+                    'user_message_id': 'new', 'answer_reference': 'unit:2:assistant',
+                    'completion_evidence': 'visible_response_controls', 'text': 'answer'}
+            assert await page.evaluate('window.osWrites') == 0
+            assert await page.evaluate('navigator.clipboard.writeText === window.originalWrite')
+            await page.evaluate('''() => {
+                const duplicate = document.querySelector('[data-turn-id-container="new"]')
+                    .cloneNode(true);
+                duplicate.querySelector('[data-message-id]')
+                    .setAttribute('data-message-id', 'another');
+                document.querySelector('main').append(duplicate);
+                duplicate.querySelector('button').onclick = () => {
+                    window.copyClicks++;
+                    navigator.clipboard.writeText('```python\\nprint("日本語 🚀")\\n```');
+                };
+            }''')
+            assert await recover(['old', 'reply-old']) == {'state': 'submission_unconfirmed'}
+            assert await page.evaluate('window.copyClicks') == 3
+            assert await page.evaluate('window.osWrites') == 0
+            await page.evaluate('''() => {
+                document.querySelector('[data-message-id="another"]')
+                    .setAttribute('data-message-id', 'new');
+            }''')
+            assert await recover(['old', 'reply-old']) == {'state': 'submission_unconfirmed'}
+            assert await page.evaluate('window.copyClicks') == 3
+            await page.evaluate('''prompt => {
+                document.querySelector('[data-turn-id-container="new"]').remove();
+                const message = document.querySelector('[data-message-id="new"]');
+                message.querySelector('button').onclick = () => {
+                    navigator.clipboard.writeText(prompt);
+                    message.setAttribute('data-message-id', 'changed');
+                };
+            }''', prompt)
+            assert await page.evaluate(source + '''\n() =>
+                copySubchatUserText(document,"conversation","new")''') == {
+                    'state': 'message_unconfirmed'}
+            assert await page.evaluate('navigator.clipboard.writeText === window.originalWrite')
+        finally:
+            await browser.close()

@@ -156,6 +156,21 @@ def test_plugin_browser_send_opt_in_reuses_login_with_minimized_window(tmp_path,
         subchat_plugin.main()
 
 
+def test_plugin_httpx_mode_keeps_minimized_fallback_on_other_platforms(tmp_path, monkeypatch):
+    profile, state = tmp_path / 'profile', tmp_path / 'ledger'
+    monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', 'browser-prepared-httpx')
+    observed = {}
+
+    async def fake_run(_profile, _state, **options):
+        observed.update(options)
+
+    monkeypatch.setattr(subchat_plugin, 'run', fake_run)
+    subchat_plugin.main()
+    assert observed['httpx_generation'] is True
+    assert observed['minimized'] is True
+
+
 async def test_plugin_browser_send_mode_exposes_and_dispatches_send(tmp_path, monkeypatch):
     from anywhere_computer import mcp_server, subchat_cli
     from anywhere_computer.subchat_browser import backend as browser_backend

@@ -20,7 +20,7 @@ from ..subchat_state import SubchatHTTPSelection, SubchatSelectionError
 from .efforts import collect_efforts
 
 if TYPE_CHECKING:
-    from playwright.async_api import CDPSession, Page, Response
+    from playwright.async_api import CDPSession, Locator, Page, Response
 
 SOURCE = Path(__file__).with_name("subchat_model_menu.js").read_text(encoding="utf-8")
 COMPOSER = 'form[data-type="unified-composer"], form[data-chatgpt-composer]'
@@ -171,17 +171,34 @@ async def empty_chat(page: Page) -> bool:
             and await editors.count() == 1 and not (await editors.inner_text()).strip())
 
 
-async def collect_page(page: Page, model: str | None = None) -> dict[str, object]:
+async def collect_page(page: Page, model: str | None = None, *,
+                       background_input: bool = False) -> dict[str, object]:
+    async def click(locator: Locator) -> None:
+        if background_input:
+            from .background import background_pointer_click
+
+            await background_pointer_click(locator)
+        else:
+            await locator.click()
+
+    async def press(locator: Locator, key: str) -> None:
+        if background_input:
+            from .background import background_key_press
+
+            await background_key_press(locator, key)
+        else:
+            await locator.press(key)
+
     if not await empty_chat(page):
         return {"state": "empty_chat_unconfirmed"}
     trigger = page.locator(TRIGGER)
     if await trigger.count() != 1 or await trigger.get_attribute("aria-expanded") != "false":
         return {"state": "closed_picker_unconfirmed"}
     try:
-        await trigger.click()
+        await click(trigger)
         models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
         if models.get("state") == "model_list_not_visible":
-            await page.locator(TOGGLE).click()
+            await click(page.locator(TOGGLE))
             models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
         if models.get("state") != "models_observed":
             return {"state": "models_unconfirmed"}
@@ -191,20 +208,20 @@ async def collect_page(page: Page, model: str | None = None) -> dict[str, object
             if len(choices) != 1:
                 return {'state': 'requested_model_unavailable', 'models': models['models'],
                         'submitted': False}
-            await page.get_by_role('menuitemradio', name=model, exact=True).click()
-            await page.locator(TOGGLE).click()
+            await click(page.get_by_role('menuitemradio', name=model, exact=True))
+            await click(page.locator(TOGGLE))
             models = await page.evaluate(SOURCE + '\nobserveSubchatModelMenu(document)')
             if [item['label'] for item in models.get('models', [])
                     if item['selected']] != [model]:
                 return {'state': 'model_selection_unconfirmed', 'submitted': False}
             # Selecting the verified row opens its effort view. No label table
             # or assumed number of effort choices is involved.
-            await page.get_by_role('menuitemradio', name=model, exact=True).click()
+            await click(page.get_by_role('menuitemradio', name=model, exact=True))
         else:
             # Some UI versions remember the model-list view on reopening.
             # In that case return the verified models as a partial catalog.
-            await page.get_by_role("menu").press("Escape")
-            await trigger.click()
+            await press(page.get_by_role("menu"), "Escape")
+            await click(trigger)
 
         async def read() -> dict[str, object]:
             if not await empty_chat(page):
@@ -216,12 +233,12 @@ async def collect_page(page: Page, model: str | None = None) -> dict[str, object
         async def step(key: str) -> None:
             if not await empty_chat(page):
                 raise ConnectionError("empty Chat changed before keyboard input")
-            await page.locator(CONTROL).press(key)
+            await press(page.locator(CONTROL), key)
 
         efforts = await collect_efforts(read, step)
         final_models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
         if final_models.get("state") == "model_list_not_visible":
-            await page.locator(TOGGLE).click()
+            await click(page.locator(TOGGLE))
             final_models = await page.evaluate(SOURCE + "\nobserveSubchatModelMenu(document)")
         if final_models != models:
             return {"state": "model_selection_changed", "submitted": False}
@@ -230,7 +247,7 @@ async def collect_page(page: Page, model: str | None = None) -> dict[str, object
                 "efforts_for_selected_model": efforts, "submitted": False}
     finally:
         if await trigger.get_attribute("aria-expanded") == "true":
-            await page.get_by_role("menu").press("Escape")
+            await press(page.get_by_role("menu"), "Escape")
         if await trigger.get_attribute("aria-expanded") != "false":
             raise ConnectionError("picker closure was not confirmed")
 

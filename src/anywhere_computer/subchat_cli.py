@@ -263,6 +263,12 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
             async def open_browser() -> BrowserContext:
                 from .subchat_browser import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
 
+                if httpx_generation and sys.platform == 'darwin':
+                    from .subchat_browser.background import background_chrome_context
+
+                    assert profile is not None
+                    return await resources.enter_async_context(background_chrome_context(
+                        await runtime(), profile, browser_launch_args))
                 context = await (await runtime()).chromium.launch_persistent_context(
                     str(profile), channel='chrome', headless=False,
                     ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
@@ -400,6 +406,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     record_conversation=record_conversation if http_read else None,
                     record_rejection=record_rejection if http_read else None,
                     httpx_generation=httpx_generation,
+                    background_pages=httpx_generation and sys.platform == 'darwin',
                     expected_account_id=expected_account_id if httpx_generation else None)
             service = Subchats(store, backend)
             # Saved-state requests need no browser. Once needed, commands share

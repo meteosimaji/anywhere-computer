@@ -41,7 +41,7 @@ from .http_reader import ChatHTTPReader
 from .request_content import add_resources, generation_input
 
 if TYPE_CHECKING:
-    from playwright.async_api import APIRequestContext, BrowserContext, Page, Route
+    from playwright.async_api import APIRequestContext, BrowserContext, Locator, Page, Route
 
 INPUT = Path(__file__).with_name('subchat_input.js').read_text(encoding="utf-8")
 STREAM = Path(__file__).with_name('subchat_stream.js').read_text(encoding='utf-8')
@@ -59,16 +59,21 @@ class BrowserSubchatBackend:
                  record_conversation: Callable[[str, str, str, str], None] | None = None,
                  record_rejection: Callable[[str, str, int, str], None] | None = None,
                  httpx_generation: bool = False,
+                 background_pages: bool = False,
                  expected_account_id: str | None = None) -> None:
         if httpx_generation and not http_read:
             raise ValueError('Browser-prepared HTTPX generation requires HTTP history')
+        if background_pages and not httpx_generation:
+            raise ValueError('Background pages require HTTPX generation')
         self.http_read = http_read
         self._httpx_generation = httpx_generation
+        self._background_pages = background_pages
         self._expected_account_id = expected_account_id
         self._record_request = record_request
         self._record_conversation = record_conversation
         self._record_rejection = record_rejection
-        self._http_reader = ChatHTTPReader(http_request_factory)
+        self._http_reader = ChatHTTPReader(
+            http_request_factory, page_factory=self._new_page if background_pages else None)
         self._context = None if callable(context) else context
         self._create_context = context if callable(context) else None
         self._context_lock = asyncio.Lock()
@@ -113,14 +118,38 @@ class BrowserSubchatBackend:
                 raise SubchatBrowserClosed('Dedicated browser disconnected; recover saved IDs')
             return self._context
 
+    async def _new_page(self) -> Page:
+        context = await self._browser()
+        if self._background_pages:
+            from .background import new_background_page
+
+            return await new_background_page(context)
+        return await context.new_page()
+
+    async def _click(self, locator: Locator) -> None:
+        if self._background_pages:
+            from .background import background_pointer_click
+
+            await background_pointer_click(locator)
+        else:
+            await locator.click()
+
+    async def _press(self, locator: Locator, key: str) -> None:
+        if self._background_pages:
+            from .background import background_key_press
+
+            await background_key_press(locator, key)
+        else:
+            await locator.press(key)
+
     async def catalog(self, model: str | None = None) -> dict[str, object]:
-        page = await (await self._browser()).new_page()
+        page = await self._new_page()
         page.set_default_timeout(15_000)
         try:
             response = await page.goto('https://chatgpt.com/', wait_until='domcontentloaded')
             if response is None or not response.ok or not await picker_ready(page):
                 return {'state': 'catalog_unavailable', 'submitted': False}
-            return await collect_page(page, model)
+            return await collect_page(page, model, background_input=self._background_pages)
         finally:
             # This is a separate observation tab, never a submission or user draft.
             await page.close()
@@ -155,7 +184,7 @@ class BrowserSubchatBackend:
             return page
         if submission.conversation_id is None:
             return None
-        page = await (await self._browser()).new_page()
+        page = await self._new_page()
         self.pages[submission.operation_id] = page
         await page.goto('https://chatgpt.com/c/' + submission.conversation_id,
                         wait_until='domcontentloaded')
@@ -169,16 +198,39 @@ class BrowserSubchatBackend:
             raise ValueError('Invalid conversation identity')
         return url
 
-    async def _baseline(self, page: Page) -> tuple[str, ...]:
+    async def _baseline_with_last_user(self, page: Page) -> tuple[tuple[str, ...], str | None]:
         if await page.locator('main').count() != 1:
             raise ValueError('Conversation history unavailable')
+        messages = await page.locator('main [data-message-author-role]').evaluate_all(
+            "elements => elements.map(e => ({id: e.getAttribute('data-message-id'), "
+            "role: e.getAttribute('data-message-author-role')}))")
+        if messages:
+            if (not isinstance(messages, list) or len(messages) > 10_000
+                    or any(not isinstance(item, dict)
+                           or not isinstance(item.get('id'), str)
+                           or not item['id'].strip()
+                           or not isinstance(item.get('role'), str)
+                           or not item['role'].strip() for item in messages)):
+                raise ValueError('Conversation history is ambiguous')
+            ids = tuple(item['id'] for item in messages)
+            if len(set(ids)) != len(ids):
+                raise ValueError('Conversation history is ambiguous')
+            users = [item['id'] for item in messages if item['role'] == 'user']
+            return ids, users[-1] if users else None
+        # The older Chat markup used a key on the turn container. Retain it for
+        # existing browser fixtures when no role-bearing messages are present.
         values = await page.locator('main [data-turn-key]').evaluate_all(
             "elements => elements.map(e => e.getAttribute('data-turn-key'))")
         if (not isinstance(values, list) or len(values) > 10_000
                 or any(not isinstance(value, str) or not value.strip() for value in values)
                 or len(set(values)) != len(values)):
             raise ValueError('Conversation history is ambiguous')
-        return tuple(values)
+        baseline = tuple(values)
+        return baseline, baseline[-1] if baseline else None
+
+    async def _baseline(self, page: Page) -> tuple[str, ...]:
+        baseline, _ = await self._baseline_with_last_user(page)
+        return baseline
 
     async def _ready(self, page: Page, submission: SubchatSubmission) -> bool:
         if page.url.rstrip('/') != self._url(submission).rstrip('/'):
@@ -245,7 +297,7 @@ class BrowserSubchatBackend:
                     if state == 'models_observed':
                         return observed
                     if state == 'model_list_not_visible' and await page.locator(CONTROL).count():
-                        await page.locator(TOGGLE).click()
+                        await self._click(page.locator(TOGGLE))
                         return await self._wait_for_models(page)
                     if state not in {'menu_unconfirmed', 'model_list_not_visible'}:
                         raise ValueError('Model menu structure is unsupported or ambiguous')
@@ -276,7 +328,7 @@ class BrowserSubchatBackend:
             and not page.is_closed() and page.url == url))
         if len(candidates) > 1:
             raise ValueError('Multiple owned tabs match the requested conversation')
-        page = candidates[0] if candidates else await (await self._browser()).new_page()
+        page = candidates[0] if candidates else await self._new_page()
         self.pages[submission.operation_id] = page
         page.set_default_timeout(15_000)
         if not candidates:
@@ -286,7 +338,7 @@ class BrowserSubchatBackend:
         if not await picker_ready(page):
             raise ConnectionError('Authenticated ordinary Chat is unavailable')
         await self._wait_for_composer(page, submission)
-        await page.locator(TRIGGER).click()
+        await self._click(page.locator(TRIGGER))
         await page.get_by_role('menu').wait_for(state='visible', timeout=10_000)
         observed = await self._open_model_list(page)
         models = observed.get('models')
@@ -296,7 +348,7 @@ class BrowserSubchatBackend:
                    and model.get('label') == submission.model and model.get('disabled') is False]
         if len(choices) != 1:
             raise ValueError('Requested model is not available in the observed menu')
-        await page.get_by_role('menuitemradio', name=submission.model, exact=True).click()
+        await self._click(page.get_by_role('menuitemradio', name=submission.model, exact=True))
         await page.locator(CONTROL).wait_for(state='visible')
         # Use verified arrow steps; custom sliders need not implement Home.
         async def read_effort() -> dict[str, object]:
@@ -305,7 +357,7 @@ class BrowserSubchatBackend:
             return value
 
         async def step_effort(key: str) -> None:
-            await page.locator(CONTROL).press(key)
+            await self._press(page.locator(CONTROL), key)
 
         original = snapshot(await read_effort())
         for index in range(original[0], original[1] + 1):
@@ -314,7 +366,7 @@ class BrowserSubchatBackend:
                 break
         else:
             raise ValueError('Requested effort is not available in the observed menu')
-        await page.locator(TOGGLE).click()
+        await self._click(page.locator(TOGGLE))
         selected = await self._wait_for_models(page)
         selected_models = selected.get('models')
         if (not isinstance(selected_models, list)
@@ -322,11 +374,11 @@ class BrowserSubchatBackend:
                     if isinstance(model, dict) and model.get('selected') is True]
                 != [submission.model]):
             raise ValueError('Selected model changed')
-        await page.get_by_role('menu').press('Escape')
+        await self._press(page.get_by_role('menu'), 'Escape')
         await self._wait_for_composer(page, submission)
-        baseline = await self._baseline(page)
+        baseline, last_user = await self._baseline_with_last_user(page)
         if (submission.expected_last_user_message_id is not None
-                and (not baseline or baseline[-1] != submission.expected_last_user_message_id)):
+                and last_user != submission.expected_last_user_message_id):
             raise SubchatStaleTarget('Queue target is stale; another turn has appeared')
         if submission.requested_conversation_id is None and baseline:
             raise ValueError('New Chat already contains messages')
@@ -355,7 +407,8 @@ class BrowserSubchatBackend:
             try:
                 session = await chrome_http_session(
                     await self._browser(), generation_client,
-                    expected_account_id=self._expected_account_id)
+                    expected_account_id=self._expected_account_id,
+                    page_factory=self._new_page if self._background_pages else None)
                 generation_account = session.account_id
                 self._http_reader.bind_verified_account(
                     await self._browser(), generation_account)
@@ -494,7 +547,12 @@ class BrowserSubchatBackend:
             raise ValueError('Chat started generating; do not silently queue the draft')
         # A user can send as soon as text appears. The service has already saved
         # the reservation and baseline, so interruption here cannot permit replay.
-        await editor.click()
+        if self._background_pages:
+            from .background import background_focus_editor
+
+            await background_focus_editor(editor)
+        else:
+            await editor.click()
         guard = await page.evaluate_handle(
             INPUT + '\ntext=>insertObservedSubchatDraft(document,text)', submission.prompt)
         try:
@@ -581,7 +639,7 @@ class BrowserSubchatBackend:
                 and await stay.is_enabled()
                 and (await self._baseline(page))[-1:] == (submission.user_message_id,)
                 and page.url == 'https://chatgpt.com/c/' + str(submission.conversation_id)):
-            await stay.click()
+            await self._click(stay)
             return None  # Observe completion on a later poll, not from the click.
         answer = await page.evaluate(COPY + '\nargs=>copySubchatMessageText(document,...args)',
                                      [submission.conversation_id, submission.user_message_id,

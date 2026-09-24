@@ -3,6 +3,19 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a23 / Plugin 0.2.0-alpha.23 — unpublished candidate (2026-09-24)
+
+- Launch the macOS dedicated Chrome profile and create its owned tabs in the
+  background for browser-prepared HTTPX Subchat sends. In one recorded live
+  run, new and follow-up turns completed in the same ordinary Chat while a
+  YouTube fullscreen window remained in front. Chrome is still required for
+  each turn; independent HTTP-only generation remains unverified.
+- Match current ordinary Chat message IDs during submission recovery while
+  retaining the legacy turn-key path. Keep uncertain sends unreplayed.
+- Improve background Chrome cleanup and startup diagnostics. The temporary
+  loopback CDP endpoint remains a local control surface while Chrome runs.
+- Make the peer credential ownership check portable to Windows.
+
 ## 0.2.0a22 / Plugin 0.2.0-alpha.22 — unpublished candidate (2026-09-24)
 
 - Add owner-bound click and fill operations to isolated browser sessions. A

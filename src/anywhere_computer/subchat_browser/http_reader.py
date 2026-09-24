@@ -53,6 +53,7 @@ class ChatHTTPReader:
     def __init__(self, request_factory: Callable[
                  [], Awaitable[APIRequestContext | AsyncClient]] | None = None,
                  *, browser_free: bool = False, session: ObservedHTTPSession | None = None,
+                 page_factory: Callable[[], Awaitable[Page]] | None = None,
                  use_client_cookies: bool = False,
                  test_origin: str | None = None,
                  access_status: int | None = None) -> None:
@@ -69,6 +70,7 @@ class ChatHTTPReader:
                 raise ValueError('Only an exact loopback test origin is supported')
         self._origin = test_origin or 'https://chatgpt.com'
         self._request_factory = request_factory
+        self._page_factory = page_factory
         self._browser_free = browser_free
         self._context: BrowserContext | None = None
         self._verified_account_id: str | None = None
@@ -132,7 +134,8 @@ class ChatHTTPReader:
             if self._browser_free:
                 raise SubchatUnsupported('http_session_required')
             assert context is not None
-            page = await context.new_page()
+            page = (await self._page_factory() if self._page_factory is not None
+                    else await context.new_page())
             try:
                 response = await observe(page)
                 headers = {}

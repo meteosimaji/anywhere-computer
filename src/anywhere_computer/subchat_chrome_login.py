@@ -4,11 +4,11 @@ from __future__ import annotations
 import json
 import logging
 import time
-from collections.abc import Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping
 from http.cookiejar import Cookie
 
 import httpx
-from playwright.async_api import BrowserContext
+from playwright.async_api import BrowserContext, Page
 
 from .subchat import SubchatAccessError
 from .subchat_browser.catalog import project_http_catalog
@@ -64,13 +64,14 @@ def _import_chrome_cookies(client: httpx.AsyncClient,
 
 
 async def chrome_http_session(context: BrowserContext, client: httpx.AsyncClient,
-                              *, expected_account_id: str | None = None
+                              *, expected_account_id: str | None = None,
+                              page_factory: Callable[[], Awaitable[Page]] | None = None
                               ) -> ObservedHTTPSession:
     """GET auth and catalog with HTTPX; retain Chrome cookies only in memory."""
     _import_chrome_cookies(client, await context.cookies())
     if 'cookie' not in client.build_request('GET', AUTH_URL).headers:
         raise SubchatAccessError(401)
-    page = await context.new_page()
+    page = await (page_factory() if page_factory is not None else context.new_page())
     try:
         user_agent = await page.evaluate('navigator.userAgent')
     finally:

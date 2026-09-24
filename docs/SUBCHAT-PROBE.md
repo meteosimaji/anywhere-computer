@@ -45,22 +45,40 @@ until a pending send reaches a confirmed result. This mode uses Chrome to send;
 it does not prove independent HTTP-only generation.
 
 On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` exposes the
-same send tools with a different generation transport. Select a logged-in
-ordinary Chrome profile through `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` or the
-local `login-selection.json` and, for multiple accounts, set
-`ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID`. A private temporary snapshot runs
-ChatGPT's turn preparation in a minimized Chrome window. The generation POST
-is intercepted before browser dispatch and sent once through HTTPX; the browser
-then renders that response. `subchat_capabilities` reports
+same send tools with a different generation transport. Use the dedicated logged-in
+profile, or select an ordinary Chrome profile through
+`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` or the local `login-selection.json`.
+For multiple accounts, set `ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID`. A private
+temporary profile runs
+ChatGPT's turn preparation in a background Chrome process and an owned background
+tab. On macOS the controller launches Chrome through Launch Services without
+activation, then connects to its fresh private profile on an ephemeral
+`127.0.0.1` CDP port. That local debugging port remains exposed to local
+processes while the controller runs; keep the machine and process access trusted.
+Chrome is still required. The generation POST is intercepted before browser
+dispatch and sent once through HTTPX; the browser then renders that response.
+`subchat_capabilities` reports
 `generation_transport=browser_prepared_httpx` and `browser_required=true`.
-On 2026-09-24, a product-path GPT-5.6 Sol Instant new Chat and a second
-turn to the same conversation both reached `completed` with the exact
-requested answers. The new turn's history was independently read through
-HTTPX GET with status 200. Other models, queued follow-ups, long responses
-and installed Plugin delivery remain separate acceptance checks. The
-minimized browser may still briefly take
-focus on macOS. Do not resend an operation whose outcome is uncertain;
-recover it by operation ID.
+In a 2026-09-24 live macOS run observed at 30 frames per second, a new Chat and
+follow-up to that same conversation reached `completed` with the exact saved
+answers `背景送信一回目成功` and `背景送信二回目成功`. Chrome did not come to the foreground.
+HTTPX 200 for those
+generation requests is inferred from the implementation's response handling
+and completed results; a prior run measured HTTPX 200 directly. This observation
+does not guarantee background behavior for every macOS/Chrome combination or
+long-term provider compatibility. Other models, queued follow-ups, long
+responses and installed Plugin delivery remain separate acceptance checks. Do
+not resend an operation whose outcome is uncertain; recover it by operation ID.
+
+In Codex, a natural-language request to use a Subchat still needs explicit tool
+discovery and selection. Inspect `subchat_capabilities` and `subchat_catalog`,
+then choose the exact available UI `model` and `effort` labels and copy the
+matching available `http_selection` for an HTTP-read send. For example, if the
+current catalog offers GPT-6 Pro with the requested effort, select that exact
+entry; if it is absent, report that it is unavailable instead of silently
+substituting another model. Call `subchat_send` with a fresh request ID, then
+`subchat_wait` or `subchat_recover` using that same operation ID until the saved
+answer is final. A submission receipt alone is not a completed answer.
 
 `subchat_capabilities` also returns `implementation_version` and
 `implementation_runtime_id` for the Subchat server that answered this call.
@@ -92,11 +110,13 @@ with `{"chrome_source_profile":"/absolute/path/to/Chrome/Default",
 but pinning it prevents a different logged-in account from being accepted.
 `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` and
 `ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID` override their respective file values.
-Neither setting contains cookies or tokens. The Plugin takes a private,
-temporary snapshot of ChatGPT cookies and opens only that snapshot headlessly;
-the ordinary Chrome window remains open and is not activated. This selection
-applies only to the read-only HTTP mode. `browser-send` continues to use its
-separate dedicated profile and can still briefly take focus. Check the account
+Neither setting contains cookies or tokens. In read-only HTTP mode, the Plugin
+takes a private temporary snapshot of ChatGPT cookies and opens only that
+snapshot headlessly. In macOS background HTTPX mode, it uses a private profile
+snapshot for browser preparation. The ordinary Chrome window remains open and
+is not activated in the observed run. Source-profile selection applies to these
+two modes; `browser-send` continues to use its separate dedicated profile and
+can still briefly take focus. Check the account
 reported by `subchat_capabilities` before recovering account-bound data. If
 login is missing or denied, or the selected profile is missing or locked, the
 server still exposes capabilities and saved operations. A missing or locked
@@ -177,11 +197,12 @@ again with a new ID when an acknowledgement or final answer is missing.
 not a fresh provider observation. Access errors and unknown outcomes need
 explicit diagnosis. The controller never treats them as permission to replay.
 
-The browser-assisted controller may create or focus a headed Chrome window.
-`--minimized` does not guarantee uninterrupted fullscreen viewing. It does
-not grant child-specific file permissions or make local paths available inside
-a Chat. Attachments refer to files already uploaded to the selected account;
-a local path is not an attachment ID. For shared work, identify the intended
+The `browser-send` controller may create or focus a headed Chrome window.
+`--minimized` does not guarantee uninterrupted fullscreen viewing. The macOS
+background HTTPX path has the narrower live observation described above. Neither
+path grants child-specific file permissions or uploads local files into a Chat.
+Attachments refer to files already uploaded to the selected account; a local
+path is not an attachment ID. For shared work, identify the intended
 device and expected content hash, then verify the child's result before using
 it.
 

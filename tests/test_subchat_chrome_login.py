@@ -67,6 +67,39 @@ async def test_chrome_login_gets_token_then_validates_catalog(caplog):
         assert private not in caplog.text
 
 
+async def test_chrome_login_uses_owned_page_factory_without_context_new_page():
+    class OwnedPage(Page):
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    class PrivateContext(Context):
+        async def new_page(self):
+            raise AssertionError('ordinary new_page would activate Chrome')
+
+    pages = []
+
+    async def owned_page():
+        page = OwnedPage()
+        pages.append(page)
+        return page
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        if request.url.path == '/api/auth/session':
+            return httpx.Response(200, json={
+                'accessToken': 'private-token', 'account': {'id': 'account'},
+                'user': {'email': 'owner@example.com'}})
+        return httpx.Response(200, json=catalog())
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+        session = await chrome_http_session(
+            PrivateContext(), client, expected_account_id='account',
+            page_factory=owned_page)
+    assert session.account_id == 'account'
+    assert len(pages) == 1 and pages[0].closed
+
+
 async def test_chrome_cookie_jar_rotates_from_auth_response():
     seen = []
 

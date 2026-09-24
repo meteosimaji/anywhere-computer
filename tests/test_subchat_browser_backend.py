@@ -54,6 +54,39 @@ window.finish=()=>{
 </script>'''
 
 
+async def test_baseline_uses_latest_user_identity_in_current_chat_markup():
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            context = await browser.new_context()
+            page = await context.new_page()
+            backend = BrowserSubchatBackend(context)
+            await page.set_content('''<main>
+                <div data-turn-id-container="user-a"><div data-message-author-role="user"
+                     data-message-id="user-a"></div></div>
+                <div data-turn-id-container="assistant-a">
+                     <div data-message-author-role="assistant"
+                          data-message-id="assistant-a"></div></div>
+            </main>''')
+            assert await backend._baseline_with_last_user(page) == (
+                ('user-a', 'assistant-a'), 'user-a')
+            await page.locator('main').evaluate('''main => main.insertAdjacentHTML(
+                'beforeend', '<div data-message-author-role="user" '
+                + 'data-message-id="user-b"></div>')''')
+            assert await backend._baseline_with_last_user(page) == (
+                ('user-a', 'assistant-a', 'user-b'), 'user-b')
+            await page.locator('main').evaluate('''main => main.insertAdjacentHTML(
+                'beforeend', '<div data-message-author-role="assistant" '
+                + 'data-message-id="assistant-a"></div>')''')
+            with pytest.raises(ValueError, match='ambiguous'):
+                await backend._baseline_with_last_user(page)
+        finally:
+            await browser.close()
+
+
 @pytest.mark.parametrize('late_element', ['composer', 'menu', 'model_rows', 'control'])
 async def test_prepare_waits_for_delayed_chat_ui_without_dispatch(tmp_path, late_element):
     playwright = pytest.importorskip('playwright.async_api')

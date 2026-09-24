@@ -4,17 +4,44 @@ async function copySubchatUserText(document, conversationId, userId) {
   return copySubchatMessageText(document, conversationId, userId, 'user');
 }
 
+function subchatCopyTarget(document, userId, role) {
+  const messages = [...document.querySelectorAll('main [data-message-author-role]')];
+  if (messages.length) {
+    const ids = messages.map(node => node.getAttribute('data-message-id'));
+    if (ids.some(id => !id || id.trim() !== id) || new Set(ids).size !== ids.length)
+      return null;
+    const users = messages.filter(node =>
+      node.getAttribute('data-message-author-role') === 'user' &&
+      node.getAttribute('data-message-id') === userId);
+    if (users.length !== 1) return null;
+    let message = users[0];
+    if (role === 'assistant') {
+      const following = messages.slice(messages.indexOf(users[0]) + 1);
+      const nextUser = following.findIndex(node =>
+        node.getAttribute('data-message-author-role') === 'user');
+      const answers = (nextUser < 0 ? following : following.slice(0, nextUser))
+        .filter(node => node.getAttribute('data-message-author-role') === 'assistant');
+      if (answers.length !== 1) return null;
+      message = answers[0];
+    }
+    return {message, turn: message.closest('[data-turn-id-container]') || message};
+  }
+  const matches = [...document.querySelectorAll('main [data-turn-key]')]
+    .filter(node => node.getAttribute('data-turn-key') === userId);
+  if (matches.length !== 1 || matches[0].querySelector('[data-turn-key]')) return null;
+  return {message: matches[0], turn: matches[0]};
+}
+
 async function copySubchatMessageText(document, conversationId, userId, role) {
   const unconfirmed = {state: 'message_unconfirmed'};
   if (document.location.href !== `https://chatgpt.com/c/${conversationId}` ||
-      typeof userId !== 'string' || !userId) return unconfirmed;
-  const matches = [...document.querySelectorAll('main [data-turn-key]')]
-    .filter(node => node.getAttribute('data-turn-key') === userId);
-  if (matches.length !== 1) return unconfirmed;
-  const turn = matches[0];
-  if (turn.querySelector('[data-turn-key]') ||
-      turn.querySelectorAll('[data-user-message-bubble="true"]').length !== 1)
+      typeof userId !== 'string' || !userId || !['user', 'assistant'].includes(role))
     return unconfirmed;
+  const target = subchatCopyTarget(document, userId, role);
+  if (!target) return unconfirmed;
+  const {turn} = target;
+  if (role === 'user' &&
+      turn.querySelectorAll('[data-user-message-bubble="true"]').length !== 1) return unconfirmed;
   let answerUnit = null;
   let controls = turn;
   const hasFinalControl = group => [...group.querySelectorAll('button')].some(button =>
@@ -29,7 +56,7 @@ async function copySubchatMessageText(document, conversationId, userId, role) {
     const groups = [...turn.querySelectorAll('.turn-action-controls')].filter(hasFinalControl);
     if (groups.length !== 1) return unconfirmed;
     controls = groups[0];
-  } else if (role !== 'user') return unconfirmed;
+  }
   const answerReference = answerUnit?.getAttribute('data-content-search-unit-key');
   const generating = () => [...document.querySelectorAll('button')].some(button =>
     ['停止', 'Stop', 'Stop generating'].includes(button.getAttribute('aria-label')) &&
@@ -64,7 +91,9 @@ async function copySubchatMessageText(document, conversationId, userId, role) {
     await Promise.race([written, new Promise(resolve => {
       timeout = setTimeout(resolve, 1000);
     })]);
-    if (!turn.isConnected || turn.getAttribute('data-turn-key') !== userId ||
+    const current = subchatCopyTarget(document, userId, role);
+    if (!turn.isConnected || !current || current.turn !== turn ||
+        current.message !== target.message ||
         !turn.contains(buttons[0]) ||
         document.location.href !== `https://chatgpt.com/c/${conversationId}` ||
         captured.length !== 1 || typeof captured[0] !== 'string') return unconfirmed;
@@ -94,12 +123,18 @@ async function recoverSubchatSubmission(document, conversationId, prompt, previo
       previousIds.some(id => typeof id !== 'string' || !id) ||
       new Set(previousIds).size !== previousIds.length) return unconfirmed;
   if (document.querySelectorAll('main').length !== 1) return unconfirmed;
-  const readIds = () => [...document.querySelectorAll('main [data-turn-key]')]
-    .map(node => node.getAttribute('data-turn-key'));
-  const before = readIds();
+  const readMessages = () => {
+    const messages = [...document.querySelectorAll('main [data-message-author-role]')];
+    return (messages.length ? messages : [...document.querySelectorAll('main [data-turn-key]')])
+      .map(node => ({id: node.getAttribute(messages.length ? 'data-message-id' : 'data-turn-key'),
+        role: messages.length ? node.getAttribute('data-message-author-role') : 'user'}));
+  };
+  const snapshot = readMessages();
+  const before = snapshot.map(message => message.id);
   if (before.some(id => !id || id.trim() !== id) ||
       new Set(before).size !== before.length) return unconfirmed;
-  const pending = before.filter(id => !previousIds.includes(id));
+  const pending = snapshot.filter(message =>
+    message.role === 'user' && !previousIds.includes(message.id)).map(message => message.id);
   // Bound UI work; missing history never justifies a second submission.
   if (!pending.length || pending.length > 20) return unconfirmed;
   const matched = [];
@@ -108,7 +143,8 @@ async function recoverSubchatSubmission(document, conversationId, prompt, previo
     if (receipt.state !== 'user_text_observed') return unconfirmed;
     if (receipt.text === prompt) matched.push(id);
   }
-  if (matched.length !== 1 || JSON.stringify(readIds()) !== JSON.stringify(before))
+  if (matched.length !== 1 ||
+      JSON.stringify(readMessages().map(message => message.id)) !== JSON.stringify(before))
     return unconfirmed;
   return {state: 'submission_observed', conversation_id: conversationId,
     user_message_id: matched[0]};

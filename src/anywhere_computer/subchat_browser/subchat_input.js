@@ -120,8 +120,9 @@ function submitSubchatDraft(document, expectedUrl, text, previousIds) {
   const editors = document.querySelectorAll(subchatEditorSelector);
   if (editors.length !== 1 || !subchatDraftMatches(editors[0], text) ||
       !editors[0].getClientRects().length) return false;
-  const ids = [...document.querySelectorAll('main [data-turn-key]')]
-    .map(node => node.getAttribute('data-turn-key'));
+  const messages = [...document.querySelectorAll('main [data-message-author-role]')];
+  const ids = (messages.length ? messages : [...document.querySelectorAll('main [data-turn-key]')])
+    .map(node => node.getAttribute(messages.length ? 'data-message-id' : 'data-turn-key'));
   if (JSON.stringify(ids) !== JSON.stringify(previousIds)) return false;
   const buttons = [...document.querySelectorAll('button')]
     .filter(button => button.getClientRects().length);
