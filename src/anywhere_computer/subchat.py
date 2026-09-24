@@ -11,6 +11,7 @@ from .models import Contract
 from .subchat_content import SubchatResources
 from .subchat_state import (
     SubchatAccountMismatch,
+    SubchatConcurrentSend,
     SubchatHTTPSelection,
     SubchatReportedSettings,
     SubchatSelectionError,
@@ -177,17 +178,27 @@ class Subchats:
             raise
         except Exception as error:
             raise SubchatPreparationFailed(str(error)) from error
-        if isinstance(prepared, SubchatPreparedSend):
-            submission = self.store.begin_send(
-                submission.operation_id, owner=owner,
-                baseline_message_ids=prepared.baseline_message_ids,
-                baseline_identity_kind=baseline_identity_kind,
-                user_message_id=prepared.user_message_id,
-                provider_account_id=prepared.provider_account_id)
-        else:
-            submission = self.store.begin_send(submission.operation_id, owner=owner,
-                                               baseline_message_ids=prepared,
-                                               baseline_identity_kind=baseline_identity_kind)
+        try:
+            if isinstance(prepared, SubchatPreparedSend):
+                submission = self.store.begin_send(
+                    submission.operation_id, owner=owner,
+                    baseline_message_ids=prepared.baseline_message_ids,
+                    baseline_identity_kind=baseline_identity_kind,
+                    user_message_id=prepared.user_message_id,
+                    provider_account_id=prepared.provider_account_id)
+            else:
+                submission = self.store.begin_send(submission.operation_id, owner=owner,
+                                                   baseline_message_ids=prepared,
+                                                   baseline_identity_kind=baseline_identity_kind)
+        except SubchatConcurrentSend:
+            discard = getattr(self.backend, 'discard_prepared', None)
+            if discard is not None:
+                try:
+                    await discard(submission)
+                except Exception as error:
+                    logger.warning('Concurrent Subchat page cleanup failed error_type=%s',
+                                   type(error).__name__)
+            raise
         try:
             receipt = await self.backend.send(submission)
             if receipt is None:

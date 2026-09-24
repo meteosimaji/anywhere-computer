@@ -29,6 +29,7 @@ from .subchat_content import SubchatResources
 from .subchat_delete import DeleteRequest, SubchatDeletionUnknown, delete_saved
 from .subchat_state import (
     SubchatAccountMismatch,
+    SubchatConcurrentSend,
     SubchatHTTPSelection,
     SubchatList,
     SubchatOperationNotFound,
@@ -149,7 +150,7 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
             output = json.dumps({
                 'state': ('invalid_parameter' if isinstance(error, ValidationError) else error.code
                           if isinstance(error, SubchatAccessError | SubchatAccountMismatch
-                                        | SubchatOperationNotFound
+                                        | SubchatOperationNotFound | SubchatConcurrentSend
                                         | SubchatUnsupported | SubchatSelectionError)
                           else 'browser_closed' if isinstance(error, SubchatBrowserClosed)
                           else 'submission_unconfirmed'

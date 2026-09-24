@@ -64,6 +64,10 @@ Chrome is still required. The generation POST is intercepted before browser
 dispatch and sent once through HTTPX; the browser then renders that response.
 `subchat_capabilities` reports
 `generation_transport=browser_prepared_httpx` and `browser_required=true`.
+Codex and Claude can use separate temporary browser snapshots while sharing a
+ledger. The ledger serializes distinct sends to the same conversation before
+dispatch; a competing send returns `concurrent_send` and is not sent. Recover
+the active operation before starting the next one.
 In a 2026-09-24 live macOS run observed at 30 frames per second, a new Chat and
 follow-up to that same conversation reached `completed` with the exact saved
 answers `背景送信一回目成功` and `背景送信二回目成功`. Chrome did not come to the foreground.

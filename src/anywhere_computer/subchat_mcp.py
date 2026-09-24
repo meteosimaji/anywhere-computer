@@ -31,6 +31,7 @@ from .subchat_delete import DeleteRequest, SubchatDeletionUnknown, delete_saved
 from .subchat_http_download import SandboxFileTooLarge
 from .subchat_state import (
     SubchatAccountMismatch,
+    SubchatConcurrentSend,
     SubchatHTTPSelection,
     SubchatList,
     SubchatOperationNotFound,
@@ -707,6 +708,12 @@ def session(service: Subchats, *,
                          error='No operation with this ID is visible in the selected ledger. '
                                'Check the ID and ledger path, then use subchat_list.',
                          data={'error_code': 'unknown_operation', 'dispatched': False,
+                               'automatic_retry': False})
+        except SubchatConcurrentSend:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='Another Subchat send is active in this conversation. '
+                               'Recover that operation before preparing this one.',
+                         data={'error_code': 'concurrent_send', 'dispatched': False,
                                'automatic_retry': False})
         except ValidationError as error:
             return Reply(operation_id=request.operation_id, state='failed',

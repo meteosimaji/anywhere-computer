@@ -5,7 +5,11 @@ import sqlite3
 import pytest
 
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatSubmissions
+from anywhere_computer.subchat_state import (
+    SubchatAccountMismatch,
+    SubchatConcurrentSend,
+    SubchatSubmissions,
+)
 
 
 def test_restart_retains_uncertain_send_and_completed_reply(tmp_path):
@@ -18,6 +22,8 @@ def test_restart_retains_uncertain_send_and_completed_reply(tmp_path):
         store.begin_send(operation, owner='peer', conversation_id='conversation')
     finally:
         ledger.close()
+
+
     ledger = Ledger(tmp_path)
     store = SubchatSubmissions(ledger.connection)
     try:
@@ -40,6 +46,31 @@ def test_restart_retains_uncertain_send_and_completed_reply(tmp_path):
         assert recovered.user_message_id == 'user'
     finally:
         ledger.close()
+
+
+def test_distinct_controllers_cannot_send_to_one_conversation_concurrently(tmp_path):
+    first_ledger = Ledger(tmp_path)
+    second_ledger = Ledger(tmp_path)
+    try:
+        first = SubchatSubmissions(first_ledger.connection)
+        second = SubchatSubmissions(second_ledger.connection)
+        conversation = 'same-conversation'
+        first.prepare('a' * 32, 'first', 'model', 'effort', owner=None,
+                      conversation_id=conversation)
+        second.prepare('b' * 32, 'second', 'model', 'effort', owner=None,
+                       conversation_id=conversation)
+        first.begin_send('a' * 32, owner=None)
+        with pytest.raises(SubchatConcurrentSend, match='another active send'):
+            second.begin_send('b' * 32, owner=None)
+        assert second.get('b' * 32, owner=None).state == 'prepared'
+        first.submitted('a' * 32, conversation, 'first-user', owner=None)
+        with pytest.raises(SubchatConcurrentSend, match='another active send'):
+            second.begin_send('b' * 32, owner=None)
+        first.complete('a' * 32, 'first-answer', 'done', owner=None)
+        assert second.begin_send('b' * 32, owner=None).state == 'sending'
+    finally:
+        second_ledger.close()
+        first_ledger.close()
 
 
 def test_submission_owner_arguments_and_stage_are_enforced(tmp_path):

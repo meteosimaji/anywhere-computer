@@ -10,7 +10,7 @@ from anywhere_computer.subchat import (
     Subchats,
 )
 from anywhere_computer.subchat_mcp import session
-from anywhere_computer.subchat_state import SubchatSubmissions
+from anywhere_computer.subchat_state import SubchatConcurrentSend, SubchatSubmissions
 
 
 class Provider:
@@ -72,6 +72,43 @@ async def test_prepared_http_identity_is_durable_before_dispatch(tmp_path):
             await service.send(other, 'another', 'model', 'effort', owner=None)
         assert store.get(other, owner=None).state == 'prepared'
         assert provider.sends == [operation]
+    finally:
+        ledger.close()
+
+
+async def test_competing_send_discards_prepared_page_before_dispatch(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+
+    class CompetingProvider(Provider):
+        def __init__(self):
+            super().__init__()
+            self.discarded = []
+
+        async def send(self, submission):
+            self.sends.append(submission.operation_id)
+            return None
+
+        async def discard_prepared(self, submission):
+            self.discarded.append(submission.operation_id)
+
+    provider = CompetingProvider()
+    service = Subchats(store, provider)
+    try:
+        first = await service.send('a' * 32, 'first', 'model', 'effort', owner=None,
+                                   conversation_id='shared')
+        assert first.state == 'sending'
+        reply = await session(service).execute(Request(
+            operation_id='b' * 32, tool='subchat_send', arguments={
+                'prompt': 'second', 'model': 'model', 'effort': 'effort',
+                'conversation_id': 'shared',
+            }))
+        assert reply.state == 'failed' and reply.data is not None
+        assert reply.data['error_code'] == SubchatConcurrentSend.code
+        assert reply.data['dispatched'] is False
+        assert provider.prepares == ['a' * 32, 'b' * 32]
+        assert provider.sends == provider.prepares[:1]
+        assert provider.discarded == ['b' * 32]
     finally:
         ledger.close()
 

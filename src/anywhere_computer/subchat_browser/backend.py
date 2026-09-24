@@ -322,6 +322,16 @@ class BrowserSubchatBackend:
                         logger.warning('Completed browser page release failed error_type=%s',
                                        type(error).__name__)
 
+    async def discard_prepared(self, submission: SubchatSubmission) -> None:
+        """Drop a draft that lost the durable same-conversation send claim."""
+        page = self.pages.pop(submission.operation_id, None)
+        self._prepared_baseline_kinds.pop(submission.operation_id, None)
+        if page is not None and page not in self.pages.values():
+            self._preparation_touched_pages.discard(page)
+            self._unreusable_pages.discard(page)
+            if not page.is_closed():
+                await page.close()
+
     async def _ready(self, page: Page, submission: SubchatSubmission) -> bool:
         if page.url.rstrip('/') != self._url(submission).rstrip('/'):
             return False

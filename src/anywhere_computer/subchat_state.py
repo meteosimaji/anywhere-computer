@@ -26,6 +26,12 @@ class SubchatOperationNotFound(ValueError):
     code = 'unknown_operation'
 
 
+class SubchatConcurrentSend(ValueError):
+    """Another durable operation is active in the same conversation."""
+
+    code = 'concurrent_send'
+
+
 class SubchatSelectionError(ValueError):
     """Safe, field-specific local catalog validation failure before dispatch."""
 
@@ -378,6 +384,19 @@ class SubchatSubmissions:
                         'SELECT 1 FROM subchat_http_deletions WHERE conversation_id=?',
                         (new.conversation_id,)).fetchone() is not None:
                     raise ValueError('Conversation has a pending or confirmed deletion')
+                # Separate Codex and Claude MCP processes share this SQLite
+                # ledger but not their in-memory browser locks. Serialize
+                # distinct sends to one Chat before either may dispatch.
+                peers = self.connection.execute(
+                    'SELECT body FROM subchat_submissions WHERE operation_id != ?',
+                    (old.operation_id,),
+                )
+                for peer_row in peers:
+                    peer = SubchatSubmission.model_validate_json(peer_row[0])
+                    if (peer.conversation_id == new.conversation_id
+                            and peer.state in {'sending', 'submitted'}):
+                        raise SubchatConcurrentSend(
+                            'Conversation has another active send; recover it first')
             if new.user_message_id is not None:
                 peers = self.connection.execute(
                     'SELECT body FROM subchat_submissions WHERE owner IS ? AND operation_id != ?',
