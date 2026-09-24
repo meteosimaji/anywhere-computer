@@ -22,12 +22,20 @@ for line in sys.stdin:
         if mode == 'malformed_observe':
             print('{synthetic_secret_ABC123}', flush=True)
             continue
+        if mode in ('window_unavailable', 'accessibility_required'):
+            print(json.dumps({'id': req['id'], 'error': {
+                'code': mode}}), flush=True)
+            continue
         if mode == 'private_error_code':
             print(json.dumps({'id': req['id'], 'error': {
                 'code': 'synthetic_secret_ABC123'}}), flush=True)
             continue
         result = {'observation_id': 'fixture-observation', 'tree': {}}
     else:
+        if mode == 'element_unavailable':
+            print(json.dumps({'id': req['id'], 'error': {
+                'code': 'element_unavailable'}}), flush=True)
+            continue
         if mode in ('changed', 'press_changed'):
             code = 'press_target_changed' if mode == 'press_changed' else 'value_changed'
             print(json.dumps({'id': req['id'], 'error': {'code': code}}), flush=True)
@@ -114,10 +122,11 @@ async def test_native_outcome_is_durable_and_not_replayed(
         if mode == "lost":
             assert first.data["error_code"] == "native_gui_outcome_unknown"
             assert helper_process[1].read_text() == "write\n"
+            assert not engine.native_gui.entries
         else:
             assert "input was not attempted" in first.error
             assert not helper_process[1].exists()
-        assert not engine.native_gui.entries
+            assert opened.data["session_id"] in engine.native_gui.entries
     finally:
         await engine.close()
 
@@ -157,5 +166,74 @@ async def test_native_helper_errors_do_not_expose_response_content(
                     else "invalid_response")
         assert expected in observed.error
         assert not engine.native_gui.entries
+        assert "Open a new native GUI session" in observed.data["next_action"]
+    finally:
+        await engine.close()
+
+
+async def test_nonfatal_helper_error_keeps_session_and_guides_reobservation(
+        tmp_path, helper_process):
+    helper_process[0][0] = "window_unavailable"
+    engine = Engine(tmp_path / "state")
+    try:
+        opened = await engine.execute(Request(operation_id="6" * 32,
+            tool="gui_native_windows", arguments={"app": "test"}), peer="one")
+        session_id = opened.data["session_id"]
+        target = {"session_id": session_id, "app": "test", "window_id": 1}
+        first = await engine.execute(Request(operation_id="7" * 32,
+            tool="gui_native_observe", arguments=target), peer="one")
+        assert first.state == "failed"
+        assert first.error == "Native GUI helper rejected request: window_unavailable"
+        assert first.data["next_action"] == "Observe the target again before further input."
+        assert session_id in engine.native_gui.entries
+        second = await engine.execute(Request(operation_id="8" * 32,
+            tool="gui_native_observe", arguments=target), peer="one")
+        assert second.data["error_code"] == "window_unavailable"
+        assert session_id in engine.native_gui.entries
+    finally:
+        await engine.close()
+
+
+async def test_accessibility_error_points_to_permission_and_retains_session(
+        tmp_path, helper_process):
+    helper_process[0][0] = 'accessibility_required'
+    engine = Engine(tmp_path / 'state')
+    try:
+        opened = await engine.execute(Request(operation_id='d' * 32,
+            tool='gui_native_windows', arguments={'app': 'test'}), peer='one')
+        session_id = opened.data['session_id']
+        observed = await engine.execute(Request(operation_id='e' * 32,
+            tool='gui_native_observe', arguments={
+                'session_id': session_id, 'app': 'test', 'window_id': 1}), peer='one')
+        assert observed.data['error_code'] == 'accessibility_required'
+        assert 'Accessibility access' in observed.data['next_action']
+        assert session_id in engine.native_gui.entries
+    finally:
+        await engine.close()
+
+
+async def test_nonfatal_mutation_rejection_keeps_session_and_invalidates_observation(
+        tmp_path, helper_process):
+    helper_process[0][0] = "element_unavailable"
+    engine = Engine(tmp_path / "state")
+    try:
+        opened = await engine.execute(Request(operation_id="9" * 32,
+            tool="gui_native_windows", arguments={"app": "test"}), peer="one")
+        session_id = opened.data["session_id"]
+        target = {"session_id": session_id, "app": "test", "window_id": 1}
+        observed = await engine.execute(Request(operation_id="a" * 32,
+            tool="gui_native_observe", arguments=target), peer="one")
+        write = {**target, "observation_id": observed.data["observation_id"],
+                 "element_ref": "field", "value": "new"}
+        first = await engine.execute(Request(operation_id="b" * 32,
+            tool="gui_native_set_value", arguments=write), peer="one")
+        assert first.state == "failed"
+        assert first.data["next_action"] == "Observe the target again before further input."
+        assert session_id in engine.native_gui.entries
+        assert not helper_process[1].exists()
+        second = await engine.execute(Request(operation_id="c" * 32,
+            tool="gui_native_set_value", arguments=write), peer="one")
+        assert second.data["error_code"] == "native_gui_observation_unavailable"
+        assert session_id in engine.native_gui.entries
     finally:
         await engine.close()

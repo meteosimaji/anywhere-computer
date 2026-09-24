@@ -44,6 +44,24 @@ operation ID for `subchat_wait` or `subchat_recover`. Keep the controller alive
 until a pending send reaches a confirmed result. This mode uses Chrome to send;
 it does not prove independent HTTP-only generation.
 
+On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` exposes the
+same send tools with a different generation transport. Select a logged-in
+ordinary Chrome profile through `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` or the
+local `login-selection.json` and, for multiple accounts, set
+`ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID`. A private temporary snapshot runs
+ChatGPT's turn preparation in a minimized Chrome window. The generation POST
+is intercepted before browser dispatch and sent once through HTTPX; the browser
+then renders that response. `subchat_capabilities` reports
+`generation_transport=browser_prepared_httpx` and `browser_required=true`.
+On 2026-09-24, a product-path GPT-5.6 Sol Instant new Chat and a second
+turn to the same conversation both reached `completed` with the exact
+requested answers. The new turn's history was independently read through
+HTTPX GET with status 200. Other models, queued follow-ups, long responses
+and installed Plugin delivery remain separate acceptance checks. The
+minimized browser may still briefly take
+focus on macOS. Do not resend an operation whose outcome is uncertain;
+recover it by operation ID.
+
 `subchat_capabilities` also returns `implementation_version` and
 `implementation_runtime_id` for the Subchat server that answered this call.
 Check these separately from the common engine version and runtime ID returned
@@ -67,19 +85,28 @@ at a normal profile that is open elsewhere. On macOS, set the separate
 `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` variable to an explicit ordinary Chrome
 profile directory, such as `~/Library/Application Support/Google/Chrome/Default`,
 to use its existing login. To retain the choice across Plugin updates, create
-`subchat/login-selection.json` under Anywhere Computer's local state directory
-with `{"chrome_source_profile":"/absolute/path/to/Chrome/Default"}`. The
-environment variable takes precedence over this local file. Neither setting
-contains cookies or tokens. The Plugin takes a private, temporary snapshot of
-ChatGPT cookies and opens only that snapshot headlessly; the ordinary Chrome
-window remains open and is not activated. This selection applies only to the
-read-only HTTP mode. `browser-send` continues to use its separate dedicated
-profile and can still briefly take focus. Check the account reported by
-`subchat_capabilities` before recovering account-bound data. If login is missing
-or denied, the server still exposes capabilities
-and saved operations. `subchat_capabilities.authentication_state` identifies the
-rejection; HTTP reads return `authentication_required` or `access_denied`. Log in
-and restart that Plugin session. The main Anywhere Computer server is independent.
+`login-selection.json` beside the selected Subchat ledger directory (by default,
+`subchat/login-selection.json` under Anywhere Computer's local state directory)
+with `{"chrome_source_profile":"/absolute/path/to/Chrome/Default",
+"expected_account_id":"your-Chat-account-ID"}`. The account ID is optional,
+but pinning it prevents a different logged-in account from being accepted.
+`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` and
+`ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID` override their respective file values.
+Neither setting contains cookies or tokens. The Plugin takes a private,
+temporary snapshot of ChatGPT cookies and opens only that snapshot headlessly;
+the ordinary Chrome window remains open and is not activated. This selection
+applies only to the read-only HTTP mode. `browser-send` continues to use its
+separate dedicated profile and can still briefly take focus. Check the account
+reported by `subchat_capabilities` before recovering account-bound data. If
+login is missing or denied, or the selected profile is missing or locked, the
+server still exposes capabilities and saved operations. A missing or locked
+profile reports `authentication_required`; an HTTP 403 reports `access_denied`.
+If the observed account differs from a configured pin, capabilities and HTTP
+reads report `account_mismatch` without exposing the observed account identity.
+The pin remains in force for `subchat_refresh_auth`; select the intended account
+before refreshing.
+Restore access, then call `subchat_refresh_auth` or restart that Plugin session.
+The main Anywhere Computer server is independent.
 
 If Google sign-in rejects a browser controlled by test automation, use the
 ordinary Chrome process shown below for this one-time interactive login. Do

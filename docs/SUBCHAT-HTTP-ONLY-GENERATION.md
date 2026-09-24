@@ -16,7 +16,10 @@ Install the optional `browser` extra and use a private ledger directory with
 - `--http-session-stdin` consumes an observed read-session JSON line from a
   trusted stdin pipe. Add `--http-generation-stdin` to consume a second JSON
   line containing the generation handoff before JSON-line commands or MCP
-  framing begin. This path does not open Chrome.
+  framing begin. This path does not open Chrome. Before a production send is
+  reserved, it uses the supplied Cookie for a separate auth GET and checks
+  that the returned account ID and access token match the selected session.
+  A mismatch stops before any preparation or generation POST.
 - `--chrome-login-profile PATH` opens an already logged-in, dedicated Chrome
   profile headlessly and obtains a read session through HTTP. The profile must
   be closed elsewhere. For generation, also pass
@@ -66,6 +69,24 @@ The handoff has exactly four fields:
 | `prepare_template` | The complete successful conversation-preparation JSON body. |
 | `generation_template` | The complete successful ordinary-Chat generation JSON body. |
 
+The current controller uses the Sentinel preparation token received immediately
+before generation. A requirements token from a previous finalized turn is a
+different, stateful value; the controller does not renew it through Sentinel
+finalize. A handoff captured from such a later turn is therefore not equivalent
+to a fresh first-turn handoff.
+
+In a 2026-09-24 Chrome 6 Pro new Chat and follow-up, both generation POSTs
+returned HTTP 200 and the requested answers appeared. Both conversation
+preparation responses had `conduit_token: null`, and neither generation sent
+`x-conduit-token`. The new Chat preparation used `client_prepare_state: none`;
+the follow-up used `success`. Neither preparation body contained
+`is_do_not_remember`, and both contained `parent_message_id`. The handoff
+validator and generation builder now accept these observed shapes, including
+an absent conduit header. This corrects a local preflight rejection; it does
+not prove that the independent HTTPX generation path is accepted. The
+follow-up still needs the finalized Sentinel state that this controller does
+not acquire.
+
 Treat both stdin lines and every handoff value as sensitive. Pass them through
 a trusted anonymous pipe; keep them out of argv, logs, files, MCP tool calls,
 and shell history. The handoff is held in process memory, not the ledger.
@@ -78,7 +99,8 @@ prompt, and the observed model and effort labels. A follow-up also specifies
 the saved `conversation_id`. The controller validates the catalog selection,
 prepares the request once, checks the current branch for a follow-up, and
 dispatches generation once. It does not substitute newly observed protection
-values into the handed-off headers.
+proof or Turnstile values into the handed-off headers. It does use fresh
+conversation and Sentinel preparation response tokens for the generation POST.
 
 A ChatGPT UI control sent `openai-sentinel-chat-requirements-token` on
 generation, together with the proof and Turnstile headers. The observed Sentinel
@@ -86,9 +108,11 @@ and conversation preparation requests carried no `openai-sentinel-*` request
 headers. This controller therefore sends those handed-off headers only on the
 generation request. The UI completed Sentinel prepare/finalize while generation
 was in flight; a later turn used the prior finalize response token. The
-controller does not implement that token lifecycle or the finalize request.
-It forwards generation route headers such as `x-openai-target-path` only on the
-generation POST, not on preparation or branch requests.
+controller does not implement finalize or renewal of that requirements token.
+It sets observed route headers such as `x-openai-target-path` and
+`x-openai-target-route` to each request's actual endpoint. A new turn trace ID
+is shared by conversation preparation and generation; Sentinel preparation
+omits the previous conduit token and turn trace.
 In two successful turns in one hidden in-app Chat, the observed request starts
 were conversation prepare, generation, Sentinel prepare, then Sentinel
 finalize; all four responses were HTTP 200 and both final answers arrived.
@@ -139,6 +163,15 @@ Successful preparation responses and authenticated GETs do not guarantee
 generation acceptance. Several session and request conditions differed between
 the accepted handoff and rejected attempts, so the cause of the 403 is
 unisolated.
+In a fresh UI turn on 2026-09-24, value-free CDP comparison showed that the
+conversation preparation response's `conduit_token` matched the generation
+request's `x-conduit-token`, and the first Sentinel preparation response's
+`prepare_token` matched its requirements-prepare header. The UI requested
+conversation preparation, then Sentinel preparation, then generation; all
+returned HTTP 200 and the answer was visible. The HTTP-only controller now
+uses those fresh response values and that order. It has not yet passed a live
+all-HTTPX generation POST or history-final check after this change, so the 403
+cause remains unconfirmed.
 For a generation 401/403, the local log records only the status, HTTP version
 category (h1/h2/other), presence of `cf-mitigated`, and response content-type
 category (JSON/HTML/other). These fixed categories help distinguish a likely
@@ -167,7 +200,9 @@ missing, use `status` or `recover` with the original operation ID. A
 failed preparation before the durable generation claim ends as
 `preflight_failed`, with no generation POST and no automatic retry. A lost
 generation response after that claim remains `sending` because its outcome is
-uncertain. Never resend an uncertain operation automatically. A new Chat whose
+uncertain. A process crash during preparation can also leave `sending` without
+a claim; the controller does not infer a safe retry from that state. Never
+resend an uncertain operation automatically. A new Chat whose
 conversation ID was not observed may require manual reconciliation.
 
 The HTTP-only path uses HTTPX for catalog and history reads, preparation,

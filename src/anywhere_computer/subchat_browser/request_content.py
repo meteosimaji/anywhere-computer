@@ -45,7 +45,16 @@ def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, J
         raise ValueError('Generation input or conversation changed')
     if submission.http_selection is not None:
         selected = submission.http_selection
-        if (body.get('model') != selected.model_slug
+        # The current GPT-5.6 Sol Instant composer emits the version model ID
+        # although its authenticated catalog preset names the Instant slug.
+        observed_instant_alias = (
+            selected.version_id == '5.6' and selected.preset_id == 0
+            and selected.model_slug == 'gpt-5-6-instant'
+            and selected.thinking_effort is None
+            and submission.model == 'GPT-5.6 Sol' and submission.effort == 'Instant'
+            and body.get('model') == 'gpt-5-6'
+        )
+        if (body.get('model') != selected.model_slug and not observed_instant_alias
                 or body.get('thinking_effort') != selected.thinking_effort):
             raise ValueError('Generation model or effort changed')
     # Do not silently merge an unrelated draft's attachments or plugin selection.

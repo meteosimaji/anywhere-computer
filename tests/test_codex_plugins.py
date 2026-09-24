@@ -51,7 +51,7 @@ async def test_catalog_is_ephemeral_and_exposes_schema_digest(fake_codex, tmp_pa
     tool = result["servers"][0]["tools"][0]
     assert set(tool) == {
         "name", "description", "inputSchema", "annotations", "server", "catalog_sha256",
-        "call_arguments",
+        "call_arguments", "availability",
     }
     assert len(tool["catalog_sha256"]) == 64
 
@@ -422,8 +422,9 @@ async def test_computer_use_reports_context_and_blocks_before_runtime(
     }}]
     catalog = await list_codex_plugin_tools(str(tmp_path), server=server, tool=tool)
     row = catalog["servers"][0]
-    assert row["availability"] == "ready_to_call"
+    assert row["availability"] == "unsupported_execution_context"
     descriptor = row["tools"][0]
+    assert descriptor["availability"] == "unsupported_execution_context"
     assert descriptor["compatibility"]["screen_read"] == "unverified"
     assert descriptor["compatibility"]["native_actions"] == "unsupported_execution_context"
     assert descriptor["compatibility"]["browser_actions"] == "unsupported_execution_context"
@@ -434,6 +435,17 @@ async def test_computer_use_reports_context_and_blocks_before_runtime(
         await call_codex_plugin_tool(**descriptor["call_arguments"], arguments={"code": "1+1"})
     assert caught.value.code == "unsupported_execution_context"
     assert stub_catalog["calls"] == []
+
+
+async def test_computer_use_search_alias_exposes_unsupported_route(stub_catalog, tmp_path):
+    stub_catalog["rows"] = [{"name": "cua_repl", "runtimeStatus": "connected", "tools": {
+        "js": {"description": "Execute JavaScript", "inputSchema": {}},
+    }}]
+    result = await list_codex_plugin_tools(str(tmp_path), query="computer use", summary=True)
+    assert result["servers"][0]["tool_names_preview"] == ["js"]
+    assert result["servers"][0]["availability"] == "unsupported_execution_context"
+    assert result["servers"][0]["computer_use_compatibility"]["state"] == (
+        "unsupported_execution_context")
 
 
 @pytest.mark.parametrize("method,stage", [

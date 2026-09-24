@@ -49,6 +49,7 @@ def test_plugin_entry_uses_headless_http_read_only_mode(tmp_path, monkeypatch):
         'profile': None, 'state': state,
         'options': {'mcp': True, 'http_only': True, 'chrome_login_profile': profile,
                     'chrome_login_source_profile': None,
+                    'expected_account_id': None,
                     'read_only_mcp': True},
     }
 
@@ -81,6 +82,7 @@ def test_plugin_reads_persistent_local_chrome_selection(tmp_path, monkeypatch):
     state.parent.mkdir()
     (state.parent / 'login-selection.json').write_text(json.dumps({
         'chrome_source_profile': str(source),
+        'expected_account_id': 'pinned-account',
     }))
     monkeypatch.delenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE', raising=False)
     monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
@@ -93,11 +95,36 @@ def test_plugin_reads_persistent_local_chrome_selection(tmp_path, monkeypatch):
     subchat_plugin.main()
     assert observed['chrome_login_source_profile'] == source
     assert observed['chrome_login_profile'] is None
+    assert observed['expected_account_id'] == 'pinned-account'
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID', 'override-account')
+    subchat_plugin.main()
+    assert observed['expected_account_id'] == 'override-account'
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID')
     (state.parent / 'login-selection.json').write_text(json.dumps({
         'chrome_source_profile': 'relative/Default',
     }))
     with pytest.raises(ValueError, match='absolute path'):
         subchat_plugin.main()
+    (state.parent / 'login-selection.json').write_text(json.dumps({
+        'chrome_source_profile': str(source), 'expected_account_id': '',
+    }))
+    with pytest.raises(ValueError, match='nonempty account ID'):
+        subchat_plugin.main()
+
+
+def test_plugin_selection_stat_error_is_sanitized(tmp_path, monkeypatch):
+    selection = tmp_path / 'login-selection.json'
+    original_stat = Path.stat
+
+    def denied_stat(path, *args, **kwargs):
+        if path == selection:
+            raise PermissionError('private selection path')
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, 'stat', denied_stat)
+    with pytest.raises(ValueError, match='Invalid Subchat login selection') as error:
+        subchat_plugin.selected_chrome_login(tmp_path / 'ledger')
+    assert 'private selection path' not in str(error.value)
 
 
 def test_plugin_browser_send_opt_in_reuses_login_with_minimized_window(tmp_path, monkeypatch):

@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a20` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.20` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a21` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.21` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -120,12 +120,16 @@ its tools and saved operations; HTTP reads return `authentication_required` or
 `access_denied` until the operator logs in and calls `subchat_refresh_auth` or
 restarts that Plugin session. Authenticated reads that receive 401 refresh the
 selected profile once and retry only the GET; sends and deletes are never replayed.
+With an account ID pin, selecting another account reports `account_mismatch`;
+the pin remains active on explicit refresh.
 On macOS, an explicitly selected existing Chrome profile can supply the login
 through a private headless snapshot (`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE`),
 without opening or activating the ordinary Chrome window. Authentication and
 model catalog GETs returned HTTP 200 in a live check; independent HTTP-only
 generation remains unverified. A local `subchat/login-selection.json` can retain
-the selected profile path across Plugin updates; see the Subchat guide.
+the selected profile path and an optional Chat account ID pin across Plugin
+updates. When the ledger location is overridden, place that file beside the
+selected ledger directory; see the Subchat guide.
 Set `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process to expose
 `subchat_send` and follow-up tools through the dedicated, logged-in Chrome
 profile. This mode minimizes Chrome but briefly activated its window in a live
@@ -137,6 +141,16 @@ HTTP-only generation remains an opt-in experiment in the separate
 `anywhere-subchat` CLI/MCP and has not passed live generation acceptance. The
 existing Anywhere Computer engine and its remote ChatGPT connection are separate
 from this Subchat server.
+
+On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` selects an
+experimental sender that snapshots the explicitly selected logged-in Chrome
+profile, lets ChatGPT prepare one turn, and makes the generation POST once with
+HTTPX. In a local product-path test, GPT-5.6 Sol Instant completed and a
+separate HTTPX history GET returned 200 with the exact input and final answer.
+This mode still launches a minimized Chrome window for preparation; a completely
+browser-free sender and a no-focus guarantee remain unverified. Select the
+profile with `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` and pin the account with
+`ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID` when multiple Chat accounts are used.
 
 The subchat guide is the authority for supported transports, CLI/MCP usage,
 attachments, plugin selection, parallel-work evidence and remaining limitations.

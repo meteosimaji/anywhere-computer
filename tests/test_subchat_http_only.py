@@ -36,6 +36,20 @@ async def test_chrome_login_rejection_keeps_capabilities_but_blocks_http(status)
     assert rejected.value.status == status
 
 
+async def test_pinned_account_mismatch_keeps_tools_and_reports_specific_state():
+    from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
+
+    async def no_request():
+        raise AssertionError('Mismatched account must not make a catalog request')
+
+    backend = HTTPOnlySubchatBackend(
+        no_request, chrome_login=True, startup_access_status=401,
+        startup_account_mismatch=True)
+    assert backend.capabilities()['authentication_state'] == 'account_mismatch'
+    with pytest.raises(SubchatAccountMismatch):
+        await backend.http_catalog()
+
+
 def session_payload():
     return {'authorization': SECRET, 'account_id': 'fixture-account',
             'catalog_url': CATALOG_URL, 'language': 'ja'}

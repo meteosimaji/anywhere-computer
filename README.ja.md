@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a20` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.20` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a21` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.21` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -63,6 +63,13 @@ Chromeは最小化しますが、macOSでの実測では一時的に前面へ出
 `generation_transport=browser_prepared`となります。独立したHTTP専用の生成は
 別途設定する`anywhere-subchat` CLI/MCPの実験機能で、実生成の合格はまだです。
 既存のAnywhere ComputerエンジンとChatGPT向けリモート接続は、このSubchatサーバーと別です。
+macOSでは`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx`を選ぶと、
+指定したログイン済みChromeプロファイルの一時スナップショットで送信準備を行い、
+生成POSTだけをHTTPXで一回送ります。製品コマンドからGPT-5.6 Sol Instantの実生成と、
+別のHTTPX GETによる入力・回答の保存確認が通りました。準備には最小化したChromeが必要で、
+ブラウザなしの送信と前面表示が絶対に起きないことは未確認です。
+`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE`でプロファイルを選び、複数アカウントを
+使う場合は`ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID`で対象を固定してください。
 対応する通信経路・操作・検証結果・未対応事項は、上のsubchatガイドを正本とします。
 Macのパスを書くだけでアクセス権が増えるわけではなく、選択したPCと接続ツールの権限が必要です。
 

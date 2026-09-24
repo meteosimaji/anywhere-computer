@@ -393,12 +393,21 @@ async def _start_and_catalog(
                 }
                 if _computer_use_route(server, name):
                     clean["compatibility"] = _computer_use_compatibility()
+                    clean["availability"] = "unsupported_execution_context"
+                else:
+                    clean["availability"] = _availability(row, True)
                 tools.append(clean)
+            server_availability = _availability(row, bool(tools))
+            if (server_availability == "ready_to_call" and tools
+                    and all(isinstance(item, dict) and item.get("availability")
+                            == "unsupported_execution_context"
+                            for item in tools)):
+                server_availability = "unsupported_execution_context"
             servers.append({
                 "server": server, "tools": tools,
                 "catalog_complete": complete, "received_tool_count": received_count,
                 "omitted_tool_count": max(0, received_count - 1000) if not complete else 0,
-                "availability": _availability(row, bool(tools)),
+                "availability": server_availability,
                 "runtime_status": row.get("runtimeStatus")
                 if row.get("runtimeStatus") in {
                     "notStarted", "starting", "connected", "authenticationRequired",
@@ -473,7 +482,8 @@ async def _inspect_tools(
         selected = [item for item in descriptors if
                     (tool is None or item["name"] == tool) and
                     (query is None or query.casefold() in
-                     f"{row['server']} {item['name']} {item['description']}".casefold())]
+                     (f"{row['server']} {item['name']} {item['description']} "
+                      f"{'computer use' if 'compatibility' in item else ''}").casefold())]
         if (query is not None and not selected
                 and query.casefold() not in str(row["server"]).casefold()):
             continue

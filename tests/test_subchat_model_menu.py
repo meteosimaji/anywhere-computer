@@ -5,6 +5,59 @@ from pathlib import Path
 import pytest
 
 
+async def test_current_power_menu_reads_slider_description_from_menuitem():
+    playwright = pytest.importorskip('playwright.async_api')
+    source = (Path(__file__).parents[1] /
+              'src/anywhere_computer/subchat_browser/subchat_model_menu.js').read_text(
+                  encoding='utf-8')
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content('''<div role="menu">
+              <div role="menuitem" aria-label="パワー"
+                aria-describedby="power-status power-help">
+                <div data-model-reasoning-effort-slider style="width:100px;height:20px">
+                  <span role="slider" aria-valuemin="0" aria-valuemax="4"
+                    aria-valuenow="0"></span></div></div>
+              <span id="power-status" role="status">Instant、5件中1件目。</span>
+              <span id="power-help">矢印キーで選択</span></div>''')
+            assert await page.evaluate(source + '\nobserveSubchatEffort(document)') == {
+                'state': 'effort_observed', 'minimum': 0, 'maximum': 4, 'index': 0,
+                'description': 'Instant、5件中1件目。', 'disabled': False}
+        finally:
+            await browser.close()
+
+
+async def test_current_composer_and_chat_radio_gate_catalog():
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser import catalog
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            page = await browser.new_page()
+            html = '''<button role="radio" data-tpp-toggle-value="chatgpt"
+              data-state="on" aria-checked="true">Chat</button>
+              <button role="radio" data-tpp-toggle-value="work" data-state="off"
+              aria-checked="false">Work</button>
+              <form data-type="unified-composer">
+                <button type="button" class="__composer-pill" aria-haspopup="menu"
+                  aria-expanded="false">6 Pro</button>
+                <div id="prompt-textarea" role="textbox" contenteditable="true"></div>
+              </form>'''
+            await page.route('https://chatgpt.com/', lambda route: route.fulfill(
+                status=200, content_type='text/html', body=html))
+            await page.goto('https://chatgpt.com/')
+            assert await catalog.picker_ready(page)
+            assert await catalog.empty_chat(page)
+            await page.locator('[data-tpp-toggle-value="chatgpt"]').evaluate(
+                'node => {node.dataset.state="off"; node.setAttribute("aria-checked","false")}')
+            assert not await catalog.empty_chat(page)
+        finally:
+            await browser.close()
+
+
 @pytest.mark.asyncio
 async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
     playwright = pytest.importorskip("playwright.async_api")

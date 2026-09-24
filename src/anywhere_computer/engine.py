@@ -1554,11 +1554,26 @@ class Engine:
                         and str(error).removeprefix("Native GUI helper rejected request: ")
                         in HELPER_ERROR_CODES | {"invalid_response"})
                 ):
+                    helper_code = (str(error).removeprefix(
+                        "Native GUI helper rejected request: ")
+                        if str(error).startswith("Native GUI helper rejected request: ")
+                        else None)
+                    session_id = request.arguments.get("session_id")
+                    session_live = (isinstance(session_id, str)
+                                    and session_id in self.native_gui.entries)
                     reply = Reply(
                         operation_id=request.operation_id, state="failed", error=str(error),
-                        data={"error_code": native_code or "native_gui_helper_rejected",
-                              "next_action": "Inspect the native GUI session and observe again "
-                              "before further input."},
+                        data={"error_code": native_code or helper_code
+                              or "native_gui_helper_rejected",
+                              "next_action": (
+                                  "Grant the native GUI helper macOS Accessibility access, "
+                                  "then observe the target again."
+                                  if helper_code == "accessibility_required" and session_live else
+                                  "Observe the target again before further input."
+                                  if session_live else
+                                  "Open a new native GUI session and observe the target before "
+                                  "further input."
+                              )},
                     )
                 elif (request.tool == "terminal_input" and type(error) is ValueError
                       and (fixed := _TERMINAL_INPUT_REJECTIONS.get(str(error))) is not None):

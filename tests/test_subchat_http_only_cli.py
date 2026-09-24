@@ -326,6 +326,112 @@ async def test_read_only_plugin_explicit_refresh_after_startup_401(tmp_path, mon
     ]
 
 
+@pytest.mark.parametrize('failure', ['missing_snapshot', 'locked_profile'])
+async def test_read_only_plugin_keeps_saved_tools_when_chrome_profile_unavailable(
+        tmp_path, monkeypatch, failure):
+    from playwright import async_api
+
+    from anywhere_computer import mcp_server, subchat_chrome_profile, subchat_cli
+    from anywhere_computer.models import Request
+
+    class Driver:
+        async def __aenter__(self):
+            async def launch(*_args, **_kwargs):
+                raise async_api.Error('profile is locked')
+
+            return SimpleNamespace(chromium=SimpleNamespace(
+                launch_persistent_context=launch))
+
+        async def __aexit__(self, *_args):
+            pass
+
+    @asynccontextmanager
+    async def missing_snapshot(_source):
+        raise ValueError('Selected Chrome profile has no Local State or Cookie database')
+        yield tmp_path  # pragma: no cover
+
+    monkeypatch.setattr(async_api, 'async_playwright', Driver)
+    if failure == 'missing_snapshot':
+        monkeypatch.setattr(subchat_chrome_profile, 'temporary_chrome_profile',
+                            missing_snapshot)
+
+    async def serve(server, *_args):
+        capabilities_reply = await server.execute(Request(
+            operation_id='a' * 32, tool='subchat_capabilities', arguments={}))
+        capabilities = capabilities_reply.data
+        assert capabilities['authentication_state'] == 'authentication_required'
+        assert capabilities['generation_transport'] == 'unavailable'
+        assert 'subchat_list' in {tool['name'] for tool in await server.catalog()}
+        catalog_reply = await server.execute(Request(
+            operation_id='b' * 32, tool='subchat_catalog', arguments={}))
+        assert catalog_reply.state == 'failed'
+        assert catalog_reply.data['error_code'] == 'authentication_required'
+
+    monkeypatch.setattr(mcp_server, 'serve_stdio', serve)
+    await subchat_cli.run(None, tmp_path / 'state', mcp=True, http_only=True,
+                          chrome_login_source_profile=(tmp_path / 'Chrome/Default'
+                                                       if failure == 'missing_snapshot' else None),
+                          chrome_login_profile=(tmp_path / 'dedicated'
+                                                if failure == 'locked_profile' else None),
+                          read_only_mcp=True)
+
+
+async def test_read_only_plugin_reports_pinned_account_mismatch_without_identity(
+        tmp_path, monkeypatch):
+    from playwright import async_api
+
+    from anywhere_computer import mcp_server, subchat_chrome_login, subchat_cli
+    from anywhere_computer.models import Request
+    from anywhere_computer.subchat_state import SubchatAccountMismatch
+
+    class Context:
+        async def close(self):
+            pass
+
+    class Driver:
+        async def __aenter__(self):
+            async def launch(*_args, **_kwargs):
+                return Context()
+
+            return SimpleNamespace(chromium=SimpleNamespace(
+                launch_persistent_context=launch))
+
+        async def __aexit__(self, *_args):
+            pass
+
+    observed_pins = []
+
+    async def wrong_account(_context, _client, *, expected_account_id):
+        observed_pins.append(expected_account_id)
+        assert expected_account_id == 'pinned-account'
+        raise SubchatAccountMismatch('private observed account')
+
+    async def serve(server, *_args):
+        capabilities = await server.execute(Request(
+            operation_id='a' * 32, tool='subchat_capabilities', arguments={}))
+        assert capabilities.data['authentication_state'] == 'account_mismatch'
+        assert 'private observed account' not in capabilities.model_dump_json()
+        catalog = await server.execute(Request(
+            operation_id='b' * 32, tool='subchat_catalog', arguments={}))
+        assert catalog.state == 'failed'
+        assert catalog.data['error_code'] == 'account_mismatch'
+        assert 'private observed account' not in catalog.model_dump_json()
+        assert 'subchat_list' in {tool['name'] for tool in await server.catalog()}
+        refresh = await server.execute(Request(
+            operation_id='c' * 32, tool='subchat_refresh_auth', arguments={}))
+        assert refresh.state == 'failed'
+        assert refresh.data['error_code'] == 'account_mismatch'
+        assert 'private observed account' not in refresh.model_dump_json()
+        assert observed_pins == ['pinned-account', 'pinned-account']
+
+    monkeypatch.setattr(async_api, 'async_playwright', Driver)
+    monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', wrong_account)
+    monkeypatch.setattr(mcp_server, 'serve_stdio', serve)
+    await subchat_cli.run(None, tmp_path / 'state', mcp=True, http_only=True,
+                          chrome_login_profile=tmp_path / 'dedicated',
+                          expected_account_id='pinned-account', read_only_mcp=True)
+
+
 async def test_http_only_real_httpx_request_uses_no_browser(tmp_path, monkeypatch):
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread

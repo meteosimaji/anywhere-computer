@@ -53,6 +53,7 @@ class ChatHTTPReader:
     def __init__(self, request_factory: Callable[
                  [], Awaitable[APIRequestContext | AsyncClient]] | None = None,
                  *, browser_free: bool = False, session: ObservedHTTPSession | None = None,
+                 use_client_cookies: bool = False,
                  test_origin: str | None = None,
                  access_status: int | None = None) -> None:
         if (browser_free and request_factory is None) or (session is not None and not browser_free):
@@ -70,7 +71,9 @@ class ChatHTTPReader:
         self._request_factory = request_factory
         self._browser_free = browser_free
         self._context: BrowserContext | None = None
-        self._headers: dict[str, str] = session.headers() if session is not None else {}
+        self._verified_account_id: str | None = None
+        self._headers: dict[str, str] = (session.headers(include_cookie=not use_client_cookies)
+                                         if session is not None else {})
         self._catalog_url: str | None = session.catalog_url if session is not None else None
         self._access_status: int | None = access_status
         self._denied_urls: set[str] = set()
@@ -91,6 +94,21 @@ class ChatHTTPReader:
                 and (self._access_status is not None
                      or bool(self._headers) and (not catalog or self._catalog_url is not None)))
 
+    def bind_verified_account(self, context: BrowserContext, account_id: str) -> None:
+        """Bind a fresh auth GET identity when current app GETs omit its header."""
+        if self._browser_free or not account_id or len(account_id) > 256:
+            raise ValueError('Invalid browser account binding')
+        if self._context is not None and self._context is not context:
+            self._headers = {}
+            self._catalog_url = None
+            self._access_status = None
+            self._denied_urls.clear()
+        observed = self._headers.get('chatgpt-account-id')
+        if observed is not None and observed != account_id:
+            raise SubchatAccountMismatch('Verified Chat account differs from catalog')
+        self._context = context
+        self._verified_account_id = account_id
+
     async def _read(self, context: BrowserContext | None, url: str | None,
                     observe: Callable[[Page], Awaitable[Response]],
                     expected_account: str | None = None) -> bytes:
@@ -101,6 +119,7 @@ class ChatHTTPReader:
             raise ValueError('Browser bootstrap requires an explicit context')
         elif self._context is not context:
             self._context = context
+            self._verified_account_id = None
             self._headers = {}
             self._catalog_url = None
             self._access_status = None
@@ -196,12 +215,16 @@ class ChatHTTPReader:
         """A bound reader must be able to recover a request before it is forwarded."""
         if self._access_status is not None:
             raise SubchatAccessError(self._access_status)
-        if self._headers:
+        if self._headers or self._verified_account_id is not None:
             self._check_account(account)
 
     def _check_account(self, expected_account: str | None) -> None:
+        observed = self._headers.get('chatgpt-account-id')
+        if (self._verified_account_id is not None and observed is not None
+                and self._verified_account_id != observed):
+            raise SubchatAccountMismatch('Verified Chat account differs from catalog')
         if (expected_account is not None
-                and self._headers.get('chatgpt-account-id') != expected_account):
+                and (self._verified_account_id or observed) != expected_account):
             raise SubchatAccountMismatch('Saved submission belongs to a different Chat account')
 
     async def history(self, context: BrowserContext | None,

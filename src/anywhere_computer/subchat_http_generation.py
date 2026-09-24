@@ -13,8 +13,9 @@ import logging
 import re
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING, BinaryIO, TypeGuard
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
@@ -52,10 +53,11 @@ _HEADERS = frozenset({
 _REQUIRED_HEADERS = frozenset({'accept', 'authorization', 'content-type', 'origin', 'referer',
                                'user-agent', 'openai-sentinel-proof-token',
                                'openai-sentinel-turnstile-token'})
-_GENERATION_ONLY_HEADERS = frozenset({
-    'x-conduit-token', 'x-openai-target-path', 'x-openai-target-route',
-    'x-oai-is-client-observation', 'x-oai-is-pending-updates',
-    'x-openai-web-sse-compression', 'oai-genui-client-actions',
+_PREPARE_EXCLUDED_HEADERS = frozenset({
+    'oai-echo-logs', 'oai-telemetry', 'x-openai-web-sse-compression',
+})
+_SENTINEL_EXTRA_EXCLUDED_HEADERS = frozenset({
+    'x-conduit-token', 'oai-genui-client-actions', 'x-oai-turn-trace-id',
 })
 _CHAT = re.compile(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}\Z')
 _PATHS = {
@@ -123,9 +125,10 @@ class ObservedHTTPGeneration:
         author = query.get('author') if isinstance(query, dict) else None
         content = query.get('content') if isinstance(query, dict) else None
         if (len(json.dumps(prepare).encode()) > 1_048_576
-                or prepare.get('client_prepare_state') != 'sent'
+                or prepare.get('client_prepare_state') not in {'none', 'sent', 'success'}
                 or prepare.get('action') != 'next'
-                or type(prepare.get('is_do_not_remember')) is not bool
+                or ('is_do_not_remember' in prepare
+                    and type(prepare['is_do_not_remember']) is not bool)
                 or not isinstance(prepare.get('timezone'), str) or not prepare['timezone']
                 or type(prepare.get('timezone_offset_min')) is not int
                 or not isinstance(functions, list)
@@ -152,7 +155,6 @@ class ObservedHTTPGeneration:
         body['thinking_effort'] = plan.thinking_effort
         if plan.conversation_id is None:
             body.pop('conversation_id', None)
-            body.pop('parent_message_id', None)
         else:
             body['conversation_id'] = plan.conversation_id
             body['parent_message_id'] = plan.predecessor_id
@@ -179,13 +181,16 @@ class ObservedHTTPGeneration:
         body['thinking_effort'] = plan.thinking_effort
         if plan.conversation_id is None:
             body.pop('conversation_id', None)
-            body.pop('parent_message_id', None)
+            if 'parent_message_id' not in self.prepare_template:
+                body.pop('parent_message_id', None)
         else:
             body['conversation_id'] = plan.conversation_id
             body['parent_message_id'] = plan.predecessor_id
         raw = json.dumps(body, ensure_ascii=False, separators=(',', ':'))
         generation_input(raw, submission)
-        if body.get('parent_message_id') != plan.predecessor_id:
+        expected_parent = (self.prepare_template.get('parent_message_id')
+                           if plan.conversation_id is None else plan.predecessor_id)
+        if body.get('parent_message_id') != expected_parent:
             raise ValueError('Generation predecessor changed')
         return raw.encode()
 
@@ -217,6 +222,19 @@ def _url(origin: str, path: str) -> str:
     if origin != 'https://chatgpt.com' and not re.fullmatch(r'http://127\.0\.0\.1:[0-9]+', origin):
         raise ValueError('Unsupported HTTP generation origin')
     return origin + path
+
+
+def _usable_header_token(value: JsonValue) -> TypeGuard[str]:
+    return (isinstance(value, str) and 0 < len(value) <= 16_384
+            and all(33 <= ord(char) <= 126 for char in value))
+
+
+def _target_headers(headers: dict[str, str], path: str) -> dict[str, str]:
+    routed = dict(headers)
+    for key in ('x-openai-target-path', 'x-openai-target-route'):
+        if key in routed:
+            routed[key] = path
+    return routed
 
 
 async def _json_response(response: Response) -> dict[str, JsonValue]:
@@ -283,25 +301,44 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
     except Exception:
         store.record_http_event(plan.operation_id, 'prepare_failed', owner=owner)
         raise ValueError('Chat preparation request is invalid') from None
-    request_headers = handoff.headers
+    request_headers = _target_headers(handoff.headers, _PATHS['generation'])
     if use_client_cookies:
         request_headers.pop('cookie', None)
-    # Generation route and protection headers do not belong on preparation or
-    # branch reads. The current UI uses distinct headers for those requests.
+    if 'x-oai-turn-trace-id' in request_headers:
+        request_headers['x-oai-turn-trace-id'] = str(uuid4())
+    # Current UI conversation preparation carries routing and client-state
+    # headers; Sentinel preparation omits the previous conduit and turn trace.
     headers = {key: value for key, value in request_headers.items()
                if not key.startswith('openai-sentinel-')
-               and key not in _GENERATION_ONLY_HEADERS}
+               and key not in _PREPARE_EXCLUDED_HEADERS
+               and key != 'x-conduit-token'}
     headers.update({'accept': 'application/json', 'accept-encoding': 'identity'})
+    prepare_headers = _target_headers(headers, _PATHS['prepare'])
+    sentinel_headers = {key: value for key, value in headers.items()
+                        if key not in _SENTINEL_EXTRA_EXCLUDED_HEADERS}
+    sentinel_headers = _target_headers(sentinel_headers, _PATHS['sentinel'])
+    prepared = await _preparation_post('prepare', plan=plan, client=client, store=store,
+                                       owner=owner, origin=origin, body=prepare_body,
+                                       headers=prepare_headers)
+    conduit_token = prepared.get('conduit_token')
+    if conduit_token is not None and not _usable_header_token(conduit_token):
+        store.record_http_event(plan.operation_id, 'prepare_failed', owner=owner)
+        raise ValueError('Conversation preparation token is invalid')
     observed = await _preparation_post('sentinel', plan=plan, client=client, store=store,
         owner=owner, origin=origin, body=json.dumps({'p': handoff.sentinel_p}).encode(),
-        headers=headers)
+        headers=sentinel_headers)
     token = observed.get('prepare_token')
-    if not isinstance(token, str) or not token or len(token) > 16_384:
+    if not _usable_header_token(token):
         store.record_http_event(plan.operation_id, 'sentinel_failed', owner=owner)
         raise ValueError('Sentinel preparation token is unavailable')
-    # A fresh sentinel response token is not substituted into this operation.
-    await _preparation_post('prepare', plan=plan, client=client, store=store,
-                            owner=owner, origin=origin, body=prepare_body, headers=headers)
+    # The UI generation request uses this turn's conversation and Sentinel
+    # preparation responses. Never reuse these fields from an older handoff.
+    if conduit_token is None:
+        request_headers.pop('x-conduit-token', None)
+    else:
+        request_headers['x-conduit-token'] = conduit_token
+    request_headers['openai-sentinel-chat-requirements-prepare-token'] = token
+    request_headers.pop('openai-sentinel-chat-requirements-token', None)
     if plan.conversation_id is not None:
         if _CHAT.fullmatch(plan.conversation_id) is None:
             store.record_http_event(plan.operation_id, 'branch_failed', owner=owner)
@@ -309,7 +346,8 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
         store.record_http_event(plan.operation_id, 'branch_request', owner=owner)
         try:
             async with client.stream('GET', _url(origin,
-                    '/backend-api/conversation/' + plan.conversation_id), headers=headers,
+                    '/backend-api/conversation/' + plan.conversation_id), headers=_target_headers(
+                        headers, '/backend-api/conversation/' + plan.conversation_id),
                     timeout=15.0, follow_redirects=False) as branch:
                 store.record_http_event(plan.operation_id, 'branch_response', owner=owner,
                                         status=branch.status_code)
@@ -335,8 +373,8 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
         raise ValueError('HTTP generation was already claimed; recover without resending')
     # One HTTPX client handles preparation, branch checks and generation. Chrome
     # sessions use its rotating cookie jar; explicit handoffs retain their headers.
-    # HTTPX does not acquire or fabricate protection values, including an absent
-    # prepare token.
+    # Proof and Turnstile values remain operator-supplied; HTTPX does not
+    # acquire or fabricate them.
     decoder = SSEDecoder()
     candidate = plan.conversation_id
     candidate_logged = False

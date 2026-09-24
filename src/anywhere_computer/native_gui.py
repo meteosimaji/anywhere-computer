@@ -26,6 +26,16 @@ HELPER_ERROR_CODES = frozenset({
     "value_changed", "value_not_comparable", "value_not_settable",
     "window_limit_exceeded", "window_unavailable",
 })
+# The helper reports these only before AXPress/AXValue is attempted. A valid
+# response leaves its JSON-lines stream usable, even when the target is stale.
+NONFATAL_HELPER_ERRORS = frozenset({
+    "accessibility_required", "ambiguous_process", "element_not_enabled",
+    "element_unavailable", "invalid_input", "observation_limit_exceeded",
+    "observation_mismatch", "observation_unavailable", "press_target_changed",
+    "process_identity_changed", "process_identity_unavailable", "process_not_found",
+    "tree_limit_exceeded", "value_changed", "value_not_comparable",
+    "value_not_settable", "window_limit_exceeded", "window_unavailable",
+})
 
 
 class NativeApp(Contract):
@@ -121,6 +131,7 @@ class NativeGUI:
         if len(wire) > LIMIT:
             raise ValueError("Native GUI request exceeds limit")
         dispatched = False
+        keep_session = False
         try:
             async with asyncio.timeout(TIMEOUT):
                 if (process.returncode is not None or process.stdin is None
@@ -143,8 +154,12 @@ class NativeGUI:
                 if not isinstance(result, dict) or "error" in response:
                     error = response.get("error")
                     code = error.get("code") if isinstance(error, dict) else None
-                    if code == "value_changed" or (code == "press_target_changed"
-                                                  and request.get("method") == "press"):
+                    keep_session = (isinstance(code, str)
+                                    and request.get("method") != "windows"
+                                    and "result" not in response
+                                    and code in NONFATAL_HELPER_ERRORS)
+                    if keep_session and (code == "value_changed" or (
+                            code == "press_target_changed" and request.get("method") == "press")):
                         raise NativeGUIInputRefused(
                             "Native GUI target changed since observation; input was not attempted")
                     # Never expose arbitrary helper diagnostics or exception text.
@@ -153,8 +168,9 @@ class NativeGUI:
                         else "invalid_response"))
                 return result
         except BaseException as error:
-            await self._retire(session_id)
-            if (mutation and dispatched and isinstance(error, Exception)
+            if not keep_session:
+                await self._retire(session_id)
+            if (mutation and dispatched and not keep_session and isinstance(error, Exception)
                     and not isinstance(error, NativeGUIInputRefused)):
                 raise NativeGUIOutcomeUnknown(
                     "Native GUI input outcome unknown; inspect the target before any new input"

@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import json
 import re
+from http.cookiejar import Cookie
 from typing import BinaryIO
 from urllib.parse import urlsplit
 
+import httpx
 from pydantic import ConfigDict, Field, SecretStr, field_validator
 
 from .models import Contract
@@ -80,17 +82,44 @@ class ObservedHTTPSession(Contract):
             raise ValueError('Only the exact observed HTTPS model-catalog URL is supported')
         return value
 
-    def headers(self) -> dict[str, str]:
+    def headers(self, *, include_cookie: bool = True) -> dict[str, str]:
         result = {'authorization': self.authorization.get_secret_value(),
                   'chatgpt-account-id': self.account_id}
         if self.language is not None:
             result['oai-language'] = self.language
-        if self.cookie is not None:
+        if include_cookie and self.cookie is not None:
             result['cookie'] = self.cookie.get_secret_value()
         if self.user_agent is not None:
             result['user-agent'] = self.user_agent
             result['referer'] = 'https://chatgpt.com/'
         return result
+
+
+_COOKIE_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
+
+
+def seed_cookie_jar(client: httpx.AsyncClient, header: str, *, domain: str
+                    ) -> frozenset[str]:
+    """Seed an exact-origin client once from a validated observed Cookie header."""
+    if domain not in {'chatgpt.com', '127.0.0.1'} or list(client.cookies.jar):
+        raise ValueError('Explicit Cookie jar is unavailable')
+    pairs: list[tuple[str, str]] = []
+    names: set[str] = set()
+    for component in header.split(';'):
+        name, separator, value = component.strip().partition('=')
+        if (not separator or _COOKIE_NAME.fullmatch(name) is None or name in names
+                or not value or any(ord(char) < 33 or ord(char) > 126 for char in value)):
+            raise ValueError('Invalid explicit Cookie header')
+        names.add(name)
+        pairs.append((name, value))
+    for name, value in pairs:
+        client.cookies.jar.set_cookie(Cookie(
+            version=0, name=name, value=value, port=None, port_specified=False,
+            domain=domain, domain_specified=True, domain_initial_dot=False,
+            path='/', path_specified=True, secure=domain == 'chatgpt.com',
+            expires=None, discard=True, comment=None, comment_url=None,
+            rest={}, rfc2109=False))
+    return frozenset(names)
 
 
 def read_http_session(source: BinaryIO) -> ObservedHTTPSession:

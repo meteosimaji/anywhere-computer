@@ -3,6 +3,26 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a21 / Plugin 0.2.0-alpha.21 — unpublished candidate (2026-09-24)
+
+- Bind explicit HTTP generation to the selected account with an authentication
+  GET before reserving a send. Improve read-only startup and account-pin errors.
+- Use the current conversation and Sentinel preparation values, per-endpoint
+  route headers, and a fresh turn trace in the HTTP generation attempt. Track
+  Cookie rotation through one in-memory HTTP client. Independent all-HTTPX
+  generation remains unverified.
+- Keep native GUI helper sessions usable after recognized nonfatal errors and
+  report unavailable Computer Use execution contexts accurately.
+- Add an opt-in browser-prepared HTTPX Subchat transport. A logged-in Chrome
+  snapshot prepares each turn; HTTPX sends the single generation POST. A live
+  GPT-5.6 Sol Instant new Chat and same-conversation follow-up completed, and
+  HTTPX history retrieval confirmed the saved input and answer. Independent
+  browser-free generation remains unverified.
+- Update the ordinary Chat composer and model picker contracts, bind account
+  identity from an auth GET when the browser omits its account header, and
+  retain the HTTPX client through slow SSE delivery. Uncertain sends are not
+  replayed.
+
 ## 0.2.0a20 / Plugin 0.2.0-alpha.20 — unpublished candidate (2026-09-24)
 
 - Finish HTTP generation operations as `preflight_failed` when the durable

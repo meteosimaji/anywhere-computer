@@ -6,10 +6,14 @@ visible message identities before dispatch; see the dated acceptance records.
 from __future__ import annotations
 
 import asyncio
+import logging
 import re
+import traceback
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+import httpx
 
 from anywhere_computer.subchat import (
     SubchatAnswer,
@@ -22,7 +26,9 @@ from anywhere_computer.subchat import (
 from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmission
 
 from .catalog import (
+    COMPOSER,
     CONTROL,
+    EDITOR,
     SOURCE,
     TOGGLE,
     TRIGGER,
@@ -42,6 +48,7 @@ STREAM = Path(__file__).with_name('subchat_stream.js').read_text(encoding='utf-8
 COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")
 CHAT = re.compile(r'https://chatgpt\.com/c/'
                   r'([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\Z')
+logger = logging.getLogger(__name__)
 
 
 class BrowserSubchatBackend:
@@ -50,8 +57,14 @@ class BrowserSubchatBackend:
                  http_request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None,
                  record_request: Callable[[str, str, str], None] | None = None,
                  record_conversation: Callable[[str, str, str, str], None] | None = None,
-                 record_rejection: Callable[[str, str, int, str], None] | None = None) -> None:
+                 record_rejection: Callable[[str, str, int, str], None] | None = None,
+                 httpx_generation: bool = False,
+                 expected_account_id: str | None = None) -> None:
+        if httpx_generation and not http_read:
+            raise ValueError('Browser-prepared HTTPX generation requires HTTP history')
         self.http_read = http_read
+        self._httpx_generation = httpx_generation
+        self._expected_account_id = expected_account_id
         self._record_request = record_request
         self._record_conversation = record_conversation
         self._record_rejection = record_rejection
@@ -69,7 +82,9 @@ class BrowserSubchatBackend:
                 'native_steer': False, 'provider_stop': False,
                 'cancel_scope': 'local_queued_or_prepared',
                 'state': 'capabilities', 'transport': 'browser_prepared',
-                'browser_required': True, 'generation_transport': 'browser_prepared',
+                'browser_required': True,
+                'generation_transport': ('browser_prepared_httpx' if self._httpx_generation
+                                         else 'browser_prepared'),
                 'http_selection_send_supported': self.http_read,
                 'credential_refresh': False, 'independent_login': False,
                 'http_delete_supported': True, 'deletion_transport': 'authenticated_http'}
@@ -120,7 +135,8 @@ class BrowserSubchatBackend:
         async with asyncio.timeout(20):
             result = await self._http_reader.catalog(await self._read_context(catalog=True))
             result['http_selection_send_supported'] = self.http_read
-            result['generation_transport'] = 'browser_prepared'
+            result['generation_transport'] = ('browser_prepared_httpx'
+                                              if self._httpx_generation else 'browser_prepared')
             return result
 
     async def verify_delete_target(self, submission: SubchatSubmission) -> None:
@@ -168,18 +184,23 @@ class BrowserSubchatBackend:
         if page.url.rstrip('/') != self._url(submission).rstrip('/'):
             return False
         chat = page.get_by_role('button', name='Chat', exact=True)
-        editor = page.locator('[data-composer-markdown][role="textbox"]')
+        chat_radio = page.locator(
+            '[role="radio"][data-tpp-toggle-value="chatgpt"][data-state="on"]'
+            '[aria-checked="true"]')
+        chat_radios = page.locator('[role="radio"][data-tpp-toggle-value="chatgpt"]')
+        editor = page.locator(EDITOR)
         stop = page.get_by_role('button', name=re.compile(r'^(停止|Stop|Stop generating)$'))
         ordinary = (submission.requested_conversation_id is not None
-                    or (await chat.count() == 1
+                    or (await chat_radio.count() == 1 if await chat_radios.count() else
+                        await chat.count() == 1
                         and await chat.get_attribute('aria-pressed') == 'true'))
-        return (ordinary and await page.locator('form[data-chatgpt-composer]').count() == 1
+        return (ordinary and await page.locator(COMPOSER).count() == 1
                 and await editor.count() == 1 and not (await editor.inner_text()).strip()
                 and await stop.filter(visible=True).count() == 0)
 
     async def _wait_for_composer(self, page: Page, submission: SubchatSubmission) -> None:
         """Wait for hydration, rejecting an occupied composer or active generation."""
-        editor = page.locator('[data-composer-markdown][role="textbox"]')
+        editor = page.locator(EDITOR)
         stop = page.get_by_role('button', name=re.compile(r'^(停止|Stop|Stop generating)$'))
         try:
             async with asyncio.timeout(10):
@@ -319,8 +340,29 @@ class BrowserSubchatBackend:
         if page is None or page.is_closed():
             raise ValueError('Prepared browser page is unavailable')
         dispatched: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        request_started: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         claimed = False
         pattern = re.compile(r'^https://chatgpt\.com/backend-api/f/conversation(?:\?.*)?$')
+
+        generation_client: httpx.AsyncClient | None = None
+        generation_account: str | None = None
+        generation_authorization: str | None = None
+        if self._httpx_generation:
+            from ..subchat_chrome_login import chrome_http_session
+
+            generation_client = httpx.AsyncClient(trust_env=False, follow_redirects=False,
+                                                  transport=httpx.AsyncHTTPTransport(retries=0))
+            try:
+                session = await chrome_http_session(
+                    await self._browser(), generation_client,
+                    expected_account_id=self._expected_account_id)
+                generation_account = session.account_id
+                self._http_reader.bind_verified_account(
+                    await self._browser(), generation_account)
+                generation_authorization = session.authorization.get_secret_value()
+            except BaseException:
+                await generation_client.aclose()
+                raise
 
         async def augment(route: Route) -> None:
             nonlocal claimed
@@ -328,7 +370,10 @@ class BrowserSubchatBackend:
                 await route.abort()
                 return
             claimed = True
+            if not request_started.done():
+                request_started.set_result(True)
             accepted = False
+            stage = 'request_validation'
             try:
                 payload = route.request.post_data
                 if payload is None:
@@ -341,49 +386,95 @@ class BrowserSubchatBackend:
                 outgoing = (add_resources(payload, submission)
                             if submission.resources is not None else payload)
                 if self._record_request is not None:
+                    stage = 'account_binding'
                     account = await route.request.header_value('chatgpt-account-id')
-                    if account is None or not account.strip() or len(account) > 256:
+                    if generation_account is not None:
+                        if account is not None and account != generation_account:
+                            raise ValueError('Generation account identity changed')
+                        account = generation_account
+                    elif account is None or not account.strip() or len(account) > 256:
                         raise ValueError('Generation account identity is unavailable')
-                    self._http_reader.check_generation_account(account)
+                    else:
+                        self._http_reader.check_generation_account(account)
                     self._record_request(submission.operation_id, identity, account)
-                await route.continue_(post_data=outgoing)
+                if generation_client is None or generation_authorization is None:
+                    stage = 'browser_transport'
+                    await route.continue_(post_data=outgoing)
+                else:
+                    from .httpx_generation import post_browser_prepared_once
+
+                    stage = 'httpx_transport'
+                    response = await post_browser_prepared_once(
+                        route.request, generation_client,
+                        authorization=generation_authorization,
+                        content=outgoing.encode('utf-8'))
+                    stage = 'browser_delivery'
+                    if response.status == 200 and response.content_type == 'text/event-stream':
+                        await route.fulfill(status=200,
+                                            headers={'content-type': 'text/event-stream'},
+                                            body=response.body)
+                    else:
+                        await route.fulfill(status=response.status,
+                                            headers={'content-type': 'application/json'},
+                                            body=b'{}')
                 accepted = True
-            except Exception:
+            except Exception as error:
                 # Provider details can contain account information; do not expose them.
+                logger.warning('Subchat generation stage=%s error_type=%s',
+                               stage, type(error).__name__)
+                frames = traceback.extract_tb(error.__traceback__)
+                logger.warning('Subchat generation failure_path=%s',
+                               '>'.join(f'{Path(frame.filename).name}:{frame.lineno}'
+                                        for frame in frames[-5:]))
+                if str(error).startswith('Invalid browser request header types: '):
+                    logger.warning('%s', error)
                 await route.abort()
             finally:
                 if not dispatched.done():
                     dispatched.set_result(accepted)
 
-        if self._record_conversation is not None or self._record_rejection is not None:
-            binding = 'ac_stream_' + submission.operation_id
-
-            def observed(source: dict[str, object], message: str, conversation: str | None,
-                         account: str, status: int | None = None) -> None:
-                if source.get('page') is not page or source.get('frame') is not page.main_frame:
-                    raise ValueError('Stream observation came from another frame')
-                if status is not None:
-                    if self._record_rejection is not None:
-                        self._record_rejection(submission.operation_id, message, status, account)
-                    return
-                if (not isinstance(conversation, str)
-                        or CHAT.fullmatch('https://chatgpt.com/c/' + conversation) is None):
-                    raise ValueError('Invalid stream conversation identity')
-                if self._record_conversation is not None:
-                    self._record_conversation(
-                        submission.operation_id, message, conversation, account)
-
-            await page.expose_binding(binding, observed)
-            await page.evaluate(STREAM + '\nobserveSubchatStream', binding)
-
-        await page.route(pattern, augment)
+        route_installed = False
         try:
+            if self._record_conversation is not None or self._record_rejection is not None:
+                binding = 'ac_stream_' + submission.operation_id
+
+                def observed(source: dict[str, object], message: str,
+                             conversation: str | None, account: str,
+                             status: int | None = None) -> None:
+                    if source.get('page') is not page or source.get('frame') is not page.main_frame:
+                        raise ValueError('Stream observation came from another frame')
+                    if status is not None:
+                        if self._record_rejection is not None:
+                            self._record_rejection(submission.operation_id, message,
+                                                   status, account)
+                        return
+                    if (not isinstance(conversation, str)
+                            or CHAT.fullmatch('https://chatgpt.com/c/' + conversation) is None):
+                        raise ValueError('Invalid stream conversation identity')
+                    if self._record_conversation is not None:
+                        self._record_conversation(
+                            submission.operation_id, message, conversation, account)
+
+                await page.expose_binding(binding, observed)
+                await page.evaluate(STREAM + '\n(args)=>observeSubchatStream(...args)',
+                                    [binding, generation_account])
+
+            await page.route(pattern, augment)
+            route_installed = True
             receipt = await self._send(submission)
-            if not await asyncio.wait_for(asyncio.shield(dispatched), 10):
+            await asyncio.wait_for(asyncio.shield(request_started), 10)
+            # Keep the HTTPX client and browser route alive for the complete
+            # stream. A valid slow generation is not a failed dispatch.
+            if not await asyncio.shield(dispatched):
                 raise ValueError('Generation resource request was not confirmed')
             return receipt
         finally:
-            await page.unroute(pattern, augment)
+            try:
+                if route_installed:
+                    await page.unroute(pattern, augment)
+            finally:
+                if generation_client is not None:
+                    await generation_client.aclose()
 
     async def _send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
         if submission.state != 'sending':
@@ -393,7 +484,7 @@ class BrowserSubchatBackend:
             raise ValueError('Prepared browser page is unavailable')
         if page.url.rstrip('/') != self._url(submission).rstrip('/'):
             raise ValueError('Prepared conversation changed before send')
-        editor = page.locator('[data-composer-markdown][role="textbox"]')
+        editor = page.locator(EDITOR)
         if await editor.count() != 1 or (await editor.inner_text()).strip():
             raise ValueError('Prepared draft changed before send')
         if await self._baseline(page) != submission.baseline_message_ids:

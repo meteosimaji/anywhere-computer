@@ -1,5 +1,5 @@
 // Observe one owned generation response. IDs are candidates, never acceptance.
-function observeSubchatStream(binding) {
+function observeSubchatStream(binding, expectedAccount = null) {
   const original = window.fetch;
   let active = true;
   const wrapped = async function (...args) {
@@ -10,7 +10,7 @@ function observeSubchatStream(binding) {
       const body = JSON.parse(args[1]?.body);
       if (body.messages?.length !== 1) return response;
       input = body.messages[0].id;
-      account = new Headers(args[1]?.headers).get('chatgpt-account-id');
+      account = new Headers(args[1]?.headers).get('chatgpt-account-id') ?? expectedAccount;
       if (!account || account.length > 256) return response;
       if (typeof input !== 'string' || !input || input.length > 256) return response;
     } catch { return response; }

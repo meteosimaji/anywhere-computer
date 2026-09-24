@@ -108,3 +108,36 @@ async def test_literal_draft_preserves_text_and_rejects_existing_content():
             assert await submit(literal + '\nKeep  two spaces\nand a newline')
         finally:
             await browser.close()
+
+
+async def test_unified_composer_uses_confirmed_editor_and_send_button():
+    playwright = pytest.importorskip('playwright.async_api')
+    source = (Path(__file__).parents[1] /
+              'src/anywhere_computer/subchat_browser/subchat_input.js').read_text(
+                  encoding='utf-8')
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content('''<main></main><form data-type="unified-composer">
+              <div id="prompt-textarea" role="textbox" contenteditable="true"><p><br></p></div>
+              <button type="button" data-testid="send-button"
+                aria-label="プロンプトを送信する" onclick="window.sends=(window.sends||0)+1">
+                Send</button></form>''')
+            editor = page.locator('#prompt-textarea')
+            await editor.click()
+            result = await page.evaluate(
+                source + '\ntext => insertSubchatDraft(document, text)', '日本語 🚀')
+            assert result == {'state': 'draft_observed', 'input_dispatched': True,
+                              'submitted': False}
+            assert await page.evaluate(
+                source + '\ntext => submitSubchatDraft(document,location.href,text,[])',
+                '日本語 🚀') is True
+            assert await page.evaluate('window.sends') == 1
+            await editor.fill('changed')
+            assert await page.evaluate(
+                source + '\ntext => submitSubchatDraft(document,location.href,text,[])',
+                '日本語 🚀') is False
+            assert await page.evaluate('window.sends') == 1
+        finally:
+            await browser.close()

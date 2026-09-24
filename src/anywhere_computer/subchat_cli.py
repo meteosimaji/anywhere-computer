@@ -184,6 +184,8 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
 
 async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read: bool = False,
               minimized: bool = False, http_only: bool = False,
+              httpx_generation: bool = False,
+              browser_source_profile: Path | None = None,
               http_session: ObservedHTTPSession | None = None,
               http_generation: ObservedHTTPGeneration | None = None,
               chrome_login_profile: Path | None = None,
@@ -196,6 +198,10 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
         raise ValueError('Read-only MCP requires HTTP-only mode without generation')
     if http_only and (profile is not None or http_read or minimized):
         raise ValueError('HTTP-only mode cannot use browser options')
+    if httpx_generation and (http_only or not http_read or profile is None):
+        raise ValueError('Browser-prepared HTTPX generation requires a browser and HTTP reads')
+    if browser_source_profile is not None and not httpx_generation:
+        raise ValueError('Browser profile snapshot requires browser-prepared HTTPX generation')
     if not http_only and (profile is None or http_session is not None):
         raise ValueError('Browser mode requires a profile and cannot import an HTTP session')
     if http_generation is not None and (not http_only or http_session is None):
@@ -205,16 +211,25 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
         raise ValueError('Choose one Chrome login profile source')
     if chrome_login and (not http_only or http_session is not None):
         raise ValueError('Chrome login requires HTTP-only mode without a supplied session')
-    if expected_account_id is not None and not chrome_login:
+    if expected_account_id is not None and not (chrome_login or httpx_generation):
         raise ValueError('Expected account requires Chrome login')
 
     ledger = Ledger(state)
     try:
         async with AsyncExitStack() as resources:
+            browser_launch_args: list[str] = []
+            if browser_source_profile is not None:
+                from .subchat_chrome_profile import temporary_chrome_profile
+
+                profile = await resources.enter_async_context(
+                    temporary_chrome_profile(browser_source_profile))
+                browser_launch_args.append(
+                    f'--profile-directory={browser_source_profile.name}')
             driver: Playwright | None = None
             http_client: APIRequestContext | None = None
             standalone_http_client: httpx.AsyncClient | None = None
             chrome_access_status: int | None = None
+            chrome_account_mismatch = False
             http_init_lock = asyncio.Lock()
 
             async def runtime() -> Playwright:
@@ -251,7 +266,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 context = await (await runtime()).chromium.launch_persistent_context(
                     str(profile), channel='chrome', headless=False,
                     ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
-                    args=['--start-minimized'] if minimized else [])
+                    args=(['--start-minimized'] if minimized else []) + browser_launch_args)
                 resources.push_async_callback(context.close)
                 if minimized:
                     from .subchat_browser.catalog import minimize_window
@@ -299,7 +314,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     trust_env=False, follow_redirects=False,
                     transport=httpx.AsyncHTTPTransport(retries=0))
                 try:
-                    session = await bootstrap_chrome_session(candidate, account_id)
+                    session = await bootstrap_chrome_session(
+                        candidate, account_id if account_id is not None else expected_account_id)
                 except BaseException:
                     await candidate.aclose()
                     raise
@@ -312,13 +328,27 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 return session, candidate_factory
 
             if chrome_login:
+                from playwright.async_api import Error as PlaywrightError
+
                 try:
                     http_session = await bootstrap_chrome_session(
                         await open_standalone_http(), expected_account_id)
+                except SubchatAccountMismatch:
+                    # A pinned-account mismatch is distinct from unavailable login.
+                    if not read_only_mcp:
+                        raise
+                    chrome_access_status = 401
+                    chrome_account_mismatch = True
                 except SubchatAccessError as error:
                     if not read_only_mcp:
                         raise
                     chrome_access_status = error.status
+                except (OSError, ValueError, PlaywrightError):
+                    # An unavailable selected profile must not hide saved-state tools.
+                    # Refresh can retry after the operator repairs or unlocks it.
+                    if not read_only_mcp:
+                        raise
+                    chrome_access_status = 401
                 if chrome_generation_stdin:
                     from .subchat_chrome_login import chrome_generation_cookie
                     from .subchat_http_generation import read_http_generation_handoff
@@ -358,6 +388,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     store=store,
                     chrome_login=chrome_login,
                     startup_access_status=chrome_access_status,
+                    startup_account_mismatch=chrome_account_mismatch,
                     refresh_session=refresh_chrome_session if read_only_mcp
                     and chrome_login else None)
             else:
@@ -367,7 +398,9 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     http_request_factory=open_http if http_read else None,
                     record_request=record_request if http_read else None,
                     record_conversation=record_conversation if http_read else None,
-                    record_rejection=record_rejection if http_read else None)
+                    record_rejection=record_rejection if http_read else None,
+                    httpx_generation=httpx_generation,
+                    expected_account_id=expected_account_id if httpx_generation else None)
             service = Subchats(store, backend)
             # Saved-state requests need no browser. Once needed, commands share
             # one dedicated context until EOF; no per-request restart or replay.
@@ -455,6 +488,12 @@ def main() -> None:
     parser.add_argument("--mcp", action="store_true", help="Serve MCP over stdio")
     parser.add_argument('--http-read', action='store_true',
                         help='Read HTTP history; sends require an observed HTTP catalog selection')
+    parser.add_argument('--httpx-generation', action='store_true',
+                        help='Use Chrome to prepare one turn, then send its generation POST once '
+                             'through HTTPX; requires --http-read')
+    parser.add_argument('--browser-source-profile', type=Path,
+                        help='macOS: use a temporary snapshot of an existing logged-in Chrome '
+                             'profile for browser-prepared HTTPX sending')
     parser.add_argument('--minimized', action='store_true',
                         help='Verify the dedicated Chrome window is minimized before page work')
     parser.add_argument('--http-only', action='store_true',
@@ -476,7 +515,8 @@ def main() -> None:
                              'and body templates. Requires --http-only --http-session-stdin.')
     args = parser.parse_args()
     if args.http_only:
-        if args.browser_profile is not None or args.http_read or args.minimized:
+        if (args.browser_profile is not None or args.http_read or args.minimized
+                or args.httpx_generation or args.browser_source_profile is not None):
             parser.error('--http-only cannot be combined with browser options')
         if (args.chrome_login_profile is not None
                 or args.chrome_login_source_profile is not None) and args.http_session_stdin:
@@ -489,8 +529,12 @@ def main() -> None:
                     or args.chrome_login_source_profile is not None)
     if chrome_login and not args.http_only:
         parser.error('Chrome login requires --http-only')
-    if args.expected_account_id is not None and not chrome_login:
-        parser.error('--expected-account-id requires Chrome login')
+    if args.httpx_generation and not args.http_read:
+        parser.error('--httpx-generation requires --http-read')
+    if args.browser_source_profile is not None and not args.httpx_generation:
+        parser.error('--browser-source-profile requires --httpx-generation')
+    if args.expected_account_id is not None and not (chrome_login or args.httpx_generation):
+        parser.error('--expected-account-id requires Chrome login or --httpx-generation')
     if (chrome_login and args.http_generation_stdin
             and args.expected_account_id is None):
         parser.error('Chrome-login generation requires --expected-account-id')
@@ -525,6 +569,9 @@ def main() -> None:
     asyncio.run(run(args.browser_profile.resolve() if args.browser_profile is not None else None,
                     args.state_dir.resolve(), mcp=args.mcp, http_read=args.http_read,
                     minimized=args.minimized, http_only=args.http_only,
+                    httpx_generation=args.httpx_generation,
+                    browser_source_profile=(args.browser_source_profile.resolve()
+                                            if args.browser_source_profile is not None else None),
                     http_session=observed_session, http_generation=observed_generation,
                     chrome_login_profile=(args.chrome_login_profile.resolve()
                                           if args.chrome_login_profile is not None else None),

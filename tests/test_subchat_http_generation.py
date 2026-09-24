@@ -81,17 +81,129 @@ def handoff():
                                             account_id='fixture-account')
 
 
+@pytest.mark.parametrize('account,token,status', [
+    ('fixture-account', SECRET.removeprefix('Bearer '), 200),
+    ('other-account', SECRET.removeprefix('Bearer '), 200),
+    ('fixture-account', 'another-token', 200),
+    ('fixture-account', SECRET.removeprefix('Bearer '), 403),
+])
+async def test_explicit_generation_verifies_cookie_account_before_send(
+        account, token, status):
+    from anywhere_computer.subchat_http_session import ObservedHTTPSession
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        assert request.method == 'GET'
+        assert str(request.url) == 'https://chatgpt.com/api/auth/session'
+        assert request.headers['cookie'] == 'session=' + PROOF
+        assert request.headers['user-agent'] == handoff().headers['user-agent']
+        assert request.headers['referer'] == 'https://chatgpt.com/'
+        assert 'authorization' not in request.headers
+        assert 'chatgpt-account-id' not in request.headers
+        return httpx.Response(status, json={
+            'account': {'id': account}, 'accessToken': token})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        async def factory():
+            return client
+
+        session = ObservedHTTPSession.model_validate({
+            **session_payload(), 'cookie': 'session=' + PROOF})
+        backend = HTTPOnlySubchatBackend(factory, session, generation=handoff(),
+                                         store=object())
+        if status == 200 and account == 'fixture-account' and token == (
+                SECRET.removeprefix('Bearer ')):
+            await backend._verify_explicit_generation_account()
+        elif status == 403:
+            with pytest.raises(Exception) as rejected:
+                await backend._verify_explicit_generation_account()
+            assert getattr(rejected.value, 'status', None) == 403
+        else:
+            with pytest.raises(SubchatAccountMismatch):
+                await backend._verify_explicit_generation_account()
+    assert len(requests) == 1
+
+
+async def test_explicit_account_mismatch_stops_before_reservation_or_post(tmp_path):
+    from anywhere_computer.subchat_http_session import ObservedHTTPSession
+
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        assert request.method == 'GET'
+        if str(request.url) == CATALOG_URL:
+            return httpx.Response(200, json=catalog())
+        assert str(request.url) == 'https://chatgpt.com/api/auth/session'
+        return httpx.Response(200, json={
+            'account': {'id': 'different-account'},
+            'accessToken': SECRET.removeprefix('Bearer ')})
+
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            async def factory():
+                return client
+
+            session = ObservedHTTPSession.model_validate({
+                **session_payload(), 'cookie': 'session=' + PROOF})
+            backend = HTTPOnlySubchatBackend(factory, session, generation=handoff(),
+                                             store=store)
+            service = Subchats(store, backend)
+            with pytest.raises(SubchatAccountMismatch):
+                await service.send('a' * 32, 'test', 'Future Chat', 'Future effort',
+                                   owner=None, http_selection=SELECTION)
+        assert len(requests) == 2
+        assert store.get('a' * 32, owner=None).state == 'prepared'
+        assert store.connection.execute(
+            'SELECT COUNT(*) FROM subchat_http_dispatch_claims').fetchone()[0] == 0
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('field,value,failed_stage', [
+    ('conduit_token', 'bad\r\nvalue', 'prepare_failed'),
+    ('sentinel_token', None, 'sentinel_failed'),
+    ('sentinel_token', '日本語', 'sentinel_failed'),
+])
+async def test_invalid_fresh_token_stops_before_dispatch(tmp_path, field, value,
+                                                        failed_stage):
+    async with LocalChat(**{field: value}) as api:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            ledger, store, service = await setup(tmp_path, api, client)
+            try:
+                with pytest.raises(SubchatPreflightFailed):
+                    await service.send('f' * 32, 'token check', 'Future Chat',
+                                       'Future effort', owner=None, http_selection=SELECTION)
+                assert store.get('f' * 32, owner=None).state == 'preflight_failed'
+                assert store.http_progress('f' * 32, owner=None)['stage'] == failed_stage
+                assert not any(path == '/backend-api/f/conversation' for _, path, _, _
+                               in api.requests)
+                assert store.connection.execute('SELECT COUNT(*) FROM '
+                    'subchat_http_dispatch_claims').fetchone()[0] == 0
+            finally:
+                ledger.close()
+
+
 class LocalChat:
-    def __init__(self, *, prepare_token_present=True, rotate_cookie=False,
+    def __init__(self, *, rotate_cookie=False,
+                 rotate_stage_cookies=False,
                  compress_generation=False, oversize_sentinel=False,
-                 challenged_generation=False):
+                 challenged_generation=False, conduit_token='fresh-conduit',
+                 sentinel_token='fresh-token', prepare_state='sent'):
         self.requests = []
         self.messages = []
-        self.prepare_token_present = prepare_token_present
         self.rotate_cookie = rotate_cookie
+        self.rotate_stage_cookies = rotate_stage_cookies
         self.compress_generation = compress_generation
         self.oversize_sentinel = oversize_sentinel
         self.challenged_generation = challenged_generation
+        self.conduit_token = conduit_token
+        self.sentinel_token = sentinel_token
+        self.prepare_state = prepare_state
         self.current_node = None
         self.stale = False
         self.lost_generation = False
@@ -122,9 +234,13 @@ class LocalChat:
                 payload = json.dumps(catalog()).encode()
             elif path == '/backend-api/sentinel/chat-requirements/prepare':
                 assert method == 'POST' and data == {'p': 'observed-p'}
+                if 'x-openai-target-path' in headers:
+                    assert headers['x-openai-target-path'] == path
+                    assert headers['x-openai-target-route'] == path
                 assert not any(key.startswith('openai-sentinel-') for key in headers)
                 assert headers['accept'] == 'application/json'
-                payload = json.dumps({'persona': 'fixture', 'prepare_token': 'fresh-token',
+                payload = json.dumps({'persona': 'fixture',
+                    'prepare_token': self.sentinel_token,
                     'turnstile': {'required': True, 'dx': 'fixture'},
                     'proofofwork': {'required': True, 'seed': 'fixture', 'difficulty': 'fixture'},
                     'so': {'required': True, 'collector_dx': 'fixture',
@@ -132,14 +248,19 @@ class LocalChat:
                 if self.oversize_sentinel:
                     payload = b'{"padding":"' + b'a' * 1_100_000 + b'"}'
             elif path == '/backend-api/f/conversation/prepare':
-                assert method == 'POST' and data['client_prepare_state'] == 'sent'
+                assert method == 'POST' and data['client_prepare_state'] == self.prepare_state
+                if 'x-openai-target-path' in headers:
+                    assert headers['x-openai-target-path'] == path
+                    assert headers['x-openai-target-route'] == path
                 assert data['partial_query']['extra'] == 'keep'
                 assert data['partial_query']['content']['extra'] == 'keep'
                 assert data['partial_query']['id'] != 'old-input'
                 assert data['partial_query']['content']['parts'] != ['old prompt']
                 assert headers['accept'] == 'application/json'
                 assert not any(key.startswith('openai-sentinel-') for key in headers)
-                payload = json.dumps({'status': 'ok', 'conduit_token': 'fixture'}).encode()
+                assert 'x-conduit-token' not in headers
+                payload = json.dumps({'status': 'ok',
+                    'conduit_token': self.conduit_token}).encode()
             elif path == '/backend-api/conversation/' + CHAT:
                 assert method == 'GET'
                 assert not any(key.startswith('openai-sentinel-') for key in headers)
@@ -147,13 +268,17 @@ class LocalChat:
                                       self.current_node, 'mapping': {}}).encode()
             elif path == '/backend-api/f/conversation':
                 assert method == 'POST'
+                if 'x-openai-target-path' in headers:
+                    assert headers['x-openai-target-path'] == path
+                    assert headers['x-openai-target-route'] == path
                 assert headers['accept'] == 'text/event-stream'
                 assert headers['openai-sentinel-proof-token'] == PROOF
                 assert headers['openai-sentinel-turnstile-token'] == PROOF
-                assert ('openai-sentinel-chat-requirements-prepare-token' in headers
-                        ) is self.prepare_token_present
-                if self.prepare_token_present:
-                    assert headers['openai-sentinel-chat-requirements-prepare-token'] == 'fixture'
+                assert headers['openai-sentinel-chat-requirements-prepare-token'] == 'fresh-token'
+                if self.conduit_token is None:
+                    assert 'x-conduit-token' not in headers
+                else:
+                    assert headers['x-conduit-token'] == self.conduit_token
                 if self.lost_generation:
                     return
                 if self.lost_after_candidate:
@@ -203,6 +328,16 @@ class LocalChat:
             set_cookie = ('Set-Cookie: session=rotated; Path=/\r\n'
                           if self.rotate_cookie and path == (
                               '/backend-api/sentinel/chat-requirements/prepare') else '')
+            if self.rotate_stage_cookies:
+                stage = {
+                    '/backend-api/f/conversation/prepare': 'prepared',
+                    '/backend-api/sentinel/chat-requirements/prepare': 'sentinel',
+                    '/backend-api/f/conversation': 'generated',
+                }.get(path)
+                if stage is not None:
+                    set_cookie += ''.join(
+                        f'Set-Cookie: {name}={stage}; Path=/\r\n'
+                        for name in ('oai-sc', '_uasid', '_umsid'))
             content_encoding = ('Content-Encoding: gzip\r\n'
                                 if self.compress_generation and path == (
                                     '/backend-api/f/conversation') else '')
@@ -223,6 +358,8 @@ class LocalRequests:
     def __init__(self, client, origin):
         self.client = client
         self.origin = origin
+        self.cookies = client.cookies
+        self.event_hooks = client.event_hooks
 
     async def get(self, url, **kwargs):
         if url.startswith('https://chatgpt.com/'):
@@ -245,7 +382,8 @@ class LocalRequests:
             yield response
 
 
-async def setup(tmp_path, api, client, *, generation=None, chrome_login=False):
+async def setup(tmp_path, api, client, *, generation=None, chrome_login=False,
+                session=None):
     ledger = Ledger(tmp_path)
     store = SubchatSubmissions(ledger.connection)
     proxy = LocalRequests(client, api.origin)
@@ -253,7 +391,7 @@ async def setup(tmp_path, api, client, *, generation=None, chrome_login=False):
     async def factory():
         return proxy
 
-    backend = HTTPOnlySubchatBackend(factory, credentials(),
+    backend = HTTPOnlySubchatBackend(factory, credentials() if session is None else session,
                                      generation=handoff() if generation is None else generation,
                                      store=store, generation_origin=api.origin,
                                      chrome_login=chrome_login)
@@ -390,11 +528,12 @@ async def test_new_and_followup_use_http_only_and_history_final(tmp_path):
                     posts = [(path, body) for method, path, _, body in api.requests
                              if method == 'POST']
                     assert [path for path, _ in posts] == [
+                        '/backend-api/f/conversation/prepare',
                         '/backend-api/sentinel/chat-requirements/prepare',
-                        '/backend-api/f/conversation/prepare', '/backend-api/f/conversation'] * 2
-                    assert posts[1][1]['partial_query']['id'] == first.user_message_id
+                        '/backend-api/f/conversation'] * 2
+                    assert posts[0][1]['partial_query']['id'] == first.user_message_id
                     assert 'conversation_id' not in posts[2][1]
-                    assert posts[4][1]['parent_message_id'] == parent.answer_message_id
+                    assert posts[3][1]['parent_message_id'] == parent.answer_message_id
                     assert posts[5][1]['parent_message_id'] == parent.answer_message_id
                     assert posts[5][1]['messages'][0]['id'] == final.user_message_id
                     assert sum(path.startswith('/backend-api/conversation/') for _, path, _, _
@@ -403,14 +542,14 @@ async def test_new_and_followup_use_http_only_and_history_final(tmp_path):
                         'SELECT COUNT(*) FROM subchat_http_dispatch_claims').fetchone()[0] == 2
                     first_events = store.http_events(first.operation_id, owner=None)
                     assert [event['stage'] for event in first_events] == [
-                        'sentinel_request', 'sentinel_response', 'prepare_request',
-                        'prepare_response', 'dispatch_claimed', 'generation_request',
+                        'prepare_request', 'prepare_response', 'sentinel_request',
+                        'sentinel_response', 'dispatch_claimed', 'generation_request',
                         'generation_response', 'sse_candidate', 'history_receipt', 'history_final',
                     ]
                     second_events = store.http_events(queued.operation_id, owner=None)
                     assert [event['stage'] for event in second_events] == [
-                        'sentinel_request', 'sentinel_response', 'prepare_request',
-                        'prepare_response', 'branch_request', 'branch_response',
+                        'prepare_request', 'prepare_response', 'sentinel_request',
+                        'sentinel_response', 'branch_request', 'branch_response',
                         'dispatch_claimed', 'generation_request', 'generation_response',
                         'sse_candidate', 'history_receipt', 'history_final',
                     ]
@@ -425,12 +564,44 @@ async def test_new_and_followup_use_http_only_and_history_final(tmp_path):
                 await client.aclose()
 
 
-async def test_generation_preserves_absent_observed_prepare_token(tmp_path):
+async def test_observed_new_chat_without_conduit_uses_its_prepare_shape(tmp_path):
+    data = handoff_data()
+    data['prepare_template']['client_prepare_state'] = 'none'
+    data['prepare_template'].pop('is_do_not_remember')
+    data['prepare_template']['parent_message_id'] = 'client-created-root'
+    data['generation_template'].pop('conversation_id')
+    data['generation_template']['parent_message_id'] = 'client-created-root'
+    data['headers']['x-conduit-token'] = 'stale-conduit'
+    generation = ObservedHTTPGeneration.from_data(
+        data, authorization=SECRET, account_id='fixture-account')
+    async with LocalChat(conduit_token=None, prepare_state='none') as api:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            ledger, _, service = await setup(tmp_path, api, client, generation=generation)
+            try:
+                sent = await service.send('8' * 32, 'new shape', 'Future Chat',
+                    'Future effort', owner=None, http_selection=SELECTION)
+                assert sent.state == 'sending'
+                final = await service.recover(sent.operation_id, owner=None)
+                assert final.state == 'completed' and final.answer == 'answer: new shape'
+                posts = [(path, headers, body) for method, path, headers, body in api.requests
+                         if method == 'POST']
+                assert [path for path, _, _ in posts] == [
+                    '/backend-api/f/conversation/prepare',
+                    '/backend-api/sentinel/chat-requirements/prepare',
+                    '/backend-api/f/conversation']
+                assert posts[0][2]['parent_message_id'] == 'client-created-root'
+                assert posts[2][2]['parent_message_id'] == 'client-created-root'
+                assert all('x-conduit-token' not in headers for _, headers, _ in posts)
+            finally:
+                ledger.close()
+
+
+async def test_generation_adds_fresh_prepare_token_when_handoff_lacked_it(tmp_path):
     data = handoff_data()
     data['headers'].pop('openai-sentinel-chat-requirements-prepare-token')
     generation = ObservedHTTPGeneration.from_data(
         data, authorization=SECRET, account_id='fixture-account')
-    async with LocalChat(prepare_token_present=False) as api:
+    async with LocalChat() as api:
         async with httpx.AsyncClient(
                 trust_env=False, follow_redirects=False,
                 transport=httpx.AsyncHTTPTransport(retries=0)) as client:
@@ -445,19 +616,21 @@ async def test_generation_preserves_absent_observed_prepare_token(tmp_path):
                                 if method == 'POST']
                 assert len(post_headers) == 3
                 assert all('openai-sentinel-chat-requirements-prepare-token' not in headers
-                           for headers in post_headers)
+                           for headers in post_headers[:2])
+                assert post_headers[2]['openai-sentinel-chat-requirements-prepare-token'] == (
+                    'fresh-token')
             finally:
                 ledger.close()
 
 
-async def test_generation_forwards_observed_requirements_token_verbatim(tmp_path):
+async def test_generation_replaces_observed_requirements_token_with_fresh_prepare_token(tmp_path):
     data = handoff_data()
     data['headers'].pop('openai-sentinel-chat-requirements-prepare-token')
     observed_token = 'observed-requirements-token'
     data['headers']['openai-sentinel-chat-requirements-token'] = observed_token
     generation = ObservedHTTPGeneration.from_data(
         data, authorization=SECRET, account_id='fixture-account')
-    async with LocalChat(prepare_token_present=False) as api:
+    async with LocalChat() as api:
         async with httpx.AsyncClient(
                 trust_env=False, follow_redirects=False,
                 transport=httpx.AsyncHTTPTransport(retries=0)) as client:
@@ -471,10 +644,11 @@ async def test_generation_forwards_observed_requirements_token_verbatim(tmp_path
                 assert len(post_headers) == 3
                 assert all(not any(key.startswith('openai-sentinel-') for key in headers)
                            for headers in post_headers[:2])
-                assert post_headers[2]['openai-sentinel-chat-requirements-token'] == (
-                    observed_token)
+                assert 'openai-sentinel-chat-requirements-token' not in post_headers[2]
                 assert all('openai-sentinel-chat-requirements-prepare-token' not in headers
-                           for headers in post_headers)
+                           for headers in post_headers[:2])
+                assert post_headers[2]['openai-sentinel-chat-requirements-prepare-token'] == (
+                    'fresh-token')
                 assert observed_token.encode() not in (tmp_path / 'operations.sqlite3').read_bytes()
             finally:
                 ledger.close()
@@ -490,12 +664,96 @@ async def test_chrome_generation_uses_rotating_client_cookie(tmp_path):
                     'Future effort', owner=None, http_selection=SELECTION)
                 assert sent.state == 'sending'
                 stages = {path: headers.get('cookie') for _, path, headers, _ in api.requests}
+                assert stages['/backend-api/f/conversation/prepare'] == 'session=initial'
                 assert stages['/backend-api/sentinel/chat-requirements/prepare'] == (
                     'session=initial')
-                assert stages['/backend-api/f/conversation/prepare'] == 'session=rotated'
                 assert stages['/backend-api/f/conversation'] == 'session=rotated'
             finally:
                 ledger.close()
+
+
+async def test_explicit_session_uses_rotating_cookie_jar_for_send_and_history(tmp_path):
+    from anywhere_computer.subchat_http_session import ObservedHTTPSession
+
+    names = ('oai-sc', '_uasid', '_umsid')
+    initial_cookie = '; '.join(f'{name}=initial' for name in names)
+    data = handoff_data()
+    data['headers']['cookie'] = initial_cookie
+    session = ObservedHTTPSession.model_validate({
+        **session_payload(), 'cookie': initial_cookie})
+    generation = ObservedHTTPGeneration.from_data(
+        data, authorization=SECRET, account_id='fixture-account',
+        cookie=initial_cookie)
+
+    def cookie_values(headers):
+        return dict(part.strip().split('=', 1) for part in headers['cookie'].split(';'))
+
+    async with LocalChat(rotate_stage_cookies=True) as api:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            ledger, store, service = await setup(
+                tmp_path, api, client, generation=generation, session=session)
+            try:
+                first = await service.send('8' * 32, 'rotating cookie', 'Future Chat',
+                    'Future effort', owner=None, http_selection=SELECTION)
+                assert first.state == 'sending'
+                completed = await service.recover(first.operation_id, owner=None)
+                assert completed.state == 'completed'
+                posts = [(path, headers) for method, path, headers, _ in api.requests
+                         if method == 'POST']
+                assert [path for path, _ in posts] == [
+                    '/backend-api/f/conversation/prepare',
+                    '/backend-api/sentinel/chat-requirements/prepare',
+                    '/backend-api/f/conversation']
+                for (_, headers), expected in zip(
+                        posts, ('initial', 'prepared', 'sentinel'), strict=True):
+                    assert cookie_values(headers) == dict.fromkeys(names, expected)
+                history = [headers for method, path, headers, _ in api.requests
+                           if method == 'GET' and path == '/backend-api/conversations/' + CHAT]
+                assert history and cookie_values(history[-1]) == dict.fromkeys(
+                    names, 'generated')
+
+                queued = service.queue('9' * 32, first.operation_id, 'next', owner=None)
+                followup = await service.recover(queued.operation_id, owner=None)
+                assert followup.state == 'sending'
+                later_posts = [(path, headers) for method, path, headers, _ in api.requests
+                               if method == 'POST']
+                assert cookie_values(later_posts[3][1]) == dict.fromkeys(names, 'generated')
+                assert all('initial' not in headers.get('cookie', '')
+                           for _, headers in later_posts[1:])
+                assert store.get(queued.operation_id, owner=None).state == 'sending'
+            finally:
+                ledger.close()
+
+
+async def test_explicit_cookie_rotation_changes_domain_without_duplicate_or_origin_leak():
+    from anywhere_computer.subchat_http_session import ObservedHTTPSession
+
+    seen = []
+
+    def respond(request):
+        seen.append(request.headers.get('cookie'))
+        if len(seen) == 1:
+            header = 'oai-sc=domain-rotated; Domain=.chatgpt.com; Path=/; Secure'
+        elif len(seen) == 2:
+            header = 'oai-sc=host-rotated; Path=/; Secure'
+        else:
+            header = ''
+        return httpx.Response(200, headers={'set-cookie': header})
+
+    session = ObservedHTTPSession.model_validate({
+        **session_payload(), 'cookie': 'oai-sc=initial'})
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        async def factory():
+            return client
+
+        backend = HTTPOnlySubchatBackend(factory, session)
+        scoped = await backend._request_factory()
+        for _ in range(3):
+            await scoped.get('https://chatgpt.com/backend-api/test')
+        assert seen == ['oai-sc=initial', 'oai-sc=domain-rotated', 'oai-sc=host-rotated']
+        with pytest.raises(ValueError, match='exact Chat origin'):
+            await scoped.get('https://example.invalid/backend-api/test')
+        assert len(seen) == 3
 
 
 async def test_preparation_response_stops_at_raw_byte_limit():
@@ -790,8 +1048,8 @@ async def test_generation_403_is_claimed_recorded_and_never_reposted(tmp_path, c
                         'subchat_http_dispatch_claims').fetchone()[0] == 1
                     posts = [path for method, path, _, _ in api.requests if method == 'POST']
                     assert posts == [
-                        '/backend-api/sentinel/chat-requirements/prepare',
                         '/backend-api/f/conversation/prepare',
+                        '/backend-api/sentinel/chat-requirements/prepare',
                         '/backend-api/f/conversation',
                     ]
                     request_count = len(api.requests)
@@ -971,7 +1229,7 @@ async def test_current_shape_generation_dispatches_with_stored_account(tmp_path)
     generation = ObservedHTTPGeneration.from_data(
         current_shape_data(), authorization=SECRET, account_id='fixture-account',
         cookie='session=' + PROOF)
-    async with LocalChat(prepare_token_present=False) as api:
+    async with LocalChat() as api:
         async with httpx.AsyncClient(
                 trust_env=False, follow_redirects=False,
                 transport=httpx.AsyncHTTPTransport(retries=0)) as client:
@@ -985,12 +1243,23 @@ async def test_current_shape_generation_dispatches_with_stored_account(tmp_path)
                 assert len(post_headers) == 3
                 assert all('chatgpt-account-id' not in headers and 'oai-did' not in headers
                            for headers in post_headers)
-                assert post_headers[2]['x-openai-target-path'] == 'fixture'
+                assert post_headers[2]['x-openai-target-path'] == (
+                    '/backend-api/f/conversation')
                 for headers in post_headers[:2]:
-                    assert not {'x-conduit-token', 'x-openai-target-path',
-                                'x-openai-target-route', 'x-oai-is-pending-updates',
-                                'x-oai-is-client-observation', 'oai-genui-client-actions'} & (
-                                    set(headers))
+                    assert headers['x-oai-is-client-observation'] == 'fixture'
+                    assert headers['x-oai-is-pending-updates'] == 'fixture'
+                assert post_headers[0]['x-openai-target-path'] == (
+                    '/backend-api/f/conversation/prepare')
+                assert post_headers[1]['x-openai-target-path'] == (
+                    '/backend-api/sentinel/chat-requirements/prepare')
+                assert 'x-conduit-token' not in post_headers[0]
+                assert post_headers[0]['oai-genui-client-actions'] == 'fixture'
+                assert 'x-conduit-token' not in post_headers[1]
+                assert 'oai-genui-client-actions' not in post_headers[1]
+                assert post_headers[0]['x-oai-turn-trace-id'] == (
+                    post_headers[2]['x-oai-turn-trace-id'])
+                assert post_headers[0]['x-oai-turn-trace-id'] != 'fixture'
+                assert 'x-oai-turn-trace-id' not in post_headers[1]
             finally:
                 ledger.close()
 
@@ -1091,7 +1360,7 @@ async def test_cancelled_preparation_is_terminal_before_dispatch(tmp_path, monke
                     'Future effort', owner=None, http_selection=SELECTION)
             assert store.get(operation, owner=None).state == 'preflight_failed'
             assert [event['stage'] for event in store.http_events(operation, owner=None)] == [
-                'sentinel_request', 'sentinel_failed']
+                'prepare_request', 'prepare_response', 'sentinel_request', 'sentinel_failed']
             assert store.connection.execute(
                 'SELECT COUNT(*) FROM subchat_http_dispatch_claims').fetchone()[0] == 0
             assert (await service.send(operation, 'cancelled prompt', 'Future Chat',

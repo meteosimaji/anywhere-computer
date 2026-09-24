@@ -9,6 +9,7 @@ from pydantic import Field
 from .models import Contract
 from .subchat_content import SubchatResources
 from .subchat_state import (
+    SubchatAccountMismatch,
     SubchatHTTPSelection,
     SubchatReportedSettings,
     SubchatSelectionError,
@@ -165,6 +166,7 @@ class Subchats:
         try:
             prepared = await self.backend.prepare(submission)
         except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError,
+                SubchatAccountMismatch,
                 SubchatUnsupported, SubchatSelectionError):
             raise
         except Exception as error:

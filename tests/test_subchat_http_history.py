@@ -544,6 +544,35 @@ async def test_unknown_conversation_recovery_does_not_launch_browser():
     assert await backend.find_submission(unknown) is None
 
 
+def test_browser_auth_account_binding_recovers_without_catalog_account_header():
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+    from anywhere_computer.subchat_state import SubchatAccountMismatch
+
+    context = object()
+    reader = ChatHTTPReader()
+    reader._headers = {'authorization': 'Bearer fixture'}
+    reader.bind_verified_account(context, 'account-a')
+    reader.check_generation_account('account-a')
+    with pytest.raises(SubchatAccountMismatch):
+        reader.check_generation_account('account-b')
+    reader._headers['chatgpt-account-id'] = 'account-b'
+    with pytest.raises(SubchatAccountMismatch):
+        reader.check_generation_account('account-a')
+
+
+def test_browser_auth_account_binding_resets_on_context_change():
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+    from anywhere_computer.subchat_state import SubchatAccountMismatch
+
+    reader = ChatHTTPReader()
+    first, second = object(), object()
+    reader.bind_verified_account(first, 'account-a')
+    reader.bind_verified_account(second, 'account-b')
+    reader.check_generation_account('account-b')
+    with pytest.raises(SubchatAccountMismatch):
+        reader.check_generation_account('account-a')
+
+
 @pytest.mark.parametrize('status', [401, 403])
 async def test_bootstrap_access_rejection_does_not_reopen_tabs(status):
     from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader

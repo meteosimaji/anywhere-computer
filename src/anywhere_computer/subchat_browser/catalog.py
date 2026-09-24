@@ -23,9 +23,15 @@ if TYPE_CHECKING:
     from playwright.async_api import CDPSession, Page, Response
 
 SOURCE = Path(__file__).with_name("subchat_model_menu.js").read_text(encoding="utf-8")
-TRIGGER = '[data-composer-navigation-target="reasoning"]'
-TOGGLE = '[data-model-picker-view-toggle="true"]:visible'
-CONTROL = '[data-reasoning-slider="true"]:visible'
+COMPOSER = 'form[data-type="unified-composer"], form[data-chatgpt-composer]'
+EDITOR = ('form[data-type="unified-composer"] #prompt-textarea[role="textbox"], '
+          '[data-composer-markdown][role="textbox"]')
+TRIGGER = ('form[data-type="unified-composer"] button.__composer-pill[aria-haspopup="menu"], '
+           '[data-composer-navigation-target="reasoning"]')
+TOGGLE = ('[role="menu"] [role="menuitem"][aria-label="モデルを選択"]:visible, '
+          '[data-model-picker-view-toggle="true"]:visible')
+CONTROL = ('[role="menu"] [role="menuitem"][aria-label="パワー"]:visible, '
+           '[data-reasoning-slider="true"]:visible')
 
 
 class HTTPModel(BaseModel):
@@ -155,8 +161,13 @@ async def empty_chat(page: Page) -> bool:
     if page.url.rstrip("/") != "https://chatgpt.com":
         return False
     chat = page.get_by_role("button", name="Chat", exact=True)
-    editors = page.locator('[data-composer-markdown][role="textbox"]')
-    return (await chat.count() == 1 and await chat.get_attribute("aria-pressed") == "true"
+    editors = page.locator(EDITOR)
+    radio = page.locator('[role="radio"][data-tpp-toggle-value="chatgpt"][data-state="on"]'
+                         '[aria-checked="true"]')
+    radios = page.locator('[role="radio"][data-tpp-toggle-value="chatgpt"]')
+    ordinary = (await radio.count() == 1 if await radios.count() else
+                await chat.count() == 1 and await chat.get_attribute("aria-pressed") == "true")
+    return (ordinary
             and await editors.count() == 1 and not (await editors.inner_text()).strip())
 
 

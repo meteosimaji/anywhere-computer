@@ -3,6 +3,7 @@
 The caller supplies real DOM reads and keyboard steps. This does not send prompts,
 choose models, reconnect a browser, or establish ownership of an arbitrary page.
 """
+import asyncio
 import re
 from collections.abc import Awaitable, Callable
 
@@ -23,7 +24,7 @@ def matches_effort(observed: tuple[int, int, int, str], label: str) -> bool:
     minimum, maximum, index, description = observed
     if description == label:
         return True
-    match = re.fullmatch(r'(.+)、\s*(\d+)\s*件中\s*(\d+)\s*番目。', description)
+    match = re.fullmatch(r'(.+)、\s*(\d+)\s*件中\s*(\d+)\s*(?:番目|件目)。', description)
     return (match is not None and match[1] == label
             and int(match[2]) == maximum - minimum + 1
             and int(match[3]) == index - minimum + 1)
@@ -57,7 +58,12 @@ async def move_effort(
             break
         direction = 1 if current[2] < target else -1
         await step("ArrowRight" if direction == 1 else "ArrowLeft")
-        updated = snapshot(await read())
+        async with asyncio.timeout(1):
+            while True:
+                updated = snapshot(await read())
+                if updated[2] != current[2]:
+                    break
+                await asyncio.sleep(.02)
         if updated[:2] != original[:2] or updated[2] != current[2] + direction:
             raise EffortUnconfirmed("keyboard step was not confirmed")
         current = updated

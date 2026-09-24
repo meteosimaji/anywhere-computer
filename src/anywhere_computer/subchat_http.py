@@ -2,11 +2,17 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
+import json
 import re
 import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, TypeVar
+from urllib.parse import urlsplit
 from uuid import uuid4
+from weakref import WeakSet
+
+import httpx
 
 from .subchat import (
     SubchatAccessError,
@@ -17,11 +23,11 @@ from .subchat import (
     SubchatUnsupported,
 )
 from .subchat_browser.catalog import require_http_selection
-from .subchat_browser.http_reader import ChatHTTPReader
+from .subchat_browser.http_reader import ChatHTTPReader, bounded_httpx_body
 from .subchat_http_download import MAX_FILE_BYTES
 from .subchat_http_generation import ObservedHTTPGeneration, dispatch_generation
 from .subchat_http_sender import HTTPFollowupParent, HTTPGenerationPlan
-from .subchat_http_session import ObservedHTTPSession
+from .subchat_http_session import ObservedHTTPSession, seed_cookie_jar
 from .subchat_state import (
     SubchatAccountMismatch,
     SubchatHTTPSelection,
@@ -54,12 +60,16 @@ class HTTPOnlySubchatBackend:
                  generation_origin: str = 'https://chatgpt.com',
                  chrome_login: bool = False,
                  startup_access_status: int | None = None,
+                 startup_account_mismatch: bool = False,
                  refresh_session: Callable[[str | None], Awaitable[tuple[
                      ObservedHTTPSession, Callable[[], Awaitable[AsyncClient]]]]]
                  | None = None) -> None:
         if startup_access_status is not None and (startup_access_status not in (401, 403)
                                                   or not chrome_login or session is not None):
             raise ValueError('Chrome login rejection requires an unbound HTTP session')
+        if startup_account_mismatch and (not chrome_login or session is not None
+                                         or startup_access_status != 401):
+            raise ValueError('Account mismatch requires a rejected Chrome login')
         if generation is not None and (session is None or store is None):
             raise ValueError('HTTP generation requires a session and durable store')
         if refresh_session is not None and (not chrome_login or generation is not None):
@@ -71,10 +81,56 @@ class HTTPOnlySubchatBackend:
                     or (session.cookie is not None and generation_headers.get('cookie')
                         != session.cookie.get_secret_value())):
                 raise ValueError('HTTP generation handoff does not match login session')
+        explicit_cookie = session is not None and session.cookie is not None and not chrome_login
+        cookie_clients: WeakSet[AsyncClient] = WeakSet()
+        cookie_lock = asyncio.Lock()
+
+        async def session_request_factory() -> AsyncClient:
+            client = await request_factory()
+            if explicit_cookie and client not in cookie_clients:
+                async with cookie_lock:
+                    if client not in cookie_clients:
+                        assert session is not None and session.cookie is not None
+                        origin = urlsplit(generation_origin)
+                        host = origin.hostname
+                        if host not in {'chatgpt.com', '127.0.0.1'}:
+                            raise ValueError('Unsupported explicit Cookie origin')
+                        seeded_names = seed_cookie_jar(
+                            client, session.cookie.get_secret_value(), domain=host)
+                        cookie_scopes = {name: (host, '/') for name in seeded_names}
+
+                        async def exact_origin(request: httpx.Request) -> None:
+                            if (request.url.scheme != origin.scheme
+                                    or request.url.host != host
+                                    or request.url.port != origin.port):
+                                raise ValueError('Explicit session requires the exact Chat origin')
+
+                        async def retire_seeded_cookies(response: httpx.Response) -> None:
+                            # The observed Cookie header has no domain/path metadata.
+                            # A provider Set-Cookie with a different scope must replace
+                            # its synthetic seed, rather than create a stale duplicate.
+                            for cookie in response.cookies.jar:
+                                if cookie.name in cookie_scopes:
+                                    previous = cookie_scopes[cookie.name]
+                                    current = (cookie.domain, cookie.path)
+                                    if current == previous:
+                                        continue
+                                    try:
+                                        client.cookies.jar.clear(*previous, cookie.name)
+                                    except KeyError:
+                                        pass
+                                    cookie_scopes[cookie.name] = current
+
+                        client.event_hooks['request'].append(exact_origin)
+                        client.event_hooks['response'].append(retire_seeded_cookies)
+                        cookie_clients.add(client)
+            return client
+
         self._http_reader = ChatHTTPReader(
-            request_factory, browser_free=True, session=session,
+            session_request_factory, browser_free=True, session=session,
+            use_client_cookies=explicit_cookie,
             access_status=startup_access_status)
-        self._request_factory = request_factory
+        self._request_factory: Callable[[], Awaitable[AsyncClient]] = session_request_factory
         self._session = session
         self._generation = generation
         self._store = store
@@ -83,6 +139,7 @@ class HTTPOnlySubchatBackend:
         self._delete_session_available = session is not None
         self._chrome_login = chrome_login
         self._startup_access_status = startup_access_status
+        self._startup_account_mismatch = startup_account_mismatch
         self._refresh_session = refresh_session
         self._refresh_lock = asyncio.Lock()
         self._last_auto_refresh_at = 0.0
@@ -99,6 +156,7 @@ class HTTPOnlySubchatBackend:
         self._http_reader = ChatHTTPReader(request_factory, browser_free=True,
                                            session=session)
         self._startup_access_status = None
+        self._startup_account_mismatch = False
         self._delete_session_available = True
 
     async def refresh_auth(self) -> dict[str, object]:
@@ -111,6 +169,8 @@ class HTTPOnlySubchatBackend:
 
     async def _authenticated_read(self, read: Callable[[], Awaitable[_ReadResult]]
                                   ) -> _ReadResult:
+        if self._startup_account_mismatch:
+            raise SubchatAccountMismatch('Chrome login selected another Chat account')
         reader = self._http_reader
         try:
             return await read()
@@ -146,6 +206,7 @@ class HTTPOnlySubchatBackend:
                 'session_source': ('chrome_profile_http_get' if self._chrome_login
                                    else 'explicit_in_memory_handoff'),
                 'authentication_state': (
+                    'account_mismatch' if self._startup_account_mismatch else
                     'authentication_required' if self._startup_access_status == 401 else
                     'access_denied' if self._startup_access_status == 403 else
                     'authenticated' if self._session is not None else
@@ -164,6 +225,45 @@ class HTTPOnlySubchatBackend:
             raise SubchatUnsupported('http_generation_unavailable')
         if selection is None:
             raise SubchatSelectionError('http_selection', 'required')
+
+    async def _verify_explicit_generation_account(self) -> None:
+        """Bind the supplied Cookie and bearer to one account before reserving a send."""
+        if self._chrome_login or self._generation_origin != 'https://chatgpt.com':
+            return
+        assert self._session is not None
+        if self._session.cookie is None:
+            raise SubchatAccountMismatch('HTTP generation Cookie is required')
+        assert self._generation is not None
+        headers = {'accept': 'application/json',
+                   'referer': 'https://chatgpt.com/',
+                   'user-agent': (self._session.user_agent
+                                  or self._generation.headers['user-agent']),
+                   'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors',
+                   'sec-fetch-dest': 'empty'}
+        client = await self._request_factory()
+        async with client.stream('GET', 'https://chatgpt.com/api/auth/session',
+                                 headers=headers, timeout=15.0,
+                                 follow_redirects=False) as response:
+            if response.status_code in (401, 403):
+                raise SubchatAccessError(response.status_code)
+            if response.status_code != 200 or response.headers.get(
+                    'content-type', '').split(';', 1)[0].strip() != 'application/json':
+                raise SubchatAccountMismatch('HTTP generation login could not be verified')
+            body = await bounded_httpx_body(response, 131_072,
+                                            'HTTP generation login response is too large')
+        try:
+            data = json.loads(body)
+            account = data.get('account') if isinstance(data, dict) else None
+            account_id = account.get('id') if isinstance(account, dict) else None
+            token = data.get('accessToken') if isinstance(data, dict) else None
+            matches = (isinstance(account_id, str) and isinstance(token, str)
+                       and account_id == self._session.account_id
+                       and hmac.compare_digest('Bearer ' + token,
+                                               self._session.authorization.get_secret_value()))
+        except (ValueError, TypeError):
+            matches = False
+        if not matches:
+            raise SubchatAccountMismatch('HTTP generation login does not match selected account')
 
     async def prepare(self, submission: SubchatSubmission
                       ) -> tuple[str, ...] | SubchatPreparedSend:
@@ -185,6 +285,7 @@ class HTTPOnlySubchatBackend:
             raise SubchatSelectionError('model', 'mismatch')
         if choices[0].get('title') != submission.effort:
             raise SubchatSelectionError('effort', 'mismatch')
+        await self._verify_explicit_generation_account()
         baseline: tuple[str, ...] = ()
         if submission.after_operation_id is not None:
             assert self._store is not None
@@ -204,6 +305,7 @@ class HTTPOnlySubchatBackend:
     async def send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
         if self._generation is None or self._store is None:
             raise SubchatUnsupported('http_generation_unavailable')
+        assert self._session is not None
         try:
             parent = None
             if submission.after_operation_id is not None:
@@ -217,7 +319,8 @@ class HTTPOnlySubchatBackend:
             await dispatch_generation(plan, submission, handoff=self._generation,
                                       client=await self._request_factory(), store=self._store,
                                       owner=self._owner, origin=self._generation_origin,
-                                      use_client_cookies=self._chrome_login)
+                                      use_client_cookies=(self._chrome_login
+                                                          or self._session.cookie is not None))
         except BaseException:
             # The SQLite claim is the dispatch boundary. A failed or cancelled
             # preflight is terminal, never an invitation to replay the request.
@@ -311,6 +414,8 @@ class HTTPOnlySubchatBackend:
         from .subchat_http_download import download_verified_sandbox_file
 
         if self._store is None or self._session is None:
+            if self._startup_account_mismatch:
+                raise SubchatAccountMismatch('Chrome login selected another Chat account')
             if self._startup_access_status is not None:
                 raise SubchatAccessError(self._startup_access_status)
             raise SubchatUnsupported('http_session_required')
@@ -327,7 +432,9 @@ class HTTPOnlySubchatBackend:
                 raise ValueError('A verified final answer is required for file download')
             assert session is not None
             return await download_verified_sandbox_file(
-                saved, answer, sandbox_link, session=session,
+                saved, answer, sandbox_link,
+                session=(session.model_copy(update={'cookie': None})
+                         if session.cookie is not None and not self._chrome_login else session),
                 client=await request_factory(), max_bytes=max_bytes)
 
         return await self._authenticated_read(read)
