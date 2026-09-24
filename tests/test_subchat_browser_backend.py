@@ -8,6 +8,27 @@ from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import Subchats
 from anywhere_computer.subchat_state import SubchatSubmissions
 
+
+async def test_image_lookup_uses_backend_ledger_owner(tmp_path):
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatOperationNotFound
+
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        operation = 'e' * 32
+        store.prepare(operation, 'private', 'model', 'effort', owner='other-grant')
+
+        async def no_browser():
+            raise AssertionError('Owner check must precede browser access')
+
+        backend = BrowserSubchatBackend(no_browser, store=store, owner='grant-1')
+        backend.image_download_available = True
+        with pytest.raises(SubchatOperationNotFound):
+            await backend.download_image(operation, max_bytes=1024)
+    finally:
+        ledger.close()
+
 CONVERSATION_ID = '11111111-2222-3333-4444-555555555555'
 
 HTML = '''<button aria-pressed="true">Chat</button>

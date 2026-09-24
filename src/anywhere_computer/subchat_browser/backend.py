@@ -58,6 +58,21 @@ CHAT = re.compile(r'https://chatgpt\.com/c/'
 logger = logging.getLogger(__name__)
 
 
+def browser_capabilities(*, http_read: bool,
+                         httpx_generation: bool) -> dict[str, object]:
+    """Describe the configured browser transport without opening a browser."""
+    return {'queue_dispatch': 'recover_or_wait', 'background_dispatcher': False,
+            'native_steer': False, 'provider_stop': False,
+            'cancel_scope': 'local_queued_or_prepared',
+            'state': 'capabilities', 'transport': 'browser_prepared',
+            'browser_required': True,
+            'generation_transport': ('browser_prepared_httpx' if httpx_generation
+                                     else 'browser_prepared'),
+            'http_selection_send_supported': http_read,
+            'credential_refresh': False, 'independent_login': False,
+            'http_delete_supported': True, 'deletion_transport': 'authenticated_http'}
+
+
 class BrowserSubchatBackend:
     def __init__(self, context: BrowserContext | Callable[[], Awaitable[BrowserContext]],
                  *, http_read: bool = False,
@@ -69,6 +84,7 @@ class BrowserSubchatBackend:
                  httpx_generation: bool = False,
                  background_pages: bool = False,
                  store: SubchatSubmissions | None = None,
+                 owner: str | None = None,
                  expected_account_id: str | None = None) -> None:
         if httpx_generation and not http_read:
             raise ValueError('Browser-prepared HTTPX generation requires HTTP history')
@@ -80,6 +96,7 @@ class BrowserSubchatBackend:
         self.image_download_available = background_pages and http_read
         self._expected_account_id = expected_account_id
         self._store = store
+        self._owner = owner
         self._record_request = record_request
         self._record_preflight_failure = record_preflight_failure
         self._record_conversation = record_conversation
@@ -100,16 +117,8 @@ class BrowserSubchatBackend:
             self._context.on('close', self._browser_closed)
 
     def capabilities(self) -> dict[str, object]:
-        return {'queue_dispatch': 'recover_or_wait', 'background_dispatcher': False,
-                'native_steer': False, 'provider_stop': False,
-                'cancel_scope': 'local_queued_or_prepared',
-                'state': 'capabilities', 'transport': 'browser_prepared',
-                'browser_required': True,
-                'generation_transport': ('browser_prepared_httpx' if self._httpx_generation
-                                         else 'browser_prepared'),
-                'http_selection_send_supported': self.http_read,
-                'credential_refresh': False, 'independent_login': False,
-                'http_delete_supported': True, 'deletion_transport': 'authenticated_http'}
+        return browser_capabilities(http_read=self.http_read,
+                                    httpx_generation=self._httpx_generation)
 
     def _browser_closed(self, context: BrowserContext) -> None:
         self._closed = True
@@ -193,7 +202,7 @@ class BrowserSubchatBackend:
 
         if not self.image_download_available or self._store is None:
             raise SubchatUnsupported('http_session_required')
-        saved = self._store.get(operation_id, owner=None)
+        saved = self._store.get(operation_id, owner=self._owner)
         if saved.state not in {'submitted', 'completed'}:
             raise ValueError('Image download requires a confirmed submission')
         async with httpx.AsyncClient(

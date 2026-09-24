@@ -135,8 +135,10 @@ class SubchatPage(Contract):
 class SubchatSubmissions:
     """Uses the ledger's connection; does not own or close it."""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(self, connection: sqlite3.Connection, *, initialize: bool = True) -> None:
         self.connection = connection
+        if not initialize:
+            return
         with connection:
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_generation_responses ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, '

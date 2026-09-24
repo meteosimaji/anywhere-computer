@@ -81,7 +81,8 @@ class DeleteCommand(DeleteRequest):
 
 async def dispatch(service: Subchats,
                    command: Command | ListCommand | QueueCommand | CatalogCommand
-                   | CapabilitiesCommand | DeleteCommand) -> str:
+                   | CapabilitiesCommand | DeleteCommand, *,
+                   owner: str | None = None) -> str:
     if isinstance(command, CapabilitiesCommand):
         capabilities = getattr(service.backend, 'capabilities', None)
         if capabilities is None:
@@ -94,13 +95,13 @@ async def dispatch(service: Subchats,
         return json.dumps(await observe(), ensure_ascii=False)
     if isinstance(command, ListCommand):
         return service.store.list(SubchatList(limit=command.limit, before=command.before),
-                                  owner=None).model_dump_json()
+                                  owner=owner).model_dump_json()
     if isinstance(command, QueueCommand):
         return service.queue(command.operation_id, command.target_operation_id,
-                             command.prompt, owner=None).model_dump_json()
+                             command.prompt, owner=owner).model_dump_json()
     if isinstance(command, DeleteCommand):
         return (await delete_saved(service, DeleteRequest.model_validate(command.model_dump(
-            exclude={'action'})), owner=None)).model_dump_json()
+            exclude={'action'})), owner=owner)).model_dump_json()
     if command.action == 'send':
         if command.prompt is None or command.model is None or command.effort is None:
             if command.prompt is None:
@@ -110,7 +111,7 @@ async def dispatch(service: Subchats,
             if command.effort is None:
                 raise SubchatSelectionError('effort', 'required')
         result = await service.send(command.operation_id, command.prompt, command.model,
-                                    command.effort, owner=None,
+                                    command.effort, owner=owner,
                                     conversation_id=command.conversation_id,
                                     work_context=command.work_context, resources=command.resources,
                                     http_selection=command.http_selection)
@@ -120,19 +121,20 @@ async def dispatch(service: Subchats,
                                                command.work_context, command.resources,
                                                command.http_selection)):
             raise ValueError('Recovery, status and cancellation accept only an operation identity')
-        result = (await service.recover(command.operation_id, owner=None)
+        result = (await service.recover(command.operation_id, owner=owner)
                   if command.action == 'recover'
-                  else service.store.cancel(command.operation_id, owner=None)
+                  else service.store.cancel(command.operation_id, owner=owner)
                   if command.action == 'cancel'
-                  else service.store.get(command.operation_id, owner=None))
+                  else service.store.get(command.operation_id, owner=owner))
     data = result.model_dump(mode='json')
-    progress = service.store.http_progress(result.operation_id, owner=None)
+    progress = service.store.http_progress(result.operation_id, owner=owner)
     if progress is not None:
         data['http_progress'] = progress
     return json.dumps(data, ensure_ascii=False, separators=(',', ':'))
 
 
-async def process_lines(service: Subchats, source: TextIO, destination: TextIO) -> None:
+async def process_lines(service: Subchats, source: TextIO, destination: TextIO, *,
+                        owner: str | None = None) -> None:
     """Sequential request framing; errors preserve the durable operation identity."""
     while True:
         line = await asyncio.to_thread(source.readline)
@@ -144,7 +146,7 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
             command = TypeAdapter(
                 Command | ListCommand | QueueCommand | CatalogCommand
                 | CapabilitiesCommand | DeleteCommand).validate_json(line)
-            output = await dispatch(service, command)
+            output = await dispatch(service, command, owner=owner)
         except Exception as error:
             # Do not print provider errors or invalid input: both can contain secrets.
             output = json.dumps({
@@ -193,7 +195,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
               chrome_login_source_profile: Path | None = None,
               chrome_generation_stdin: bool = False,
               expected_account_id: str | None = None,
-              read_only_mcp: bool = False) -> None:
+              read_only_mcp: bool = False,
+              ledger_owner: str | None = None) -> None:
     if read_only_mcp and (not mcp or not http_only or http_generation is not None
                           or chrome_generation_stdin):
         raise ValueError('Read-only MCP requires HTTP-only mode without generation')
@@ -373,21 +376,22 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
             store = SubchatSubmissions(ledger.connection)
 
             def record_request(operation_id: str, message_id: str, account_id: str) -> None:
-                store.observe_request(operation_id, message_id, owner=None,
+                store.observe_request(operation_id, message_id, owner=ledger_owner,
                                       provider_account_id=account_id)
 
             def record_conversation(operation_id: str, message_id: str,
                                     conversation_id: str, account_id: str) -> None:
-                store.observe_conversation(operation_id, message_id, conversation_id, owner=None,
+                store.observe_conversation(operation_id, message_id, conversation_id,
+                                           owner=ledger_owner,
                                            provider_account_id=account_id)
 
             def record_rejection(operation_id: str, message_id: str,
                                  status: int, account_id: str) -> None:
-                store.observe_rejection(operation_id, message_id, status, owner=None,
+                store.observe_rejection(operation_id, message_id, status, owner=ledger_owner,
                                         provider_account_id=account_id)
 
             def record_preflight_failure(operation_id: str) -> None:
-                if not store.fail_http_before_dispatch(operation_id, owner=None):
+                if not store.fail_http_before_dispatch(operation_id, owner=ledger_owner):
                     raise ValueError('Generation preflight state changed')
 
             backend: BrowserSubchatBackend | HTTPOnlySubchatBackend
@@ -397,6 +401,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 backend = HTTPOnlySubchatBackend(
                     open_standalone_http, http_session, generation=http_generation,
                     store=store,
+                    owner=ledger_owner,
                     chrome_login=chrome_login,
                     startup_access_status=chrome_access_status,
                     startup_account_mismatch=chrome_account_mismatch,
@@ -415,6 +420,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     httpx_generation=httpx_generation,
                     background_pages=httpx_generation and sys.platform == 'darwin',
                     store=store,
+                    owner=ledger_owner,
                     expected_account_id=expected_account_id if httpx_generation else None)
             service = Subchats(store, backend)
             # Saved-state requests need no browser. Once needed, commands share
@@ -488,13 +494,13 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 server = session(service, observe_catalog=backend.catalog,
                                  observe_http_catalog=backend.http_catalog,
                                  instructions=instructions, serialize_recovery=not http_only,
-                                 read_only=read_only_mcp)
+                                 read_only=read_only_mcp, owner=ledger_owner)
                 try:
                     await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
                 finally:
                     await server.close()
             else:
-                await process_lines(service, sys.stdin, sys.stdout)
+                await process_lines(service, sys.stdin, sys.stdout, owner=ledger_owner)
     finally:
         ledger.close()
 

@@ -131,6 +131,14 @@ def main() -> None:
     parser.add_argument("--client-id", help="Registered public OAuth client ID")
     parser.add_argument("--owner", help="Owner identifier for initial authentication setup")
     parser.add_argument("--scope", action="append", help="Tool to authorize (repeat per tool)")
+    parser.add_argument("--subchat-profile", type=Path,
+                        help="Selected logged-in Chrome profile for direct HTTP Subchat tools")
+    parser.add_argument("--subchat-ledger", type=Path,
+                        help="Persistent Subchat operation ledger for direct HTTP tools")
+    parser.add_argument("--subchat-account-id",
+                        help="Expected ordinary Chat account ID for direct HTTP Subchat tools")
+    parser.add_argument("--subchat-send-consent", action="store_true",
+                        help="Explicitly enable ordinary Chat Subchat tools on this HTTP service")
     parser.add_argument("--port", type=int, help="Stable loopback HTTP port (default: 8768)")
     parser.add_argument("--redirect-uri", action="append", help="Registered OAuth callback URL")
     parser.add_argument(
@@ -267,6 +275,12 @@ def main() -> None:
         parser.error("--scope is only valid for login, http-configure and http-add-tools")
     if args.command == "http-add-tools" and not args.scope:
         parser.error("http-add-tools requires at least one --scope tool")
+    subchat_options = (args.subchat_profile, args.subchat_ledger,
+                       args.subchat_account_id, args.subchat_send_consent)
+    if any(subchat_options) and args.command != "http-add-tools":
+        parser.error("Subchat selection options are only valid for http-add-tools")
+    if args.command == "http-add-tools" and any(subchat_options) and not all(subchat_options):
+        parser.error("Direct Subchat selection requires profile, ledger, account ID and consent")
     if args.command == "login" and not args.scope:
         parser.error("login requires at least one --scope tool")
     if args.owner is not None and args.command not in {
@@ -432,7 +446,15 @@ def main() -> None:
             stop = watch_parent_pipe() if args.watch_parent else None
             raise SystemExit(run_tunnel(directory, stop=stop, connector=args.connector))
         elif args.command == "http-add-tools":
-            result = asyncio.run(add_http_tools(directory, frozenset(args.scope)))
+            from .subchat_gateway import SubchatGatewayConfig
+
+            subchat_selection = (SubchatGatewayConfig(
+                profile=str(args.subchat_profile), ledger=str(args.subchat_ledger),
+                account_id=args.subchat_account_id,
+                consent="ordinary-chat-browser-control-approved",
+            ) if all(subchat_options) else None)
+            result = asyncio.run(add_http_tools(directory, frozenset(args.scope),
+                                                subchat=subchat_selection))
             print(json.dumps(result, indent=2))
         elif args.command == "http-configure":
             config = asyncio.run(

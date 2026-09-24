@@ -9,6 +9,7 @@ from anywhere_computer.authorization import AuthorizationStore, pkce_s256
 from anywhere_computer.http_service import http_service, load_http_config
 from anywhere_computer.http_tool_upgrade import add_http_tools
 from anywhere_computer.owner_credentials import OwnerCredentials
+from anywhere_computer.subchat_gateway import SubchatGatewayConfig
 
 
 @pytest.mark.parametrize("added_tools", [
@@ -90,6 +91,51 @@ async def test_upgrade_does_not_expand_restricted_revoked_or_expired_grants(
     )
     try:
         assert store.db.execute("SELECT id,tools,expires,revoked FROM grants").fetchall() == before
+    finally:
+        store.close()
+
+
+async def test_subchat_upgrade_requires_selection_and_new_consent(tmp_path, unused_tcp_port):
+    config = await setup(tmp_path, unused_tcp_port)
+    store = AuthorizationStore(
+        tmp_path / "http-server/authorization", resource=RESOURCE,
+        known_tools=config.scopes,
+    )
+    try:
+        store.approve(
+            owner=config.owner, device=config.device, client=config.client,
+            redirect=next(iter(config.redirects)), resource=RESOURCE,
+            tools=config.scopes, challenge=pkce_s256("v" * 43),
+        )
+        original_grant = store.db.execute(
+            "SELECT tools FROM grants ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()[0]
+    finally:
+        store.close()
+    with pytest.raises(ValueError, match="explicit gateway selection"):
+        await add_http_tools(tmp_path, frozenset({"subchat_send"}))
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "selected-profile"),
+        ledger=str(tmp_path / "selected-ledger"), account_id="account-id",
+        consent="ordinary-chat-browser-control-approved",
+    )
+    result = await add_http_tools(
+        tmp_path, frozenset({"subchat_send", "subchat_status"}), subchat=selected,
+    )
+    assert result["expanded_full_access_grants"] == 0
+    assert result["new_consent_required"] is True
+    updated = load_http_config(tmp_path)
+    assert updated.subchat == selected
+    assert {"subchat_send", "subchat_status"} <= updated.scopes
+    store = AuthorizationStore(
+        tmp_path / "http-server/authorization", resource=RESOURCE,
+        known_tools=updated.scopes,
+    )
+    try:
+        saved_grant = store.db.execute(
+            "SELECT tools FROM grants ORDER BY rowid DESC LIMIT 1"
+        ).fetchone()[0]
+        assert saved_grant == original_grant
     finally:
         store.close()
 

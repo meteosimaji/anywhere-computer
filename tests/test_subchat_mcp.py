@@ -1,5 +1,6 @@
 from test_subchat_lifecycle import BrowserFixture
 
+from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import Subchats
 from anywhere_computer.subchat_mcp import session
@@ -71,6 +72,104 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
         assert saved['result']['structuredContent']['data']['state'] == 'sending'
         assert backend.sends == 2
     finally:
+        ledger.close()
+
+
+async def test_mcp_session_owner_isolates_saved_operations_and_downloads(tmp_path):
+    from types import SimpleNamespace
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    downloads = []
+
+    class Backend(BrowserFixture):
+        image_download_available = True
+
+        async def download_sandbox_file(self, operation_id, sandbox_link, *, max_bytes):
+            downloads.append(('file', operation_id))
+            return SimpleNamespace(file_name='result.txt', mime_type='text/plain',
+                                   file_size_bytes=2, content=b'ok')
+
+        async def download_image(self, operation_id, *, max_bytes):
+            downloads.append(('image', operation_id))
+            return SimpleNamespace(file_size_bytes=2, content=b'ok', mime_type='image/png',
+                                   submission_state='completed', width=1, height=1)
+
+    backend = Backend()
+    service = Subchats(store, backend)
+    alice_id, bob_id = 'a' * 32, 'b' * 32
+    for owner, operation_id, user_message in (
+        ('alice', alice_id, 'alice-user'), ('bob', bob_id, 'bob-user')
+    ):
+        store.prepare(operation_id, owner, 'model', 'effort', owner=owner)
+        store.begin_send(operation_id, owner=owner)
+        store.submitted(operation_id, f'{owner}-chat', user_message, owner=owner)
+        store.complete(operation_id, f'{owner}-answer', f'{owner}-reply', owner=owner)
+    alice = session(service, owner='alice')
+    bob = session(service, owner='bob')
+
+    async def call(server, tool, target, **extra):
+        return await server.execute(Request(operation_id='c' * 32, tool=tool,
+                                            arguments={'operation_id': target, **extra}))
+
+    try:
+        own = await call(alice, 'subchat_status', alice_id)
+        assert own.state == 'completed' and own.data['answer'] == 'alice-reply'
+        for tool in ('subchat_status', 'subchat_recover', 'subchat_wait',
+                     'subchat_cancel', 'subchat_queue_watch'):
+            foreign = await call(alice, tool, bob_id)
+            assert foreign.state == 'failed'
+            assert foreign.data['error_code'] == 'unknown_operation'
+        listing = await alice.execute(Request(operation_id='d' * 32,
+                                              tool='subchat_list', arguments={}))
+        assert [item['operation_id'] for item in listing.data['submissions']] == [alice_id]
+        queue = await alice.execute(Request(operation_id='e' * 32, tool='subchat_message',
+                                            arguments={'mode': 'queue',
+                                                       'target_operation_id': bob_id,
+                                                       'prompt': 'foreign follow-up'}))
+        assert queue.data['error_code'] == 'unknown_operation'
+        duplicate = await alice.execute(Request(operation_id=bob_id, tool='subchat_send',
+                                                arguments={'prompt': 'different',
+                                                           'model': 'model', 'effort': 'effort'}))
+        assert duplicate.data['error_code'] == 'unknown_operation'
+        assert backend.sends == 0
+
+        for tool, extra in (
+            ('subchat_download_file', {'sandbox_link': 'sandbox:/result.txt'}),
+            ('subchat_download_image', {}),
+        ):
+            previous_downloads = list(downloads)
+            foreign = await call(alice, tool, bob_id, **extra)
+            assert foreign.data['error_code'] == 'unknown_operation'
+            assert downloads == previous_downloads
+            own_download = await call(alice, tool, alice_id, **extra)
+            assert own_download.state == 'completed'
+            assert own_download.data['content_base64'] == 'b2s='
+        assert downloads == [('file', alice_id), ('image', alice_id)]
+        own_send_id = '1' * 32
+        sent = await alice.execute(Request(operation_id=own_send_id, tool='subchat_send',
+                                           arguments={'prompt': 'alice input', 'model': 'model',
+                                                      'effort': 'effort'}))
+        assert sent.state == 'unknown'
+        assert store.get(own_send_id, owner='alice').state == 'sending'
+        assert (await call(bob, 'subchat_status', own_send_id)).data['error_code'] == (
+            'unknown_operation')
+        own_queue_id = '2' * 32
+        queued = await alice.execute(Request(operation_id=own_queue_id,
+                                             tool='subchat_message', arguments={
+                                                 'mode': 'queue',
+                                                 'target_operation_id': alice_id,
+                                                 'prompt': 'alice follow-up'}))
+        assert queued.state == 'completed'
+        assert store.get(own_queue_id, owner='alice').state == 'queued'
+        assert (await call(bob, 'subchat_status', own_queue_id)).data['error_code'] == (
+            'unknown_operation')
+        assert (await call(bob, 'subchat_status', bob_id)).data['answer'] == 'bob-reply'
+        assert (await call(bob, 'subchat_status', alice_id)).data['error_code'] == (
+            'unknown_operation')
+    finally:
+        await alice.close()
+        await bob.close()
         ledger.close()
 
 
@@ -374,4 +473,81 @@ async def test_wait_drops_parent_observation_after_parent_completes(tmp_path):
         finishing.cancel()
         await asyncio.gather(finishing, return_exceptions=True)
         await server.close()
+        ledger.close()
+
+
+async def test_session_owner_scopes_ledger_tools_and_download_authorization(tmp_path):
+    from anywhere_computer.models import Request
+
+    class DownloadBackend(BrowserFixture):
+        file_reads = 0
+        image_reads = 0
+
+        async def download_sandbox_file(self, operation_id, sandbox_link, *, max_bytes):
+            self.file_reads += 1
+            raise AssertionError('Cross-owner file download reached backend')
+
+        async def download_image(self, operation_id, *, max_bytes):
+            self.image_reads += 1
+            raise AssertionError('Cross-owner image download reached backend')
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    backend = DownloadBackend()
+    service = Subchats(store, backend)
+    alice_id, bob_id = 'a' * 32, 'b' * 32
+    store.prepare(alice_id, 'alice prompt', 'model', 'effort', owner='alice')
+    store.prepare(bob_id, 'bob prompt', 'model', 'effort', owner='bob')
+    alice = session(service, owner='alice')
+    bob = session(service, owner='bob')
+    anonymous = session(service)
+
+    async def run(server, tool, operation_id, arguments):
+        return await server.execute(Request(operation_id=operation_id, tool=tool,
+                                            arguments=arguments))
+
+    try:
+        for server, own_id, foreign_id in ((alice, alice_id, bob_id),
+                                           (bob, bob_id, alice_id)):
+            listed = await run(server, 'subchat_list', '1' * 32, {})
+            assert [item['operation_id'] for item in listed.data['submissions']] == [own_id]
+            own = await run(server, 'subchat_status', '2' * 32,
+                            {'operation_id': own_id})
+            assert own.data['operation_id'] == own_id
+            for tool in ('subchat_status', 'subchat_recover', 'subchat_wait',
+                         'subchat_queue_watch', 'subchat_cancel'):
+                rejected = await run(server, tool, '3' * 32,
+                                     {'operation_id': foreign_id})
+                assert rejected.data['error_code'] == 'unknown_operation'
+            queued = await run(server, 'subchat_message', '4' * 32,
+                               {'mode': 'queue', 'target_operation_id': foreign_id,
+                                'prompt': 'foreign queue'})
+            assert queued.data['error_code'] == 'unknown_operation'
+            deleted = await run(server, 'subchat_delete', '5' * 32,
+                                {'operation_id': foreign_id,
+                                 'conversation_id': '00000000-0000-0000-0000-000000000001'})
+            assert deleted.data['error_code'] == 'unknown_operation'
+            sent = await run(server, 'subchat_send', foreign_id,
+                             {'prompt': 'foreign prompt', 'model': 'model', 'effort': 'effort'})
+            assert sent.data['error_code'] == 'unknown_operation'
+            file = await run(server, 'subchat_download_file', '6' * 32,
+                             {'operation_id': foreign_id, 'sandbox_link': 'sandbox:/foreign'})
+            assert file.data['error_code'] == 'unknown_operation'
+            image = await run(server, 'subchat_download_image', '7' * 32,
+                              {'operation_id': foreign_id})
+            assert image.data['error_code'] == 'unknown_operation'
+
+        assert backend.sends == backend.file_reads == backend.image_reads == 0
+        assert store.get(alice_id, owner='alice').state == 'prepared'
+        assert store.get(bob_id, owner='bob').state == 'prepared'
+        empty = await run(anonymous, 'subchat_list', '8' * 32, {})
+        assert empty.data['submissions'] == []
+        cancelled = await run(alice, 'subchat_cancel', '9' * 32,
+                              {'operation_id': alice_id})
+        assert cancelled.data['state'] == 'cancelled'
+        assert store.get(bob_id, owner='bob').state == 'prepared'
+    finally:
+        await alice.close()
+        await bob.close()
+        await anonymous.close()
         ledger.close()

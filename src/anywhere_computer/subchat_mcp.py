@@ -94,6 +94,69 @@ READ_ONLY_TOOLS = frozenset({
     'subchat_download_image', 'subchat_refresh_auth',
 })
 
+_BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
+    'subchat_queue_watch': (QueueWatch, 'Explicitly arm or disarm automatic delivery of an '
+        'existing queued input while this MCP controller remains alive. Requires an already '
+        'open owned browser tab; never launches Chrome. Checks every five seconds, stops on '
+        'errors or after final saved result. At most eight retained watches; disable to '
+        'release a slot. '
+        'Lease is 30-1800 seconds (default 900); expiry requires explicit re-arming. '
+        'Restart requires explicit re-arming. Disabling observation does not cancel a queue '
+        'or a preparation already in progress; use subchat_cancel for unsent cancellation. '
+        'This is browser-assisted delivery, not quiet HTTP generation or immediate steer.'),
+    'subchat_list': (SubchatList, 'List saved submission summaries without opening Chrome.'),
+    'subchat_cancel': (OperationId, 'Cancel an unsent queued/prepared input; never stop Chat.'),
+    'subchat_delete': (DeleteRequest, 'Hide one exact saved ordinary Chat conversation. '
+        'Requires matching saved operation and conversation ID and checks the bound account. '
+        'Makes one authenticated HTTP PATCH; unknown outcomes are never replayed.'),
+    'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
+                        'Steer returns unsupported without sending or queueing.'),
+    'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels.'),
+    'subchat_recover': (OperationId, 'Recover receipt/answer or progress a queued follow-up; '
+                        'never replay an uncertain send.'),
+    'subchat_status': (OperationId, 'Read the saved submission and latest HTTP transport '
+                       'checkpoint without browser interaction.'),
+    'subchat_wait': (Wait, 'Wait for an answer without stopping generation or resending. '
+                     'Other subchats can progress between observations. Timeout returns '
+                     'the current saved state, not a failed generation.'),
+}
+_CAPABILITIES_DEFINITION = (
+    Contract, 'Read configured transport capabilities without network or browser work.')
+_GATEWAY_CATALOG_DEFINITION = (
+    ReadOnlyHTTPCatalog, "Read the selected account's authenticated HTTP model "
+    'catalog without changing the browser model picker.')
+
+
+def _tool_catalog(definitions: dict[str, tuple[type[Contract], str]]) -> list[JsonValue]:
+    return [cast(JsonValue, {
+        'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
+        'annotations': {'readOnlyHint': name in {
+            'subchat_capabilities', 'subchat_catalog', 'subchat_status', 'subchat_list',
+            'subchat_download_file', 'subchat_download_image', 'subchat_refresh_auth'},
+                        'destructiveHint': name == 'subchat_delete', 'openWorldHint': True},
+    }) for name, (schema, description) in definitions.items()]
+
+
+def direct_gateway_catalog() -> list[JsonValue]:
+    """Advertise selected direct tools without opening or authenticating Chrome."""
+    definitions = {name: definition for name, definition in _BASE_TOOL_DEFINITIONS.items()
+                   if name in {'subchat_message', 'subchat_send', 'subchat_recover',
+                               'subchat_status', 'subchat_wait'}}
+    definitions['subchat_capabilities'] = _CAPABILITIES_DEFINITION
+    definitions['subchat_catalog'] = _GATEWAY_CATALOG_DEFINITION
+    return _tool_catalog(definitions)
+
+
+def capability_report(reported: dict[str, object], *,
+                      queue_watch_supported: bool) -> dict[str, JsonValue]:
+    """Add the implementation identity to configured transport capabilities."""
+    return TypeAdapter(dict[str, JsonValue]).validate_python({
+        **reported,
+        'implementation_version': __version__,
+        'implementation_runtime_id': runtime_identity(),
+        'queue_watch_supported': queue_watch_supported,
+    })
+
 _PREPARATION_REASONS = {
     'Ordinary Chat composer contains a draft': 'composer_has_draft',
     'Ordinary Chat is generating': 'generation_active',
@@ -229,6 +292,7 @@ def session(service: Subchats, *,
             instructions: str | None = None,
             serialize_recovery: bool = False,
             read_only: bool = False,
+            owner: str | None = None,
             ) -> SubchatSession:
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
@@ -241,7 +305,7 @@ def session(service: Subchats, *,
                     server.queue_watch_states[operation_id] = {
                         'state': 'stopped', 'reason': 'lease_expired'}
                     return
-                current = service.store.get(operation_id, owner=None)
+                current = service.store.get(operation_id, owner=owner)
                 if current.state not in {'queued', 'sending', 'submitted'}:
                     server.queue_watch_states[operation_id] = {
                         'state': 'stopped', 'reason': 'submission_finished'
@@ -254,7 +318,7 @@ def session(service: Subchats, *,
                         'state': 'stopped', 'reason': 'owned_browser_unavailable'}
                     return
                 await observe(operation_id)
-                if service.store.get(operation_id, owner=None).state in {
+                if service.store.get(operation_id, owner=owner).state in {
                         'queued', 'sending', 'submitted'}:
                     await asyncio.sleep(min(QUEUE_WATCH_INTERVAL,
                         max(0, server.queue_watch_deadlines[operation_id] - time.monotonic())))
@@ -276,7 +340,7 @@ def session(service: Subchats, *,
     async def observe(operation_id: str) -> SubchatSubmission:
         if server.closed:
             raise RuntimeError('Subchat session is closed')
-        current = service.store.get(operation_id, owner=None)
+        current = service.store.get(operation_id, owner=owner)
         if current.state == 'interrupted':
             raise SubchatInterrupted('Provider interruption is saved; do not resend')
         # Recovering a queued follow-up can dispatch it when its parent is complete.
@@ -293,9 +357,9 @@ def session(service: Subchats, *,
                     nullcontext())
                 async with lock:
                     if current.state == 'queued':
-                        return await service.recover(operation_id, owner=None)
+                        return await service.recover(operation_id, owner=owner)
                     async with asyncio.timeout(25):
-                        return await service.recover(operation_id, owner=None)
+                        return await service.recover(operation_id, owner=owner)
 
             task = asyncio.create_task(run())
             recoveries[operation_id] = task
@@ -315,7 +379,7 @@ def session(service: Subchats, *,
             try:
                 result = await asyncio.shield(task)
             except asyncio.CancelledError:
-                current = service.store.get(operation_id, owner=None)
+                current = service.store.get(operation_id, owner=owner)
                 if not server.closed and task.cancelled() and current.state == 'cancelled':
                     return current
                 raise
@@ -329,37 +393,11 @@ def session(service: Subchats, *,
                 return result
         return current
 
-    definitions: dict[str, tuple[type[Contract], str]] = {
-        'subchat_queue_watch': (QueueWatch, 'Explicitly arm or disarm automatic delivery of an '
-            'existing queued input while this MCP controller remains alive. Requires an already '
-            'open owned browser tab; never launches Chrome. Checks every five seconds, stops on '
-            'errors or after final saved result. At most eight retained watches; disable to '
-            'release a slot. '
-            'Lease is 30-1800 seconds (default 900); expiry requires explicit re-arming. '
-            'Restart requires explicit re-arming. Disabling observation does not cancel a queue '
-            'or a preparation already in progress; use subchat_cancel for unsent cancellation. '
-            'This is browser-assisted delivery, not quiet HTTP generation or immediate steer.'),
-        'subchat_list': (SubchatList, 'List saved submission summaries without opening Chrome.'),
-        'subchat_cancel': (OperationId, 'Cancel an unsent queued/prepared input; never stop Chat.'),
-        'subchat_delete': (DeleteRequest, 'Hide one exact saved ordinary Chat conversation. '
-            'Requires matching saved operation and conversation ID and checks the bound account. '
-            'Makes one authenticated HTTP PATCH; unknown outcomes are never replayed.'),
-        'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
-                            'Steer returns unsupported without sending or queueing.'),
-        'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels.'),
-        'subchat_recover': (OperationId, 'Recover receipt/answer or progress a queued follow-up; '
-                            'never replay an uncertain send.'),
-        'subchat_status': (OperationId, 'Read the saved submission and latest HTTP transport '
-                           'checkpoint without browser interaction.'),
-        'subchat_wait': (Wait, 'Wait for an answer without stopping generation or resending. '
-                         'Other subchats can progress between observations. Timeout returns '
-                         'the current saved state, not a failed generation.'),
-    }
+    definitions = dict(_BASE_TOOL_DEFINITIONS)
 
     capabilities = getattr(service.backend, 'capabilities', None)
     if capabilities is not None:
-        definitions['subchat_capabilities'] = (
-            Contract, 'Read configured transport capabilities without network or browser work.')
+        definitions['subchat_capabilities'] = _CAPABILITIES_DEFINITION
 
     refresh_auth = getattr(service.backend, 'refresh_auth', None)
     if (read_only and refresh_auth is not None and capabilities is not None
@@ -408,13 +446,7 @@ def session(service: Subchats, *,
                        if name in READ_ONLY_TOOLS}
 
     async def catalog() -> list[JsonValue]:
-        return [cast(JsonValue, {
-            'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
-            'annotations': {'readOnlyHint': name in {
-                'subchat_capabilities', 'subchat_catalog', 'subchat_status', 'subchat_list',
-                'subchat_download_file', 'subchat_download_image', 'subchat_refresh_auth'},
-                            'destructiveHint': name == 'subchat_delete', 'openWorldHint': True},
-        }) for name, (schema, description) in definitions.items()]
+        return _tool_catalog(definitions)
 
     async def execute(request: Request) -> Reply:
         if read_only and request.tool not in READ_ONLY_TOOLS:
@@ -430,6 +462,9 @@ def session(service: Subchats, *,
                              data=TypeAdapter(dict[str, JsonValue]).validate_python(refreshed))
             if request.tool == 'subchat_download_file' and download_sandbox_file is not None:
                 target_file = SandboxFile.model_validate(request.arguments)
+                # Backend download implementations may use their own ledger owner.
+                # Never pass another owner's operation to one of them.
+                service.store.get(target_file.operation_id, owner=owner)
                 try:
                     downloaded = await download_sandbox_file(
                         target_file.operation_id, target_file.sandbox_link,
@@ -451,6 +486,7 @@ def session(service: Subchats, *,
             if (request.tool == 'subchat_download_image' and download_image is not None
                     and 'subchat_download_image' in definitions):
                 target_image = ChatImage.model_validate(request.arguments)
+                service.store.get(target_image.operation_id, owner=owner)
                 try:
                     downloaded_image = await download_image(
                         target_image.operation_id, max_bytes=target_image.max_bytes)
@@ -480,7 +516,7 @@ def session(service: Subchats, *,
                 })
             if request.tool == 'subchat_queue_watch':
                 watch = QueueWatch.model_validate(request.arguments)
-                current = service.store.get(watch.operation_id, owner=None)
+                current = service.store.get(watch.operation_id, owner=owner)
                 if not watch.enabled:
                     watch_task = server.queue_watches.get(watch.operation_id)
                     if watch_task is not None:
@@ -531,21 +567,18 @@ def session(service: Subchats, *,
                     # but this Plugin deliberately does not expose that tool.
                     reported = {**reported, 'http_delete_supported': False,
                                 'deletion_transport': 'unavailable'}
-                data = TypeAdapter(dict[str, JsonValue]).validate_python({
-                    **reported,
-                    'implementation_version': __version__,
-                    'implementation_runtime_id': runtime_identity(),
-                    'queue_watch_supported': (not read_only
-                                              and hasattr(service.backend, 'queue_watch_ready')),
-                })
+                data = capability_report(reported,
+                    queue_watch_supported=(not read_only
+                        and hasattr(service.backend, 'queue_watch_ready')))
                 return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_list':
-                page = service.store.list(SubchatList.model_validate(request.arguments), owner=None)
+                page = service.store.list(SubchatList.model_validate(request.arguments),
+                                          owner=owner)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data=page.model_dump(mode='json'))
             if request.tool == 'subchat_cancel':
                 target = OperationId.model_validate(request.arguments)
-                result = service.store.cancel(target.operation_id, owner=None)
+                result = service.store.cancel(target.operation_id, owner=owner)
                 pending: list[asyncio.Task[Reply] | asyncio.Task[SubchatSubmission]] = [
                     task for task, call in server.calls.items()
                            if call.tool == 'subchat_send'
@@ -562,25 +595,25 @@ def session(service: Subchats, *,
             if request.tool == 'subchat_delete':
                 target_delete = DeleteRequest.model_validate(request.arguments)
                 async with browser_lock:
-                    result_delete = await delete_saved(service, target_delete, owner=None)
+                    result_delete = await delete_saved(service, target_delete, owner=owner)
                 return Reply(operation_id=request.operation_id,
                              state='completed' if result_delete.state == 'deleted' else 'unknown',
                              data=result_delete.model_dump(mode='json'))
             if request.tool == 'subchat_message':
                 message = Message.model_validate(request.arguments)
-                service.store.get(message.target_operation_id, owner=None)
+                service.store.get(message.target_operation_id, owner=owner)
                 if message.mode == 'steer':
                     return Reply(operation_id=request.operation_id, state='failed',
                                  error='Immediate steer is not supported by this adapter.',
                                  data={'error_code': 'unsupported', 'mode': 'steer',
                                        'dispatched': False, 'queued': False})
                 result = service.queue(request.operation_id, message.target_operation_id,
-                                       message.prompt, owner=None)
+                                       message.prompt, owner=owner)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data=result.model_dump(mode='json'))
             if request.tool == 'subchat_wait':
                 wait = Wait.model_validate(request.arguments)
-                result = service.store.get(wait.operation_id, owner=None)
+                result = service.store.get(wait.operation_id, owner=owner)
                 deadline = asyncio.timeout(wait.wait_ms / 1000)
                 try:
                     async with deadline:
@@ -596,17 +629,17 @@ def session(service: Subchats, *,
                 except TimeoutError:
                     if not deadline.expired():
                         raise
-                    current = service.store.get(wait.operation_id, owner=None)
+                    current = service.store.get(wait.operation_id, owner=owner)
                     if (current.state != result.state
                             or isinstance(result, SubchatObservedSubmission)
                             and service.store.get(result.observation.operation_id,
-                                owner=None).state != 'submitted'):
+                                owner=owner).state != 'submitted'):
                         result = current
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={**result.model_dump(mode='json'),
                                    **({'http_progress': progress} if (progress :=
                                       service.store.http_progress(result.operation_id,
-                                                                  owner=None)) is not None
+                                                                  owner=owner)) is not None
                                       else {})})
             if request.tool == 'subchat_catalog' and (
                 (read_only and observe_http_catalog is not None)
@@ -633,7 +666,7 @@ def session(service: Subchats, *,
                 args = Send.model_validate(request.arguments)
                 async with browser_lock:
                     result = await service.send(request.operation_id, args.prompt, args.model,
-                                                args.effort, owner=None,
+                                                args.effort, owner=owner,
                                                 conversation_id=args.conversation_id,
                                                 work_context=args.work_context,
                                                 resources=args.resources,
@@ -641,7 +674,7 @@ def session(service: Subchats, *,
             elif request.tool in {'subchat_recover', 'subchat_status'}:
                 target = OperationId.model_validate(request.arguments)
                 if request.tool == 'subchat_status':
-                    result = service.store.get(target.operation_id, owner=None)
+                    result = service.store.get(target.operation_id, owner=owner)
                 else:
                     result = await observe(target.operation_id)
             else:
@@ -650,12 +683,12 @@ def session(service: Subchats, *,
                          data={**result.model_dump(mode='json'),
                                **({'http_progress': progress} if (progress :=
                                   service.store.http_progress(result.operation_id,
-                                                              owner=None)) is not None else {}),
+                                                              owner=owner)) is not None else {}),
                                **({'queue_watch': server.queue_watch_states[result.operation_id]}
                                   if result.operation_id in server.queue_watch_states else {})})
         except asyncio.CancelledError:
             if request.tool == 'subchat_send' and not server.closed:
-                current = service.store.get(request.operation_id, owner=None)
+                current = service.store.get(request.operation_id, owner=owner)
                 if current.state == 'cancelled':
                     return Reply(operation_id=request.operation_id, state='completed',
                                  data=current.model_dump(mode='json'))

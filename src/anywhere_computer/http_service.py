@@ -6,13 +6,20 @@ import os
 import secrets
 import tempfile
 from collections.abc import AsyncIterator, Iterator
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 from .authorization import AuthorizationStore, validate_authorization_url
 from .authorized_http import AuthorizedDeviceMCP
@@ -28,6 +35,11 @@ from .models import MAX_TOOL_SCOPES
 from .oauth_endpoints import OAuthEndpoints
 from .owner_credentials import OwnerCredentials
 from .state import prepare_directory
+from .subchat_gateway import (
+    SUBCHAT_GATEWAY_TOOLS,
+    SubchatGatewayConfig,
+    lazy_subchat_gateway,
+)
 
 
 class HTTPServiceConfig(BaseModel):
@@ -41,6 +53,13 @@ class HTTPServiceConfig(BaseModel):
     scopes: frozenset[str] = Field(min_length=1, max_length=MAX_TOOL_SCOPES)
     redirects: frozenset[str] = Field(min_length=1, max_length=10)
     shared_agent_directory: str | None = Field(default=None, max_length=4096)
+    subchat: SubchatGatewayConfig | None = None
+
+    @model_validator(mode="after")
+    def check_subchat_selection(self) -> "HTTPServiceConfig":
+        if self.subchat is None and self.scopes & SUBCHAT_GATEWAY_TOOLS:
+            raise ValueError("Subchat scopes require an explicit gateway selection")
+        return self
 
     @field_validator("shared_agent_directory")
     @classmethod
@@ -94,6 +113,7 @@ async def configure_http(
     port: int,
     scopes: frozenset[str],
     redirects: frozenset[str],
+    subchat: SubchatGatewayConfig | None = None,
 ) -> HTTPServiceConfig:
     config = HTTPServiceConfig(
         resource=resource,
@@ -103,6 +123,7 @@ async def configure_http(
         port=port,
         scopes=scopes,
         redirects=redirects,
+        subchat=subchat,
     )
     return await save_http_config(directory, config)
 
@@ -125,7 +146,8 @@ async def save_http_config(directory: Path, config: HTTPServiceConfig) -> HTTPSe
                 store = AuthorizationStore(
                     staged / "authorization",
                     resource=config.resource,
-                    known_tools=frozenset(engine.tools) | ROUTER_TOOLS,
+                    known_tools=(frozenset(engine.tools) | ROUTER_TOOLS
+                                 | (SUBCHAT_GATEWAY_TOOLS if config.subchat else frozenset())),
                 )
                 try:
                     store.register_client(config.client, config.redirects)
@@ -201,7 +223,8 @@ async def http_service(
         engine = None
         if agent_directory is None:
             engine = Engine(service_directory / "engine", file_locks=directory / "file-locks")
-            known_tools = frozenset(engine.tools) | ROUTER_TOOLS
+            known_tools = (frozenset(engine.tools) | ROUTER_TOOLS
+                           | (SUBCHAT_GATEWAY_TOOLS if config.subchat else frozenset()))
         else:
             await asyncio.to_thread(ensure_agent, agent_directory)
             catalog = await exchange(agent_directory, "__catalog")
@@ -213,7 +236,8 @@ async def http_service(
                 if not isinstance(entry, dict) or not isinstance(name := entry.get("name"), str):
                     raise ValueError("Shared agent catalog is invalid")
                 names.add(name)
-            known_tools = frozenset(names) | ROUTER_TOOLS
+            known_tools = (frozenset(names) | ROUTER_TOOLS
+                           | (SUBCHAT_GATEWAY_TOOLS if config.subchat else frozenset()))
         try:
             store = AuthorizationStore(
                 service_directory / "authorization",
@@ -222,33 +246,38 @@ async def http_service(
             )
             try:
                 _check_enrollment(store, config)
-                backend = AuthorizedDeviceMCP(
-                    store,
-                    engine,
-                    agent_directory=agent_directory,
-                    owner=config.owner,
-                    device=config.device,
-                    client=config.client,
-                    allowed_tools=config.scopes,
-                    device_directory=agent_directory or directory,
-                )
-                consent = BrowserAuthorization(store, owner, device=config.device)
-                oauth = OAuthEndpoints(
-                    store, authorization_endpoint=consent.authorization_endpoint,
-                    authorization_response_iss_supported=True,
-                )
-                adapter = HTTPMCP(
-                    backend.authenticate,
-                    backend.session,
-                    origins=frozenset({consent.origin}),
-                    public_routes={**oauth.routes(), **consent.routes()},
-                    auth_challenge=oauth.challenge,
-                )
-                try:
-                    await adapter.start(config.port)
-                    yield RunningHTTPService(config, adapter)
-                finally:
-                    await adapter.close()
+                async with AsyncExitStack() as resources:
+                    subchat_gateway = (await resources.enter_async_context(
+                        lazy_subchat_gateway(config.subchat, owner=config.owner))
+                        if config.subchat is not None else None)
+                    backend = AuthorizedDeviceMCP(
+                        store,
+                        engine,
+                        agent_directory=agent_directory,
+                        owner=config.owner,
+                        device=config.device,
+                        client=config.client,
+                        allowed_tools=config.scopes,
+                        device_directory=agent_directory or directory,
+                        subchat_gateway=subchat_gateway,
+                    )
+                    consent = BrowserAuthorization(store, owner, device=config.device)
+                    oauth = OAuthEndpoints(
+                        store, authorization_endpoint=consent.authorization_endpoint,
+                        authorization_response_iss_supported=True,
+                    )
+                    adapter = HTTPMCP(
+                        backend.authenticate,
+                        backend.session,
+                        origins=frozenset({consent.origin}),
+                        public_routes={**oauth.routes(), **consent.routes()},
+                        auth_challenge=oauth.challenge,
+                    )
+                    try:
+                        await adapter.start(config.port)
+                        yield RunningHTTPService(config, adapter)
+                    finally:
+                        await adapter.close()
             finally:
                 store.close()
         finally:

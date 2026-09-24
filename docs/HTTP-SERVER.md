@@ -27,6 +27,44 @@ anywhere http-serve
 稼働・公開到達性の診断ではありません。既存設定の上書きや初期化は行いません。
 設定変更・追加クライアント登録・再承認の管理画面は今後の作業です。
 
+## macOS の通常 Chat Subchat を HTTPS MCP に追加する
+
+ログイン済み Chrome のプロファイルと利用する通常 Chat のアカウント ID を選択済みの
+所有者は、既存の HTTP サーバーへ Subchat ツールを明示的に追加できます。
+`--subchat-profile` は `Default` または `Profile N` ディレクトリ、
+`--subchat-ledger` は操作記録を保持する専用ディレクトリの絶対パスです。
+次は値を置き換えるための例です。
+
+```sh
+anywhere http-add-tools --scope subchat_capabilities --scope subchat_catalog \
+  --scope subchat_send --scope subchat_recover --scope subchat_status \
+  --scope subchat_wait --scope subchat_message \
+  --subchat-profile /absolute/path/to/Chrome/Default \
+  --subchat-ledger /absolute/path/to/subchat-ledger \
+  --subchat-account-id SELECTED_ACCOUNT_ID --subchat-send-consent
+```
+
+追加後に HTTP サーバーを再起動し、接続元で新しい OAuth 認可を受けてください。
+既存 grant の Subchat 権限は自動拡張されません。各ツールには個別の scope が必要です。
+送信前に `subchat_catalog` の `source=http` から対応するモデル選択を取得し、
+その `http_selection` と利用者が選んだモデル・エフォートを指定します。
+`subchat_send` と `subchat_message` は呼び出し前に一意な `request_id` を選び、
+応答が途切れたら同じ ID で状態を回収してください。未確認の送信を新しい ID で
+再送しないでください。`tools/list` は許可済み Subchat ツールの定義を
+Chrome を起動せずに表示し、ログイン状態は検証しません。
+`subchat_status` は保存済み操作を grant ごとに、`subchat_capabilities` は
+設定済みの能力を、Chrome やネットワークを使わずに読みます。
+送信・回収などブラウザーが必要な操作では、最初の実行時に選択アカウントを
+検証します。Chrome またはログインが利用できなくても他の HTTP ツールと
+上記のローカル参照は利用できます。検証失敗後は10秒間の再試行間隔を置きます。
+選択したアカウントと異なるログインでは送信できません。
+
+この経路は macOS の選択済み Chrome プロファイルから認証を読み、ブラウザー内で
+送信を準備した後、生成 POST を HTTPX で行います。Chrome の起動は必要ですが、
+通常タブを作らない背景タブを使用します。ログイン切れや Chrome の変更による
+動作の変化はあり得ます。通常 Chat の利用条件を確認し、第三者へのアクセス販売や
+モデル蒸留を目的とした大量取得には使用しないでください。
+
 標準の戻り先は `http://127.0.0.1/oauth/callback` と `http://[::1]/oauth/callback` です。
 別の戻り先を使う場合は、初期設定時に `--redirect-uri URL` を必要な数だけ指定します。
 独自指定時は標準の戻り先に追加ではなく、指定した一覧を登録します。

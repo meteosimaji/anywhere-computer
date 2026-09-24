@@ -9,10 +9,10 @@ import secrets
 import stat
 import sys
 import time
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Coroutine, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import psutil
 
@@ -102,6 +102,52 @@ def _stop_profile_processes(profile: Path, token: str, *, startup_grace: bool = 
         raise RuntimeError('Background Chrome profile process did not stop')
 
 
+async def _finish_cleanup(coroutine: Coroutine[Any, Any, None | int]) -> None:
+    """Let cleanup finish even when the owning task is cancelled again."""
+    task = asyncio.create_task(coroutine)
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    task.result()
+    if cancelled:
+        raise asyncio.CancelledError
+
+
+async def _start_guardian(profile: Path, token: str) -> asyncio.subprocess.Process:
+    """Arm a separate owner-death watcher before Launch Services can start Chrome."""
+    guardian = await asyncio.create_subprocess_exec(
+        os.path.abspath(sys.executable), '-B', '-I', '-X', 'utf8', '-m',
+        'anywhere_computer.subchat_browser.background_guardian', str(profile), token,
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL, start_new_session=True)
+    try:
+        assert guardian.stdout is not None and guardian.stdin is not None
+        if await asyncio.wait_for(guardian.stdout.readexactly(1), timeout=5) != b'R':
+            raise ConnectionError('Background Chrome guardian did not become ready')
+        if guardian.returncode is not None:
+            raise ConnectionError('Background Chrome guardian exited before launch')
+    except BaseException:
+        if guardian.stdin is not None:
+            guardian.stdin.close()
+        if guardian.returncode is None:
+            guardian.kill()
+        await _finish_cleanup(guardian.wait())
+        raise
+    return guardian
+
+
+async def _finish_guardian(guardian: asyncio.subprocess.Process, *, clean: bool) -> None:
+    assert guardian.stdin is not None
+    if clean and guardian.returncode is None:
+        guardian.stdin.write(b'D')
+        await guardian.stdin.drain()
+    guardian.stdin.close()
+    await guardian.wait()
+
+
 @asynccontextmanager
 async def background_chrome_context(
     driver: Playwright, profile: Path, launch_args: list[str],
@@ -138,13 +184,14 @@ async def background_chrome_context(
                    '--no-first-run', '--no-default-browser-check', '--no-startup-window',
                    *launch_args]
         browser = None
-        launched = False
+        launch_attempted = False
         ownership_confirmed = False
+        guardian = await _start_guardian(profile, token)
         try:
+            launch_attempted = True
             process = await asyncio.create_subprocess_exec(
                 *command, stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL)
-            launched = True
             if await process.wait() != 0:
                 raise ConnectionError('Background Chrome launch failed')
             try:
@@ -168,15 +215,23 @@ async def background_chrome_context(
                 raise ConnectionError('Background Chrome context is ambiguous')
             yield browser.contexts[0]
         finally:
-            try:
-                if browser is not None:
-                    await browser.close()
-            finally:
-                if launched:
-                    await asyncio.to_thread(
-                        _stop_profile_processes, profile, token,
-                        startup_grace=not ownership_confirmed)
-                    port_file.unlink(missing_ok=True)
+            async def cleanup() -> None:
+                clean = False
+                try:
+                    try:
+                        if browser is not None:
+                            await browser.close()
+                    finally:
+                        if launch_attempted:
+                            await asyncio.to_thread(
+                                _stop_profile_processes, profile, token,
+                                startup_grace=not ownership_confirmed)
+                            port_file.unlink(missing_ok=True)
+                    clean = True
+                finally:
+                    await _finish_guardian(guardian, clean=clean)
+
+            await _finish_cleanup(cleanup())
 
 
 async def new_background_page(context: BrowserContext) -> Page:
