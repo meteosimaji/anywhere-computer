@@ -15,7 +15,7 @@ from test_subchat_http_only_cli import command, environment
 
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
+from anywhere_computer.subchat import SubchatOutcomeUnknown, SubchatPreflightFailed, Subchats
 from anywhere_computer.subchat_cli import Command, dispatch
 from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
 from anywhere_computer.subchat_http_generation import (
@@ -531,11 +531,11 @@ async def test_oversized_preparation_never_reaches_generation(tmp_path, monkeypa
         async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
             ledger, store, service = await setup(tmp_path, api, client)
             try:
-                with pytest.raises(SubchatOutcomeUnknown):
+                with pytest.raises(SubchatPreflightFailed):
                     await service.send('d' * 32, 'large preparation', 'Future Chat',
                         'Future effort', owner=None, http_selection=SELECTION)
                 assert not post_called
-                assert store.get('d' * 32, owner=None).state == 'sending'
+                assert store.get('d' * 32, owner=None).state == 'preflight_failed'
                 assert [event['stage'] for event in store.http_events(
                     'd' * 32, owner=None)][-2:] == ['sentinel_response', 'sentinel_failed']
                 assert not any(path == '/backend-api/f/conversation' for _, path, _, _
@@ -559,11 +559,11 @@ async def test_multibyte_outgoing_body_is_bounded_before_any_post(
             ledger, store, service = await setup(tmp_path, api, client,
                                                   generation=generation)
             try:
-                with pytest.raises(SubchatOutcomeUnknown):
+                with pytest.raises(SubchatPreflightFailed):
                     await service.send('d' * 32, '界' * 100_000, 'Future Chat',
                                        'Future effort', owner=None,
                                        http_selection=SELECTION)
-                assert store.get('d' * 32, owner=None).state == 'sending'
+                assert store.get('d' * 32, owner=None).state == 'preflight_failed'
                 assert [event['stage'] for event in store.http_events(
                     'd' * 32, owner=None)] == [failed_stage]
                 assert all(method != 'POST' for method, _, _, _ in api.requests)
@@ -643,9 +643,9 @@ async def test_stale_branch_and_lost_post_do_not_replay(tmp_path):
                     await service.recover(first.operation_id, owner=None)
                     api.stale = True
                     queued = service.queue('d' * 32, first.operation_id, 'stale', owner=None)
-                    with pytest.raises(SubchatOutcomeUnknown):
+                    with pytest.raises(SubchatPreflightFailed):
                         await service.recover(queued.operation_id, owner=None)
-                    assert store.get(queued.operation_id, owner=None).state == 'sending'
+                    assert store.get(queued.operation_id, owner=None).state == 'preflight_failed'
                     assert sum(path == '/backend-api/f/conversation' for _, path, _, _
                                in api.requests) == 1
                     assert store.connection.execute('SELECT COUNT(*) FROM '
@@ -673,7 +673,7 @@ async def test_stale_branch_and_lost_post_do_not_replay(tmp_path):
     '/backend-api/sentinel/chat-requirements/prepare',
     '/backend-api/f/conversation/prepare',
 ])
-async def test_failed_preparation_keeps_unknown_without_claim_or_retry(tmp_path, stage):
+async def test_failed_preparation_is_terminal_without_claim_or_retry(tmp_path, stage):
     async with LocalChat() as api:
         api.fail_stage = stage
         async with httpx.AsyncClient(
@@ -682,26 +682,56 @@ async def test_failed_preparation_keeps_unknown_without_claim_or_retry(tmp_path,
             try:
                 ledger, store, service = await setup(tmp_path, api, client)
                 try:
-                    with pytest.raises(SubchatOutcomeUnknown):
+                    with pytest.raises(SubchatPreflightFailed):
                         await service.send('f' * 32, 'unknown preparation', 'Future Chat',
                             'Future effort', owner=None, http_selection=SELECTION)
                     count = len(api.requests)
                     saved = await service.send('f' * 32, 'unknown preparation', 'Future Chat',
                         'Future effort', owner=None, http_selection=SELECTION)
-                    assert saved.state == 'sending' and len(api.requests) == count
+                    assert saved.state == 'preflight_failed' and len(api.requests) == count
                     assert store.connection.execute('SELECT COUNT(*) FROM '
                         'subchat_http_dispatch_claims').fetchone()[0] == 0
                     events = store.http_events('f' * 32, owner=None)
                     failed_stage = 'sentinel' if 'sentinel' in stage else 'prepare'
-                    assert events[-1]['stage'] == failed_stage + '_failed'
-                    assert events[-2]['stage'] == failed_stage + '_response'
+                    assert [event['stage'] for event in events[-2:]] == [
+                        failed_stage + '_response', failed_stage + '_failed']
                     assert events[-2]['status'] == 403
+                    assert events[-1]['status'] == 403
                     assert not any(path == '/backend-api/f/conversation' for _, path, _, _
                                    in api.requests)
                 finally:
                     ledger.close()
             finally:
                 await client.aclose()
+
+
+async def test_mcp_reports_http_preflight_failure_without_replay(tmp_path):
+    async with LocalChat() as api:
+        api.fail_stage = '/backend-api/f/conversation/prepare'
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            ledger, store, service = await setup(tmp_path, api, client)
+            server = mcp_session(service, serialize_recovery=False)
+            try:
+                operation = 'a' * 32
+                result = await server.execute(Request(operation_id=operation,
+                    tool='subchat_send', arguments={
+                        'prompt': 'preflight',
+                        'model': 'Future Chat', 'effort': 'Future effort',
+                        'http_selection': SELECTION.model_dump(mode='json')}))
+                assert result.state == 'failed'
+                assert result.data == {'error_code': 'http_preflight_failed',
+                                       'dispatched': False, 'automatic_retry': False}
+                assert store.get(operation, owner=None).state == 'preflight_failed'
+                count = len(api.requests)
+                recovered = await server.execute(Request(operation_id='b' * 32,
+                    tool='subchat_recover', arguments={'operation_id': operation}))
+                assert recovered.data['state'] == 'preflight_failed'
+                assert recovered.data['http_progress']['stage'] == 'prepare_failed'
+                assert recovered.data['http_progress']['status'] == 403
+                assert len(api.requests) == count
+            finally:
+                await server.close()
+                ledger.close()
 
 
 async def test_lost_stream_checkpoints_candidate_but_not_receipt(tmp_path):
@@ -1039,7 +1069,7 @@ async def test_http_progress_surfaces_preserve_pending_and_final_state(tmp_path)
             ledger.close()
 
 
-async def test_cancelled_preparation_keeps_original_operation_unknown(tmp_path, monkeypatch):
+async def test_cancelled_preparation_is_terminal_before_dispatch(tmp_path, monkeypatch):
     async with LocalChat() as api, httpx.AsyncClient(
             trust_env=False, follow_redirects=False,
             transport=httpx.AsyncHTTPTransport(retries=0)) as client:
@@ -1059,13 +1089,13 @@ async def test_cancelled_preparation_keeps_original_operation_unknown(tmp_path, 
             with pytest.raises(asyncio.CancelledError):
                 await service.send(operation, 'cancelled prompt', 'Future Chat',
                     'Future effort', owner=None, http_selection=SELECTION)
-            assert store.get(operation, owner=None).state == 'sending'
+            assert store.get(operation, owner=None).state == 'preflight_failed'
             assert [event['stage'] for event in store.http_events(operation, owner=None)] == [
                 'sentinel_request', 'sentinel_failed']
             assert store.connection.execute(
                 'SELECT COUNT(*) FROM subchat_http_dispatch_claims').fetchone()[0] == 0
             assert (await service.send(operation, 'cancelled prompt', 'Future Chat',
-                'Future effort', owner=None, http_selection=SELECTION)).state == 'sending'
+                'Future effort', owner=None, http_selection=SELECTION)).state == 'preflight_failed'
             assert api.requests and all(path != '/backend-api/f/conversation'
                                         for _, path, _, _ in api.requests)
         finally:
@@ -1098,7 +1128,8 @@ async def test_cancelled_followup_or_generation_preserves_claim_boundary(
             monkeypatch.setattr(LocalRequests, 'stream', cancelled_stream)
             with pytest.raises(asyncio.CancelledError):
                 await service.recover(child.operation_id, owner=None)
-            assert store.get(child.operation_id, owner=None).state == 'sending'
+            assert store.get(child.operation_id, owner=None).state == (
+                'preflight_failed' if stage == 'branch' else 'sending')
             stages = [event['stage'] for event in store.http_events(
                 child.operation_id, owner=None)]
             assert stages[-2:] == ([
@@ -1109,7 +1140,7 @@ async def test_cancelled_followup_or_generation_preserves_claim_boundary(
                     1 if stage == 'branch' else 2)
             count = len(api.requests)
             repeated = await service.recover(child.operation_id, owner=None)
-            assert repeated.state == 'sending'
+            assert repeated.state == ('preflight_failed' if stage == 'branch' else 'sending')
             assert not any(path == '/backend-api/f/conversation' for _, path, _, _
                            in api.requests[count:])
         finally:
@@ -1126,5 +1157,28 @@ def test_cli_opt_in_handoff_reports_capability_without_browser_or_secret_output(
     capability = json.loads(result.stdout)
     assert capability['generation_transport'] == 'explicit_handoff_http'
     assert capability['browser_required'] is False
+    assert SECRET.encode() not in result.stdout + result.stderr
+    assert PROOF.encode() not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('cookie_mode', ['matching', 'missing', 'wrong'])
+def test_cli_current_header_shape_requires_bound_explicit_cookie(tmp_path, cookie_mode):
+    session = session_payload()
+    if cookie_mode != 'missing':
+        session['cookie'] = ('session=' + PROOF if cookie_mode == 'matching'
+                             else 'session=another-account')
+    lines = [session, current_shape_data(), {'action': 'capabilities'}]
+    result = subprocess.run(command(tmp_path / 'state', '--http-only',
+        '--http-session-stdin', '--http-generation-stdin'), env=environment(),
+        input=''.join(json.dumps(item) + '\n' for item in lines).encode(),
+        capture_output=True, timeout=15, check=False)
+    if cookie_mode == 'matching':
+        assert result.returncode == 0, result.stderr
+        capability = json.loads(result.stdout)
+        assert capability['generation_transport'] == 'explicit_handoff_http'
+        assert capability['browser_required'] is False
+    else:
+        assert result.returncode == 2
+        assert b'invalid_http_generation_handoff' in result.stderr
     assert SECRET.encode() not in result.stdout + result.stderr
     assert PROOF.encode() not in result.stdout + result.stderr

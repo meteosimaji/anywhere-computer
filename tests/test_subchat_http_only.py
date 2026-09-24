@@ -403,15 +403,18 @@ async def test_http_only_no_session_is_explicit_and_does_not_request(tmp_path):
         ledger.close()
 
 
-@pytest.mark.parametrize('change', ['cookie', 'protection_token', 'foreign_origin', 'userinfo',
+@pytest.mark.parametrize('change', ['cookie_newline', 'cookie_del', 'protection_token',
+                                  'foreign_origin', 'userinfo',
                                   'port', 'fragment', 'other_path', 'header_newline', 'oversized',
                                   'duplicate', 'bad_json', 'missing_account'])
 def test_session_input_rejects_unsafe_envelopes_without_secret_diagnostics(change):
     from anywhere_computer.subchat_http_session import read_http_session
 
     data = session_payload()
-    if change == 'cookie':
-        data['cookie'] = 'fixture'
+    if change == 'cookie_newline':
+        data['cookie'] = 'session=fixture\r\nInjected: bad'
+    elif change == 'cookie_del':
+        data['cookie'] = 'session=fixture\x7f'
     elif change == 'protection_token':
         data['openai-sentinel-proof-token'] = 'fixture'
     elif change in {'foreign_origin', 'userinfo', 'port', 'fragment', 'other_path'}:

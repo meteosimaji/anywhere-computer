@@ -112,12 +112,18 @@ header names outside the then-current handoff allowlist, including
 The a19 handoff validator accepts these observed header names, but the current
 UI request shape has not passed the complete handoff and generation path. In
 particular, a request without `chatgpt-account-id` requires a matching Cookie
-binding, which the explicit stdin session currently cannot supply. This is a
-remaining compatibility gap, not an isolated cause of the HTTPX 403. The
+binding. The explicit stdin session now accepts a bounded Cookie header for
+that check; this parser-level compatibility has not passed a live all-HTTPX
+generation test and does not explain the HTTPX 403. The
 observed request starts also differed: conversation
 prepare and one Sentinel prepare/finalize cycle started before generation; a
 second Sentinel cycle started while generation was in flight. These are dated
 observations, not a stable protocol specification.
+
+An explicit session Cookie is sent on this controller's exact-origin Chat
+catalog, history, and deletion requests as well as the handed-off generation
+requests. Supply only a Cookie authorized for those paths; explicit handoff
+does not reproduce browser cookie path filtering.
 
 An earlier live acceptance on 2026-09-23 used an explicit in-memory handoff
 from a successful Chrome generation, then closed Chrome. The controller used
@@ -158,10 +164,11 @@ An HTTP success or streaming response alone does not prove completion. The
 controller correlates the saved input, final answer, and terminal markers in
 HTTP history before reporting `completed`. If an acknowledgement or answer is
 missing, use `status` or `recover` with the original operation ID. A
-preparation failure or lost generation response can leave the operation
-`sending` because remote effects are uncertain. Never resend it under a new ID
-as an automatic recovery step. A new Chat whose conversation ID was not observed
-may require manual reconciliation.
+failed preparation before the durable generation claim ends as
+`preflight_failed`, with no generation POST and no automatic retry. A lost
+generation response after that claim remains `sending` because its outcome is
+uncertain. Never resend an uncertain operation automatically. A new Chat whose
+conversation ID was not observed may require manual reconciliation.
 
 The HTTP-only path uses HTTPX for catalog and history reads, preparation,
 branch checks, and generation. It does not automatically fall back to a

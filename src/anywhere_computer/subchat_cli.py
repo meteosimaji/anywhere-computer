@@ -21,6 +21,7 @@ from .subchat import (
     SubchatBrowserClosed,
     SubchatInterrupted,
     SubchatOutcomeUnknown,
+    SubchatPreflightFailed,
     Subchats,
     SubchatUnsupported,
 )
@@ -152,7 +153,8 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
                                         | SubchatUnsupported | SubchatSelectionError)
                           else 'browser_closed' if isinstance(error, SubchatBrowserClosed)
                           else 'submission_unconfirmed'
-                          if isinstance(error, SubchatOutcomeUnknown) else 'reply_interrupted'
+                          if isinstance(error, SubchatOutcomeUnknown) else 'http_preflight_failed'
+                          if isinstance(error, SubchatPreflightFailed) else 'reply_interrupted'
                           if isinstance(error, SubchatInterrupted) else 'delete_unknown'
                           if isinstance(error, SubchatDeletionUnknown) else 'command_failed'),
                 'operation_id': (command.operation_id
@@ -160,6 +162,8 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO) 
                                  else None),
                 'error_type': type(error).__name__,
                 'automatic_retry': False,
+                **({'dispatched': False}
+                   if isinstance(error, SubchatPreflightFailed) else {}),
                 **({'field': error.field, 'reason': error.reason,
                     'dispatched': False, 'corrected_request_requires_new_operation_id': True}
                    if isinstance(error, SubchatSelectionError) else {}),
@@ -511,7 +515,9 @@ def main() -> None:
             observed_generation = read_http_generation_handoff(
                 sys.stdin.buffer,
                 authorization=observed_session.authorization.get_secret_value(),
-                account_id=observed_session.account_id)
+                account_id=observed_session.account_id,
+                cookie=(observed_session.cookie.get_secret_value()
+                        if observed_session.cookie is not None else None))
         except ValueError:
             print(json.dumps({'state': 'invalid_http_generation_handoff',
                               'automatic_retry': False}), file=sys.stderr)

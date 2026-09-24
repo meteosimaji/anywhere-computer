@@ -248,7 +248,11 @@ async def _preparation_post(stage: str, *, plan: HTTPGenerationPlan,
             store.record_http_event(plan.operation_id, stage + '_response', owner=owner,
                                     status=response.status_code)
             return await _json_response(response)
-    except (asyncio.CancelledError, SubchatAccessError):
+    except SubchatAccessError as error:
+        store.record_http_event(plan.operation_id, stage + '_failed', owner=owner,
+                                status=error.status)
+        raise
+    except asyncio.CancelledError:
         store.record_http_event(plan.operation_id, stage + '_failed', owner=owner)
         raise
     except Exception:
@@ -310,7 +314,11 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
                 store.record_http_event(plan.operation_id, 'branch_response', owner=owner,
                                         status=branch.status_code)
                 current = await _json_response(branch)
-        except (asyncio.CancelledError, SubchatAccessError):
+        except SubchatAccessError as error:
+            store.record_http_event(plan.operation_id, 'branch_failed', owner=owner,
+                                    status=error.status)
+            raise
+        except asyncio.CancelledError:
             store.record_http_event(plan.operation_id, 'branch_failed', owner=owner)
             raise
         except Exception:

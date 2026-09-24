@@ -55,6 +55,14 @@ class ObservedHTTPSession(Contract):
             raise ValueError('Invalid language envelope')
         return value
 
+    @field_validator('cookie')
+    @classmethod
+    def cookie_header(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None and any(
+                ord(char) < 32 or ord(char) > 126 for char in value.get_secret_value()):
+            raise ValueError('Invalid Cookie envelope')
+        return value
+
     @field_validator('user_email')
     @classmethod
     def email_envelope(cls, value: str | None) -> str | None:
@@ -107,7 +115,7 @@ def read_http_session(source: BinaryIO) -> ObservedHTTPSession:
             raise ValueError('Session envelope is missing or oversized')
         data = json.loads(raw.decode('utf-8'), object_pairs_hook=unique)
         if not isinstance(data, dict) or set(data) - {
-                'authorization', 'account_id', 'catalog_url', 'language'}:
+                'authorization', 'account_id', 'catalog_url', 'language', 'cookie'}:
             raise ValueError('Unsupported explicit session field')
         return ObservedHTTPSession.model_validate(data)
     except (ValueError, TypeError, OSError, RecursionError):

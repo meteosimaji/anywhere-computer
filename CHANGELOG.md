@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a20 / Plugin 0.2.0-alpha.20 — unpublished candidate (2026-09-24)
+
+- Finish HTTP generation operations as `preflight_failed` when the durable
+  generation dispatch claim was never made. Keep the last failed preparation
+  stage and HTTP status visible without replaying the operation. Claimed sends
+  remain uncertain until history proves an outcome.
+- Allow a bounded Cookie in the explicit HTTP session handoff so current
+  observed Chat request headers can be bound to the session. Authorization,
+  account, origin, and exact Cookie matching still apply. Independent all-HTTPX
+  Chat generation remains unverified.
+
 ## 0.2.0a19 / Plugin 0.2.0-alpha.19 — unpublished candidate (2026-09-24)
 
 - Accept current observed ordinary-Chat generation header names while preserving

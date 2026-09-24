@@ -319,6 +319,35 @@ def test_atomic_claim_from_concurrent_ledger_connections(tmp_path):
     assert sorted(results) == [False, True]
 
 
+@pytest.mark.parametrize('claim_first', [False, True])
+def test_preflight_failure_and_generation_claim_are_exclusive(tmp_path, claim_first):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        saved = reserved(store, 'b' * 32, 'claim boundary')
+        plan = HTTPGenerationPlan.from_reserved(saved)
+
+        def claim():
+            return store.claim_http_dispatch(
+                plan.operation_id, owner=None, user_message_id=plan.user_message_id,
+                provider_account_id=plan.account_id, prompt=plan.prompt,
+                model_slug=plan.model_slug, thinking_effort=plan.thinking_effort,
+                conversation_id=None, predecessor_id=None)
+
+        if claim_first:
+            assert claim()
+            assert not store.fail_http_before_dispatch(plan.operation_id, owner=None)
+            assert store.get(plan.operation_id, owner=None).state == 'sending'
+        else:
+            assert store.fail_http_before_dispatch(plan.operation_id, owner=None)
+            assert not store.fail_http_before_dispatch(plan.operation_id, owner=None)
+            assert store.get(plan.operation_id, owner=None).state == 'preflight_failed'
+            with pytest.raises(ValueError, match='identity'):
+                claim()
+    finally:
+        ledger.close()
+
+
 def test_existing_submission_database_adds_claim_table_without_reset(tmp_path):
     old = Ledger(tmp_path)
     saved = reserved(SubchatSubmissions(old.connection), '6' * 32, 'legacy submission')

@@ -79,7 +79,8 @@ class SubchatSubmission(Contract):
     model: str = Field(min_length=1, max_length=256)
     effort: str = Field(min_length=1, max_length=256)
     state: Literal[
-        'queued', 'prepared', 'sending', 'submitted', 'completed', 'cancelled', 'interrupted'
+        'queued', 'prepared', 'sending', 'submitted', 'completed', 'cancelled',
+        'interrupted', 'preflight_failed'
     ] = 'prepared'
     after_operation_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
     expected_last_user_message_id: str | None = None
@@ -241,6 +242,30 @@ class SubchatSubmissions:
             if cursor.rowcount == 1:
                 self._insert_http_event(operation_id, 'dispatch_claimed', None)
             return cursor.rowcount == 1
+
+    def fail_http_before_dispatch(self, operation_id: str, *, owner: str | None) -> bool:
+        """Finish an HTTP send only when no generation dispatch was claimed.
+
+        The claim and this transition use the same SQLite write lock. Never
+        make a failed operation retryable: preparation may have remote effects.
+        """
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            saved = self.get(operation_id, owner=owner)
+            if saved.http_selection is None or saved.state != 'sending':
+                return False
+            if self.connection.execute(
+                    'SELECT 1 FROM subchat_http_dispatch_claims WHERE operation_id=?',
+                    (operation_id,)).fetchone() is not None:
+                return False
+            updated = saved.model_copy(update={'state': 'preflight_failed'})
+            self.connection.execute(
+                'UPDATE subchat_submissions SET body=? WHERE operation_id=? AND owner IS ?',
+                (updated.model_dump_json(exclude={
+                    'reported_settings', 'provider_account_id', 'generation_http_status'}),
+                 operation_id, owner),
+            )
+            return True
 
     def get(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
         row = self.connection.execute(

@@ -20,6 +20,7 @@ from .subchat import (
     SubchatInterrupted,
     SubchatObservedSubmission,
     SubchatOutcomeUnknown,
+    SubchatPreflightFailed,
     SubchatPreparationFailed,
     Subchats,
     SubchatStaleTarget,
@@ -533,10 +534,12 @@ def session(service: Subchats, *,
                 try:
                     async with deadline:
                         while result.state not in {
-                                'prepared', 'completed', 'cancelled', 'interrupted'}:
+                                'prepared', 'completed', 'cancelled', 'interrupted',
+                                'preflight_failed'}:
                             result = await observe(wait.operation_id)
                             if result.state not in {
-                                    'prepared', 'completed', 'cancelled', 'interrupted'}:
+                                    'prepared', 'completed', 'cancelled', 'interrupted',
+                                    'preflight_failed'}:
                                 # Never hold the browser input lock while the model thinks.
                                 await asyncio.sleep(.5)
                 except TimeoutError:
@@ -681,6 +684,14 @@ def session(service: Subchats, *,
                                'For an existing queued message, recover its operation instead.',
                          data={'error_code': 'preparation_failed', 'dispatched': False,
                                **({'reason': reason} if reason is not None else {})})
+        except SubchatPreflightFailed:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='HTTP generation stopped before the generation POST. '
+                               'This operation is final and will not be resent. '
+                               'Inspect subchat_status for the last preparation stage; '
+                               'use a new operation ID only after resolving the cause.',
+                         data={'error_code': 'http_preflight_failed', 'dispatched': False,
+                               'automatic_retry': False})
         except SubchatOutcomeUnknown as error:
             return Reply(operation_id=request.operation_id, state='unknown',
                          error='Submission unconfirmed. Use subchat_recover with '

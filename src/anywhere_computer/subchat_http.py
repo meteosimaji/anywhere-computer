@@ -204,19 +204,25 @@ class HTTPOnlySubchatBackend:
     async def send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
         if self._generation is None or self._store is None:
             raise SubchatUnsupported('http_generation_unavailable')
-        parent = None
-        if submission.after_operation_id is not None:
-            target = self._store.get(submission.after_operation_id, owner=self._owner)
-            if (target.state != 'completed' or target.conversation_id is None
-                    or target.user_message_id is None or target.answer_message_id is None):
-                raise ValueError('HTTP follow-up target is not a verified final answer')
-            parent = HTTPFollowupParent(target.conversation_id, target.user_message_id,
-                                        target.answer_message_id)
-        plan = HTTPGenerationPlan.from_reserved(submission, followup_parent=parent)
-        await dispatch_generation(plan, submission, handoff=self._generation,
-                                  client=await self._request_factory(), store=self._store,
-                                  owner=self._owner, origin=self._generation_origin,
-                                  use_client_cookies=self._chrome_login)
+        try:
+            parent = None
+            if submission.after_operation_id is not None:
+                target = self._store.get(submission.after_operation_id, owner=self._owner)
+                if (target.state != 'completed' or target.conversation_id is None
+                        or target.user_message_id is None or target.answer_message_id is None):
+                    raise ValueError('HTTP follow-up target is not a verified final answer')
+                parent = HTTPFollowupParent(target.conversation_id, target.user_message_id,
+                                            target.answer_message_id)
+            plan = HTTPGenerationPlan.from_reserved(submission, followup_parent=parent)
+            await dispatch_generation(plan, submission, handoff=self._generation,
+                                      client=await self._request_factory(), store=self._store,
+                                      owner=self._owner, origin=self._generation_origin,
+                                      use_client_cookies=self._chrome_login)
+        except BaseException:
+            # The SQLite claim is the dispatch boundary. A failed or cancelled
+            # preflight is terminal, never an invitation to replay the request.
+            self._store.fail_http_before_dispatch(submission.operation_id, owner=self._owner)
+            raise
         return None  # Only history can confirm the saved input and final answer.
 
     async def catalog(self, model: str | None = None) -> dict[str, object]:

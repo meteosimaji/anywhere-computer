@@ -106,6 +106,10 @@ class SubchatPreparationFailed(ValueError):
     """Preparation failed before dispatch; provider details remain local."""
 
 
+class SubchatPreflightFailed(ValueError):
+    """HTTP preparation ended before any generation POST was claimed."""
+
+
 class SubchatUnsupported(ValueError):
     """An explicit unavailable capability; no fallback or automatic retry is allowed."""
 
@@ -182,9 +186,12 @@ class Subchats:
                 return self.store.get(submission.operation_id, owner=owner)
             return self._accept(submission, receipt, owner)
         except Exception as error:
+            if self.store.get(submission.operation_id, owner=owner).state == 'preflight_failed':
+                raise SubchatPreflightFailed('HTTP generation stopped before dispatch') from error
             # Provider errors may contain account data; retain only the cause locally.
             raise SubchatOutcomeUnknown(submission.operation_id) from error
-        # Cancellation also leaves the committed 'sending' record intact.
+        # Browser sends and claimed HTTP generation retain an uncertain outcome
+        # after cancellation; unclaimed HTTP preflight is terminalized by backend.send.
 
     async def recover(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
         submission = self.store.get(operation_id, owner=owner)
@@ -199,7 +206,7 @@ class Subchats:
                                                      observation=target.observation)
                 return submission
             return await self._dispatch(submission, owner=owner)
-        if submission.state in {'prepared', 'completed', 'cancelled'}:
+        if submission.state in {'prepared', 'completed', 'cancelled', 'preflight_failed'}:
             return submission
         if submission.state == 'sending':
             receipt = await self.backend.find_submission(submission)
