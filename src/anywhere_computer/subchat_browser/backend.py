@@ -25,7 +25,9 @@ from anywhere_computer.subchat import (
     SubchatStaleTarget,
     SubchatUnsupported,
 )
+from anywhere_computer.subchat_http_download import MAX_FILE_BYTES, SandboxDownload
 from anywhere_computer.subchat_state import (
+    SubchatAccountMismatch,
     SubchatHTTPSelection,
     SubchatSubmission,
     SubchatSubmissions,
@@ -291,6 +293,41 @@ class BrowserSubchatBackend:
                     await self._read_context(), saved)
             return await download_verified_image(
                 saved, history, session=auth, client=client, max_bytes=max_bytes)
+
+    async def download_sandbox_file(self, operation_id: str,
+                                    sandbox_link: str, *, max_bytes: int = MAX_FILE_BYTES
+                                    ) -> SandboxDownload:
+        """Download a saved final-answer link with a freshly verified Chrome account."""
+        from ..subchat_chrome_login import chrome_http_session
+        from ..subchat_http_download import download_verified_sandbox_file
+
+        if not self.http_read or self._store is None:
+            raise SubchatUnsupported('http_session_required')
+        saved = self._store.get(operation_id, owner=self._owner)
+        if saved.state != 'completed':
+            raise ValueError('File download requires a completed operation')
+        account_id = saved.provider_account_id
+        if account_id is None or (self._expected_account_id is not None
+                                  and account_id != self._expected_account_id):
+            raise SubchatAccountMismatch('Completed Chat belongs to another account')
+        if max_bytes <= 0 or max_bytes > MAX_FILE_BYTES:
+            raise ValueError('Invalid file size limit')
+        async with httpx.AsyncClient(
+            trust_env=False, follow_redirects=False,
+            transport=httpx.AsyncHTTPTransport(retries=0),
+        ) as client:
+            context = await self._browser()
+            auth = await chrome_http_session(
+                context, client, expected_account_id=account_id,
+                page_factory=self._new_page if self._background_pages else None)
+            self._http_reader.bind_verified_account(context, auth.account_id)
+            async with asyncio.timeout(20):
+                answer = await self._http_reader.history(context, saved)
+            if not isinstance(answer, SubchatAnswer):
+                raise ValueError('A verified final answer is required for file download')
+            return await download_verified_sandbox_file(
+                saved, answer, sandbox_link, session=auth, client=client,
+                max_bytes=max_bytes)
 
     async def verify_delete_target(self, submission: SubchatSubmission) -> None:
         async with asyncio.timeout(20):

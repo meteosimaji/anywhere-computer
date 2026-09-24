@@ -10,10 +10,16 @@ from test_subchat_http_only import credentials, seed
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatAnswer, Subchats
+from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+from anywhere_computer.subchat_browser.history import project_observation
 from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
-from anywhere_computer.subchat_http_download import download_verified_sandbox_file
+from anywhere_computer.subchat_http_download import MAX_FILE_BYTES, download_verified_sandbox_file
 from anywhere_computer.subchat_mcp import session as mcp_session
-from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatSubmissions
+from anywhere_computer.subchat_state import (
+    SubchatAccountMismatch,
+    SubchatOperationNotFound,
+    SubchatSubmissions,
+)
 
 LINK = 'sandbox:/mnt/data/report.csv'
 CONTENT_URL = 'https://chatgpt.com/backend-api/estuary/content?file=fixture'
@@ -141,6 +147,100 @@ async def test_download_success_and_rejects_missing_link_or_unverified_final(tmp
 async def test_download_rejects_other_account_and_oversize(tmp_path):
     await _case(tmp_path / 'account', account='other-account')
     await _case(tmp_path / 'size', size=16 * 1024 * 1024 + 1)
+
+
+@pytest.mark.parametrize('case', ['success', 'pending', 'missing_link', 'oversize'])
+async def test_browser_download_uses_fresh_pinned_account_and_final_history(
+        tmp_path, monkeypatch, case):
+    from anywhere_computer import subchat_chrome_login
+
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, payload = completed(store)
+        if case == 'pending':
+            payload['messages'][1]['end_turn'] = False
+        calls = []
+        context = type('Context', (), {'browser': None, 'on': lambda *args: None})()
+
+        async def browser():
+            calls.append('browser')
+            return context
+
+        async def session(observed_context, client, *, expected_account_id,
+                          page_factory):
+            assert observed_context is context
+            assert expected_account_id == 'fixture-account'
+            assert page_factory is None
+            calls.append('fresh_auth')
+            return credentials()
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            calls.append(request.url.path)
+            assert request.method == 'GET'
+            assert request.headers['chatgpt-account-id'] == 'fixture-account'
+            if request.url.path.endswith('/interpreter/download'):
+                return streamed_json({
+                    'download_url': CONTENT_URL, 'file_name': 'report.csv',
+                    'file_size_bytes': 3, 'mime_type': 'text/csv', 'status': 'ready'})
+            assert request.url.path == '/backend-api/estuary/content'
+            return streamed_content(b'abc', content_type='text/csv')
+
+        monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', session)
+        monkeypatch.setattr(httpx, 'AsyncHTTPTransport',
+                            lambda **kwargs: httpx.MockTransport(serve))
+        backend = BrowserSubchatBackend(browser, http_read=True, store=store,
+                                        expected_account_id='fixture-account')
+
+        async def history(observed_context, saved):
+            assert observed_context is context
+            assert saved.operation_id == submission.operation_id
+            calls.append('history')
+            return project_observation(json.dumps(payload).encode(), saved)
+
+        monkeypatch.setattr(backend._http_reader, 'history', history)
+        if case == 'success':
+            result = await backend.download_sandbox_file(submission.operation_id, LINK,
+                                                         max_bytes=3)
+            assert (result.content, result.file_name, result.file_size_bytes) == (
+                b'abc', 'report.csv', 3)
+            assert calls == ['browser', 'fresh_auth', 'history',
+                             '/backend-api/conversation/' + submission.conversation_id
+                             + '/interpreter/download', '/backend-api/estuary/content']
+        elif case == 'oversize':
+            with pytest.raises(ValueError, match='size limit'):
+                await backend.download_sandbox_file(submission.operation_id, LINK,
+                                                    max_bytes=MAX_FILE_BYTES + 1)
+            assert calls == []
+        else:
+            link = 'sandbox:/mnt/data/other.csv' if case == 'missing_link' else LINK
+            with pytest.raises(ValueError):
+                await backend.download_sandbox_file(submission.operation_id, link)
+            assert calls == ['browser', 'fresh_auth', 'history']
+    finally:
+        ledger.close()
+
+
+async def test_browser_download_checks_owner_and_pinned_account_before_browser(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, _ = completed(store)
+
+        async def no_browser():
+            raise AssertionError('Rejected file request must not open Chrome')
+
+        backend = BrowserSubchatBackend(no_browser, http_read=True, store=store,
+                                        owner='another-owner')
+        with pytest.raises(SubchatOperationNotFound):
+            await backend.download_sandbox_file(submission.operation_id, LINK)
+
+        backend = BrowserSubchatBackend(no_browser, http_read=True, store=store,
+                                        expected_account_id='another-account')
+        with pytest.raises(SubchatAccountMismatch):
+            await backend.download_sandbox_file(submission.operation_id, LINK)
+    finally:
+        ledger.close()
 
 
 async def test_streamed_content_exceeding_declared_size_is_rejected(tmp_path):
