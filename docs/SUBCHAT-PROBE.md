@@ -72,18 +72,12 @@ the next one. If its outcome cannot be established from conversation history,
 the original conversation stays blocked against automated sends. Start a new
 Chat instead of resending the uncertain request. This prevents duplicate or
 out-of-order turns when the provider's receipt is unavailable.
-In live macOS runs, a new Chat and follow-up to the same conversation reached
-`completed` with exact saved answers, and a separate GPT-6 Pro run measured
-HTTPX `200 text/event-stream` for both generation POSTs. The installed alpha24
-Codex Plugin also created a Chat and recovered its answer, then sent and
-recovered follow-ups in that same conversation. During one follow-up, 41
-foreground-app samples all remained Prime Video. A separate 10 Hz window-list
-check over 30 seconds found that none of the dedicated Chrome windows were
-onscreen in its samples. A temporary Dock icon may appear during execution.
-These observations do not exclude shorter visible intervals or guarantee the
-same behavior on every macOS/Chrome combination. Long responses, provider
-changes and other model selections still need their own checks. Do not resend
-an operation whose outcome is uncertain; recover it by operation ID.
+The installed Codex Plugin has passed live new-Chat, same-conversation
+follow-up and saved-answer recovery checks on macOS. In sampled runs the
+dedicated Chrome windows stayed offscreen and another app retained focus; a
+temporary Dock icon may appear during execution. This does not guarantee the
+same behavior on every macOS/Chrome combination or after provider changes.
+Do not resend an operation whose outcome is uncertain; recover it by operation ID.
 
 In Codex, a natural-language request to use a Subchat still needs explicit tool
 discovery and selection. Inspect `subchat_capabilities` and `subchat_catalog`,
