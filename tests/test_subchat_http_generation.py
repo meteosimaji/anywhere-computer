@@ -80,13 +80,15 @@ def handoff():
 
 class LocalChat:
     def __init__(self, *, prepare_token_present=True, rotate_cookie=False,
-                 compress_generation=False, oversize_sentinel=False):
+                 compress_generation=False, oversize_sentinel=False,
+                 challenged_generation=False):
         self.requests = []
         self.messages = []
         self.prepare_token_present = prepare_token_present
         self.rotate_cookie = rotate_cookie
         self.compress_generation = compress_generation
         self.oversize_sentinel = oversize_sentinel
+        self.challenged_generation = challenged_generation
         self.current_node = None
         self.stale = False
         self.lost_generation = False
@@ -193,14 +195,19 @@ class LocalChat:
                 status, payload = '404 Not Found', b'{}'
             if path == self.fail_stage:
                 status, payload = '403 Forbidden', b'{}'
+                if self.challenged_generation:
+                    content_type, payload = 'text/html', b'<secret-response-body>'
             set_cookie = ('Set-Cookie: session=rotated; Path=/\r\n'
                           if self.rotate_cookie and path == (
                               '/backend-api/sentinel/chat-requirements/prepare') else '')
             content_encoding = ('Content-Encoding: gzip\r\n'
                                 if self.compress_generation and path == (
                                     '/backend-api/f/conversation') else '')
+            mitigation = ('Cf-Mitigated: challenge\r\n' if self.challenged_generation
+                          and path == self.fail_stage else '')
             writer.write(f'HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\n'
                          f'Content-Length: {len(payload)}\r\n{set_cookie}{content_encoding}'
+                         f'{mitigation}'
                          'Connection: close\r\n\r\n'.encode()
                          + payload)
             await writer.drain()
@@ -722,8 +729,8 @@ async def test_lost_stream_checkpoints_candidate_but_not_receipt(tmp_path):
                 await client.aclose()
 
 
-async def test_generation_403_is_claimed_recorded_and_never_reposted(tmp_path):
-    async with LocalChat() as api:
+async def test_generation_403_is_claimed_recorded_and_never_reposted(tmp_path, caplog):
+    async with LocalChat(challenged_generation=True) as api:
         api.fail_stage = '/backend-api/f/conversation'
         async with httpx.AsyncClient(
                 trust_env=False, follow_redirects=False,
@@ -738,6 +745,10 @@ async def test_generation_403_is_claimed_recorded_and_never_reposted(tmp_path):
                     saved = store.get('2' * 32, owner=None)
                     assert saved.state == 'sending'
                     assert saved.generation_http_status == 403
+                    assert ('status=403 http=h1 cf_mitigated=True response_kind=html'
+                            in caplog.text)
+                    assert 'secret-response-body' not in caplog.text
+                    assert PROOF not in caplog.text and SECRET not in caplog.text
                     events = store.http_events('2' * 32, owner=None)
                     assert [(event['stage'], event['status']) for event in events[-3:]] == [
                         ('generation_request', None), ('generation_response', 403),

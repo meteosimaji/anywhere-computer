@@ -107,6 +107,11 @@ Successful preparation responses and authenticated GETs do not guarantee
 generation acceptance. Several session and request conditions differed between
 the accepted handoff and rejected attempts, so the cause of the 403 is
 unisolated.
+For a generation 401/403, the local log records only the status, HTTP version
+category (h1/h2/other), presence of `cf-mitigated`, and response content-type
+category (JSON/HTML/other). These fixed categories help distinguish a likely
+edge challenge from an application rejection; they do not prove the cause.
+The response body and credential or protection values are never logged.
 
 An HTTP success or streaming response alone does not prove completion. The
 controller correlates the saved input, final answer, and terminal markers in

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from dataclasses import dataclass
@@ -26,6 +27,8 @@ from .subchat_state import SubchatAccountMismatch, SubchatSubmission, SubchatSub
 
 if TYPE_CHECKING:
     from httpx import Response
+
+logger = logging.getLogger(__name__)
 
 
 _HEADERS = frozenset({
@@ -323,6 +326,17 @@ async def dispatch_generation(plan: HTTPGenerationPlan, submission: SubchatSubmi
                 store.record_http_event(plan.operation_id, 'generation_response', owner=owner,
                                         status=response.status_code)
                 if response.status_code in (401, 403):
+                    content_type = response.headers.get('content-type', '').split(';', 1)[0].strip()
+                    response_kind = ('json' if content_type == 'application/json' else
+                                     'html' if content_type == 'text/html' else 'other')
+                    http_version = {'HTTP/1.1': 'h1', 'HTTP/2': 'h2'}.get(
+                        response.http_version, 'other')
+                    logger.warning(
+                        'Subchat generation rejected status=%d http=%s '
+                        'cf_mitigated=%s response_kind=%s',
+                        response.status_code, http_version,
+                        'cf-mitigated' in response.headers, response_kind,
+                    )
                     store.observe_rejection(plan.operation_id, plan.user_message_id,
                                             response.status_code, owner=owner,
                                             provider_account_id=plan.account_id)
