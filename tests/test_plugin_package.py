@@ -27,6 +27,30 @@ def test_packaged_runtime_matches_current_source_and_checksums():
     assert subchat["args"][:-1] == config["args"][:-2]
     assert subchat["args"][-1] == "anywhere-subchat-plugin"
     assert not any("/Users/" in arg or "\\\\Users\\\\" in arg for arg in subchat["args"])
+    claude_manifest = json.loads(
+        (plugin / ".claude-plugin/plugin.json").read_text(encoding="utf-8")
+    )
+    assert claude_manifest["name"] == manifest["name"]
+    assert claude_manifest["version"] == manifest["version"]
+    assert claude_manifest["mcpServers"] == "./.claude-mcp.json"
+    claude_servers = json.loads(
+        (plugin / ".claude-mcp.json").read_text(encoding="utf-8")
+    )["mcpServers"]
+    assert set(claude_servers) == set(servers)
+    for server in claude_servers.values():
+        assert server["command"] == "uv"
+        assert "cwd" not in server
+        claude_wheel = server["args"][server["args"].index("--from") + 1]
+        assert claude_wheel == (
+            "${CLAUDE_PLUGIN_ROOT}/bundled/anywhere_computer-"
+            + __version__ + "-py3-none-any.whl"
+        )
+        requirements = server["args"][server["args"].index("--with-requirements") + 1]
+        assert requirements == "${CLAUDE_PLUGIN_ROOT}/bundled/dependencies.txt"
+    marketplace = json.loads(
+        (ROOT / ".claude-plugin/marketplace.json").read_text(encoding="utf-8")
+    )
+    assert marketplace["plugins"][0]["source"] == "./plugins/anywhere-computer"
     checksums = json.loads((plugin / "bundled/checksums.json").read_text(encoding="utf-8"))
     dependencies = (plugin / "bundled/dependencies.txt").read_text(encoding="utf-8")
     assert re.search(r'^mcp==1\.30\.0\s', dependencies, re.MULTILINE)

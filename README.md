@@ -81,6 +81,23 @@ before diagnosing a zero-tool runtime as a Plugin packaging failure.
 For a published version, use a checkout of its matching release tag rather than
 assuming that this development checkout matches the release asset.
 
+For Claude Code CLI or local Code mode, add this checkout as a Claude marketplace
+and install the Plugin:
+
+```sh
+claude plugin marketplace add /absolute/path/to/anywhere-computer
+claude plugin install anywhere-computer@anywhere-computer-local --scope user
+claude mcp list
+```
+
+The Claude marketplace is `.claude-plugin/marketplace.json`. Its MCP servers run
+the same bundled wheel as the Codex Plugin. Install `uv` first and restart the
+Claude Code session after a Plugin update. The local stdio servers require this
+computer to remain on; Claude cloud sessions and Claude Chat/Cowork need a
+separately configured public HTTPS MCP endpoint. Installing this Plugin does not
+make local files available to those cloud clients. Subchat sending remains subject
+to the transport and login limitations below.
+
 For ChatGPT, choose its HTTPS route in `setup`. You still need a public HTTPS MCP
 URL, authentication and registration in ChatGPT. Installing the Codex Plugin does
 not perform those steps. Hosting, tunnels and managed pairing are not silently

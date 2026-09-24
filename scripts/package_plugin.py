@@ -55,12 +55,26 @@ def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["version"] = version
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    claude_manifest_path = plugin / ".claude-plugin/plugin.json"
+    claude_manifest = json.loads(claude_manifest_path.read_text(encoding="utf-8"))
+    claude_manifest["version"] = version
+    claude_manifest_path.write_text(
+        json.dumps(claude_manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8",
+    )
     config_path = plugin / ".mcp.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
     for server_name in ("anywhere-computer", "anywhere-subchat"):
         arguments = config["mcpServers"][server_name]["args"]
         arguments[arguments.index("--from") + 1] = "./bundled/" + wheel.name
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
+    claude_config_path = plugin / ".claude-mcp.json"
+    claude_config = json.loads(claude_config_path.read_text(encoding="utf-8"))
+    for server_name in ("anywhere-computer", "anywhere-subchat"):
+        arguments = claude_config["mcpServers"][server_name]["args"]
+        arguments[arguments.index("--from") + 1] = (
+            "${CLAUDE_PLUGIN_ROOT}/bundled/" + wheel.name
+        )
+    claude_config_path.write_text(json.dumps(claude_config, indent=2) + "\n", encoding="utf-8")
     subprocess.run(
         [
             "uv",
@@ -110,7 +124,9 @@ def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
     output.parent.mkdir(parents=True, exist_ok=True)
     members = [
         plugin / ".codex-plugin/plugin.json",
+        plugin / ".claude-plugin/plugin.json",
         plugin / ".mcp.json",
+        plugin / ".claude-mcp.json",
         plugin / "LICENSE",
         plugin / "skills/computer-work/SKILL.md",
         bundled / wheel.name,

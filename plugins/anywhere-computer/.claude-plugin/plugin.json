@@ -1,0 +1,9 @@
+{
+  "name": "anywhere-computer",
+  "version": "0.2.0-alpha.17",
+  "description": "Local computer tools and optional ChatGPT Subchat access for Claude Code.",
+  "author": {"name": "めてお", "url": "https://github.com/meteosimaji"},
+  "license": "MIT",
+  "repository": "https://github.com/meteosimaji/anywhere-computer",
+  "mcpServers": "./.claude-mcp.json"
+}
