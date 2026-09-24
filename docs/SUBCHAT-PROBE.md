@@ -72,16 +72,18 @@ the next one. If its outcome cannot be established from conversation history,
 the original conversation stays blocked against automated sends. Start a new
 Chat instead of resending the uncertain request. This prevents duplicate or
 out-of-order turns when the provider's receipt is unavailable.
-In a 2026-09-24 live macOS run observed at 30 frames per second, a new Chat and
-follow-up to that same conversation reached `completed` with the exact saved
-answers `背景送信一回目成功` and `背景送信二回目成功`. Chrome did not come to the foreground.
-HTTPX 200 for those
-generation requests is inferred from the implementation's response handling
-and completed results; a prior run measured HTTPX 200 directly. This observation
-does not guarantee background behavior for every macOS/Chrome combination or
-long-term provider compatibility. Other models, queued follow-ups, long
-responses and installed Plugin delivery remain separate acceptance checks. Do
-not resend an operation whose outcome is uncertain; recover it by operation ID.
+In live macOS runs, a new Chat and follow-up to the same conversation reached
+`completed` with exact saved answers, and a separate GPT-6 Pro run measured
+HTTPX `200 text/event-stream` for both generation POSTs. The installed alpha24
+Codex Plugin also created a Chat and recovered its answer, then sent and
+recovered follow-ups in that same conversation. During one follow-up, 41
+foreground-app samples all remained Prime Video. A separate 10 Hz window-list
+check over 30 seconds found that none of the dedicated Chrome windows were
+onscreen in its samples. A temporary Dock icon may appear during execution.
+These observations do not exclude shorter visible intervals or guarantee the
+same behavior on every macOS/Chrome combination. Long responses, provider
+changes and other model selections still need their own checks. Do not resend
+an operation whose outcome is uncertain; recover it by operation ID.
 
 In Codex, a natural-language request to use a Subchat still needs explicit tool
 discovery and selection. Inspect `subchat_capabilities` and `subchat_catalog`,
