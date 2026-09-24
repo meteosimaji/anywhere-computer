@@ -94,6 +94,58 @@ READ_ONLY_TOOLS = frozenset({
     'subchat_download_image', 'subchat_refresh_auth',
 })
 
+_BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
+    'subchat_queue_watch': (QueueWatch, 'Explicitly arm or disarm automatic delivery of an '
+        'existing queued input while this MCP controller remains alive. Requires an already '
+        'open owned browser tab; never launches Chrome. Checks every five seconds, stops on '
+        'errors or after final saved result. At most eight retained watches; disable to '
+        'release a slot. '
+        'Lease is 30-1800 seconds (default 900); expiry requires explicit re-arming. '
+        'Restart requires explicit re-arming. Disabling observation does not cancel a queue '
+        'or a preparation already in progress; use subchat_cancel for unsent cancellation. '
+        'This is browser-assisted delivery, not quiet HTTP generation or immediate steer.'),
+    'subchat_list': (SubchatList, 'List saved submission summaries without opening Chrome.'),
+    'subchat_cancel': (OperationId, 'Cancel an unsent queued/prepared input; never stop Chat.'),
+    'subchat_delete': (DeleteRequest, 'Hide one exact saved ordinary Chat conversation. '
+        'Requires matching saved operation and conversation ID and checks the bound account. '
+        'Makes one authenticated HTTP PATCH; unknown outcomes are never replayed.'),
+    'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
+                        'Steer returns unsupported without sending or queueing.'),
+    'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels.'),
+    'subchat_recover': (OperationId, 'Recover receipt/answer or progress a queued follow-up; '
+                        'never replay an uncertain send.'),
+    'subchat_status': (OperationId, 'Read the saved submission and latest HTTP transport '
+                       'checkpoint without browser interaction.'),
+    'subchat_wait': (Wait, 'Wait for an answer without stopping generation or resending. '
+                     'Other subchats can progress between observations. Timeout returns '
+                     'the current saved state, not a failed generation.'),
+}
+_CAPABILITIES_DEFINITION = (
+    Contract, 'Read configured transport capabilities without network or browser work.')
+_GATEWAY_CATALOG_DEFINITION = (
+    ReadOnlyHTTPCatalog, "Read the selected account's authenticated HTTP model "
+    'catalog without changing the browser model picker.')
+
+
+def _tool_catalog(definitions: dict[str, tuple[type[Contract], str]]) -> list[JsonValue]:
+    return [cast(JsonValue, {
+        'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
+        'annotations': {'readOnlyHint': name in {
+            'subchat_capabilities', 'subchat_catalog', 'subchat_status', 'subchat_list',
+            'subchat_download_file', 'subchat_download_image', 'subchat_refresh_auth'},
+                        'destructiveHint': name == 'subchat_delete', 'openWorldHint': True},
+    }) for name, (schema, description) in definitions.items()]
+
+
+def direct_gateway_catalog() -> list[JsonValue]:
+    """Advertise selected direct tools without opening or authenticating Chrome."""
+    definitions = {name: definition for name, definition in _BASE_TOOL_DEFINITIONS.items()
+                   if name in {'subchat_message', 'subchat_send', 'subchat_recover',
+                               'subchat_status', 'subchat_wait'}}
+    definitions['subchat_capabilities'] = _CAPABILITIES_DEFINITION
+    definitions['subchat_catalog'] = _GATEWAY_CATALOG_DEFINITION
+    return _tool_catalog(definitions)
+
 _PREPARATION_REASONS = {
     'Ordinary Chat composer contains a draft': 'composer_has_draft',
     'Ordinary Chat is generating': 'generation_active',
@@ -330,37 +382,11 @@ def session(service: Subchats, *,
                 return result
         return current
 
-    definitions: dict[str, tuple[type[Contract], str]] = {
-        'subchat_queue_watch': (QueueWatch, 'Explicitly arm or disarm automatic delivery of an '
-            'existing queued input while this MCP controller remains alive. Requires an already '
-            'open owned browser tab; never launches Chrome. Checks every five seconds, stops on '
-            'errors or after final saved result. At most eight retained watches; disable to '
-            'release a slot. '
-            'Lease is 30-1800 seconds (default 900); expiry requires explicit re-arming. '
-            'Restart requires explicit re-arming. Disabling observation does not cancel a queue '
-            'or a preparation already in progress; use subchat_cancel for unsent cancellation. '
-            'This is browser-assisted delivery, not quiet HTTP generation or immediate steer.'),
-        'subchat_list': (SubchatList, 'List saved submission summaries without opening Chrome.'),
-        'subchat_cancel': (OperationId, 'Cancel an unsent queued/prepared input; never stop Chat.'),
-        'subchat_delete': (DeleteRequest, 'Hide one exact saved ordinary Chat conversation. '
-            'Requires matching saved operation and conversation ID and checks the bound account. '
-            'Makes one authenticated HTTP PATCH; unknown outcomes are never replayed.'),
-        'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
-                            'Steer returns unsupported without sending or queueing.'),
-        'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels.'),
-        'subchat_recover': (OperationId, 'Recover receipt/answer or progress a queued follow-up; '
-                            'never replay an uncertain send.'),
-        'subchat_status': (OperationId, 'Read the saved submission and latest HTTP transport '
-                           'checkpoint without browser interaction.'),
-        'subchat_wait': (Wait, 'Wait for an answer without stopping generation or resending. '
-                         'Other subchats can progress between observations. Timeout returns '
-                         'the current saved state, not a failed generation.'),
-    }
+    definitions = dict(_BASE_TOOL_DEFINITIONS)
 
     capabilities = getattr(service.backend, 'capabilities', None)
     if capabilities is not None:
-        definitions['subchat_capabilities'] = (
-            Contract, 'Read configured transport capabilities without network or browser work.')
+        definitions['subchat_capabilities'] = _CAPABILITIES_DEFINITION
 
     refresh_auth = getattr(service.backend, 'refresh_auth', None)
     if (read_only and refresh_auth is not None and capabilities is not None
@@ -409,13 +435,7 @@ def session(service: Subchats, *,
                        if name in READ_ONLY_TOOLS}
 
     async def catalog() -> list[JsonValue]:
-        return [cast(JsonValue, {
-            'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
-            'annotations': {'readOnlyHint': name in {
-                'subchat_capabilities', 'subchat_catalog', 'subchat_status', 'subchat_list',
-                'subchat_download_file', 'subchat_download_image', 'subchat_refresh_auth'},
-                            'destructiveHint': name == 'subchat_delete', 'openWorldHint': True},
-        }) for name, (schema, description) in definitions.items()]
+        return _tool_catalog(definitions)
 
     async def execute(request: Request) -> Reply:
         if read_only and request.tool not in READ_ONLY_TOOLS:

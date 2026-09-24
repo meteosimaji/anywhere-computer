@@ -191,7 +191,14 @@ async def test_subchat_login_failure_keeps_http_tools_and_recovers_without_resta
                 assert response.status_code == 200
                 return {tool["name"] for tool in response.json()["result"]["tools"]}
 
-            assert await list_names("before") == SCOPES
+            assert await list_names("before") == scopes
+            assert opens == 0
+            unavailable = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": "unavailable", "method": "tools/call",
+                "params": {"name": "subchat_status",
+                           "arguments": {"operation_id": "a" * 32}}})
+            assert unavailable.status_code == 200
+            assert unavailable.json()["result"]["structuredContent"]["state"] == "failed"
             assert opens == 1
             target = tmp_path / "available.txt"
             target.write_text("still available", encoding="utf-8")
@@ -203,7 +210,7 @@ async def test_subchat_login_failure_keeps_http_tools_and_recovers_without_resta
             ready = True
             clock[0] += 11
             assert await list_names("after") == scopes
-            assert opens == 2  # A failed login is retried after a short cooldown.
+            assert opens == 1  # Discovery never retries or opens Chrome.
             missing_id = await http.post("/mcp", headers=headers, json={
                 "jsonrpc": "2.0", "id": "send", "method": "tools/call",
                 "params": {"name": "subchat_send", "arguments": {}}})
@@ -215,6 +222,7 @@ async def test_subchat_login_failure_keeps_http_tools_and_recovers_without_resta
                            "arguments": {"operation_id": "a" * 32}}})
             assert result.status_code == 200
             assert result.json()["result"]["structuredContent"]["data"] == {"ready": True}
+            assert opens == 2  # An authorized call retries after the cooldown.
     assert closes == 1
 
 

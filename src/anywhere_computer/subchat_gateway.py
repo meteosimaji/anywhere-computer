@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator
 
 from .models import Reply, Request
-from .subchat_mcp import ReadOnlyHTTPCatalog, SubchatSession
+from .subchat_mcp import ReadOnlyHTTPCatalog, SubchatSession, direct_gateway_catalog
 
 if TYPE_CHECKING:
     import httpx
@@ -69,13 +69,7 @@ class SubchatGateway:
             if item.get("name") == "subchat_catalog":
                 # This gateway permits only an HTTP catalog observation. The
                 # UI picker variant can change the selected profile's default.
-                annotations = item.get("annotations")
-                result.append({**item,
-                    "description": "Read the selected account's authenticated HTTP model "
-                                   "catalog without changing the browser model picker.",
-                    "inputSchema": ReadOnlyHTTPCatalog.model_json_schema(),
-                    "annotations": {**(annotations if isinstance(annotations, dict) else {}),
-                                    "readOnlyHint": True}})
+                result.append(direct_gateway_catalog()[-1])
             else:
                 result.append(item)
         return result
@@ -265,18 +259,16 @@ class LazySubchatGateway:
                 self._idle_task = None
 
     async def catalog(self, grant_id: str, granted: frozenset[str]) -> list[JsonValue]:
-        if not granted & SUBCHAT_GATEWAY_TOOLS:
+        if self._closed:
             return []
-        gateway = await self._acquire()
-        if gateway is None:
-            return []
-        try:
-            return await gateway.catalog(grant_id, granted)
-        finally:
-            await self._release()
+        return [item for item in direct_gateway_catalog()
+                if isinstance(item, dict) and item.get("name") in granted & SUBCHAT_GATEWAY_TOOLS]
 
     async def execute(self, grant_id: str, request: Request,
                       granted: frozenset[str]) -> Reply:
+        if request.tool not in granted & SUBCHAT_GATEWAY_TOOLS:
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="Subchat tool is not granted")
         gateway = await self._acquire()
         if gateway is None:
             return Reply(operation_id=request.operation_id, state="failed",

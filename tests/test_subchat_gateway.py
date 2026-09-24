@@ -23,7 +23,7 @@ RESOURCE = "https://computer.example/mcp"
 
 
 @pytest.mark.asyncio
-async def test_lazy_gateway_retries_login_and_opens_once_for_concurrent_discovery(monkeypatch):
+async def test_lazy_gateway_discovery_is_static_and_execute_retries_login(monkeypatch):
     from types import SimpleNamespace
 
     import anywhere_computer.subchat_gateway as gateway_module
@@ -66,17 +66,27 @@ async def test_lazy_gateway_retries_login_and_opens_once_for_concurrent_discover
     granted = frozenset({"subchat_status"})
     assert await gateway.catalog("grant", frozenset()) == []
     assert entered == 0
-    assert await gateway.catalog("grant", granted) == []
+    assert [item["name"] for item in await gateway.catalog("grant", granted)] == [
+        "subchat_status"]
+    assert entered == 0
+    request = Request(operation_id="a" * 32, tool="subchat_status")
+    denied = await gateway.execute("grant", request, frozenset())
+    assert denied.state == "failed" and denied.error == "Subchat tool is not granted"
+    assert entered == 0
+    unknown = await gateway.execute("grant", request.model_copy(
+        update={"tool": "unknown_tool"}), granted)
+    assert unknown.state == "failed" and entered == 0
+    assert (await gateway.execute("grant", request, granted)).state == "failed"
     assert entered == 1
     ready = True
-    assert await gateway.catalog("grant", granted) == []
+    assert (await gateway.execute("grant", request, granted)).state == "failed"
     assert entered == 1
     clock[0] += 11
-    catalogs = await asyncio.gather(*(gateway.catalog("grant", granted) for _ in range(8)))
-    assert all(catalog[0]["name"] == "subchat_status" for catalog in catalogs)
+    replies = await asyncio.gather(*(gateway.execute("grant", Request(
+        operation_id=f"{index:032x}", tool="subchat_status"), granted)
+        for index in range(8)))
+    assert all(reply.state == "completed" for reply in replies)
     assert entered == 2
-    assert (await gateway.execute("grant", Request(operation_id="a" * 32,
-            tool="subchat_status"), granted)).state == "completed"
     await gateway.close()
     await gateway.close()
     assert exited == 1
@@ -91,19 +101,12 @@ async def test_lazy_gateway_idle_closes_and_reopens_without_closing_active_calls
         consent="ordinary-chat-browser-control-approved")
     entered = 0
     exited = 0
-    catalog_started = asyncio.Event()
-    finish_catalog = asyncio.Event()
     execute_started = asyncio.Event()
     finish_execute = asyncio.Event()
 
     class Core:
         def has_live_work(self):
             return False
-
-        async def catalog(self, grant_id, granted):
-            catalog_started.set()
-            await finish_catalog.wait()
-            return [{"name": "subchat_status"}]
 
         async def execute(self, grant_id, request, granted):
             execute_started.set()
@@ -124,24 +127,22 @@ async def test_lazy_gateway_idle_closes_and_reopens_without_closing_active_calls
     gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
     granted = frozenset({"subchat_status"})
     try:
-        catalog = asyncio.create_task(gateway.catalog("grant", granted))
-        await catalog_started.wait()
-        await asyncio.sleep(.03)
-        assert entered == 1 and exited == 0
         execute = asyncio.create_task(gateway.execute(
             "grant", Request(operation_id="a" * 32, tool="subchat_status"), granted))
         await execute_started.wait()
-        finish_catalog.set()
-        assert (await catalog)[0]["name"] == "subchat_status"
         await asyncio.sleep(.03)
-        assert exited == 0  # The overlapping execute still owns the gateway.
+        assert entered == 1 and exited == 0
+        assert (await gateway.catalog("grant", granted))[0]["name"] == "subchat_status"
+        assert exited == 0
         finish_execute.set()
         assert (await execute).state == "completed"
         await asyncio.wait_for(_until(lambda: exited == 1), timeout=1)
         assert (await gateway.catalog("grant", granted))[0]["name"] == "subchat_status"
+        assert entered == 1  # Catalog alone never reopens Chrome.
+        assert (await gateway.execute("grant", Request(
+            operation_id="b" * 32, tool="subchat_status"), granted)).state == "completed"
         assert entered == 2
     finally:
-        finish_catalog.set()
         finish_execute.set()
         await gateway.close()
 
@@ -209,21 +210,21 @@ async def test_lazy_gateway_idle_waits_for_detached_work_and_service_close(monke
 
 
 @pytest.mark.asyncio
-async def test_lazy_gateway_service_close_waits_for_active_catalog(monkeypatch):
+async def test_lazy_gateway_service_close_waits_for_active_execute(monkeypatch):
     import anywhere_computer.subchat_gateway as gateway_module
 
     selected = SubchatGatewayConfig(
         profile="/selected/Default", ledger="/selected/ledger", account_id="account",
         consent="ordinary-chat-browser-control-approved")
-    catalog_started = asyncio.Event()
-    finish_catalog = asyncio.Event()
+    execute_started = asyncio.Event()
+    finish_execute = asyncio.Event()
     exited = 0
 
     class Core:
-        async def catalog(self, grant_id, granted):
-            catalog_started.set()
-            await finish_catalog.wait()
-            return [{"name": "subchat_status"}]
+        async def execute(self, grant_id, request, granted):
+            execute_started.set()
+            await finish_execute.wait()
+            return Reply(operation_id=request.operation_id, state="completed")
 
     @asynccontextmanager
     async def open_gateway(config, *, owner):
@@ -236,14 +237,15 @@ async def test_lazy_gateway_service_close_waits_for_active_catalog(monkeypatch):
     monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
     gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
     granted = frozenset({"subchat_status"})
-    catalog = asyncio.create_task(gateway.catalog("grant", granted))
-    await catalog_started.wait()
+    execute = asyncio.create_task(gateway.execute(
+        "grant", Request(operation_id="d" * 32, tool="subchat_status"), granted))
+    await execute_started.wait()
     closing = asyncio.create_task(gateway.close())
     await asyncio.sleep(.03)
     assert not closing.done() and exited == 0
     assert await gateway.catalog("grant", granted) == []
-    finish_catalog.set()
-    assert (await catalog)[0]["name"] == "subchat_status"
+    finish_execute.set()
+    assert (await execute).state == "completed"
     await closing
     assert exited == 1
 
@@ -364,7 +366,9 @@ async def test_gateway_grant_catalog_and_disconnected_worker():
 
 
 @pytest.mark.asyncio
-async def test_gateway_preserves_direct_tool_schema_and_annotations(tmp_path):
+async def test_static_discovery_matches_real_gateway_catalog_without_chrome(tmp_path, monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+
     class Backend:
         def capabilities(self):
             return {"generation_transport": "browser_prepared_httpx"}
@@ -377,12 +381,21 @@ async def test_gateway_preserves_direct_tool_schema_and_annotations(tmp_path):
         core = session(Subchats(SubchatSubmissions(ledger.connection), Backend()),
                        observe_catalog=catalog, owner="grant-a")
         gateway = SubchatGateway(lambda grant: core, owner="owner")
-        granted = SUBCHAT_GATEWAY_TOOLS - {"subchat_catalog"}
+        granted = SUBCHAT_GATEWAY_TOOLS
         actual = await gateway.catalog("grant-a", granted)
-        expected = [tool for tool in await core.catalog()
-                    if tool["name"] in granted]
-        assert actual == expected
+        async def forbidden_open(config, *, owner):
+            raise AssertionError("Discovery opened Chrome")
+
+        monkeypatch.setattr(gateway_module, "open_subchat_gateway", forbidden_open)
+        selected = SubchatGatewayConfig(
+            profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+            consent="ordinary-chat-browser-control-approved")
+        lazy = LazySubchatGateway(selected, owner="owner")
+        assert await lazy.catalog("grant-a", granted) == actual
+        assert await lazy.catalog("grant-a", frozenset({"subchat_catalog"})) == [
+            tool for tool in actual if tool["name"] == "subchat_catalog"]
         assert {tool["name"] for tool in actual} == granted
+        await lazy.close()
         await gateway.close()
     finally:
         ledger.close()
