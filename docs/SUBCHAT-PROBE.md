@@ -232,11 +232,11 @@ it.
 `--http-read` supports authenticated, saved-answer recovery and model reads
 through an observed browser session. It does not independently log in or send.
 An HTTP rejection does not trigger automatic browser fallback or generation
-replay. The [HTTP-only generation guide](SUBCHAT-HTTP-ONLY-GENERATION.md)
-describes a separate opt-in mode using a complete, observed request handoff.
-That mode has explicit account matching, does not acquire generation protection
-values automatically and does not renew an expired login. Start read-only and
-check the reported capabilities before enabling generation.
+replay. The separate opt-in HTTP-only generation mode has not passed live
+generation acceptance. It requires a complete observed request handoff, does
+not acquire generation protection values automatically and does not renew an
+expired login. Start read-only and check the reported capabilities before
+enabling generation.
 
 Personal ordinary-Chat HTTP access must stay within the permission and account
 scope granted to the owner. The experimental transport is not an official API;
