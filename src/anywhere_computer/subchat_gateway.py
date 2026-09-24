@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sys
+import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
@@ -22,6 +24,7 @@ SUBCHAT_GATEWAY_TOOLS = frozenset({
     "subchat_capabilities", "subchat_catalog", "subchat_send", "subchat_message",
     "subchat_recover", "subchat_wait", "subchat_status",
 })
+logger = logging.getLogger(__name__)
 
 
 class SubchatGatewayConfig(BaseModel):
@@ -176,6 +179,74 @@ class SubchatGateway:
                                  return_exceptions=True)
         self.pending.clear()
         self.cores.clear()
+
+
+class LazySubchatGateway:
+    """Open a selected account only when discovered; retry failed preparation."""
+
+    def __init__(self, config: SubchatGatewayConfig, *, owner: str) -> None:
+        self.config = config
+        self.owner = owner
+        self._lock = asyncio.Lock()
+        self._gateway: SubchatGateway | None = None
+        self._resources: AsyncExitStack | None = None
+        self._closed = False
+        self._retry_after = 0.0
+
+    async def _ready(self) -> SubchatGateway | None:
+        async with self._lock:
+            if self._closed:
+                return None
+            if self._gateway is not None:
+                return self._gateway
+            if time.monotonic() < self._retry_after:
+                return None
+            resources = AsyncExitStack()
+            try:
+                gateway = await resources.enter_async_context(
+                    open_subchat_gateway(self.config, owner=self.owner))
+            except Exception as error:
+                await resources.aclose()
+                # Provider errors can carry private URLs or account data.
+                logger.warning("Subchat gateway unavailable: %s", type(error).__name__)
+                self._retry_after = time.monotonic() + 10
+                return None
+            self._resources = resources
+            self._gateway = gateway
+            return gateway
+
+    async def catalog(self, grant_id: str, granted: frozenset[str]) -> list[JsonValue]:
+        if not granted & SUBCHAT_GATEWAY_TOOLS:
+            return []
+        gateway = await self._ready()
+        return await gateway.catalog(grant_id, granted) if gateway is not None else []
+
+    async def execute(self, grant_id: str, request: Request,
+                      granted: frozenset[str]) -> Reply:
+        gateway = await self._ready()
+        if gateway is None:
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="Selected Subchat account is unavailable",
+                         data={"dispatched": False})
+        return await gateway.execute(grant_id, request, granted)
+
+    async def close(self) -> None:
+        async with self._lock:
+            self._closed = True
+            if self._resources is not None:
+                await self._resources.aclose()
+                self._resources = None
+                self._gateway = None
+
+
+@asynccontextmanager
+async def lazy_subchat_gateway(config: SubchatGatewayConfig, *, owner: str
+                               ) -> AsyncIterator[LazySubchatGateway]:
+    gateway = LazySubchatGateway(config, owner=owner)
+    try:
+        yield gateway
+    finally:
+        await gateway.close()
 
 
 async def _background_account_session(context: BrowserContext, client: httpx.AsyncClient,

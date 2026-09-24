@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -10,6 +11,7 @@ from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import Subchats
 from anywhere_computer.subchat_gateway import (
     SUBCHAT_GATEWAY_TOOLS,
+    LazySubchatGateway,
     SubchatGateway,
     SubchatGatewayConfig,
     _background_account_session,
@@ -18,6 +20,63 @@ from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatSubmissions
 
 RESOURCE = "https://computer.example/mcp"
+
+
+@pytest.mark.asyncio
+async def test_lazy_gateway_retries_login_and_opens_once_for_concurrent_discovery(monkeypatch):
+    from types import SimpleNamespace
+
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    clock = [100.0]
+    monkeypatch.setattr(gateway_module, "time",
+                        SimpleNamespace(monotonic=lambda: clock[0]))
+
+    selected = SubchatGatewayConfig(
+        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        consent="ordinary-chat-browser-control-approved")
+    ready = False
+    entered = 0
+    exited = 0
+
+    class Core:
+        async def catalog(self, grant_id, granted):
+            return [{"name": "subchat_status", "inputSchema": {"type": "object"}}]
+
+        async def execute(self, grant_id, request, granted):
+            return Reply(operation_id=request.operation_id, state="completed")
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        nonlocal entered, exited
+        assert config is selected and owner == "owner"
+        entered += 1
+        if not ready:
+            raise ConnectionError("Chrome login unavailable")
+        try:
+            yield Core()
+        finally:
+            exited += 1
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    gateway = LazySubchatGateway(selected, owner="owner")
+    granted = frozenset({"subchat_status"})
+    assert await gateway.catalog("grant", frozenset()) == []
+    assert entered == 0
+    assert await gateway.catalog("grant", granted) == []
+    assert entered == 1
+    ready = True
+    assert await gateway.catalog("grant", granted) == []
+    assert entered == 1
+    clock[0] += 11
+    catalogs = await asyncio.gather(*(gateway.catalog("grant", granted) for _ in range(8)))
+    assert all(catalog[0]["name"] == "subchat_status" for catalog in catalogs)
+    assert entered == 2
+    assert (await gateway.execute("grant", Request(operation_id="a" * 32,
+            tool="subchat_status"), granted)).state == "completed"
+    await gateway.close()
+    await gateway.close()
+    assert exited == 1
 
 
 @pytest.mark.asyncio

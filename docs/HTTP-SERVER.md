@@ -50,7 +50,13 @@ anywhere http-add-tools --scope subchat_capabilities --scope subchat_catalog \
 その `http_selection` と利用者が選んだモデル・エフォートを指定します。
 `subchat_send` と `subchat_message` は呼び出し前に一意な `request_id` を選び、
 応答が途切れたら同じ ID で状態を回収してください。未確認の送信を新しい ID で
-再送しないでください。選択したアカウントと異なるログインは起動時に拒否します。
+再送しないでください。Subchat の初回一覧取得時に選択アカウントを検証します。
+Chrome またはログインが利用できない間も HTTP サーバーの他のツールは利用でき、
+Subchat ツールは一覧に表示されません。失敗後は10秒間の再試行間隔を置きます。
+ログインを復旧したら同じ接続で `tools/list` を再実行してください。
+クライアントがツール一覧をキャッシュする場合は接続し直してください。
+選択したアカウントと異なるログインでは
+Subchat ツールを利用できません。
 
 この経路は macOS の選択済み Chrome プロファイルから認証を読み、ブラウザー内で
 送信を準備した後、生成 POST を HTTPX で行います。Chrome の起動は必要ですが、

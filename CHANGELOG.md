@@ -14,6 +14,10 @@
   ordinary Chat answer without a visible Chrome window in sampled frames.
 - Allow same-ID retries after safe preparation failures and keep recovery
   available when uncertain send IDs reach the gateway's capacity.
+- Start the optional HTTPS Subchat gateway on discovery so an expired Chrome
+  login does not stop the other HTTP tools. Retry discovery after login returns.
+- Guard dedicated macOS Chrome processes across an owning Python process crash;
+  the guardian stops only the profile and owner token it was given.
 
 ## 0.2.0a23 / Plugin 0.2.0-alpha.23 — unpublished candidate (2026-09-24)
 

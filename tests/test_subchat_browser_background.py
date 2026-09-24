@@ -1,11 +1,13 @@
 """Background Chrome launch and owned-tab allocation contracts."""
 
+import asyncio
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
 
-from anywhere_computer.subchat_browser import background
+from anywhere_computer.subchat_browser import background, background_guardian
 
 
 async def test_background_page_uses_nonactivating_cdp_target():
@@ -44,6 +46,8 @@ async def test_background_launch_attaches_only_to_fresh_profile_and_cleans_up(
     monkeypatch.setattr(background.sys, 'platform', 'darwin')
     monkeypatch.setattr(background, '_profile_processes', lambda _profile: [])
     monkeypatch.setattr(background, '_owned_processes', lambda _profile, _token: [object()])
+    monkeypatch.setattr(background, '_start_guardian', _fake_guardian)
+    monkeypatch.setattr(background, '_finish_guardian', _fake_finish_guardian)
     stopped = []
     monkeypatch.setattr(
         background, '_stop_profile_processes',
@@ -182,6 +186,8 @@ async def test_background_launch_reclaims_owned_orphan_and_stale_port(tmp_path, 
         stopped.append((token, startup_grace))
 
     monkeypatch.setattr(background, '_stop_profile_processes', stop)
+    monkeypatch.setattr(background, '_start_guardian', _fake_guardian)
+    monkeypatch.setattr(background, '_finish_guardian', _fake_finish_guardian)
 
     class Process:
         async def wait(self):
@@ -222,6 +228,161 @@ def test_background_owner_token_rejects_symlink(tmp_path):
     owner_file.symlink_to(target)
     with pytest.raises(OSError):
         background._read_owner_token(owner_file)
+
+
+async def _fake_guardian(_profile, _token):
+    return object()
+
+
+async def _fake_finish_guardian(_guardian, *, clean):
+    assert clean
+
+
+def test_background_guardian_only_stops_owned_session_on_owner_loss(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(background_guardian.sys, 'platform', 'darwin')
+    stopped = []
+    written = []
+    monkeypatch.setattr(background_guardian.os, 'write',
+                        lambda descriptor, data: written.append((descriptor, data)))
+    monkeypatch.setattr(background_guardian, '_stop_profile_processes',
+                        lambda profile, token, *, startup_grace:
+                        stopped.append((profile, token, startup_grace)))
+    token = 'a' * 32
+    for received in (b'D', b'', b'X'):
+        monkeypatch.setattr(background_guardian.os, 'read',
+                            lambda descriptor, count, received=received: received)
+        assert background_guardian.run(tmp_path, token) == 0
+    assert written == [(1, b'R')] * 3
+    assert stopped == [(tmp_path, token, True)] * 2
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
+async def test_background_guardian_failure_prevents_chrome_launch(tmp_path, monkeypatch):
+    monkeypatch.setattr(background.sys, 'platform', 'darwin')
+    monkeypatch.setattr(background, '_profile_processes', lambda _profile: [])
+    launches = []
+
+    async def launch(*command, **_kwargs):
+        launches.append(command)
+        raise OSError('guardian unavailable')
+
+    monkeypatch.setattr(background.asyncio, 'create_subprocess_exec', launch)
+    with pytest.raises(OSError, match='guardian unavailable'):
+        async with background.background_chrome_context(object(), tmp_path, []):
+            pass
+    assert len(launches) == 1
+    assert 'background_guardian' in ' '.join(launches[0])
+
+
+@pytest.mark.skipif(sys.platform != 'darwin', reason='macOS guardian')
+async def test_background_guardian_installed_module_handshake_without_chrome(tmp_path):
+    guardian = await background._start_guardian(tmp_path, 'a' * 32)
+    await background._finish_guardian(guardian, clean=True)
+    assert guardian.returncode == 0
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
+async def test_background_launch_cancellation_waits_for_owned_cleanup(tmp_path, monkeypatch):
+    monkeypatch.setattr(background.sys, 'platform', 'darwin')
+    monkeypatch.setattr(background, '_profile_processes', lambda _profile: [])
+    guardian_actions = []
+
+    async def start(_profile, _token):
+        return object()
+
+    async def finish(_guardian, *, clean):
+        guardian_actions.append(clean)
+
+    monkeypatch.setattr(background, '_start_guardian', start)
+    monkeypatch.setattr(background, '_finish_guardian', finish)
+    stops = []
+    monkeypatch.setattr(background, '_stop_profile_processes',
+                        lambda profile, token, *, startup_grace:
+                        stops.append((profile, token, startup_grace)))
+    launch_started = asyncio.Event()
+    launch_finish = asyncio.Event()
+
+    async def launch(*_command, **_kwargs):
+        launch_started.set()
+        await launch_finish.wait()
+
+    monkeypatch.setattr(background.asyncio, 'create_subprocess_exec', launch)
+
+    async def run():
+        async with background.background_chrome_context(object(), tmp_path, []):
+            pass
+
+    task = asyncio.create_task(run())
+    await launch_started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert guardian_actions == [True]
+    assert len(stops) == 1 and stops[0][0] == tmp_path and stops[0][2] is True
+    launch_finish.set()
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
+async def test_background_cleanup_finishes_after_repeated_cancellation(tmp_path, monkeypatch):
+    monkeypatch.setattr(background.sys, 'platform', 'darwin')
+    monkeypatch.setattr(background, '_profile_processes', lambda _profile: [])
+    monkeypatch.setattr(background, '_owned_processes', lambda _profile, _token: [object()])
+    guardian_actions = []
+
+    async def finish(_guardian, *, clean):
+        guardian_actions.append(clean)
+
+    monkeypatch.setattr(background, '_start_guardian', _fake_guardian)
+    monkeypatch.setattr(background, '_finish_guardian', finish)
+    loop = asyncio.get_running_loop()
+    cleanup_started = asyncio.Event()
+    release_cleanup = threading.Event()
+
+    def stop(_profile, _token, *, startup_grace):
+        loop.call_soon_threadsafe(cleanup_started.set)
+        assert release_cleanup.wait(timeout=5)
+
+    monkeypatch.setattr(background, '_stop_profile_processes', stop)
+
+    class Launch:
+        async def wait(self):
+            (tmp_path / 'DevToolsActivePort').write_text('32001\n/devtools/browser/owned\n')
+            return 0
+
+    async def launch(*_command, **_kwargs):
+        return Launch()
+
+    monkeypatch.setattr(background.asyncio, 'create_subprocess_exec', launch)
+
+    class Browser:
+        contexts = [object()]
+
+        async def close(self):
+            pass
+
+    async def connect(_endpoint):
+        return Browser()
+
+    driver = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=connect))
+
+    async def run():
+        async with background.background_chrome_context(driver, tmp_path, []):
+            pass
+
+    task = asyncio.create_task(run())
+    try:
+        await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+        task.cancel()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert guardian_actions == [True]
 
 
 async def test_background_input_prepares_model_and_draft_on_offline_chat_fixture():

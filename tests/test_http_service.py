@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -24,7 +25,9 @@ from anywhere_computer.http_service import (
     revoke_http_device,
 )
 from anywhere_computer.locking import ProcessLock
+from anywhere_computer.models import Reply
 from anywhere_computer.owner_credentials import OwnerCredentials
+from anywhere_computer.subchat_gateway import SubchatGatewayConfig
 
 RESOURCE = "https://computer.example/mcp"
 REDIRECT = "https://client.example/callback"
@@ -51,7 +54,7 @@ async def configured(tmp_path, unused_tcp_port):
     return config, owner
 
 
-async def authenticate(http, *, client_id="native", redirect=REDIRECT):
+async def authenticate(http, *, client_id="native", redirect=REDIRECT, scopes=SCOPES):
     metadata = (await http.get("/.well-known/oauth-authorization-server")).json()
     assert metadata["authorization_response_iss_parameter_supported"] is True
     resource_metadata = (await http.get("/.well-known/oauth-protected-resource")).json()
@@ -63,7 +66,7 @@ async def authenticate(http, *, client_id="native", redirect=REDIRECT):
             "client_id": client_id,
             "redirect_uri": redirect,
             "resource": RESOURCE,
-            "scope": " ".join(sorted(SCOPES)),
+            "scope": " ".join(sorted(scopes)),
             "state": "client-state",
             "code_challenge": pkce_s256("v" * 43),
             "code_challenge_method": "S256",
@@ -130,6 +133,89 @@ async def initialize(http, token):
     )
     assert response.status_code == 202
     return headers
+
+
+async def test_subchat_login_failure_keeps_http_tools_and_recovers_without_restart(
+    tmp_path, unused_tcp_port, monkeypatch,
+):
+    from types import SimpleNamespace
+
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    clock = [100.0]
+    monkeypatch.setattr(gateway_module, "time",
+                        SimpleNamespace(monotonic=lambda: clock[0]))
+
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "Default"), ledger=str(tmp_path / "subchat-ledger"),
+        account_id="selected", consent="ordinary-chat-browser-control-approved")
+    scopes = SCOPES | {"subchat_status", "subchat_send"}
+    config = await setup(tmp_path, unused_tcp_port, scopes=scopes, subchat=selected)
+    owner = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
+    owner.initialize("synthetic owner password")
+    ready = False
+    opens = 0
+    closes = 0
+
+    class Gateway:
+        async def catalog(self, grant_id, granted):
+            return [{"name": "subchat_status", "inputSchema": {"type": "object"},
+                     "annotations": {"readOnlyHint": True}},
+                    {"name": "subchat_send", "inputSchema": {"type": "object"}}]
+
+        async def execute(self, grant_id, request, granted):
+            return Reply(operation_id=request.operation_id,
+                         state="completed", data={"ready": True})
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        nonlocal opens, closes
+        assert config == selected and owner == "owner"
+        opens += 1
+        if not ready:
+            raise ConnectionError("login unavailable")
+        try:
+            yield Gateway()
+        finally:
+            closes += 1
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    async with http_service(tmp_path, credentials=owner):
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{config.port}",
+                                     trust_env=False) as http:
+            token = await authenticate(http, scopes=scopes)
+            headers = await initialize(http, token)
+            async def list_names(identity):
+                response = await http.post("/mcp", headers=headers, json={
+                    "jsonrpc": "2.0", "id": identity, "method": "tools/list"})
+                assert response.status_code == 200
+                return {tool["name"] for tool in response.json()["result"]["tools"]}
+
+            assert await list_names("before") == SCOPES
+            assert opens == 1
+            target = tmp_path / "available.txt"
+            target.write_text("still available", encoding="utf-8")
+            local = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": "read", "method": "tools/call",
+                "params": {"name": "files_read", "arguments": {"path": str(target)}}})
+            assert local.status_code == 200
+            assert local.json()["result"]["structuredContent"]["state"] == "completed"
+            ready = True
+            clock[0] += 11
+            assert await list_names("after") == scopes
+            assert opens == 2  # A failed login is retried after a short cooldown.
+            missing_id = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": "send", "method": "tools/call",
+                "params": {"name": "subchat_send", "arguments": {}}})
+            assert missing_id.status_code == 200
+            assert missing_id.json()["error"]["code"] == -32602
+            result = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": "status", "method": "tools/call",
+                "params": {"name": "subchat_status",
+                           "arguments": {"operation_id": "a" * 32}}})
+            assert result.status_code == 200
+            assert result.json()["result"]["structuredContent"]["data"] == {"ready": True}
+    assert closes == 1
 
 
 async def test_fresh_chat_discovers_and_operates_without_previous_session(configured, tmp_path):

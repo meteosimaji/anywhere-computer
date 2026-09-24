@@ -14,7 +14,7 @@ from .mcp_server import INSTRUCTIONS as MCP_INSTRUCTIONS
 from .mcp_server import OPERATION_META, MCPSession, rpc_error
 from .models import OperationId, Reply, Request
 from .remote_bridge import RemoteAgent
-from .subchat_gateway import SUBCHAT_GATEWAY_TOOLS, SubchatGateway
+from .subchat_gateway import SUBCHAT_GATEWAY_TOOLS, LazySubchatGateway, SubchatGateway
 
 
 class SubchatHTTPSession(MCPSession):
@@ -51,7 +51,7 @@ class AuthorizedDeviceMCP:
         client: str | None = None,
         allowed_tools: frozenset[str] | None = None,
         device_directory: Path | None = None,
-        subchat_gateway: SubchatGateway | None = None,
+        subchat_gateway: SubchatGateway | LazySubchatGateway | None = None,
     ) -> None:
         if (engine is None) == (agent_directory is None):
             raise ValueError("Select exactly one embedded engine or shared agent directory")

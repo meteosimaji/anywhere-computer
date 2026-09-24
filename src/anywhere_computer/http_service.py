@@ -38,7 +38,7 @@ from .state import prepare_directory
 from .subchat_gateway import (
     SUBCHAT_GATEWAY_TOOLS,
     SubchatGatewayConfig,
-    open_subchat_gateway,
+    lazy_subchat_gateway,
 )
 
 
@@ -248,7 +248,7 @@ async def http_service(
                 _check_enrollment(store, config)
                 async with AsyncExitStack() as resources:
                     subchat_gateway = (await resources.enter_async_context(
-                        open_subchat_gateway(config.subchat, owner=config.owner))
+                        lazy_subchat_gateway(config.subchat, owner=config.owner))
                         if config.subchat is not None else None)
                     backend = AuthorizedDeviceMCP(
                         store,
