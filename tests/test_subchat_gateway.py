@@ -23,7 +23,7 @@ RESOURCE = "https://computer.example/mcp"
 
 
 @pytest.mark.asyncio
-async def test_lazy_gateway_discovery_is_static_and_execute_retries_login(monkeypatch):
+async def test_lazy_gateway_discovery_is_static_and_execute_retries_login(monkeypatch, tmp_path):
     from types import SimpleNamespace
 
     import anywhere_computer.subchat_gateway as gateway_module
@@ -33,7 +33,8 @@ async def test_lazy_gateway_discovery_is_static_and_execute_retries_login(monkey
                         SimpleNamespace(monotonic=lambda: clock[0]))
 
     selected = SubchatGatewayConfig(
-        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        profile=str(tmp_path / "selected" / "Default"),
+        ledger=str(tmp_path / "selected" / "ledger"), account_id="account",
         consent="ordinary-chat-browser-control-approved")
     ready = False
     entered = 0
@@ -93,11 +94,14 @@ async def test_lazy_gateway_discovery_is_static_and_execute_retries_login(monkey
 
 
 @pytest.mark.asyncio
-async def test_lazy_gateway_idle_closes_and_reopens_without_closing_active_calls(monkeypatch):
+async def test_lazy_gateway_idle_closes_and_reopens_without_closing_active_calls(
+    monkeypatch, tmp_path,
+):
     import anywhere_computer.subchat_gateway as gateway_module
 
     selected = SubchatGatewayConfig(
-        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        profile=str(tmp_path / "selected" / "Default"),
+        ledger=str(tmp_path / "selected" / "ledger"), account_id="account",
         consent="ordinary-chat-browser-control-approved")
     entered = 0
     exited = 0
@@ -148,11 +152,12 @@ async def test_lazy_gateway_idle_closes_and_reopens_without_closing_active_calls
 
 
 @pytest.mark.asyncio
-async def test_lazy_gateway_idle_waits_for_detached_work_and_service_close(monkeypatch):
+async def test_lazy_gateway_idle_waits_for_detached_work_and_service_close(monkeypatch, tmp_path):
     import anywhere_computer.subchat_gateway as gateway_module
 
     selected = SubchatGatewayConfig(
-        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        profile=str(tmp_path / "selected" / "Default"),
+        ledger=str(tmp_path / "selected" / "ledger"), account_id="account",
         consent="ordinary-chat-browser-control-approved")
     work = asyncio.Event()
     exited = 0
@@ -210,11 +215,14 @@ async def test_lazy_gateway_idle_waits_for_detached_work_and_service_close(monke
 
 
 @pytest.mark.asyncio
-async def test_idle_keeps_completed_recovery_failure_until_explicit_observation(monkeypatch):
+async def test_idle_keeps_completed_recovery_failure_until_explicit_observation(
+    monkeypatch, tmp_path,
+):
     import anywhere_computer.subchat_gateway as gateway_module
 
     selected = SubchatGatewayConfig(
-        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        profile=str(tmp_path / "selected" / "Default"),
+        ledger=str(tmp_path / "selected" / "ledger"), account_id="account",
         consent="ordinary-chat-browser-control-approved")
     finish_recovery = asyncio.Event()
     opened = 0
@@ -286,11 +294,12 @@ async def test_idle_keeps_completed_recovery_failure_until_explicit_observation(
 
 
 @pytest.mark.asyncio
-async def test_lazy_gateway_service_close_waits_for_active_execute(monkeypatch):
+async def test_lazy_gateway_service_close_waits_for_active_execute(monkeypatch, tmp_path):
     import anywhere_computer.subchat_gateway as gateway_module
 
     selected = SubchatGatewayConfig(
-        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        profile=str(tmp_path / "selected" / "Default"),
+        ledger=str(tmp_path / "selected" / "ledger"), account_id="account",
         consent="ordinary-chat-browser-control-approved")
     execute_started = asyncio.Event()
     finish_execute = asyncio.Event()
@@ -360,7 +369,7 @@ async def test_gateway_account_checks_never_open_normal_chrome_pages(monkeypatch
     assert created == ["background", "background"]
 
 
-def test_subchat_scopes_require_explicit_selection():
+def test_subchat_scopes_require_explicit_selection(tmp_path):
     options = dict(resource=RESOURCE, owner="owner", device="a" * 32,
                    client="native", port=12345,
                    scopes=frozenset({"subchat_send"}),
@@ -368,7 +377,8 @@ def test_subchat_scopes_require_explicit_selection():
     with pytest.raises(ValueError, match="explicit gateway selection"):
         HTTPServiceConfig(**options)
     selected = SubchatGatewayConfig(
-        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        profile=str(tmp_path / "selected" / "Default"),
+        ledger=str(tmp_path / "selected" / "ledger"), account_id="account",
         consent="ordinary-chat-browser-control-approved")
     assert HTTPServiceConfig(**options, subchat=selected).subchat == selected
     assert HTTPServiceConfig(**{**options, "scopes": frozenset({"files_read"})}).subchat is None
@@ -464,7 +474,8 @@ async def test_static_discovery_matches_real_gateway_catalog_without_chrome(tmp_
 
         monkeypatch.setattr(gateway_module, "open_subchat_gateway", forbidden_open)
         selected = SubchatGatewayConfig(
-            profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+            profile=str(tmp_path / "selected" / "Default"),
+        ledger=str(tmp_path / "selected" / "ledger"), account_id="account",
             consent="ordinary-chat-browser-control-approved")
         lazy = LazySubchatGateway(selected, owner="owner")
         assert await lazy.catalog("grant-a", granted) == actual
