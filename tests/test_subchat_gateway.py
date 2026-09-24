@@ -210,6 +210,82 @@ async def test_lazy_gateway_idle_waits_for_detached_work_and_service_close(monke
 
 
 @pytest.mark.asyncio
+async def test_idle_keeps_completed_recovery_failure_until_explicit_observation(monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    selected = SubchatGatewayConfig(
+        profile="/selected/Default", ledger="/selected/ledger", account_id="account",
+        consent="ordinary-chat-browser-control-approved")
+    finish_recovery = asyncio.Event()
+    opened = 0
+    closed = 0
+    sends = 0
+    operation_id = "e" * 32
+
+    class Core:
+        def __init__(self):
+            self.calls = {}
+            self.recoveries = {}
+            self.queue_watches = {}
+
+        async def execute(self, request):
+            nonlocal sends
+            if request.tool == "subchat_send":
+                sends += 1
+
+                async def recovery():
+                    await finish_recovery.wait()
+                    raise ConnectionError("late recovery failure")
+
+                task = asyncio.create_task(recovery())
+                self.recoveries[operation_id] = task
+                task.add_done_callback(lambda done: done.exception())
+                return Reply(operation_id=request.operation_id, state="running")
+            task = self.recoveries[operation_id]
+            try:
+                await task
+            except ConnectionError:
+                self.recoveries.pop(operation_id)
+                return Reply(operation_id=request.operation_id, state="failed",
+                             data={"error_type": "ConnectionError"})
+            raise AssertionError("Recovery unexpectedly succeeded")
+
+        async def close(self):
+            assert not self.recoveries
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        nonlocal opened, closed
+        opened += 1
+        actual = SubchatGateway(lambda _grant: Core(), owner=owner)
+        try:
+            yield actual
+        finally:
+            await actual.close()
+            closed += 1
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
+    granted = frozenset({"subchat_send", "subchat_recover"})
+    try:
+        sent = await gateway.execute("grant", Request(
+            operation_id=operation_id, tool="subchat_send"), granted)
+        assert sent.state == "running" and sends == 1
+        finish_recovery.set()
+        await asyncio.sleep(.04)
+        assert opened == 1 and closed == 0
+        observed = await gateway.execute("grant", Request(
+            operation_id="f" * 32, tool="subchat_recover",
+            arguments={"operation_id": operation_id}), granted)
+        assert observed.data["error_type"] == "ConnectionError"
+        assert sends == 1 and opened == 1
+        await asyncio.wait_for(_until(lambda: closed == 1), timeout=1)
+    finally:
+        finish_recovery.set()
+        await gateway.close()
+
+
+@pytest.mark.asyncio
 async def test_lazy_gateway_service_close_waits_for_active_execute(monkeypatch):
     import anywhere_computer.subchat_gateway as gateway_module
 

@@ -176,11 +176,11 @@ class SubchatGateway:
         self.cores.clear()
 
     def has_live_work(self) -> bool:
-        """Keep the browser while a dispatch or its detached recovery is running."""
+        """Retain detached recovery failures until the next explicit observer."""
         return (any(not entry[2].done() for entry in self.pending.values())
+                or any(core.recoveries for core in self.cores.values())
                 or any(not task.done() for core in self.cores.values()
-                       for task in (*core.calls, *core.recoveries.values(),
-                                    *core.queue_watches.values())))
+                       for task in (*core.calls, *core.queue_watches.values())))
 
 
 class LazySubchatGateway:
