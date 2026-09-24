@@ -54,8 +54,19 @@ def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, J
             and submission.model == 'GPT-5.6 Sol' and submission.effort == 'Instant'
             and body.get('model') == 'gpt-5-6'
         )
+        # The current Latest > Pro composer sends standard on the wire, while
+        # the authenticated catalog's Pro preset has a null effort field.
+        observed_pro_effort = (
+            selected.version_id == 'latest' and selected.preset_id == 3
+            and selected.model_slug == 'gpt-6-pro'
+            and selected.thinking_effort is None
+            and submission.model == '最新' and submission.effort == 'Pro'
+            and body.get('model') == 'gpt-6-pro'
+            and body.get('thinking_effort') == 'standard'
+        )
         if (body.get('model') != selected.model_slug and not observed_instant_alias
-                or body.get('thinking_effort') != selected.thinking_effort):
+                or (body.get('thinking_effort') != selected.thinking_effort
+                    and not observed_pro_effort)):
             raise ValueError('Generation model or effort changed')
     # Do not silently merge an unrelated draft's attachments or plugin selection.
     if (metadata.get('attachments') or metadata.get('system_hints')

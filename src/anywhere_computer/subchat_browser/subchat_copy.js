@@ -117,12 +117,20 @@ async function copySubchatMessageText(document, conversationId, userId, role) {
 }
 
 // Exact original text, rather than a lossy reconstruction of rendered Markdown.
-async function recoverSubchatSubmission(document, conversationId, prompt, previousIds) {
+async function recoverSubchatSubmission(
+    document, conversationId, prompt, previousIds, baselineIdentityKind = null) {
   const unconfirmed = {state: 'submission_unconfirmed'};
   if (typeof prompt !== 'string' || !prompt || !Array.isArray(previousIds) ||
       previousIds.some(id => typeof id !== 'string' || !id) ||
       new Set(previousIds).size !== previousIds.length) return unconfirmed;
   if (document.querySelectorAll('main').length !== 1) return unconfirmed;
+  const hasMessageIds = !!document.querySelector('main [data-message-author-role]');
+  // Saved pre-version baselines contain turn keys. They cannot establish which
+  // current message IDs predate dispatch, even when the saved list is empty.
+  if (baselineIdentityKind === 'empty') {
+    if (previousIds.length) return unconfirmed;
+  } else if (hasMessageIds ? baselineIdentityKind !== 'message_id' :
+      ![null, 'legacy_turn_key'].includes(baselineIdentityKind)) return unconfirmed;
   const readMessages = () => {
     const messages = [...document.querySelectorAll('main [data-message-author-role]')];
     return (messages.length ? messages : [...document.querySelectorAll('main [data-turn-key]')])

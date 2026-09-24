@@ -11,7 +11,7 @@ import re
 import traceback
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import httpx
 
@@ -56,6 +56,7 @@ class BrowserSubchatBackend:
                  *, http_read: bool = False,
                  http_request_factory: Callable[[], Awaitable[APIRequestContext]] | None = None,
                  record_request: Callable[[str, str, str], None] | None = None,
+                 record_preflight_failure: Callable[[str], None] | None = None,
                  record_conversation: Callable[[str, str, str, str], None] | None = None,
                  record_rejection: Callable[[str, str, int, str], None] | None = None,
                  httpx_generation: bool = False,
@@ -70,6 +71,7 @@ class BrowserSubchatBackend:
         self._background_pages = background_pages
         self._expected_account_id = expected_account_id
         self._record_request = record_request
+        self._record_preflight_failure = record_preflight_failure
         self._record_conversation = record_conversation
         self._record_rejection = record_rejection
         self._http_reader = ChatHTTPReader(
@@ -78,6 +80,11 @@ class BrowserSubchatBackend:
         self._create_context = context if callable(context) else None
         self._context_lock = asyncio.Lock()
         self.pages: dict[str, Page] = {}
+        self._prepared_baseline_kinds: dict[
+            str, Literal['legacy_turn_key', 'message_id', 'empty']] = {}
+        self._preparation_touched_pages: set[Page] = set()
+        self._unreusable_pages: set[Page] = set()
+        self._completed_page_owners: set[str] = set()
         self._closed = False
         if self._context is not None:
             self._context.on('close', self._browser_closed)
@@ -198,13 +205,19 @@ class BrowserSubchatBackend:
             raise ValueError('Invalid conversation identity')
         return url
 
-    async def _baseline_with_last_user(self, page: Page) -> tuple[tuple[str, ...], str | None]:
+    async def _baseline_snapshot(self, page: Page) -> tuple[
+        tuple[str, ...], tuple[str, ...], Literal['legacy_turn_key', 'message_id', 'empty']
+    ]:
         if await page.locator('main').count() != 1:
             raise ValueError('Conversation history unavailable')
         messages = await page.locator('main [data-message-author-role]').evaluate_all(
             "elements => elements.map(e => ({id: e.getAttribute('data-message-id'), "
             "role: e.getAttribute('data-message-author-role')}))")
+        values = await page.locator('main [data-turn-key]').evaluate_all(
+            "elements => elements.map(e => e.getAttribute('data-turn-key'))")
         if messages:
+            if values:
+                raise ValueError('Conversation history is ambiguous')
             if (not isinstance(messages, list) or len(messages) > 10_000
                     or any(not isinstance(item, dict)
                            or not isinstance(item.get('id'), str)
@@ -215,22 +228,64 @@ class BrowserSubchatBackend:
             ids = tuple(item['id'] for item in messages)
             if len(set(ids)) != len(ids):
                 raise ValueError('Conversation history is ambiguous')
-            users = [item['id'] for item in messages if item['role'] == 'user']
-            return ids, users[-1] if users else None
+            users = tuple(item['id'] for item in messages if item['role'] == 'user')
+            return ids, users, 'message_id'
         # The older Chat markup used a key on the turn container. Retain it for
         # existing browser fixtures when no role-bearing messages are present.
-        values = await page.locator('main [data-turn-key]').evaluate_all(
-            "elements => elements.map(e => e.getAttribute('data-turn-key'))")
         if (not isinstance(values, list) or len(values) > 10_000
                 or any(not isinstance(value, str) or not value.strip() for value in values)
                 or len(set(values)) != len(values)):
             raise ValueError('Conversation history is ambiguous')
         baseline = tuple(values)
-        return baseline, baseline[-1] if baseline else None
+        return baseline, baseline, 'legacy_turn_key' if baseline else 'empty'
+
+    async def _baseline_with_last_user(self, page: Page) -> tuple[tuple[str, ...], str | None]:
+        baseline, users, _ = await self._baseline_snapshot(page)
+        return baseline, users[-1] if users else None
 
     async def _baseline(self, page: Page) -> tuple[str, ...]:
-        baseline, _ = await self._baseline_with_last_user(page)
+        baseline, _, _ = await self._baseline_snapshot(page)
         return baseline
+
+    def baseline_identity_kind(
+        self, submission: SubchatSubmission,
+    ) -> Literal['legacy_turn_key', 'message_id', 'empty']:
+        if submission.operation_id not in self._prepared_baseline_kinds:
+            raise ValueError('Prepared history identity is unavailable')
+        return self._prepared_baseline_kinds[submission.operation_id]
+
+    async def release_completed(self, submission: SubchatSubmission, *,
+                                keep_for_queue: bool) -> None:
+        """Release an owned tab after a durable final answer, respecting live aliases."""
+        if submission.state != 'completed':
+            raise ValueError('Only a completed submission can release its browser page')
+        operation_id = submission.operation_id
+        page = self.pages.get(operation_id)
+        if page is not None:
+            self._completed_page_owners.add(operation_id)
+        if keep_for_queue:
+            return
+        url = ('https://chatgpt.com/c/' + submission.conversation_id
+               if submission.conversation_id is not None else None)
+        released: set[Page] = set()
+        for owner, candidate in tuple(self.pages.items()):
+            if owner in self._completed_page_owners and (
+                    owner == operation_id or url is not None and candidate.url == url):
+                self.pages.pop(owner)
+                self._prepared_baseline_kinds.pop(owner, None)
+                self._completed_page_owners.discard(owner)
+                released.add(candidate)
+        for candidate in released:
+            if candidate not in self.pages.values():
+                self._preparation_touched_pages.discard(candidate)
+                self._unreusable_pages.discard(candidate)
+                if not candidate.is_closed():
+                    try:
+                        await candidate.close()
+                    except Exception as error:
+                        # The answer is already durable; cleanup cannot undo it.
+                        logger.warning('Completed browser page release failed error_type=%s',
+                                       type(error).__name__)
 
     async def _ready(self, page: Page, submission: SubchatSubmission) -> bool:
         if page.url.rstrip('/') != self._url(submission).rstrip('/'):
@@ -325,19 +380,43 @@ class BrowserSubchatBackend:
         candidates = list(dict.fromkeys(
             page for page in self.pages.values()
             if submission.requested_conversation_id is not None
-            and not page.is_closed() and page.url == url))
+            and not page.is_closed() and page.url == url
+            and page not in self._unreusable_pages))
         if len(candidates) > 1:
             raise ValueError('Multiple owned tabs match the requested conversation')
         page = candidates[0] if candidates else await self._new_page()
+        previous = self.pages.get(submission.operation_id)
+        previous_kind = self._prepared_baseline_kinds.pop(submission.operation_id, None)
         self.pages[submission.operation_id] = page
+        try:
+            baseline = await self._prepare_page(page, submission, url, reused=bool(candidates))
+            self._preparation_touched_pages.discard(page)
+            return baseline
+        except BaseException:
+            if page in self._preparation_touched_pages and candidates:
+                self._unreusable_pages.add(page)
+            self._preparation_touched_pages.discard(page)
+            if previous is None:
+                self.pages.pop(submission.operation_id, None)
+            else:
+                self.pages[submission.operation_id] = previous
+                if previous_kind is not None:
+                    self._prepared_baseline_kinds[submission.operation_id] = previous_kind
+            if not candidates:
+                await page.close()
+            raise
+
+    async def _prepare_page(self, page: Page, submission: SubchatSubmission,
+                            url: str, *, reused: bool) -> tuple[str, ...]:
         page.set_default_timeout(15_000)
-        if not candidates:
+        if not reused:
             response = await page.goto(url, wait_until='domcontentloaded')
             if response is None or not response.ok:
                 raise ConnectionError('Authenticated ordinary Chat is unavailable')
         if not await picker_ready(page):
             raise ConnectionError('Authenticated ordinary Chat is unavailable')
         await self._wait_for_composer(page, submission)
+        self._preparation_touched_pages.add(page)
         await self._click(page.locator(TRIGGER))
         await page.get_by_role('menu').wait_for(state='visible', timeout=10_000)
         observed = await self._open_model_list(page)
@@ -376,12 +455,16 @@ class BrowserSubchatBackend:
             raise ValueError('Selected model changed')
         await self._press(page.get_by_role('menu'), 'Escape')
         await self._wait_for_composer(page, submission)
-        baseline, last_user = await self._baseline_with_last_user(page)
+        baseline, users, kind = await self._baseline_snapshot(page)
+        last_user = users[-1] if users else None
         if (submission.expected_last_user_message_id is not None
                 and last_user != submission.expected_last_user_message_id):
             raise SubchatStaleTarget('Queue target is stale; another turn has appeared')
         if submission.requested_conversation_id is None and baseline:
             raise ValueError('New Chat already contains messages')
+        if submission.requested_conversation_id is not None and not baseline:
+            raise ValueError('Existing conversation history is unavailable')
+        self._prepared_baseline_kinds[submission.operation_id] = kind
         return baseline
 
     async def send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
@@ -482,6 +565,9 @@ class BrowserSubchatBackend:
                 if str(error).startswith('Invalid browser request header types: '):
                     logger.warning('%s', error)
                 await route.abort()
+                if (stage in {'request_validation', 'account_binding'}
+                        and self._record_preflight_failure is not None):
+                    self._record_preflight_failure(submission.operation_id)
             finally:
                 if not dispatched.done():
                     dispatched.set_result(accepted)
@@ -540,7 +626,10 @@ class BrowserSubchatBackend:
         editor = page.locator(EDITOR)
         if await editor.count() != 1 or (await editor.inner_text()).strip():
             raise ValueError('Prepared draft changed before send')
-        if await self._baseline(page) != submission.baseline_message_ids:
+        baseline, _, kind = await self._baseline_snapshot(page)
+        if (baseline != submission.baseline_message_ids
+                or (submission.baseline_identity_kind is not None
+                    and kind != submission.baseline_identity_kind)):
             raise ValueError('Conversation history changed before send')
         stop = page.get_by_role('button', name=re.compile(r'^(停止|Stop|Stop generating)$'))
         if await stop.filter(visible=True).count():
@@ -597,7 +686,15 @@ class BrowserSubchatBackend:
             async with asyncio.timeout(20):
                 return await self._http_reader.receipt(await self._browser(), candidate)
         if submission.resources is not None:
-            candidates = [key for key in await self._baseline(page)
+            _, users, kind = await self._baseline_snapshot(page)
+            expected_kind = submission.baseline_identity_kind
+            if (expected_kind == 'empty' and submission.baseline_message_ids):
+                return None
+            if (expected_kind not in {kind, 'empty'}
+                    or (expected_kind == 'empty'
+                        and submission.requested_conversation_id is not None)):
+                return None
+            candidates = [key for key in users
                           if key not in submission.baseline_message_ids]
             if len(candidates) != 1:
                 return None
@@ -607,7 +704,8 @@ class BrowserSubchatBackend:
                 return await self._http_reader.receipt(await self._browser(), candidate)
         observed = await page.evaluate(
             COPY + '\nargs=>recoverSubchatSubmission(document,...args)',
-            [match[1], submission.wire_prompt, list(submission.baseline_message_ids)])
+            [match[1], submission.wire_prompt, list(submission.baseline_message_ids),
+             submission.baseline_identity_kind])
         if observed.get('state') != 'submission_observed':
             return None
         return SubchatReceipt(conversation_id=match[1],
@@ -637,7 +735,8 @@ class BrowserSubchatBackend:
             r'^(Work\s*で続ける|Continue in Work)$')).filter(visible=True)
         if (await stay.count() == 1 and await work.count() == 1
                 and await stay.is_enabled()
-                and (await self._baseline(page))[-1:] == (submission.user_message_id,)
+                and (await self._baseline_with_last_user(page))[1]
+                    == submission.user_message_id
                 and page.url == 'https://chatgpt.com/c/' + str(submission.conversation_id)):
             await self._click(stay)
             return None  # Observe completion on a later poll, not from the click.

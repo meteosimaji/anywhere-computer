@@ -76,6 +76,55 @@ async def test_prepared_http_identity_is_durable_before_dispatch(tmp_path):
         ledger.close()
 
 
+async def test_browser_baseline_identity_kind_is_saved_before_dispatch(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+
+    class IdentifiedProvider(Provider):
+        def baseline_identity_kind(self, submission):
+            return 'empty'
+
+        async def send(self, submission):
+            saved = store.get(submission.operation_id, owner=None)
+            assert saved.baseline_identity_kind == 'empty'
+            return None
+
+    try:
+        submission = await Subchats(store, IdentifiedProvider()).send(
+            '9' * 32, 'prompt', 'model', 'effort', owner=None)
+        assert submission.state == 'sending'
+        assert store.get(submission.operation_id, owner=None).baseline_identity_kind == 'empty'
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('queued', [False, True])
+async def test_completed_page_release_preserves_queued_delivery(tmp_path, queued):
+    ledger = Ledger(tmp_path)
+
+    class ReleasingProvider(Provider):
+        def __init__(self):
+            super().__init__()
+            self.releases = []
+
+        async def release_completed(self, submission, *, keep_for_queue):
+            self.releases.append((submission.operation_id, keep_for_queue))
+
+    provider = ReleasingProvider()
+    service = Subchats(SubchatSubmissions(ledger.connection), provider)
+    parent = '8' * 32
+    try:
+        submitted = await service.send(parent, 'first', 'model', 'effort', owner=None)
+        assert submitted.state == 'submitted'
+        if queued:
+            service.queue('7' * 32, parent, 'follow-up', owner=None)
+        provider.finished = True
+        assert (await service.recover(parent, owner=None)).state == 'completed'
+        assert provider.releases == [(parent, queued)]
+    finally:
+        ledger.close()
+
+
 async def test_queue_restart_pending_completion_and_lost_receipt(tmp_path):
     parent, message = '1' * 32, '2' * 32
     provider = Provider()

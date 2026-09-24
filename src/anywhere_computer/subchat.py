@@ -165,6 +165,9 @@ class Subchats:
             return submission
         try:
             prepared = await self.backend.prepare(submission)
+            identity_kind = getattr(self.backend, 'baseline_identity_kind', None)
+            baseline_identity_kind = (
+                identity_kind(submission) if identity_kind is not None else None)
         except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError,
                 SubchatAccountMismatch,
                 SubchatUnsupported, SubchatSelectionError):
@@ -175,11 +178,13 @@ class Subchats:
             submission = self.store.begin_send(
                 submission.operation_id, owner=owner,
                 baseline_message_ids=prepared.baseline_message_ids,
+                baseline_identity_kind=baseline_identity_kind,
                 user_message_id=prepared.user_message_id,
                 provider_account_id=prepared.provider_account_id)
         else:
             submission = self.store.begin_send(submission.operation_id, owner=owner,
-                                               baseline_message_ids=prepared)
+                                               baseline_message_ids=prepared,
+                                               baseline_identity_kind=baseline_identity_kind)
         try:
             receipt = await self.backend.send(submission)
             if receipt is None:
@@ -228,5 +233,12 @@ class Subchats:
             # Thinking or unavailable observation: leave the submission untouched.
             return submission
         self._accept(submission, answer, owner)
-        return self.store.complete(operation_id, answer.answer_message_id, answer.text, owner=owner,
-                                   reported_settings=answer.reported_settings)
+        completed = self.store.complete(
+            operation_id, answer.answer_message_id, answer.text, owner=owner,
+            reported_settings=answer.reported_settings)
+        release = getattr(self.backend, 'release_completed', None)
+        if release is not None:
+            assert completed.conversation_id is not None
+            await release(completed, keep_for_queue=self.store.has_queued_for_conversation(
+                completed.conversation_id, owner=owner))
+        return completed

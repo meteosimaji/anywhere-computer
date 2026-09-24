@@ -214,3 +214,68 @@ async def test_httpx_client_closes_when_setup_fails(monkeypatch, failure_stage):
     with pytest.raises(RuntimeError):
         await backend.send(submission)
     assert client.closed
+
+
+async def test_invalid_browser_generation_marks_preflight_without_http_post(monkeypatch):
+    from anywhere_computer import subchat_chrome_login
+    from anywhere_computer.subchat_browser import backend as backend_module
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatHTTPSelection
+
+    class Client:
+        async def aclose(self):
+            pass
+
+    class Page:
+        routed = None
+
+        def is_closed(self):
+            return False
+
+        async def route(self, pattern, callback):
+            self.routed = callback
+
+        async def unroute(self, pattern, callback):
+            pass
+
+    class Route:
+        request = RequestFixture()
+        aborted = False
+
+        async def abort(self):
+            self.aborted = True
+
+    async def session(*args, **kwargs):
+        return SimpleNamespace(account_id='account-a',
+                               authorization=SimpleNamespace(
+                                   get_secret_value=lambda: 'Bearer fixture'))
+
+    page = Page()
+    route = Route()
+    failures = []
+    backend = BrowserSubchatBackend(
+        lambda: None, http_read=True, httpx_generation=True,
+        record_preflight_failure=failures.append)
+    backend.pages['d' * 32] = page
+
+    async def browser():
+        return object()
+
+    async def send(submission):
+        assert page.routed is not None
+        await page.routed(route)
+        return None
+
+    monkeypatch.setattr(backend, '_browser', browser)
+    monkeypatch.setattr(backend, '_send', send)
+    monkeypatch.setattr(backend_module.httpx, 'AsyncClient', lambda **kwargs: Client())
+    monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', session)
+    submission = SubchatSubmission(
+        operation_id='d' * 32, prompt='fixture', model='fixture', effort='fixture',
+        state='sending',
+        http_selection=SubchatHTTPSelection(
+            version_id='fixture', preset_id=1, model_slug='fixture',
+            thinking_effort=None))
+    with pytest.raises(ValueError, match='not confirmed'):
+        await backend.send(submission)
+    assert route.aborted and failures == [submission.operation_id]

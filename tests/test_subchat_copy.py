@@ -75,8 +75,14 @@ async def test_copy_reads_selected_message_and_restores_clipboard():
             assert recovered == {'state': 'submission_observed',
                                  'conversation_id': 'conversation', 'user_message_id': 'user'}
             assert await page.evaluate(source + '''\ntext =>
+                recoverSubchatSubmission(document,"conversation",text,[],"empty")''',
+                                       text) == recovered
+            assert await page.evaluate(source + '''\ntext =>
                 recoverSubchatSubmission(document,"conversation",text,["user"])''', text) == {
                     'state': 'submission_unconfirmed'}
+            assert await page.evaluate(source + '''\ntext =>
+                recoverSubchatSubmission(document,"conversation",text,[],"message_id")''',
+                                       text) == {'state': 'submission_unconfirmed'}
             await page.evaluate('''text => {
                 const duplicate = document.querySelector('[data-turn-key]').cloneNode(true);
                 duplicate.setAttribute('data-turn-key', 'duplicate');
@@ -149,21 +155,33 @@ async def test_copy_and_recovery_use_current_message_ids_without_resending():
                 };
                 document.querySelector('[data-message-id="old"] button').onclick = () => {
                     window.copyClicks++;
-                    navigator.clipboard.writeText('old');
+                    navigator.clipboard.writeText(prompt);
                 };
                 document.querySelector('[data-message-id="reply-new"] [aria-label="Copy"]')
                     .onclick = () => navigator.clipboard.writeText('answer');
             }''', prompt)
-            async def recover(previous):
+            async def recover(previous, kind='message_id'):
                 return await page.evaluate(source + '''\nargs =>
                     recoverSubchatSubmission(document,"conversation",...args)''',
-                                           [prompt, previous])
+                                           [prompt, previous, kind])
+            # A saved old-format baseline (including an empty baseline) cannot
+            # exclude an earlier identical prompt in message-ID markup.
+            assert await recover(['old', 'reply-old'], None) == {
+                'state': 'submission_unconfirmed'}
+            assert await recover([], None) == {'state': 'submission_unconfirmed'}
+            assert await page.evaluate('window.copyClicks') == 0
+            assert await recover([], 'empty') == {'state': 'submission_unconfirmed'}
+            assert await recover(['old', 'reply-old'], 'empty') == {
+                'state': 'submission_unconfirmed'}
+            assert await recover(['old', 'reply-old'], 'legacy_turn_key') == {
+                'state': 'submission_unconfirmed'}
+            assert await page.evaluate('window.copyClicks') == 2
             assert await recover(['old', 'reply-old']) == {
                 'state': 'submission_observed', 'conversation_id': 'conversation',
                 'user_message_id': 'new'}
             assert await recover(['old', 'reply-old', 'new', 'reply-new']) == {
                 'state': 'submission_unconfirmed'}
-            assert await page.evaluate('window.copyClicks') == 1
+            assert await page.evaluate('window.copyClicks') == 3
             assert await page.evaluate(source + '''\n() =>
                 copySubchatMessageText(document,"conversation","new","assistant")''') == {
                     'state': 'answer_text_observed', 'conversation_id': 'conversation',
@@ -183,14 +201,14 @@ async def test_copy_and_recovery_use_current_message_ids_without_resending():
                 };
             }''')
             assert await recover(['old', 'reply-old']) == {'state': 'submission_unconfirmed'}
-            assert await page.evaluate('window.copyClicks') == 3
+            assert await page.evaluate('window.copyClicks') == 5
             assert await page.evaluate('window.osWrites') == 0
             await page.evaluate('''() => {
                 document.querySelector('[data-message-id="another"]')
                     .setAttribute('data-message-id', 'new');
             }''')
             assert await recover(['old', 'reply-old']) == {'state': 'submission_unconfirmed'}
-            assert await page.evaluate('window.copyClicks') == 3
+            assert await page.evaluate('window.copyClicks') == 5
             await page.evaluate('''prompt => {
                 document.querySelector('[data-turn-id-container="new"]').remove();
                 const message = document.querySelector('[data-message-id="new"]');

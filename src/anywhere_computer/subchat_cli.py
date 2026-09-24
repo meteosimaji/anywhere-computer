@@ -385,6 +385,10 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 store.observe_rejection(operation_id, message_id, status, owner=None,
                                         provider_account_id=account_id)
 
+            def record_preflight_failure(operation_id: str) -> None:
+                if not store.fail_http_before_dispatch(operation_id, owner=None):
+                    raise ValueError('Generation preflight state changed')
+
             backend: BrowserSubchatBackend | HTTPOnlySubchatBackend
             if http_only:
                 from .subchat_http import HTTPOnlySubchatBackend
@@ -403,6 +407,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 backend = BrowserSubchatBackend(open_browser, http_read=http_read,
                     http_request_factory=open_http if http_read else None,
                     record_request=record_request if http_read else None,
+                    record_preflight_failure=(record_preflight_failure
+                                              if httpx_generation else None),
                     record_conversation=record_conversation if http_read else None,
                     record_rejection=record_rejection if http_read else None,
                     httpx_generation=httpx_generation,

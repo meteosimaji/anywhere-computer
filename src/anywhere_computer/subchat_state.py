@@ -87,6 +87,8 @@ class SubchatSubmission(Contract):
     requested_conversation_id: str | None = None
     conversation_id: str | None = None
     baseline_message_ids: tuple[str, ...] = ()
+    # Absent on saved operations created before baseline identities were versioned.
+    baseline_identity_kind: Literal['legacy_turn_key', 'message_id', 'empty'] | None = None
     user_message_id: str | None = None
     answer_message_id: str | None = None
     answer: str | None = None
@@ -447,6 +449,8 @@ class SubchatSubmissions:
     def begin_send(self, operation_id: str, *, owner: str | None,
                    conversation_id: str | None = None,
                    baseline_message_ids: tuple[str, ...] = (),
+                   baseline_identity_kind: Literal[
+                       'legacy_turn_key', 'message_id', 'empty'] | None = None,
                    user_message_id: str | None = None,
                    provider_account_id: str | None = None) -> SubchatSubmission:
         old = self.get(operation_id, owner=owner)
@@ -464,6 +468,10 @@ class SubchatSubmissions:
                 or len(set(baseline_message_ids)) != len(baseline_message_ids)
                 or any(not item.strip() or len(item) > 256 for item in baseline_message_ids)):
             raise ValueError('Invalid baseline message identities')
+        if baseline_identity_kind not in (None, 'legacy_turn_key', 'message_id', 'empty'):
+            raise ValueError('Invalid baseline identity kind')
+        if baseline_identity_kind == 'empty' and baseline_message_ids:
+            raise ValueError('Empty baseline identity kind requires empty history')
         if (user_message_id is None) != (provider_account_id is None):
             raise ValueError('Outgoing identity and account must be reserved together')
         if user_message_id is not None:
@@ -482,6 +490,7 @@ class SubchatSubmissions:
         return self._replace(old, old.model_copy(update={
             'state': 'sending', 'conversation_id': old.conversation_id or conversation_id,
             'baseline_message_ids': baseline_message_ids,
+            'baseline_identity_kind': baseline_identity_kind,
             'user_message_id': user_message_id,
             'provider_account_id': provider_account_id}), owner)
 
@@ -585,3 +594,13 @@ class SubchatSubmissions:
         return self._replace(old, old.model_copy(update={
             'state': 'completed', 'answer_message_id': answer_message_id, 'answer': answer,
             'reported_settings': reported_settings}), owner, http_event='history_final')
+
+    def has_queued_for_conversation(self, conversation_id: str, *, owner: str | None) -> bool:
+        """Keep an owned browser page only while a saved child awaits dispatch."""
+        for (body,) in self.connection.execute(
+            'SELECT body FROM subchat_submissions WHERE owner IS ?', (owner,)
+        ):
+            submission = SubchatSubmission.model_validate_json(body)
+            if submission.state == 'queued' and submission.conversation_id == conversation_id:
+                return True
+        return False

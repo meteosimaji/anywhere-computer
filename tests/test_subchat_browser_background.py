@@ -1,5 +1,6 @@
 """Background Chrome launch and owned-tab allocation contracts."""
 
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -36,16 +37,17 @@ async def test_background_page_uses_nonactivating_cdp_target():
     ]
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
 async def test_background_launch_attaches_only_to_fresh_profile_and_cleans_up(
     tmp_path, monkeypatch,
 ):
     monkeypatch.setattr(background.sys, 'platform', 'darwin')
-    process_checks = iter([[], [object()]])
-    monkeypatch.setattr(background, '_profile_processes', lambda _profile: next(process_checks))
+    monkeypatch.setattr(background, '_profile_processes', lambda _profile: [])
+    monkeypatch.setattr(background, '_owned_processes', lambda _profile, _token: [object()])
     stopped = []
     monkeypatch.setattr(
         background, '_stop_profile_processes',
-        lambda profile, *, startup_grace: stopped.append((profile, startup_grace)))
+        lambda profile, token, *, startup_grace: stopped.append((profile, token, startup_grace)))
     launched = []
 
     class Process:
@@ -72,13 +74,19 @@ async def test_background_launch_attaches_only_to_fresh_profile_and_cleans_up(
         return Browser()
 
     driver = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=connect))
-    async with background.background_chrome_context(driver, tmp_path, []) as attached:
-        assert attached is context
+    for _ in range(2):
+        async with background.background_chrome_context(driver, tmp_path, []) as attached:
+            assert attached is context
+        assert not (tmp_path / 'DevToolsActivePort').exists()
     assert '-g' in launched[0] and '-j' in launched[0] and '-n' in launched[0]
     assert '--remote-debugging-port=0' in launched[0]
     assert '--remote-debugging-address=127.0.0.1' in launched[0]
+    assert any(arg.startswith('--anywhere-background-owner=') for arg in launched[0])
     assert '--no-startup-window' in launched[0]
-    assert closed == [True] and stopped == [(tmp_path, False)]
+    assert closed == [True, True]
+    assert len(stopped) == 2 and all(item[0] == tmp_path and item[2] is False
+                                     for item in stopped)
+    assert stopped[-1][1] == (tmp_path / '.anywhere-background.owner').read_text()
 
 
 def test_background_cleanup_catches_late_chrome_and_waits_after_kill(tmp_path, monkeypatch):
@@ -95,31 +103,105 @@ def test_background_cleanup_catches_late_chrome_and_waits_after_kill(tmp_path, m
 
     process = Process()
     checks = iter([[], [], [process], []])
-    monkeypatch.setattr(background, '_profile_processes', lambda _profile: next(checks))
+    monkeypatch.setattr(background, '_owned_processes',
+                        lambda _profile, _token: next(checks))
     monkeypatch.setattr(background.time, 'sleep', lambda _seconds: None)
     waits = iter([([], [process]), ([process], [])])
     monkeypatch.setattr(background.psutil, 'wait_procs',
                         lambda _processes, timeout: next(waits))
 
-    background._stop_profile_processes(tmp_path, startup_grace=True)
+    background._stop_profile_processes(tmp_path, 'owner', startup_grace=True)
     assert process.terminated and process.killed
 
 
 def test_background_cleanup_reports_surviving_chrome(tmp_path, monkeypatch):
     process = SimpleNamespace(terminate=lambda: None, kill=lambda: None)
-    monkeypatch.setattr(background, '_profile_processes', lambda _profile: [process])
+    monkeypatch.setattr(background, '_owned_processes',
+                        lambda _profile, _token: [process])
     monkeypatch.setattr(background.psutil, 'wait_procs',
                         lambda processes, timeout: ([], processes))
     with pytest.raises(RuntimeError, match='did not stop'):
-        background._stop_profile_processes(tmp_path)
+        background._stop_profile_processes(tmp_path, 'owner')
 
 
-async def test_background_launch_rejects_existing_cdp_endpoint(tmp_path, monkeypatch):
+@pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
+async def test_background_launch_rejects_unowned_profile_process(tmp_path, monkeypatch):
     monkeypatch.setattr(background.sys, 'platform', 'darwin')
-    (tmp_path / 'DevToolsActivePort').write_text('32001\n/devtools/browser/other\n')
+    monkeypatch.setattr(background, '_profile_processes', lambda _profile: [object()])
     with pytest.raises(ValueError, match='already in use'):
         async with background.background_chrome_context(object(), tmp_path, []):
             pass
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
+def test_background_profile_lock_rejects_concurrent_owner(tmp_path):
+    with background._profile_lock(tmp_path):
+        with pytest.raises(ValueError, match='already in use'):
+            with background._profile_lock(tmp_path):
+                pass
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
+async def test_background_launch_reclaims_owned_orphan_and_stale_port(tmp_path, monkeypatch):
+    monkeypatch.setattr(background.sys, 'platform', 'darwin')
+    port_file = tmp_path / 'DevToolsActivePort'
+    port_file.write_text('32000\n/devtools/browser/stale\n')
+    old_token = 'a' * 32
+    (tmp_path / '.anywhere-background.owner').write_text(old_token)
+    old_process = object()
+    monkeypatch.setattr(background, '_profile_processes', lambda _profile: [old_process])
+
+    def owned(_profile, token):
+        return [old_process] if token in {old_token, new_token[0]} else []
+
+    new_token = ['']
+    monkeypatch.setattr(background, '_owned_processes', owned)
+    stopped = []
+
+    def stop(_profile, token, *, startup_grace=False):
+        stopped.append((token, startup_grace))
+
+    monkeypatch.setattr(background, '_stop_profile_processes', stop)
+
+    class Process:
+        async def wait(self):
+            assert not port_file.exists()
+            port_file.write_text('32001\n/devtools/browser/new\n')
+            return 0
+
+    async def launch(*command, **_kwargs):
+        new_token[0] = next(
+            arg.removeprefix('--anywhere-background-owner=') for arg in command
+            if arg.startswith('--anywhere-background-owner='))
+        return Process()
+
+    monkeypatch.setattr(background.asyncio, 'create_subprocess_exec', launch)
+    context = object()
+
+    class Browser:
+        contexts = [context]
+
+        async def close(self):
+            pass
+
+    async def connect(endpoint):
+        assert endpoint == 'http://127.0.0.1:32001'
+        return Browser()
+
+    driver = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=connect))
+    async with background.background_chrome_context(driver, tmp_path, []) as attached:
+        assert attached is context
+    assert stopped == [(old_token, False), (new_token[0], False)]
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
+def test_background_owner_token_rejects_symlink(tmp_path):
+    owner_file = tmp_path / '.anywhere-background.owner'
+    target = tmp_path / 'other-file'
+    target.write_text('a' * 32)
+    owner_file.symlink_to(target)
+    with pytest.raises(OSError):
+        background._read_owner_token(owner_file)
 
 
 async def test_background_input_prepares_model_and_draft_on_offline_chat_fixture():

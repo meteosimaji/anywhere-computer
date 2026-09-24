@@ -159,6 +159,7 @@ def test_baseline_survives_restart_and_legacy_json_can_advance(tmp_path):
                 'SELECT body FROM subchat_submissions WHERE operation_id=?',
                 (operation,)).fetchone()[0])
             body.pop('baseline_message_ids')
+            body.pop('baseline_identity_kind', None)
             ledger.connection.execute('UPDATE subchat_submissions SET body=? WHERE operation_id=?',
                                       (json.dumps(body), operation))
         with pytest.raises(ValueError, match='baseline'):
@@ -170,9 +171,35 @@ def test_baseline_survives_restart_and_legacy_json_can_advance(tmp_path):
     try:
         store = SubchatSubmissions(ledger.connection)
         assert store.get(operation, owner=None).baseline_message_ids == ('old',)
+        assert store.get(operation, owner=None).baseline_identity_kind is None
         with pytest.raises(ValueError, match='predates'):
             store.submitted(operation, 'conversation', 'old', owner=None)
         assert store.submitted(operation, 'conversation', 'new', owner=None).state == 'submitted'
+    finally:
+        ledger.close()
+
+
+def test_versioned_baseline_identity_survives_restart(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    operation = '8' * 32
+    try:
+        store.prepare(operation, 'prompt', 'model', 'effort', owner=None)
+        with pytest.raises(ValueError, match='kind'):
+            store.begin_send(operation, owner=None, baseline_identity_kind='unrecognized')
+        with pytest.raises(ValueError, match='empty history'):
+            store.begin_send(operation, owner=None, baseline_message_ids=('old',),
+                             baseline_identity_kind='empty')
+        sent = store.begin_send(operation, owner=None, baseline_message_ids=('old',),
+                                baseline_identity_kind='message_id')
+        assert sent.baseline_identity_kind == 'message_id'
+    finally:
+        ledger.close()
+    ledger = Ledger(tmp_path)
+    try:
+        restored = SubchatSubmissions(ledger.connection).get(operation, owner=None)
+        assert restored.baseline_message_ids == ('old',)
+        assert restored.baseline_identity_kind == 'message_id'
     finally:
         ledger.close()
 

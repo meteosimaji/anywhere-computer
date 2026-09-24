@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import importlib
+import os
+import secrets
+import stat
 import sys
 import time
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,6 +18,11 @@ import psutil
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Locator, Page, Playwright
+
+if sys.platform == 'win32':
+    _NOFOLLOW = 0  # The protected profile path is only used on macOS.
+else:
+    _NOFOLLOW = os.O_NOFOLLOW
 
 
 def _profile_processes(profile: Path) -> list[psutil.Process]:
@@ -30,15 +39,53 @@ def _profile_processes(profile: Path) -> list[psutil.Process]:
     return processes
 
 
-def _stop_profile_processes(profile: Path, *, startup_grace: bool = False) -> None:
-    processes = _profile_processes(profile)
+def _owned_processes(profile: Path, token: str) -> list[psutil.Process]:
+    marker = f'--anywhere-background-owner={token}'
+    return [process for process in _profile_processes(profile)
+            if marker in (process.info['cmdline'] or [])]
+
+
+@contextmanager
+def _profile_lock(profile: Path) -> Iterator[None]:
+    fcntl = importlib.import_module('fcntl')
+
+    descriptor = os.open(profile / '.anywhere-background.lock',
+                         os.O_CREAT | os.O_RDWR | _NOFOLLOW, 0o600)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError('Dedicated Chrome profile is already in use') from error
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _read_owner_token(owner_file: Path) -> str:
+    try:
+        descriptor = os.open(owner_file, os.O_RDONLY | _NOFOLLOW)
+    except FileNotFoundError:
+        return ''
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return ''
+        token = os.read(descriptor, 33).decode('ascii')
+        if len(token) != 32 or any(char not in '0123456789abcdef' for char in token):
+            return ''
+        return token
+    finally:
+        os.close(descriptor)
+
+
+def _stop_profile_processes(profile: Path, token: str, *, startup_grace: bool = False) -> None:
+    processes = _owned_processes(profile, token)
     if startup_grace:
         # `open` can return before Launch Services has started Chrome. A
         # cancelled launch must still catch that late process.
         deadline = time.monotonic() + 10
         while not processes and time.monotonic() < deadline:
             time.sleep(.05)
-            processes = _profile_processes(profile)
+            processes = _owned_processes(profile, token)
     for process in processes:
         try:
             process.terminate()
@@ -51,7 +98,7 @@ def _stop_profile_processes(profile: Path, *, startup_grace: bool = False) -> No
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             pass
     _, alive = psutil.wait_procs(alive, timeout=3)
-    if alive or _profile_processes(profile):
+    if alive or _owned_processes(profile, token):
         raise RuntimeError('Background Chrome profile process did not stop')
 
 
@@ -59,60 +106,77 @@ def _stop_profile_processes(profile: Path, *, startup_grace: bool = False) -> No
 async def background_chrome_context(
     driver: Playwright, profile: Path, launch_args: list[str],
 ) -> AsyncIterator[BrowserContext]:
-    """Attach only to a fresh private profile's ephemeral loopback CDP port."""
+    """Attach only to an owned private profile's ephemeral loopback CDP port."""
     if sys.platform != 'darwin':
         raise ValueError('Background Chrome launch is supported on macOS only')
     profile = profile.resolve()
     profile.mkdir(parents=True, exist_ok=True)
-    port_file = profile / 'DevToolsActivePort'
-    if port_file.exists() or _profile_processes(profile):
-        # Do not trust a pre-existing endpoint even if its Chrome process is
-        # gone; a stale file could point at a different loopback listener.
-        raise ValueError('Dedicated Chrome profile is already in use')
-    command = ['/usr/bin/open', '-g', '-j', '-n', '-b', 'com.google.Chrome', '--args',
-               f'--user-data-dir={profile}', '--remote-debugging-port=0',
-               '--remote-debugging-address=127.0.0.1',
-               '--no-first-run', '--no-default-browser-check', '--no-startup-window',
-               *launch_args]
-    browser = None
-    launched = False
-    ownership_confirmed = False
-    try:
-        process = await asyncio.create_subprocess_exec(
-            *command, stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL)
-        launched = True
-        if await process.wait() != 0:
-            raise ConnectionError('Background Chrome launch failed')
+    with _profile_lock(profile):
+        port_file = profile / 'DevToolsActivePort'
+        owner_file = profile / '.anywhere-background.owner'
+        previous = _profile_processes(profile)
+        if previous:
+            token = _read_owner_token(owner_file)
+            if not token or len(_owned_processes(profile, token)) != len(previous):
+                raise ValueError('Dedicated Chrome profile is already in use')
+            await asyncio.to_thread(_stop_profile_processes, profile, token)
+        # This file is only a Chrome discovery hint. Once the exact-profile
+        # process is gone, it must not direct us to an unrelated listener.
+        port_file.unlink(missing_ok=True)
+        token = secrets.token_hex(16)
+        temporary_owner = profile / f'.anywhere-background.owner.{token}'
+        descriptor = os.open(temporary_owner, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                             _NOFOLLOW,
+                             0o600)
+        with os.fdopen(descriptor, 'w', encoding='ascii') as owner_stream:
+            owner_stream.write(token)
+        temporary_owner.replace(owner_file)
+        command = ['/usr/bin/open', '-g', '-j', '-n', '-b', 'com.google.Chrome', '--args',
+                   f'--user-data-dir={profile}', '--remote-debugging-port=0',
+                   '--remote-debugging-address=127.0.0.1',
+                   f'--anywhere-background-owner={token}',
+                   '--no-first-run', '--no-default-browser-check', '--no-startup-window',
+                   *launch_args]
+        browser = None
+        launched = False
+        ownership_confirmed = False
         try:
-            async with asyncio.timeout(10):
-                while True:
-                    if port_file.is_file():
-                        lines = port_file.read_text(encoding='ascii').splitlines()
-                        if len(lines) == 2 and lines[0].isdigit():
-                            break
-                    await asyncio.sleep(.05)
-        except TimeoutError as error:
-            raise ConnectionError('Background Chrome CDP endpoint did not appear') from error
-        port = int(lines[0])
-        if not 1 <= port <= 65535:
-            raise ConnectionError('Background Chrome CDP endpoint is invalid')
-        if not _profile_processes(profile):
-            raise ConnectionError('Background Chrome profile ownership is unconfirmed')
-        ownership_confirmed = True
-        browser = await driver.chromium.connect_over_cdp(f'http://127.0.0.1:{port}')
-        if len(browser.contexts) != 1:
-            raise ConnectionError('Background Chrome context is ambiguous')
-        yield browser.contexts[0]
-    finally:
-        try:
-            if browser is not None:
-                await browser.close()
+            process = await asyncio.create_subprocess_exec(
+                *command, stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL)
+            launched = True
+            if await process.wait() != 0:
+                raise ConnectionError('Background Chrome launch failed')
+            try:
+                async with asyncio.timeout(10):
+                    while True:
+                        if port_file.is_file():
+                            lines = port_file.read_text(encoding='ascii').splitlines()
+                            if len(lines) == 2 and lines[0].isdigit():
+                                break
+                        await asyncio.sleep(.05)
+            except TimeoutError as error:
+                raise ConnectionError('Background Chrome CDP endpoint did not appear') from error
+            port = int(lines[0])
+            if not 1 <= port <= 65535:
+                raise ConnectionError('Background Chrome CDP endpoint is invalid')
+            if not _owned_processes(profile, token):
+                raise ConnectionError('Background Chrome profile ownership is unconfirmed')
+            ownership_confirmed = True
+            browser = await driver.chromium.connect_over_cdp(f'http://127.0.0.1:{port}')
+            if len(browser.contexts) != 1:
+                raise ConnectionError('Background Chrome context is ambiguous')
+            yield browser.contexts[0]
         finally:
-            if launched:
-                await asyncio.to_thread(
-                    _stop_profile_processes, profile,
-                    startup_grace=not ownership_confirmed)
+            try:
+                if browser is not None:
+                    await browser.close()
+            finally:
+                if launched:
+                    await asyncio.to_thread(
+                        _stop_profile_processes, profile, token,
+                        startup_grace=not ownership_confirmed)
+                    port_file.unlink(missing_ok=True)
 
 
 async def new_background_page(context: BrowserContext) -> Page:
