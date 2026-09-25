@@ -60,6 +60,7 @@ COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")
 CHAT = re.compile(r'https://chatgpt\.com/c/'
                   r'([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\Z')
 logger = logging.getLogger(__name__)
+EXISTING_HISTORY_TIMEOUT_MS = 5_000
 
 
 def _stream_conversation_id(body: bytes) -> str | None:
@@ -637,6 +638,18 @@ class BrowserSubchatBackend:
             raise ValueError('Selected model changed')
         await self._press(page.get_by_role('menu'), 'Escape')
         await self._wait_for_composer(page, submission)
+        if submission.requested_conversation_id is not None:
+            from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+            try:
+                await page.locator(
+                    'main [data-message-author-role], main [data-turn-key]'
+                ).first.wait_for(state='attached', timeout=EXISTING_HISTORY_TIMEOUT_MS)
+            except PlaywrightTimeoutError as error:
+                raise ValueError('Existing conversation history is unavailable') from error
+            if page.url != url:
+                raise ValueError('Ordinary Chat conversation changed')
+            await self._wait_for_composer(page, submission)
         baseline, users, kind = await self._baseline_snapshot(page)
         last_user = users[-1] if users else None
         if (submission.expected_last_user_message_id is not None
