@@ -106,6 +106,7 @@ def test_discovery_skips_symlink_and_reports_missing_login(tmp_path, monkeypatch
     root = tmp_path / "Chrome"
     (root / "Default").mkdir(parents=True)
     (root / "Profile 1").symlink_to(root / "Default")
+    (root / "Profile 100").mkdir()
     monkeypatch.setattr(subchat_setup.sys, "platform", "darwin")
     monkeypatch.setattr(subchat_chrome_profile, "chrome_user_data_root", lambda: root)
     monkeypatch.setattr(subchat_setup, "chrome_user_data_root", lambda: root)
@@ -115,7 +116,8 @@ def test_discovery_skips_symlink_and_reports_missing_login(tmp_path, monkeypatch
 
     monkeypatch.setattr(subchat_setup, "inspect_account", expired)
     assert asyncio.run(subchat_setup.discover_profiles()) == [
-        {"profile_id": "Default", "state": "login_required"}]
+        {"profile_id": "Default", "state": "login_required"},
+        {"profile_id": "Profile 100", "state": "login_required"}]
 
 
 def test_setup_authentication_failure_never_saves_selection(tmp_path, monkeypatch):

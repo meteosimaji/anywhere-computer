@@ -193,9 +193,13 @@ async def discover_profiles() -> list[dict[str, str]]:
     root = chrome_user_data_root()
     if root.is_symlink() or not root.is_dir():
         return []
-    profile_ids = ["Default", *(f"Profile {number}" for number in range(1, 100))]
-    available = [profile_id for profile_id in profile_ids
-                 if (root / profile_id).is_dir() and not (root / profile_id).is_symlink()]
+    available = sorted(
+        (entry.name for entry in root.iterdir()
+         if (entry.name == "Default" or
+             (entry.name.startswith("Profile ") and entry.name[8:].isdigit()))
+         and entry.is_dir() and not entry.is_symlink()),
+        key=lambda name: (name != "Default", int(name[8:]) if name != "Default" else 0),
+    )
     if len(available) > 20:
         raise SetupInputError("Chrome has too many profiles to inspect")
     results = []
