@@ -54,6 +54,11 @@ Subchat の背景送信やキュー監視を開始したセッションは、無
 `subchat_activity` で実行中か確認する。実行中、または確認できないときは終了を
 保留し、活動がなくなってから通常の期限切れ処理に戻す。明示終了と Engine 終了は
 この保留の対象外である。
+古い Subchat サーバーに `subchat_activity` がない場合は状態変更前に
+`plugin_activity_unavailable` で拒否する。監視中に活動確認が失敗した場合は
+安全側に保留し、`codex_plugin_session_status` の
+`background_activity_probe_failures` で回数を確認できる。活動が終了したと
+確認できないセッションは自動で閉じないため、必要なら状態を確認して明示終了する。
 同じセッションで操作が実行中なら、別の操作・終了は `session_busy` として実行前に拒否する。
 
 クライアントが切断しても、受け付け済みの操作は Engine の操作台帳と実行タスクで追跡する。

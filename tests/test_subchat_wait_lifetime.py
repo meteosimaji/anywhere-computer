@@ -56,6 +56,54 @@ async def test_short_wait_does_not_cancel_or_repeat_queue_preparation(tmp_path):
         ledger.close()
 
 
+async def test_queued_preparation_failure_survives_controller_restart(tmp_path):
+    release = asyncio.Event()
+
+    class FailsOnce(Provider):
+        async def prepare(self, submission):
+            self.prepares.append(submission.operation_id)
+            if len(self.prepares) == 1:
+                await release.wait()
+                raise ValueError('Ordinary Chat composer contains a draft')
+            return ('parent-user',)
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    provider = FailsOnce()
+    parent, child = '5' * 32, '6' * 32
+    store.prepare(parent, 'first', 'model', 'effort', owner=None,
+                  conversation_id='chat')
+    store.begin_send(parent, owner=None)
+    store.submitted(parent, 'chat', 'parent-user', owner=None)
+    store.complete(parent, 'answer', '42', owner=None)
+    service = Subchats(store, provider)
+    service.queue(child, parent, 'next', owner=None)
+    server = session(service)
+    try:
+        pending = await server.execute(Request(operation_id='7' * 32,
+            tool='subchat_wait', arguments={'operation_id': child, 'wait_ms': 30}))
+        assert pending.data['state'] == 'queued'
+        release.set()
+        with pytest.raises(ValueError):
+            await server.recoveries[child]
+        await asyncio.sleep(0)
+        await server.close()
+        server = session(service)
+        failed = await server.execute(Request(operation_id='8' * 32,
+            tool='subchat_status', arguments={'operation_id': child}))
+        assert failed.data == {'error_code': 'preparation_failed',
+                               'dispatched': False, 'reason': 'composer_has_draft'}
+        retried = await server.execute(Request(operation_id='9' * 32,
+            tool='subchat_recover', arguments={'operation_id': child}))
+        assert retried.state == 'unknown'
+        assert provider.sends == [child]
+        assert provider.prepares == [child, child]
+    finally:
+        release.set()
+        await server.close()
+        ledger.close()
+
+
 @pytest.mark.parametrize('finish', ['close', 'cancel'])
 async def test_session_joins_pending_preparation_without_send(tmp_path, finish):
     cancelled = asyncio.Event()

@@ -651,7 +651,9 @@ async def test_late_preparation_failure_is_reported_by_reads_and_explicit_retry(
             pass
         activity = await server.execute(Request(operation_id='7' * 32,
             tool='subchat_activity', arguments={}))
-        assert activity.data['active_sends'] == 1
+        assert activity.data['active_sends'] == 0
+        await server.close()
+        server = session(Subchats(store, backend))
         for tool in ('subchat_status', 'subchat_recover', 'subchat_wait'):
             observed = await server.execute(Request(operation_id='e' * 32, tool=tool,
                 arguments={'operation_id': operation, **({'wait_ms': 100}

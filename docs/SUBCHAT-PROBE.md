@@ -44,6 +44,10 @@ close it explicitly. Idle cleanup consults `subchat_activity`; it preserves a
 session while a send, recovery or queue watch is live, then allows normal idle
 expiry after the work finishes. An explicit session close or Engine shutdown
 still ends that local background work.
+An older server without `subchat_activity` is rejected before a stateful bridge
+call. Sanitized preparation failures are saved with their operation ID so a
+later status call can report the reason after a controller restart; an exact
+retry clears that prior failure before preparing again.
 
 To enable actual sends through the dedicated Chrome profile, set
 `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process and restart

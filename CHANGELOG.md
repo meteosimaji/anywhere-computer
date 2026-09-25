@@ -8,6 +8,9 @@
 - Protect explicit bridge sessions while their Subchat controller reports an
   active send, recovery or queue watch. Probe activity before idle cleanup,
   and retain the session when the probe cannot establish a safe stop.
+- Persist sanitized late preparation failures so an expired controller does
+  not erase their reason. Require the activity tool before a stateful bridge
+  call, including a call to an older manual MCP registration.
 - Require a session for stateful Subchat tool names even if the MCP server has
   a custom registration name. Document the bridge workflow in the Subchat
   skill and guides.

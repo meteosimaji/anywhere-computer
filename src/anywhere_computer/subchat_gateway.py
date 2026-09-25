@@ -113,6 +113,12 @@ class SubchatGateway:
         existing = self.pending.get(key)
         if existing is not None:
             tool, arguments, task = existing
+            if (task.done() and not task.cancelled() and task.exception() is None
+                    and task.result().data.get("error_code") == "request_conflict"):
+                self.pending.pop(key)
+                existing = None
+        if existing is not None:
+            tool, arguments, task = existing
             if (tool, arguments) != (request.tool, digest):
                 return Reply(operation_id=request.operation_id, state="failed",
                              error="Operation ID was already used with different input",
@@ -123,7 +129,8 @@ class SubchatGateway:
                     request.operation_id)
                 if (request.tool == "subchat_send"
                         and ((reply.state == "failed"
-                              and reply.data.get("error_code") == "preparation_failed"
+                              and reply.data.get("error_code") in {
+                                  "preparation_failed", "request_conflict"}
                               and reply.data.get("dispatched") is False)
                              or (reply.state == "running"
                                  and (sending is None or sending.done())))):
@@ -405,8 +412,7 @@ class LazySubchatGateway:
                 sending = core.sends.get(target.operation_id) if core is not None else None
                 if (core is not None and sending is not None and sending.done()
                         and not sending.cancelled() and sending.exception() is not None):
-                    # The durable row cannot store a failed browser preparation.
-                    # The live core retains the sanitized error for observation.
+                    # Preserve the live error when it is still available.
                     return await core.execute(request)
             return saved
         except SubchatOperationNotFound:
@@ -449,6 +455,13 @@ class LazySubchatGateway:
                     and result.provider_account_id != self.config.account_id):
                 raise SubchatAccountMismatch("Saved operation belongs to another account")
             progress = store.http_progress(operation_id, owner=grant_id)
+            failure_reason = store.preparation_failure(operation_id, owner=grant_id)
+        if failure_reason is not None and result.state in {"prepared", "queued"}:
+            return Reply(operation_id=request_id, state="failed",
+                         error="Subchat preparation failed; retry the same operation ID "
+                               "after correcting the issue.",
+                         data={"error_code": "preparation_failed", "dispatched": False,
+                               "reason": failure_reason})
         data = result.model_dump(mode="json")
         if progress is not None:
             data["http_progress"] = progress
