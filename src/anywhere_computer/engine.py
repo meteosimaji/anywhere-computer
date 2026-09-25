@@ -181,6 +181,15 @@ _DOCUMENT_EDIT_REJECTIONS: dict[str, tuple[str, str]] = {
     "Paragraph changed; read it again": (
         "paragraph_changed", "Read the document again before editing."
     ),
+    "File changed or expected_sha256 is missing; read it again": (
+        "document_changed", "Read the document again before editing."
+    ),
+    "Target disappeared after it was read": (
+        "document_changed", "Read the document again before editing."
+    ),
+    "Concurrent modification detected before replacement": (
+        "document_changed", "Read the document again before editing."
+    ),
 }
 _NATIVE_GUI_FAILURES: dict[str, str] = {
     "Native GUI request exceeds limit": "native_gui_request_too_large",
