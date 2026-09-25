@@ -184,6 +184,62 @@ async def test_failed_prepare_closes_new_tabs_and_does_not_reuse_touched_tab(tmp
             await browser.close()
 
 
+async def test_existing_chat_waits_for_history_after_composer_is_ready(tmp_path):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    delayed_history = HTML + '''<script>
+document.querySelector('#menu').addEventListener('keydown', event => {
+  if (event.key === 'Escape') setTimeout(() => {
+    document.querySelector('main').innerHTML = '<div data-turn-key="prior"></div>';
+  }, 250);
+});
+</script>'''
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=delayed_history))
+            backend = BrowserSubchatBackend(context)
+            store = SubchatSubmissions(ledger.connection)
+            submission = store.prepare('a' * 32, 'prompt', 'Future model',
+                                       'Initial effort', owner=None,
+                                       conversation_id=CONVERSATION_ID)
+            assert await backend.prepare(submission) == ('prior',)
+            assert await backend.pages[submission.operation_id].evaluate('window.sends') == 0
+        finally:
+            ledger.close()
+            await browser.close()
+
+
+async def test_existing_chat_without_history_stops_before_send(tmp_path, monkeypatch):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser import backend as backend_module
+
+    monkeypatch.setattr(backend_module, 'EXISTING_HISTORY_TIMEOUT_MS', 50)
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=HTML))
+            backend = backend_module.BrowserSubchatBackend(context)
+            store = SubchatSubmissions(ledger.connection)
+            submission = store.prepare('b' * 32, 'prompt', 'Future model',
+                                       'Initial effort', owner=None,
+                                       conversation_id=CONVERSATION_ID)
+            with pytest.raises(ValueError, match='Existing conversation history is unavailable'):
+                await backend.prepare(submission)
+            assert context.pages == []
+            assert store.get(submission.operation_id, owner=None).state == 'prepared'
+        finally:
+            ledger.close()
+            await browser.close()
+
+
 async def test_work_handoff_uses_latest_user_when_assistant_id_follows():
     playwright = pytest.importorskip('playwright.async_api')
     from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend

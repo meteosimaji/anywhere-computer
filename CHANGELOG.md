@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a37 / Plugin 0.2.0-alpha.37 — unpublished candidate (2026-09-25)
+
+- Wait briefly for an existing Chat's message history to appear before preparing
+  a follow-up. Keep an empty or ambiguous history as a pre-dispatch failure.
+- Report a bounded reason code for unavailable or ambiguous history instead of
+  collapsing these preparation failures into `unknown`.
+
 ## 0.2.0a36 / Plugin 0.2.0-alpha.36 — unpublished candidate (2026-09-25)
 
 - Invalidate a Codex plugin tool selection when the server's reported

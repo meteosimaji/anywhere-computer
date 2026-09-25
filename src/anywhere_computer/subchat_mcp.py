@@ -175,6 +175,9 @@ _PREPARATION_REASONS = {
     'Requested model is not available in the observed menu': 'model_unavailable',
     'Requested effort is not available in the observed menu': 'effort_unavailable',
     'Ordinary Chat conversation changed': 'conversation_changed',
+    'Existing conversation history is unavailable': 'existing_history_unavailable',
+    'Conversation history unavailable': 'history_unavailable',
+    'Conversation history is ambiguous': 'history_ambiguous',
 }
 
 

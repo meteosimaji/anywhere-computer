@@ -647,12 +647,17 @@ async def test_preparation_failure_is_unsent_and_same_request_can_retry(tmp_path
         ledger.close()
 
 
-async def test_preparation_failure_reports_only_a_known_local_reason(tmp_path):
+@pytest.mark.parametrize('failure,reason', [
+    ('Ordinary Chat composer contains a draft', 'composer_has_draft'),
+    ('Existing conversation history is unavailable', 'existing_history_unavailable'),
+])
+async def test_preparation_failure_reports_only_a_known_local_reason(
+        tmp_path, failure, reason):
     from anywhere_computer.models import Request
 
     class DraftBrowser(BrowserFixture):
         async def prepare(self, submission):
-            raise ValueError('Ordinary Chat composer contains a draft')
+            raise ValueError(failure)
 
     ledger = Ledger(tmp_path)
     backend = DraftBrowser()
@@ -663,7 +668,7 @@ async def test_preparation_failure_reports_only_a_known_local_reason(tmp_path):
         failed = await server.execute(request)
         assert failed.state == 'failed'
         assert failed.data == {'error_code': 'preparation_failed',
-                               'dispatched': False, 'reason': 'composer_has_draft'}
+                               'dispatched': False, 'reason': reason}
         assert backend.sends == 0
     finally:
         await server.close()
