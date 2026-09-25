@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a42` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.42` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a43` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.43` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:

@@ -9,6 +9,7 @@ import asyncio
 import io
 import subprocess
 import sys
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -266,6 +267,35 @@ async def test_concurrent_catalog_recovery_launches_one_agent(
             assert 'result' in result, result
             assert "files_read" in {tool["name"] for tool in result["result"]["tools"]}
         assert len(children) == 2
+
+
+async def test_concurrent_connectors_wait_through_slow_agent_start(
+    isolated_agent, monkeypatch,
+):
+    directory, children = isolated_agent
+    original = connection.exchange
+    release_readiness = threading.Event()
+
+    async def delayed_status(*args, **kwargs):
+        if children and args[1] == "__status":
+            release_readiness.wait(timeout=25)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(connection, "exchange", delayed_status)
+    first = asyncio.create_task(asyncio.to_thread(connection.ensure_agent, directory))
+    for _ in range(100):
+        if children:
+            break
+        await asyncio.sleep(0.05)
+    assert children
+    second = asyncio.create_task(asyncio.to_thread(connection.ensure_agent, directory))
+    try:
+        await asyncio.sleep(16)
+    finally:
+        release_readiness.set()
+    first_result, second_result = await asyncio.gather(first, second)
+    assert first_result["instance_id"] == second_result["instance_id"]
+    assert len(children) == 1
 
 
 @pytest.mark.parametrize("transport", ["stdio", "http"])

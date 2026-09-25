@@ -298,7 +298,9 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
 
         resume_pending_release(directory)
     expected_runtime = runtime_identity()
-    with ProcessLock(directory / "startup.lock", timeout=15):
+    # A concurrent connector must be able to wait through a slow first
+    # startup, then inspect that agent instead of timing out on the lock.
+    with ProcessLock(directory / "startup.lock", timeout=35):
         engine_directory(directory)  # Never start against a half-switched or missing store.
         candidate = RuntimeSelection(executable=os.path.abspath(sys.executable),
                                      runtime_id=expected_runtime) if replace_idle else None
