@@ -652,14 +652,26 @@ def session(service: Subchats, *,
                 started = time.monotonic()
                 result = service.store.get(wait.operation_id, owner=owner)
                 raise_failed_preparation(wait.operation_id, result)
+
+                def live_preparation() -> bool:
+                    sending = sends.get(wait.operation_id)
+                    return (result.state == 'prepared' and sending is not None
+                            and not sending.done())
+
                 deadline = asyncio.timeout(wait.wait_ms / 1000)
                 try:
                     async with deadline:
+                        preparing = live_preparation()
                         while result.state not in {
                                 'prepared', 'completed', 'cancelled', 'interrupted',
-                                'preflight_failed'}:
+                                'preflight_failed'} or preparing:
+                            if preparing:
+                                # Re-read the durable row after the send task may
+                                # have left preparation; do not return a stale row.
+                                await asyncio.sleep(.5)
                             result = await observe(wait.operation_id)
-                            if result.state not in {
+                            preparing = live_preparation()
+                            if not preparing and result.state not in {
                                     'prepared', 'completed', 'cancelled', 'interrupted',
                                     'preflight_failed'}:
                                 # Never hold the browser input lock while the model thinks.
@@ -673,12 +685,14 @@ def session(service: Subchats, *,
                             and service.store.get(result.observation.operation_id,
                                 owner=owner).state != 'submitted'):
                         result = current
+                raise_failed_preparation(wait.operation_id, result)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={**result.model_dump(mode='json'),
                                    'elapsed_ms': max(0, round((time.monotonic() - started) * 1000)),
                                    'suggested_poll_interval_ms': (
                                        WAIT_POLL_INTERVAL_MS if result.state in {
-                                           'queued', 'sending', 'submitted'} else None),
+                                           'queued', 'sending', 'submitted'}
+                                       or live_preparation() else None),
                                    **({'http_progress': progress} if (progress :=
                                       service.store.http_progress(result.operation_id,
                                                                   owner=owner)) is not None
