@@ -76,6 +76,54 @@ async def test_isolated_browser_exact_owner_tab_and_stale_references(local_page)
         await control.close()
 
 
+@pytest.mark.parametrize("close_target", ["page", "browser"])
+async def test_dead_browser_session_releases_capacity_without_touching_live_owners(
+    close_target,
+):
+    pytest.importorskip("playwright.async_api")
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = [await control.open(owner=f"owner-{index}") for index in range(4)]
+        ended = opened[0]
+        entry = control.entries[ended["session_id"]]
+        if close_target == "page":
+            await entry.page.close()
+        else:
+            await entry.browser.close()
+        with pytest.raises(ValueError, match="ended"):
+            await control.observe(BrowserSession(session_id=ended["session_id"],
+                                                 tab_id=ended["tab_id"]), owner="owner-0")
+
+        replacement = await control.open(owner="owner-new")
+        assert ended["session_id"] not in control.entries
+        assert len(control.entries) == 4
+        assert replacement["session_id"] in control.entries
+        for index, session in enumerate(opened[1:], start=1):
+            observed = await control.observe(BrowserSession(
+                session_id=session["session_id"], tab_id=session["tab_id"]),
+                                             owner=f"owner-{index}")
+            assert observed["session_id"] == session["session_id"]
+    finally:
+        await control.close()
+
+
+async def test_status_reports_closed_page_as_ended(tmp_path):
+    pytest.importorskip("playwright.async_api")
+    engine = Engine(tmp_path / "state")
+    engine.browser.channel = "chrome"
+    try:
+        opened = await engine.browser.open(owner="owner-a")
+        await engine.browser.entries[opened["session_id"]].page.close()
+        details = engine.status(owner="owner-a")["update_blocker_details"]
+        assert details == [{
+            "resource": "browser_session", "id": opened["session_id"],
+            "state": "ended", "stop_tool": "browser_close",
+            "tab_id": opened["tab_id"], "stop_available": True,
+        }]
+    finally:
+        await engine.close()
+
+
 async def test_engine_browser_tools_are_owned_and_block_update(tmp_path, local_page, monkeypatch):
     pytest.importorskip("playwright.async_api")
     engine = Engine(tmp_path / "state")

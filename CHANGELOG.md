@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a39 / Plugin 0.2.0-alpha.39 — unpublished candidate (2026-09-25)
+
+- Reclaim isolated browser sessions after their page closes or browser
+  disconnects, so unexpected exits cannot exhaust the four-session limit.
+  Report a closed page as ended in status diagnostics.
+
 ## 0.2.0a38 / Plugin 0.2.0-alpha.38 — unpublished candidate (2026-09-25)
 
 - Require an explicit plugin session for namespaced Subchat send and recovery
