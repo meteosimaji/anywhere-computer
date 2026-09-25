@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a48 / Plugin 0.2.0-alpha.48 — unpublished candidate (2026-09-25)
+
+- Count a live Subchat generation stream after its initial send receipt so
+  Plugin and direct MCP sessions remain available until collection finishes.
+- Preserve field-specific model-selection errors after a controller restart.
+- Keep direct MCP sessions alive during active or unconfirmed Subchat work.
+
 ## 0.2.0a47 / Plugin 0.2.0-alpha.47 — unpublished candidate (2026-09-25)
 
 - Reject mismatched Subchat UI model and effort labels against the selected
