@@ -56,6 +56,12 @@ anywhere http-add-tools --scope subchat_capabilities --scope subchat_catalog \
 
 追加後に HTTP サーバーを再起動し、接続元で新しい OAuth 認可を受けてください。
 既存 grant の Subchat 権限は自動拡張されません。各ツールには個別の scope が必要です。
+ChatGPT の開発用 Plugin では、既存接続の「更新する」や「再接続」だけでは、
+Plugin 作成時に保存された既定スコープが増えない場合があります。認可画面の
+「Requested tools」に上記8個の `subchat_*` が含まれることを確認してください。
+含まれなければ、その画面で所有者パスワードを入力しても Subchat 権限は得られません。
+新しい開発用 MCP 接続を作る場合は、公開 `/mcp` URL、登録済みのクライアント ID と
+戻り先を使い、OAuth の詳細設定で必要な Subchat スコープを選んでから認可します。
 送信前に `subchat_catalog` の `source=http` から対応するモデル選択を取得し、
 その `http_selection` と利用者が選んだモデル・エフォートを指定します。
 `subchat_send` と `subchat_message` は呼び出し前に一意な `request_id` を選び、
