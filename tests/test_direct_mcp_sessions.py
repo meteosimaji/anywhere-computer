@@ -179,6 +179,8 @@ async def test_bounded_subchat_watch_owns_outer_session_and_records_stop(tmp_pat
             if name == 'subchat_queue_watch':
                 state = 'disabled' if arguments.get('enabled') is False else 'watching'
                 data = {'submission_operation_id': arguments['operation_id'], 'state': state}
+            elif name == 'subchat_activity':
+                data = {'active_count': 0}
             else:
                 data = {'state': 'queued', 'queue_watch': {'state': 'watching'}}
             return {'isError': False, 'structuredContent': {'state': 'completed', 'data': data}}
@@ -195,6 +197,8 @@ async def test_bounded_subchat_watch_owns_outer_session_and_records_stop(tmp_pat
         await pool.expire_idle()
         assert pool.status(sid, owner='owner')['state'] == 'open'
         assert pool.active_watch_count == 1
+        with pytest.raises(RuntimeError, match='queue watch is active'):
+            await pool.stop(sid, owner='owner')
         assert pool.watch_history(owner='other') == []
         assert pool.watch_history(owner='owner')[0]['state'] == 'watching'
         await pool.call(sid, 'subchat_queue_watch', {'operation_id': identity,
@@ -459,6 +463,123 @@ m.run(transport='stdio')
             await pool.tools(sid, owner=None)
     finally:
         await pool.close()
+
+
+@pytest.mark.parametrize('tool', [
+    'subchat_send', 'subchat_recover', 'subchat_wait', 'subchat_message',
+])
+async def test_idle_expiry_preserves_subchat_background_work(tmp_path, monkeypatch, tool):
+    from anywhere_computer import direct_mcp_sessions
+
+    now = [0.0]
+
+    class Peer:
+        cleanup_confirmed = False
+        active_count = 1
+        activity_error = False
+
+        def __init__(self, command, cwd):
+            self.calls = []
+
+        async def open(self):
+            pass
+
+        async def close(self):
+            self.cleanup_confirmed = True
+
+        async def call(self, name, arguments):
+            self.calls.append(name)
+            if name == 'subchat_activity':
+                if self.activity_error:
+                    raise RuntimeError('activity unavailable')
+                data = {'active_count': self.active_count}
+            else:
+                data = {'state': 'sending'}
+            return {'isError': False, 'structuredContent': {
+                'state': 'completed', 'data': data}}
+
+    monkeypatch.setattr(direct_mcp_sessions, 'DirectMCPContext', Peer)
+    pool = direct_mcp_sessions.DirectMCPSessions(clock=lambda: now[0])
+    try:
+        opened = await pool.open([sys.executable], tmp_path, owner='owner', idle_timeout=30)
+        sid = opened['session_id']
+        entry = pool.entries[sid]
+        await pool.call(sid, tool, {}, owner='owner')
+        with pytest.raises(RuntimeError, match='Subchat background activity'):
+            await pool.stop(sid, owner='owner')
+        assert pool.status(sid, owner='owner')['state'] == 'open'
+        assert not entry.context.cleanup_confirmed
+        now[0] = 31
+        await pool.call(sid, 'subchat_status', {}, owner='owner')
+        assert pool.status(sid, owner='owner')['state'] == 'open'
+        now[0] = 62
+        await pool.expire_idle()
+        assert pool.status(sid, owner='owner')['state'] == 'open'
+        assert entry.context.calls[-1] == 'subchat_activity'
+
+        now[0] = 93
+        entry.context.activity_error = True
+        await pool.expire_idle()
+        assert pool.status(sid, owner='owner')['state'] == 'open'
+        with pytest.raises(RuntimeError, match='could not be checked'):
+            await pool.stop(sid, owner='owner')
+        assert pool.status(sid, owner='owner')['state'] == 'open'
+        assert not entry.context.cleanup_confirmed
+
+        entry.context.activity_error = False
+        entry.context.active_count = 0
+        await pool.expire_idle()
+        assert pool.status(sid, owner='owner')['state'] == 'expired'
+    finally:
+        await pool.close()
+
+
+async def test_hung_subchat_activity_probe_does_not_block_idle_reaper(tmp_path, monkeypatch):
+    from anywhere_computer import direct_mcp_sessions
+
+    now = [0.0]
+
+    class Peer:
+        cleanup_confirmed = False
+
+        def __init__(self, command, cwd):
+            self.probes = 0
+            self.cancelled = False
+
+        async def open(self):
+            pass
+
+        async def close(self):
+            self.cleanup_confirmed = True
+
+        async def call(self, name, arguments):
+            if name == 'subchat_activity':
+                self.probes += 1
+                try:
+                    await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    self.cancelled = True
+                    raise
+            return {'isError': False, 'structuredContent': {
+                'state': 'completed', 'data': {'state': 'sending'}}}
+
+    monkeypatch.setattr(direct_mcp_sessions, 'DirectMCPContext', Peer)
+    monkeypatch.setattr(direct_mcp_sessions, 'ACTIVITY_PROBE_TIMEOUT', .01)
+    pool = direct_mcp_sessions.DirectMCPSessions(clock=lambda: now[0])
+    try:
+        sid = (await pool.open([sys.executable], tmp_path, owner=None,
+                               idle_timeout=30))['session_id']
+        peer = pool.entries[sid].context
+        await pool.call(sid, 'subchat_send', {}, owner=None)
+        now[0] = 31
+        await asyncio.wait_for(pool.expire_idle(), timeout=.5)
+        assert pool.status(sid, owner=None)['state'] == 'open'
+        assert peer.probes == 1 and not peer.cancelled
+        await asyncio.wait_for(pool.expire_idle(), timeout=.5)
+        assert peer.probes == 1
+    finally:
+        await pool.close()
+    assert peer.cancelled
 
 
 async def test_real_direct_image_reaches_mcp_projection_and_ledger(tmp_path):

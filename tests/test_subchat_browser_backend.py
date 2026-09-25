@@ -140,6 +140,99 @@ async def test_baseline_uses_latest_user_identity_in_current_chat_markup():
             await browser.close()
 
 
+async def test_browser_generation_stays_live_until_final_answer(tmp_path):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=HTML))
+            backend = BrowserSubchatBackend(context)
+            service = Subchats(SubchatSubmissions(ledger.connection), backend)
+            operation = 'a' * 32
+            sent = await service.send(operation, 'work', 'Future model', 'Initial effort',
+                                      owner=None)
+            assert sent.state == 'submitted'
+            assert backend.has_live_generation()
+            assert (await service.recover(operation, owner=None)).state == 'submitted'
+            assert backend.has_live_generation()
+            await backend.pages[operation].evaluate('window.finish()')
+            assert (await service.recover(operation, owner=None)).state == 'completed'
+            assert not backend.has_live_generation()
+        finally:
+            ledger.close()
+            await browser.close()
+
+
+async def test_browser_prepared_route_remains_live_after_send_returns(monkeypatch):
+    from anywhere_computer.subchat_browser import backend as backend_module
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmission
+
+    class Page:
+        routed = False
+        unrouted = False
+        closed = False
+
+        def is_closed(self):
+            return self.closed
+
+        async def route(self, pattern, callback):
+            self.callback = callback
+            self.routed = True
+
+        async def unroute(self, pattern, callback):
+            assert callback is self.callback
+            self.unrouted = True
+
+    class Request:
+        method = 'POST'
+        post_data = '{}'
+
+        async def header_value(self, name):
+            assert name == 'chatgpt-account-id'
+            return 'account-a'
+
+    class Route:
+        request = Request()
+        continued = False
+
+        async def continue_(self, *, post_data):
+            assert post_data == '{}'
+            self.continued = True
+
+    page = Page()
+    route = Route()
+    recorded = []
+
+    async def unused_browser():
+        raise AssertionError('Browser should not be opened by this send fixture')
+
+    backend = BrowserSubchatBackend(unused_browser,
+                                    record_request=lambda *args: recorded.append(args))
+    submission = SubchatSubmission(operation_id='b' * 32, prompt='work', model='model',
+                                   effort='effort', state='sending')
+    backend.pages[submission.operation_id] = page
+
+    async def dispatch(submission):
+        await page.callback(route)
+        return None
+
+    monkeypatch.setattr(backend, '_send', dispatch)
+    monkeypatch.setattr(backend_module, 'generation_input', lambda *args: {
+        'messages': [{'id': 'message-a'}]})
+    await backend.send(submission)
+    assert route.continued and page.routed and page.unrouted
+    assert recorded == [(submission.operation_id, 'message-a', 'account-a')]
+    assert backend.has_live_generation()
+    page.closed = True
+    assert not backend.has_live_generation()
+
+
 async def test_failed_prepare_closes_new_tabs_and_does_not_reuse_touched_tab(tmp_path):
     playwright = pytest.importorskip('playwright.async_api')
     from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend

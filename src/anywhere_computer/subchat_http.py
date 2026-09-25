@@ -274,18 +274,8 @@ class HTTPOnlySubchatBackend:
                 and submission.after_operation_id is None):
             raise ValueError('HTTP generation requires a queued follow-up or new text Chat')
         catalog = await self.http_catalog()
-        require_http_selection(catalog, submission.http_selection)
-        versions = catalog['versions']
-        assert isinstance(versions, list)
-        choices = [choice for version in versions if isinstance(version, dict)
-                   for choice in version['choices'] if isinstance(choice, dict)
-                   and choice.get('http_selection') == submission.http_selection.model_dump()]
-        if len(choices) != 1:
-            raise SubchatSelectionError('preset_id', 'ambiguous')
-        if choices[0].get('model_title') != submission.model:
-            raise SubchatSelectionError('model', 'mismatch')
-        if choices[0].get('title') != submission.effort:
-            raise SubchatSelectionError('effort', 'mismatch')
+        require_http_selection(catalog, submission.http_selection,
+                               model=submission.model, effort=submission.effort)
         await self._verify_explicit_generation_account()
         baseline: tuple[str, ...] = ()
         if submission.after_operation_id is not None:

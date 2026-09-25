@@ -6,7 +6,7 @@ import os
 import secrets
 import tempfile
 from collections.abc import AsyncIterator, Iterator
-from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
+from contextlib import AsyncExitStack, ExitStack, asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
@@ -310,9 +310,42 @@ def revoke_http_device(directory: Path) -> None:
 
 def enable_http_device(directory: Path) -> bool:
     """Allow fresh consent after revocation; never restore existing credentials."""
-    with _http_authority(directory) as (config, store):
-        _check_enrollment(store, config)
-        return store.enable_device(owner=config.owner, device=config.device)
+    with ProcessLock(directory / "owner-reset.lock"):
+        with _http_authority(directory) as (config, store):
+            _check_enrollment(store, config)
+            return store.enable_device(owner=config.owner, device=config.device)
+
+
+def reset_http_owner_password(directory: Path, replacement: str) -> None:
+    """Recover the configured owner only after all serving engines have stopped."""
+    prepare_directory(directory)
+    with ProcessLock(directory / "http-server.lock"):
+        with ProcessLock(directory / "owner-reset.lock"):
+            with _http_authority(directory) as (config, store):
+                _check_enrollment(store, config)
+                with ExitStack() as stopped_engines:
+                    if config.shared_agent_directory is not None:
+                        # A shared agent can retain terminal/process work after the
+                        # HTTP server stops. Its lock is held through engine.close().
+                        stopped_engines.enter_context(ProcessLock(
+                            Path(config.shared_agent_directory) / "agent.lock"
+                        ))
+                    credentials = OwnerCredentials(
+                        directory, resource=config.resource, owner=config.owner
+                    )
+
+                    def revoke_and_check() -> None:
+                        store.revoke_device(owner=config.owner, device=config.device)
+                        if store.device_enabled(owner=config.owner, device=config.device):
+                            raise ValueError("Device revocation was not confirmed")
+                        remaining = store.db.execute(
+                            "SELECT 1 FROM grants WHERE device=? AND revoked=0 LIMIT 1",
+                            (config.device,),
+                        ).fetchone()
+                        if remaining is not None:
+                            raise ValueError("Grant revocation was not confirmed")
+
+                    credentials.reset_password(replacement, revoke_and_check)
 
 
 def retain_http_grants(directory: Path) -> int:

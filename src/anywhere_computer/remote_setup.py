@@ -138,7 +138,7 @@ def setup_remote(
                           "allowed_tools": sorted(config.scopes)}, indent=2))
         owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner)
         if not owner.is_initialized():
-            password = getpass.getpass("Owner password (at least 16 characters, hidden): ")
+            password = getpass.getpass("Owner password (at least 8 characters, hidden): ")
             if password != getpass.getpass("Confirm owner password (hidden): "):
                 raise ValueError("Owner passwords did not match; rerun remote-setup to resume")
             owner.initialize(password)

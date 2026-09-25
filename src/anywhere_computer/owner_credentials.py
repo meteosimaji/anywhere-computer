@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import secrets
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal
 
@@ -82,9 +83,9 @@ class OwnerCredentials:
 
     @staticmethod
     def _validate_password(password: str) -> None:
-        if len(password) < 16 or len(password.encode("utf-8")) > 1024:
+        if len(password) < 8 or len(password.encode("utf-8")) > 1024:
             raise ValueError(
-                "Use an owner password of at least 16 characters and at most 1024 bytes"
+                "Use an owner password of at least 8 characters and at most 1024 bytes"
             )
 
     def change_password(self, current: str, replacement: str) -> None:
@@ -124,6 +125,35 @@ class OwnerCredentials:
                     "Password update was not saved; the previous password remains installed"
                 )
             raise OwnerPasswordChangeUnknown("Password update outcome is unknown; do not retry")
+
+    def reset_password(self, replacement: str, revoke: Callable[[], None]) -> None:
+        """Offline recovery: revoke grants before replacing the native verifier.
+
+        The caller must hold the HTTP service lock throughout this operation.
+        A failed or uncertain write must leave the device disabled.
+        """
+        self._validate_password(replacement)
+        with ProcessLock(self.lock_path, timeout=30):
+            # Confirm the bound verifier can be read before touching authorization.
+            self._record()
+            revoke()
+            salt = secrets.token_hex(32)
+            updated = _PasswordRecord(version=1, salt=salt, digest=self._derive(replacement, salt))
+            try:
+                self.vault.set_password(SERVICE, self.account, updated.model_dump_json())
+            except Exception:
+                # A backend may report an error after committing the write.
+                pass
+            try:
+                installed = self._record()
+            except ClientCredentialError:
+                raise OwnerPasswordChangeUnknown(
+                    "Password reset outcome is unknown; device remains disabled"
+                ) from None
+            if installed != updated:
+                raise OwnerPasswordChangeUnknown(
+                    "Password reset was not confirmed; device remains disabled"
+                )
 
     def _record(self) -> _PasswordRecord:
         raw = self._read()

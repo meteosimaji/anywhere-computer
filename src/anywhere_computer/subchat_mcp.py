@@ -101,7 +101,7 @@ READ_ONLY_TOOLS = frozenset({
 _BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
     'subchat_activity': (Contract, 'Report counts of live work owned by this MCP controller. '
         'No browser or account request is made. Use to decide whether an idle plugin '
-        'session can close without interrupting a send or queue watch.'),
+        'session can close without interrupting a send, generation, or queue watch.'),
     'subchat_queue_watch': (QueueWatch, 'Explicitly arm or disarm automatic delivery of an '
         'existing queued input while this MCP controller remains alive. Requires an already '
         'open owned browser tab; never launches Chrome. Checks every five seconds, stops on '
@@ -323,6 +323,11 @@ def session(service: Subchats, *,
     sends: dict[str, asyncio.Task[SubchatSubmission]] = {}
 
     def save_preparation_failure(operation_id: str, error: BaseException) -> None:
+        if isinstance(error, SubchatSelectionError):
+            service.store.record_preparation_failure(
+                operation_id, owner=owner,
+                reason=f'selection_{error.field}_{error.reason}')
+            return
         if not isinstance(error, SubchatPreparationFailed):
             return
         cause = error.__cause__
@@ -339,6 +344,12 @@ def session(service: Subchats, *,
             return
         persisted = service.store.preparation_failure(operation_id, owner=owner)
         if persisted is not None:
+            for field in ('http_selection', 'version_id', 'preset_id', 'model_slug',
+                          'thinking_effort', 'model', 'effort'):
+                for reason in ('required', 'not_found', 'unavailable', 'mismatch',
+                               'ambiguous'):
+                    if persisted == f'selection_{field}_{reason}':
+                        raise SubchatSelectionError(field, reason)
             raise SubchatPreparationFailed(
                 'Saved preparation failure', reason=persisted)
         sending = sends.get(operation_id)
@@ -628,14 +639,18 @@ def session(service: Subchats, *,
                                         for task in recoveries.values())
                 watches_active = sum(not task.done() for task in
                                      server.queue_watches.values())
+                generation_active = (server.live_transport is not None
+                                     and server.live_transport())
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={'state': 'active' if (sends_active or recoveries_active
-                                                        or watches_active) else 'idle',
+                                                        or watches_active or generation_active)
+                                              else 'idle',
                                    'active_count': sends_active + recoveries_active
-                                                   + watches_active,
+                                                   + watches_active + int(generation_active),
                                    'active_sends': sends_active,
                                    'active_recoveries': recoveries_active,
-                                   'active_queue_watches': watches_active})
+                                   'active_queue_watches': watches_active,
+                                   'live_generation': generation_active})
             if request.tool == 'subchat_capabilities' and capabilities is not None:
                 Contract.model_validate(request.arguments)
                 reported = capabilities()

@@ -15,6 +15,11 @@ from pydantic import JsonValue
 from .direct_mcp import DirectMCPContext
 
 WATCH_POLL_SECONDS = 5
+ACTIVITY_PROBE_TIMEOUT = 15.0
+BACKGROUND_SUBCHAT_TOOLS = frozenset({
+    'subchat_send', 'subchat_message', 'subchat_recover', 'subchat_wait',
+    'subchat_queue_watch',
+})
 
 
 @dataclass
@@ -26,6 +31,8 @@ class _Entry:
     last_used: float = field(default_factory=time.monotonic)
     idle_timeout: int = 300
     watches: dict[str, '_Watch'] = field(default_factory=dict)
+    background_subchat: bool = False
+    activity_probe: asyncio.Task[dict[str, JsonValue]] | None = None
 
 
 @dataclass
@@ -115,6 +122,10 @@ class DirectMCPSessions:
     async def _retire(self, entry: _Entry, state: str = 'closed',
                       session_id: str | None = None) -> None:
         entry.state = state
+        if entry.activity_probe is not None:
+            entry.activity_probe.cancel()
+            await asyncio.gather(entry.activity_probe, return_exceptions=True)
+            entry.activity_probe = None
         for identity, watch in entry.watches.items():
             if watch.state == 'watching':
                 watch.state = 'stopped'
@@ -135,6 +146,34 @@ class DirectMCPSessions:
                                     for watch in other.watches.values()))
                             for other in self.entries.values())):
             self.owner_released(entry.owner)
+
+    async def _background_active(self, entry: _Entry) -> bool:
+        if not entry.background_subchat:
+            return False
+        if entry.activity_probe is None:
+            entry.activity_probe = asyncio.create_task(
+                entry.context.call('subchat_activity', {}))
+        elif not entry.activity_probe.done():
+            # A timed-out probe is still in flight. Do not duplicate it or cancel
+            # the transport call, whose cancellation stops the owned MCP server.
+            return True
+        try:
+            result = await asyncio.wait_for(asyncio.shield(entry.activity_probe),
+                                            timeout=ACTIVITY_PROBE_TIMEOUT)
+            structured = result.get('structuredContent')
+            data = structured.get('data') if isinstance(structured, dict) else None
+            count = data.get('active_count') if isinstance(data, dict) else None
+            if (result.get('isError') is True or not isinstance(structured, dict)
+                    or structured.get('state') != 'completed'
+                    or not isinstance(count, int) or isinstance(count, bool) or count < 0):
+                raise ValueError('Subchat activity result is malformed')
+            return count > 0
+        except Exception:
+            # A failed observation cannot establish that background work has stopped.
+            return True
+        finally:
+            if entry.activity_probe is not None and entry.activity_probe.done():
+                entry.activity_probe = None
 
     async def open(self, command: list[str], cwd: Path, *, owner: str | None,
                    idle_timeout: int = 300,
@@ -176,7 +215,8 @@ class DirectMCPSessions:
             if (entry.state == 'open' and self.clock() - entry.last_used >= entry.idle_timeout
                     and not any(watch.state == 'watching' and
                                 self.clock() < watch.deadline
-                                for watch in entry.watches.values())):
+                                for watch in entry.watches.values())
+                    and not await self._background_active(entry)):
                 await self._retire(entry, 'expired', session_id=session_id)
             if entry.state != 'open':
                 raise RuntimeError('Direct MCP session is closed; no automatic restart performed')
@@ -196,7 +236,8 @@ class DirectMCPSessions:
                 if (self.clock() - entry.last_used >= entry.idle_timeout
                         and not any(watch.state == 'watching' and
                                     self.clock() < watch.deadline
-                                    for watch in entry.watches.values())):
+                                    for watch in entry.watches.values())
+                        and not await self._background_active(entry)):
                     await self._retire(entry, 'expired', session_id=session_id)
 
     async def _expire_loop(self) -> None:
@@ -238,6 +279,8 @@ class DirectMCPSessions:
     async def call(self, session_id: str, name: str, arguments: dict[str, JsonValue], *,
                    owner: str | None) -> dict[str, JsonValue]:
         async with self._lease(session_id, owner) as entry:
+            if name in BACKGROUND_SUBCHAT_TOOLS:
+                entry.background_subchat = True
             result = await entry.context.call(name, arguments)
             if name == 'subchat_queue_watch':
                 self._sync_watch(session_id, entry, arguments, result)
@@ -335,6 +378,14 @@ class DirectMCPSessions:
         if entry.lock.locked():
             raise RuntimeError('Direct MCP session is busy; inspect the existing operation')
         async with entry.lock:
+            if entry.state == 'open':
+                if any(watch.state == 'watching' and self.clock() < watch.deadline
+                       for watch in entry.watches.values()):
+                    raise RuntimeError('Direct MCP session is busy; '
+                                       'a Subchat queue watch is active')
+                if await self._background_active(entry):
+                    raise RuntimeError('Direct MCP session is busy; Subchat background activity '
+                                       'is active or could not be checked')
             await self._retire(entry, session_id=session_id)
         return self.status(session_id, owner=owner)
 

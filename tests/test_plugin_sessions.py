@@ -244,16 +244,22 @@ async def test_idle_session_keeps_background_subchat_alive_until_work_ends(
         await pool.call(session_id, owner="peer-a", cwd=str(tmp_path),
                         server="chat-subchat", tool=tool, arguments={},
                         catalog_sha256="1" * 64)
+        with pytest.raises(PluginPreflightError, match="session_busy"):
+            await pool.stop(session_id, owner="peer-a")
+        assert entry.context.alive
         now[0] = 31
         await pool.expire_idle()
         assert (await pool.status(session_id, owner="peer-a"))["state"] == "open"
-        assert entry.context.alive and entry.context.activity_probes == 1
+        assert entry.context.alive and entry.context.activity_probes == 2
         now[0] = 62
         entry.context.activity_error = True
         await pool.expire_idle()
         status = await pool.status(session_id, owner="peer-a")
         assert status["state"] == "open"
         assert status["background_activity_probe_failures"] == 1
+        with pytest.raises(PluginPreflightError, match="session_busy"):
+            await pool.stop(session_id, owner="peer-a")
+        assert entry.context.alive
         now[0] = 93
         entry.context.activity_error = False
         entry.context.active_count = 0
@@ -294,7 +300,7 @@ async def test_namespaced_subchat_activity_protects_idle_session(tmp_path, monke
             if tool == activity_tool:
                 self.activity_probes += 1
                 return {"is_error": False, "structured_content": {
-                    "data": {"active_count": 1},
+                    "state": "completed", "data": {"active_count": 1},
                 }}
             assert tool == send_tool
             return {"is_error": False, "structured_content": {"state": "running"}}
@@ -312,6 +318,84 @@ async def test_namespaced_subchat_activity_protects_idle_session(tmp_path, monke
         assert status["state"] == "open"
         assert status["background_activity_protected"] is True
         assert pool.entries[session_id].context.activity_probes == 1
+    finally:
+        await pool.close()
+
+
+async def test_explicit_close_succeeds_after_subchat_background_work_finishes(
+    contexts, tmp_path, monkeypatch,
+):
+    pool = PluginSessions()
+    try:
+        session_id = (await pool.open(str(tmp_path), owner="peer-a"))["session_id"]
+        entry = pool.entries[session_id]
+        entry.background_servers.add(("chat-subchat", "subchat_activity"))
+
+        async def inactive(_entry):
+            assert _entry is entry
+            return False
+
+        monkeypatch.setattr(pool, "_subchat_active", inactive)
+        closed = await pool.stop(session_id, owner="peer-a")
+        assert closed["state"] == "closed"
+        assert closed["cleanup_confirmed"] is True
+        assert not contexts[0].alive
+    finally:
+        await pool.close()
+
+
+@pytest.mark.parametrize("activity_state", [None, "running", "failed"])
+async def test_zero_subchat_activity_requires_completed_envelope(
+    tmp_path, monkeypatch, activity_state,
+):
+    now = [0.0]
+
+    class Context:
+        def __init__(self, cwd):
+            self.cwd = str(Path(cwd).resolve())
+            self.alive = False
+            self.activity_state = activity_state
+
+        async def open(self):
+            self.alive = True
+
+        async def close(self):
+            self.alive = False
+
+        async def inspect(self, **kwargs):
+            assert kwargs == {"server": "chat-subchat", "tool": "subchat_activity"}
+            return {"servers": [{"server": "chat-subchat", "tools": [{
+                "name": "subchat_activity", "catalog_sha256": "1" * 64,
+            }]}]}
+
+        async def call(self, server, tool, arguments, digest):
+            assert server == "chat-subchat" and digest == "1" * 64
+            if tool == "subchat_activity":
+                content = {"data": {"active_count": 0}}
+                if self.activity_state is not None:
+                    content["state"] = self.activity_state
+                return {"is_error": False, "structured_content": content}
+            assert tool == "subchat_send"
+            return {"is_error": False, "structured_content": {"state": "running"}}
+
+    monkeypatch.setattr(codex_plugins, "PluginContext", Context)
+    pool = PluginSessions(clock=lambda: now[0])
+    try:
+        session_id = (await pool.open(str(tmp_path), owner="peer-a", idle_timeout=30))["session_id"]
+        entry = pool.entries[session_id]
+        await pool.call(session_id, owner="peer-a", cwd=str(tmp_path),
+                        server="chat-subchat", tool="subchat_send", arguments={},
+                        catalog_sha256="1" * 64)
+        with pytest.raises(PluginPreflightError, match="session_busy"):
+            await pool.stop(session_id, owner="peer-a")
+        assert entry.context.alive and entry.state == "open"
+        now[0] = 31
+        await pool.expire_idle()
+        assert entry.context.alive and entry.state == "open"
+        assert entry.activity_probe_failures == 2
+        entry.context.activity_state = "completed"
+        stopped = await pool.stop(session_id, owner="peer-a")
+        assert stopped["state"] == "closed" and stopped["cleanup_confirmed"] is True
     finally:
         await pool.close()
 

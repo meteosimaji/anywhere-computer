@@ -44,6 +44,52 @@ async def test_late_non_preparation_error_remains_observable(tmp_path, monkeypat
         ledger.close()
 
 
+async def test_late_selection_error_survives_controller_restart(tmp_path, monkeypatch):
+    import asyncio
+
+    from anywhere_computer import subchat_mcp
+    from anywhere_computer.subchat_state import SubchatSelectionError
+
+    monkeypatch.setattr(subchat_mcp, 'SEND_ACK_TIMEOUT', .001)
+    release = asyncio.Event()
+
+    class MismatchedCatalog(BrowserFixture):
+        async def prepare(self, submission):
+            await release.wait()
+            raise SubchatSelectionError('model', 'mismatch')
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    server = session(Subchats(store, MismatchedCatalog()))
+    operation = 'd' * 32
+    try:
+        pending = await server.execute(Request(operation_id=operation,
+            tool='subchat_send', arguments={'prompt': 'work', 'model': 'wrong',
+                                            'effort': 'Instant'}))
+        assert pending.state == 'running'
+        release.set()
+        with pytest.raises(SubchatSelectionError):
+            await server.sends[operation]
+        await asyncio.sleep(0)
+        assert store.get(operation, owner=None).state == 'prepared'
+        await server.close()
+
+        restarted = session(Subchats(store, MismatchedCatalog()))
+        try:
+            observed = await restarted.execute(Request(operation_id='e' * 32,
+                tool='subchat_status', arguments={'operation_id': operation}))
+            assert observed.data['error_code'] == 'invalid_parameter'
+            assert observed.data['field'] == 'model'
+            assert observed.data['reason'] == 'mismatch'
+            assert observed.data['dispatched'] is False
+        finally:
+            await restarted.close()
+    finally:
+        release.set()
+        await server.close()
+        ledger.close()
+
+
 async def test_untrusted_preparation_reason_is_sanitized(tmp_path):
     from anywhere_computer.subchat import SubchatPreparationFailed
 
@@ -116,6 +162,68 @@ async def test_slow_send_returns_pending_and_same_id_recovers_final(tmp_path, mo
             arguments={'operation_id': operation})), .3)
         assert final.data['state'] == 'completed' and final.data['answer'] == '42'
         assert backend.sends == 1
+    finally:
+        finish.set()
+        await server.close()
+        ledger.close()
+
+
+async def test_activity_tracks_generation_stream_after_send_receipt(tmp_path):
+    import asyncio
+
+    from anywhere_computer.subchat import SubchatReceipt
+
+    finish = asyncio.Event()
+
+    class StreamingBrowser(BrowserFixture):
+        def __init__(self):
+            super().__init__()
+            self.generation = None
+
+        async def send(self, submission):
+            self.sends += 1
+            self.generation = asyncio.create_task(finish.wait())
+            self.receipt = SubchatReceipt(conversation_id='conversation',
+                                          user_message_id='user', prompt=submission.prompt)
+            return self.receipt
+
+        def has_live_generation(self):
+            return self.generation is not None and not self.generation.done()
+
+        async def close_generations(self):
+            if self.generation is not None:
+                self.generation.cancel()
+                await asyncio.gather(self.generation, return_exceptions=True)
+
+    ledger = Ledger(tmp_path)
+    backend = StreamingBrowser()
+    server = session(Subchats(SubchatSubmissions(ledger.connection), backend))
+    operation = '4' * 32
+    async def activity():
+        return (await server.execute(Request(operation_id='5' * 32,
+            tool='subchat_activity', arguments={}))).data
+
+    try:
+        sent = await server.execute(Request(operation_id=operation,
+            tool='subchat_send', arguments={'prompt': 'work', 'model': 'model',
+                                            'effort': 'effort'}))
+        assert sent.data['state'] == 'submitted'
+        await asyncio.sleep(0)  # Release the completed send task's controller reference.
+        assert backend.has_live_generation()
+        assert not server.sends and not server.recoveries
+        active = await activity()
+        assert active['state'] == 'active'
+        assert active['active_count'] == 1
+        assert active['live_generation'] is True
+        assert active['active_sends'] == active['active_recoveries'] == 0
+
+        finish.set()
+        assert backend.generation is not None
+        await backend.generation
+        idle = await activity()
+        assert idle['state'] == 'idle'
+        assert idle['active_count'] == 0
+        assert idle['live_generation'] is False
     finally:
         finish.set()
         await server.close()

@@ -16,6 +16,7 @@ from test_subchat_http_only_cli import command, environment
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatOutcomeUnknown, SubchatPreflightFailed, Subchats
+from anywhere_computer.subchat_browser.catalog import project_http_catalog
 from anywhere_computer.subchat_cli import Command, dispatch
 from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
 from anywhere_computer.subchat_http_generation import (
@@ -29,6 +30,7 @@ from anywhere_computer.subchat_mcp import session as mcp_session
 from anywhere_computer.subchat_state import (
     SubchatAccountMismatch,
     SubchatHTTPSelection,
+    SubchatSelectionError,
     SubchatSubmission,
     SubchatSubmissions,
 )
@@ -193,7 +195,8 @@ class LocalChat:
                  rotate_stage_cookies=False,
                  compress_generation=False, oversize_sentinel=False,
                  challenged_generation=False, conduit_token='fresh-conduit',
-                 sentinel_token='fresh-token', prepare_state='sent'):
+                 sentinel_token='fresh-token', prepare_state='sent',
+                 catalog_payload=None):
         self.requests = []
         self.messages = []
         self.rotate_cookie = rotate_cookie
@@ -204,6 +207,7 @@ class LocalChat:
         self.conduit_token = conduit_token
         self.sentinel_token = sentinel_token
         self.prepare_state = prepare_state
+        self.catalog_payload = catalog_payload
         self.current_node = None
         self.stale = False
         self.lost_generation = False
@@ -231,7 +235,7 @@ class LocalChat:
             status = '200 OK'
             content_type = 'application/json'
             if path.startswith('/backend-api/models?'):
-                payload = json.dumps(catalog()).encode()
+                payload = json.dumps(self.catalog_payload or catalog()).encode()
             elif path == '/backend-api/sentinel/chat-requirements/prepare':
                 assert method == 'POST' and data == {'p': 'observed-p'}
                 if 'x-openai-target-path' in headers:
@@ -431,6 +435,34 @@ async def test_invalid_model_selection_reports_field_without_generation(tmp_path
                 assert reply.data['error_code'] == 'invalid_parameter'
                 assert reply.data['field'] == 'model_slug'
                 assert reply.data['dispatched'] is False
+                assert not any(path == '/backend-api/f/conversation'
+                               for _, path, _, _ in api.requests)
+            finally:
+                ledger.close()
+
+
+async def test_http_only_rejects_other_version_label_before_reservation(tmp_path):
+    payload = catalog()
+    payload['versions'][0]['id'] = 'latest'
+    payload['versions'][0]['display_text'] = '最新'
+    payload['versions'][0]['intelligence_presets'][0]['title'] = 'Instant'
+    payload['models'][0]['title'] = 'GPT-5.6 Sol'
+    payload['versions'].append({**payload['versions'][0], 'id': '5.6',
+                                'display_text': 'GPT-5.6 Sol'})
+    async with LocalChat(catalog_payload=payload) as api:
+        async with httpx.AsyncClient(trust_env=False, follow_redirects=False) as client:
+            ledger, store, service = await setup(tmp_path, api, client)
+            try:
+                selected = SubchatHTTPSelection.model_validate(
+                    project_http_catalog(json.dumps(payload).encode())['versions'][0]
+                    ['choices'][0]['http_selection'])
+                with pytest.raises(SubchatSelectionError) as caught:
+                    await service.send('b' * 32, 'test', 'GPT-5.6 Sol', 'Instant',
+                                       owner=None, http_selection=selected)
+                assert (caught.value.field, caught.value.reason) == ('model', 'mismatch')
+                assert store.get('b' * 32, owner=None).state == 'prepared'
+                assert store.connection.execute(
+                    'SELECT COUNT(*) FROM subchat_http_dispatch_claims').fetchone()[0] == 0
                 assert not any(path == '/backend-api/f/conversation'
                                for _, path, _, _ in api.requests)
             finally:

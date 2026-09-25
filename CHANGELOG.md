@@ -3,6 +3,29 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a49 / Plugin 0.2.0-alpha.49 — unpublished candidate (2026-09-25)
+
+- Keep Subchat sessions open through active browser preparation and uncertain
+  completion, so follow-up collection does not lose the in-flight result.
+- Add an offline owner-password reset that revokes existing grants and requires
+  explicit device re-enablement. The password minimum is now eight characters.
+- Clarify OAuth consent risks, requested tools, password recovery, and callback
+  destination; prevent accidental double submission of a consent decision.
+
+## 0.2.0a48 / Plugin 0.2.0-alpha.48 — unpublished candidate (2026-09-25)
+
+- Count a live Subchat generation stream after its initial send receipt so
+  Plugin and direct MCP sessions remain available until collection finishes.
+- Preserve field-specific model-selection errors after a controller restart.
+- Keep direct MCP sessions alive during active or unconfirmed Subchat work.
+
+## 0.2.0a47 / Plugin 0.2.0-alpha.47 — unpublished candidate (2026-09-25)
+
+- Reject mismatched Subchat UI model and effort labels against the selected
+  HTTP catalog choice before browser dispatch or HTTP generation.
+- Keep an explicit Plugin bridge session open while Subchat background work is
+  active, including after the initial tool call has returned.
+
 ## 0.2.0a46 / Plugin 0.2.0-alpha.46 — unpublished candidate (2026-09-25)
 
 - Warn on the owner consent page when a client omits available Subchat tools.

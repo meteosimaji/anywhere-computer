@@ -163,7 +163,9 @@ class PluginSessions:
             content = result.get("structured_content")
             data = content.get("data") if isinstance(content, dict) else None
             count = data.get("active_count") if isinstance(data, dict) else None
-            if (result.get("is_error") is True or not isinstance(count, int)
+            if (result.get("is_error") is True or not isinstance(content, dict)
+                    or content.get("state") != "completed" or not isinstance(data, dict)
+                    or not isinstance(count, int)
                     or isinstance(count, bool) or count < 0):
                 raise ValueError("Subchat activity result is malformed")
             if count:
@@ -300,6 +302,23 @@ class PluginSessions:
                 "session_busy", "Do not terminate a session with an active call",
             )
         async with entry.lock:
+            if entry.state == "open" and entry.background_servers:
+                try:
+                    active = await asyncio.wait_for(
+                        self._subchat_active(entry), timeout=ACTIVITY_PROBE_TIMEOUT,
+                    )
+                except (TimeoutError, OSError, ValueError, RuntimeError) as error:
+                    entry.activity_probe_failures += 1
+                    raise PluginPreflightError(
+                        "session_busy", "Subchat activity could not be checked; keep this "
+                        "session open and inspect the pending operation before closing it",
+                    ) from error
+                entry.activity_probe_failures = 0
+                if active:
+                    raise PluginPreflightError(
+                        "session_busy", "Subchat background work is still active; wait for "
+                        "it to finish before closing this session",
+                    )
             if entry.state in {"opening", "open"} or not entry.cleanup_confirmed:
                 await self._retire(entry, "closed")
         return self._describe(entry)

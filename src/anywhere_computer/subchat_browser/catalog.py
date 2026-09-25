@@ -99,8 +99,9 @@ def project_http_catalog(payload: bytes) -> dict[str, object]:
             'send_requires_ui_labels': True}
 
 
-def require_http_selection(catalog: dict[str, object], selected: SubchatHTTPSelection) -> None:
-    """Require the exact caller-observed choice to still be available; never resolve aliases."""
+def require_http_selection(catalog: dict[str, object], selected: SubchatHTTPSelection,
+                           *, model: str | None = None, effort: str | None = None) -> None:
+    """Require the observed choice and, for a send, its version and preset UI labels."""
     versions = catalog.get('versions')
     if catalog.get('state') != 'http_catalog_observed' or not isinstance(versions, list):
         raise ValueError('HTTP model catalog is unavailable')
@@ -132,6 +133,18 @@ def require_http_selection(catalog: dict[str, object], selected: SubchatHTTPSele
         raise SubchatSelectionError('model_slug', 'mismatch')
     if identity.get('thinking_effort') != selected.thinking_effort:
         raise SubchatSelectionError('thinking_effort', 'mismatch')
+    # Version rows can share a model slug. A title can also differ from the
+    # picker label, so a title match must not override another version's exact
+    # displayed label.
+    if model is not None:
+        another_version = any(
+            version.get('id') != selected.version_id and version.get('label') == model
+            for version in versions if isinstance(version, dict))
+        if (another_version or model not in (version_matches[0].get('label'),
+                                              choice.get('model_title'))):
+            raise SubchatSelectionError('model', 'mismatch')
+    if effort is not None and choice.get('title') != effort:
+        raise SubchatSelectionError('effort', 'mismatch')
 
 
 async def observe_http_catalog(page: Page) -> Response:
