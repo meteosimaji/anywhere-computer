@@ -466,8 +466,9 @@ class LazySubchatGateway:
         except SubchatOperationNotFound:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="No operation with this ID is visible in the selected ledger. "
-                               "Check the ID and ledger path, then use subchat_list.",
-                         data={"error_code": "unknown_operation", "dispatched": False,
+                               "Check the original connection, account and ledger path, "
+                               "then use subchat_list. This does not prove the send failed.",
+                         data={"error_code": "unknown_operation", "dispatched": None,
                                "automatic_retry": False})
         except SubchatAccountMismatch:
             return Reply(operation_id=request.operation_id, state="failed",
