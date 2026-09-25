@@ -1592,9 +1592,13 @@ class Engine:
                         data={"error_code": native_code or helper_code
                               or "native_gui_helper_rejected",
                               "next_action": (
-                                  "Grant the native GUI helper macOS Accessibility access, "
-                                  "then observe the target again."
-                                  if helper_code == "accessibility_required" and session_live else
+                                  "Grant the Anywhere Computer native GUI helper "
+                                  "Accessibility access in "
+                                  "macOS System Settings > Privacy & Security > Accessibility, "
+                                  + ("then observe the target again."
+                                     if session_live else
+                                     "then open a new native GUI session.")
+                                  if helper_code == "accessibility_required" else
                                   "Observe the target again before further input."
                                   if session_live else
                                   "Open a new native GUI session and observe the target before "

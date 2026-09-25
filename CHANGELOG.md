@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a45 / Plugin 0.2.0-alpha.45 — unpublished candidate (2026-09-25)
+
+- Explain macOS Accessibility setup when the first native GUI window request
+  fails, including the need to open a new session after granting permission.
+- Point public HTTPS 403 diagnostics to both edge access rules and the origin
+  Host-header setting without treating either as a proven cause.
+
 ## 0.2.0a44 / Plugin 0.2.0-alpha.44 — unpublished candidate (2026-09-25)
 
 - Advertise only the HTTP tools enabled for this device in OAuth discovery.

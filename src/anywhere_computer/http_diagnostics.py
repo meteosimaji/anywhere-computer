@@ -191,10 +191,17 @@ async def diagnose_remote(
     if local["state"] != "metadata_reachable":
         result["action"] = local["action"]
     elif probe_public and public["state"] != "metadata_reachable":
-        result["action"] = (
-            "Loopback responds. Inspect the connector, configured HTTPS route, "
-            "DNS and certificate; no repair was attempted."
-        )
+        if public.get("http_status") == 403:
+            result["action"] = (
+                "Loopback responds but public metadata returned 403. Inspect edge access "
+                "rules and the tunnel originRequest.httpHostHeader; set the latter to the "
+                "loopback host and port. No repair was attempted."
+            )
+        else:
+            result["action"] = (
+                "Loopback responds. Inspect the connector, configured HTTPS route, "
+                "DNS and certificate; no repair was attempted."
+            )
     else:
         result["action"] = (
             "Metadata is not proof of client authorization or connector ownership. "

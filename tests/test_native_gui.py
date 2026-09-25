@@ -17,6 +17,10 @@ for line in sys.stdin:
     req = json.loads(line)
     method = req['method']
     if method == 'windows':
+        if mode == 'accessibility_required_windows':
+            print(json.dumps({'id': req['id'], 'error': {
+                'code': 'accessibility_required'}}), flush=True)
+            continue
         result = {'windows': [{'window_id': 1}]}
     elif method == 'observe':
         if mode == 'malformed_observe':
@@ -208,6 +212,22 @@ async def test_accessibility_error_points_to_permission_and_retains_session(
         assert observed.data['error_code'] == 'accessibility_required'
         assert 'Accessibility access' in observed.data['next_action']
         assert session_id in engine.native_gui.entries
+    finally:
+        await engine.close()
+
+
+async def test_first_windows_accessibility_error_explains_permission_and_new_session(
+        tmp_path, helper_process):
+    helper_process[0][0] = 'accessibility_required_windows'
+    engine = Engine(tmp_path / 'state')
+    try:
+        reply = await engine.execute(Request(operation_id='f' * 32,
+            tool='gui_native_windows', arguments={'app': 'test'}), peer='one')
+        assert reply.state == 'failed'
+        assert reply.data['error_code'] == 'accessibility_required'
+        assert 'System Settings > Privacy & Security > Accessibility' in reply.data['next_action']
+        assert 'open a new native GUI session' in reply.data['next_action']
+        assert not engine.native_gui.entries
     finally:
         await engine.close()
 

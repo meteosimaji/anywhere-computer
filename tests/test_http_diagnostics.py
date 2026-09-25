@@ -166,7 +166,9 @@ async def test_remote_doctor_rejects_relative_connector_before_probe(tmp_path, m
         await diagnostic.diagnose_remote(tmp_path, connector="relative-connector")
 
 
-@pytest.mark.parametrize("public_state", ["ok", "mismatch", "certificate", "unreachable"])
+@pytest.mark.parametrize("public_state", [
+    "ok", "mismatch", "certificate", "unreachable", "forbidden",
+])
 async def test_remote_doctor_separates_local_and_public(configured, tmp_path, monkeypatch,
                                                        public_state):
     import ssl
@@ -184,6 +186,8 @@ async def test_remote_doctor_separates_local_and_public(configured, tmp_path, mo
             raise ssl.SSLCertVerificationError("synthetic certificate failure")
         if public_state == "unreachable":
             raise OSError("synthetic network failure")
+        if public_state == "forbidden":
+            raise diagnostic.MetadataHTTPError(403)
         return {"resource": config.resource if public_state == "ok" else "https://other.example/mcp"}
 
     monkeypatch.setattr(diagnostic, "_metadata", metadata)
@@ -193,10 +197,14 @@ async def test_remote_doctor_separates_local_and_public(configured, tmp_path, mo
     assert report["public"]["state"] == {
         "ok": "metadata_reachable", "mismatch": "resource_mismatch",
         "certificate": "certificate_verification_failed", "unreachable": "unreachable",
+        "forbidden": "http_error",
     }[public_state]
     assert report["state"] == (
         "local_and_public_metadata_reachable" if public_state == "ok" else "attention_required"
     )
+    if public_state == "forbidden":
+        assert report["public"]["http_status"] == 403
+        assert "originRequest.httpHostHeader" in report["action"]
 
 
 async def test_public_metadata_real_tls_verifies_hostname_and_bounds(certificates, monkeypatch):
