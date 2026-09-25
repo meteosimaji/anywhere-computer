@@ -147,6 +147,17 @@ async def test_duplicate_and_changed_annotation_prevent_dispatch(stub_catalog, t
     assert "duplicate" in str(caught.value.__cause__)
 
 
+async def test_auth_status_change_invalidates_selected_tool(stub_catalog, tmp_path):
+    stub_catalog["rows"][0].update(runtimeStatus="connected", authStatus="unsupported")
+    catalog = await list_codex_plugin_tools(str(tmp_path), server="demo", tool="echo")
+    digest = catalog["servers"][0]["tools"][0]["catalog_sha256"]
+    stub_catalog["rows"][0]["authStatus"] = "oAuth"
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(str(tmp_path), "demo", "echo", {}, digest)
+    assert caught.value.code == "catalog_stale"
+    assert not any(method == "mcpServer/tool/call" for method, _ in stub_catalog["calls"])
+
+
 @pytest.mark.parametrize("failure", [TimeoutError(), ConnectionError(), RuntimeError()])
 async def test_dispatched_error_is_unknown(stub_catalog, tmp_path, failure):
     result = await list_codex_plugin_tools(str(tmp_path))
