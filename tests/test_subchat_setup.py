@@ -21,6 +21,12 @@ from anywhere_computer.subchat import SubchatAccessError
 from anywhere_computer.subchat_gateway import SubchatGatewayConfig
 
 
+@pytest.fixture(autouse=True)
+def standard_test_chrome_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(subchat_chrome_profile, "chrome_user_data_root",
+                        lambda: tmp_path / "Chrome")
+
+
 def test_inspect_then_select_pins_only_verified_account_without_send(tmp_path, monkeypatch,
                                                                      capsys):
     source = tmp_path / "Chrome" / "Default"

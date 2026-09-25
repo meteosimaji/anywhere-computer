@@ -39,6 +39,27 @@ def chrome_profile_by_id(profile_id: str) -> Path:
     return source
 
 
+def selected_chrome_source(source: Path, *, stage_root: Path | None = None) -> Path:
+    """Accept only this user's Chrome store or a managed private snapshot."""
+    if not source.is_absolute() or source.is_symlink() or source.parent.is_symlink():
+        raise ValueError("Selected Chrome profile path is invalid")
+    if source.parent == chrome_user_data_root():
+        return chrome_profile_by_id(source.name)
+    if (stage_root is None or source.parent.parent != stage_root
+            or not source.parent.name.startswith("snapshot-")
+            or source.parent.is_symlink() or stage_root.is_symlink()
+            or not source.is_dir()):
+        raise ValueError("Selected Chrome profile is outside the managed store")
+    if source.name != "Default" and not (
+        source.name.startswith("Profile ") and source.name[8:].isdigit()
+    ):
+        raise ValueError("Selected Chrome profile ID is invalid")
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None and source.stat().st_uid != getuid():
+        raise ValueError("Selected Chrome profile belongs to another user")
+    return source
+
+
 def _snapshot_profile(source: Path, destination: Path) -> None:
     if source.name != "Default" and not (
         source.name.startswith("Profile ") and source.name[8:].isdigit()

@@ -152,7 +152,8 @@ session before starting the server. Do not point the dedicated-profile setting
 at a normal profile that is open elsewhere. On macOS, set the separate
 `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` variable to an explicit ordinary Chrome
 profile directory, such as `~/Library/Application Support/Google/Chrome/Default`,
-to use its existing login. To retain the choice across Plugin updates, create
+to use its existing login. Only a profile under the current user's standard
+Chrome store or an app-managed staged snapshot is accepted. To retain the choice across Plugin updates, create
 `login-selection.json` beside the selected Subchat ledger directory (by default,
 `subchat/login-selection.json` under Anywhere Computer's local state directory)
 with `{"chrome_source_profile":"/absolute/path/to/Chrome/Default",
@@ -203,8 +204,9 @@ Plugin. Environment overrides and an explicit transport setting are separate
 operator settings; remove those as well if they were configured. Existing
 path-based `inspect`, `select` and `stage` remain available for older setups and
 the stopped HTTPS service staging flow.
-`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` and
-`ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID` override their respective file values.
+`ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` overrides a legacy path selection,
+but cannot override a saved profile-ID selection. `ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID`
+overrides the file's account pin.
 Neither setting contains cookies or tokens. In read-only HTTP mode, the Plugin
 takes a private temporary snapshot of ChatGPT cookies and opens only that
 snapshot headlessly. In macOS background HTTPX mode, it uses a private profile
@@ -321,6 +323,7 @@ macOS) `--chrome-login-source-profile PATH`. Sending also requires
 `--expected-account-id ID`. The generation handoff has four fields:
 `headers`, `sentinel_p`, `prepare_template` and `generation_template`. The
 controller checks the selected account against the authenticated read session
+and accepts a source path only under the current user's standard Chrome store
 before dispatch. Pass observed session and handoff data through a trusted
 anonymous stdin pipe. Keep credentials and protection values out of command
 arguments, files, logs, MCP calls and shell history. The controller does not

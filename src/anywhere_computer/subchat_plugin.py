@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 from .state import state_directory
-from .subchat_chrome_profile import chrome_profile_by_id
+from .subchat_chrome_profile import chrome_profile_by_id, selected_chrome_source
 from .subchat_cli import run
 
 
@@ -45,6 +45,8 @@ def selected_chrome_login(state: Path) -> tuple[Path | None, str | None]:
     record = _selection_record(state)
     configured = os.environ.get("ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE")
     profile_id = record.get("chrome_profile_id")
+    if configured is not None and profile_id is not None:
+        raise ValueError("Environment profile path cannot override a selected Chrome ID")
     source_value = configured if configured is not None else record.get("chrome_source_profile")
     source = None
     if configured is None and profile_id is not None:
@@ -57,7 +59,11 @@ def selected_chrome_login(state: Path) -> tuple[Path | None, str | None]:
         source = Path(source_value).expanduser()
         if not source.is_absolute():
             raise ValueError("Subchat Chrome source profile must be an absolute path")
-        source = source.resolve()
+        if sys.platform == "darwin":
+            source = selected_chrome_source(
+                source, stage_root=state.parent / "staged-chrome-profiles")
+        else:
+            source = source.resolve()
     if source is not None and (source == state or source in state.parents
                                or state in source.parents):
         raise ValueError("Subchat Chrome source profile and state must be separate")

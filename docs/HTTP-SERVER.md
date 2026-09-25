@@ -40,7 +40,8 @@ anywhere http-serve
 
 ログイン済み Chrome のプロファイルと利用する通常 Chat のアカウント ID を選択済みの
 所有者は、既存の HTTP サーバーへ Subchat ツールを明示的に追加できます。
-`--subchat-profile` は `Default` または `Profile N` ディレクトリ、
+`--subchat-profile-id` は現在の macOS ユーザーの標準 Chrome 保存先にある
+`Default` または `Profile N` の名前で、任意のパスは受け付けません。
 `--subchat-ledger` は操作記録を保持する専用ディレクトリの絶対パスです。
 次は値を置き換えるための例です。
 
@@ -49,10 +50,15 @@ anywhere http-add-tools --scope subchat_capabilities --scope subchat_catalog \
   --scope subchat_list \
   --scope subchat_send --scope subchat_recover --scope subchat_status \
   --scope subchat_wait --scope subchat_message \
-  --subchat-profile /absolute/path/to/Chrome/Default \
+  --subchat-profile-id Default \
   --subchat-ledger /absolute/path/to/subchat-ledger \
   --subchat-account-id SELECTED_ACCOUNT_ID --subchat-send-consent
 ```
+
+追加時には対話端末で所有者パスワードを確認します。事前に
+`anywhere-subchat-setup discover` でプロファイルと Chat アカウント ID を調べ、
+一致する ID を指定してください。既存の HTTP サービスと監視プロセスを停止してから
+追加します。サービスの起動時にも選択アカウントを再検証します。
 
 追加後に HTTP サーバーを再起動し、接続元で新しい OAuth 認可を受けてください。
 既存 grant の Subchat 権限は自動拡張されません。各ツールには個別の scope が必要です。

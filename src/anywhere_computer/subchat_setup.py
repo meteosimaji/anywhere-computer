@@ -40,6 +40,13 @@ def _source_profile(value: Path, state: Path) -> Path:
     if (source.name != "Default" and not (
             source.name.startswith("Profile ") and source.name[8:].isdigit())):
         raise SetupInputError("Select Chrome Default or Profile N")
+    try:
+        selected = chrome_profile_by_id(source.name)
+    except ValueError:
+        raise SetupInputError(
+            "Selected Chrome profile is outside the standard Chrome store") from None
+    if source != selected:
+        raise SetupInputError("Selected Chrome profile is outside the standard Chrome store")
     if not source.is_dir() or source == state or source in state.parents or state in source.parents:
         raise SetupInputError("Selected Chrome profile is unavailable or overlaps the ledger")
     return source

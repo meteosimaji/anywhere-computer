@@ -1,15 +1,41 @@
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from test_client_tokens import MemoryVault
 from test_http_service import RESOURCE, authenticate, initialize, setup
 
+from anywhere_computer import cli, subchat_chrome_profile
 from anywhere_computer.authorization import AuthorizationStore, pkce_s256
 from anywhere_computer.http_service import http_service, load_http_config
 from anywhere_computer.http_tool_upgrade import add_http_tools
 from anywhere_computer.owner_credentials import OwnerCredentials
 from anywhere_computer.subchat_gateway import SubchatGatewayConfig
+
+
+def test_http_subchat_profile_id_requires_owner_verification(tmp_path, monkeypatch):
+    root = tmp_path / "Chrome"
+    selected = root / "Default"
+    selected.mkdir(parents=True)
+    monkeypatch.setattr(subchat_chrome_profile, "chrome_user_data_root", lambda: root)
+    monkeypatch.setattr(cli, "load_http_config", lambda _directory: SimpleNamespace(
+        resource=RESOURCE, owner="owner"))
+
+    class FakeCredentials:
+        def __init__(self, directory, *, resource, owner):
+            assert directory == tmp_path and resource == RESOURCE and owner == "owner"
+
+        def verify(self, password):
+            return password == "correct password"
+
+    monkeypatch.setattr(cli, "OwnerCredentials", FakeCredentials)
+    with pytest.raises(ValueError, match="Select Chrome Default or Profile N"):
+        cli._authenticated_http_subchat_profile(tmp_path, str(selected), "correct password")
+    with pytest.raises(ValueError, match="Owner authentication failed"):
+        cli._authenticated_http_subchat_profile(tmp_path, "Default", "wrong password")
+    assert cli._authenticated_http_subchat_profile(
+        tmp_path, "Default", "correct password") == selected
 
 
 @pytest.mark.parametrize("added_tools", [
