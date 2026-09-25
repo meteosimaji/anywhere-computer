@@ -712,6 +712,25 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
                      provider_account_id="account")
     store.submitted(legacy_id, "legacy-conversation", "legacy-message",
                     owner="old-grant")
+    bound_root_id = "5" * 32
+    store.prepare(bound_root_id, "root", "model", "effort", owner="old-grant")
+    store.begin_send(bound_root_id, owner="old-grant", user_message_id="root-message",
+                     provider_account_id="account")
+    store.submitted(bound_root_id, "chain-conversation", "root-message",
+                    owner="old-grant")
+    store.complete(bound_root_id, "root-answer", "root answer", owner="old-grant")
+    unbound_child_id = "3" * 32
+    store.prepare(unbound_child_id, "child", "model", "effort", owner="old-grant",
+                  conversation_id="chain-conversation", after_operation_id=bound_root_id)
+    store.begin_send(unbound_child_id, owner="old-grant",
+                     conversation_id="chain-conversation")
+    store.submitted(unbound_child_id, "chain-conversation", "child-message",
+                    owner="old-grant")
+    store.complete(unbound_child_id, "child-answer", "child answer", owner="old-grant")
+    grandchild_id = "4" * 32
+    store.prepare(grandchild_id, "grandchild", "model", "effort", owner="old-grant",
+                  conversation_id="chain-conversation",
+                  after_operation_id=unbound_child_id)
     wrong_account_id = "f" * 32
     store.prepare(wrong_account_id, "other", "model", "effort", owner="old-grant")
     store.begin_send(wrong_account_id, owner="old-grant", user_message_id="other-message",
@@ -825,6 +844,14 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
             operation_id="8" * 32, tool="subchat_recover",
             arguments={"operation_id": queued_id}))
         assert queued_recovery.data["operation_id"] == queued_id
+        grandchild_status = await backend.session("new-grant").execute(Request(
+            operation_id="8" * 32, tool="subchat_status",
+            arguments={"operation_id": grandchild_id}))
+        assert grandchild_status.data["state"] == "queued"
+        grandchild_recovery = await backend.session("new-grant").execute(Request(
+            operation_id="c" * 32, tool="subchat_recover",
+            arguments={"operation_id": grandchild_id}))
+        assert grandchild_recovery.data["operation_id"] == grandchild_id
         unbound_from_new = await backend.session("new-grant").execute(Request(
             operation_id="b" * 32, tool="subchat_status",
             arguments={"operation_id": unbound_id}))

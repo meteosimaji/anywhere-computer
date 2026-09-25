@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a29 / Plugin 0.2.0-alpha.29 — unpublished candidate (2026-09-25)
+
+- Resolve an unbound queued follow-up through its same-owner predecessor chain
+  after OAuth re-consent. Bound the walk and require a matching saved account
+  before exposing any legacy operation to the new grant.
+
 ## 0.2.0a28 / Plugin 0.2.0-alpha.28 — unpublished candidate (2026-09-25)
 
 - Keep an account-matched queued follow-up recoverable after OAuth re-consent

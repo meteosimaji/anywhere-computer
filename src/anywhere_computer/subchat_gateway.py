@@ -339,15 +339,17 @@ class LazySubchatGateway:
                     return stable_owner
                 store = SubchatSubmissions(connection, initialize=False)
                 saved = store.get(target, owner=legacy_owner)
-                if (legacy_owner != legacy_grant_id
-                        and saved.provider_account_id is None
-                        and saved.after_operation_id is not None):
-                    # A child can remain unbound after it is cancelled,
-                    # interrupted, or sent by a backend without an account
-                    # receipt. Queue creation already required a confirmed
-                    # predecessor; its exact same-owner binding remains the
-                    # account proof even if its state later changes.
-                    saved = store.get(saved.after_operation_id, owner=legacy_owner)
+                if legacy_owner != legacy_grant_id:
+                    # A queued or submitted child may have no account receipt.
+                    # Follow only its exact same-owner ancestry to an account
+                    # binding; refuse unbound roots and excessive chains.
+                    for _ in range(256):
+                        if (saved.provider_account_id is not None
+                                or saved.after_operation_id is None):
+                            break
+                        saved = store.get(saved.after_operation_id, owner=legacy_owner)
+                    else:
+                        return stable_owner
         except (sqlite3.Error, SubchatOperationNotFound):
             return stable_owner
         if (saved.provider_account_id != self.config.account_id
