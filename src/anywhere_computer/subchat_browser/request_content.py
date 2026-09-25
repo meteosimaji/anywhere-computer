@@ -45,6 +45,8 @@ def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, J
         raise ValueError('Generation input or conversation changed')
     if submission.http_selection is not None:
         selected = submission.http_selection
+        # Preparation already binds the displayed model_title to this exact
+        # selection. It need not equal the version label (notably "latest").
         # The current GPT-5.6 Sol Instant composer emits the version model ID
         # for both its version and Latest picker entries, although the
         # authenticated catalog preset names the Instant slug.
@@ -52,8 +54,6 @@ def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, J
             selected.version_id in {'5.6', 'latest'} and selected.preset_id == 0
             and selected.model_slug == 'gpt-5-6-instant'
             and selected.thinking_effort is None
-            and submission.model == ('最新' if selected.version_id == 'latest'
-                                     else 'GPT-5.6 Sol')
             and submission.effort == 'Instant'
             and body.get('model') == 'gpt-5-6'
         )
@@ -63,7 +63,7 @@ def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, J
             selected.version_id == 'latest' and selected.preset_id == 3
             and selected.model_slug == 'gpt-6-pro'
             and selected.thinking_effort is None
-            and submission.model == '最新' and submission.effort == 'Pro'
+            and submission.effort == 'Pro'
             and body.get('model') == 'gpt-6-pro'
             and body.get('thinking_effort') == 'standard'
         )
