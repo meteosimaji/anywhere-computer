@@ -64,6 +64,64 @@ async def test_slow_send_returns_pending_and_same_id_recovers_final(tmp_path, mo
         ledger.close()
 
 
+async def test_wait_observes_a_live_preparation_instead_of_returning_immediately(
+    tmp_path, monkeypatch,
+):
+    import asyncio
+
+    from anywhere_computer import subchat_mcp
+    from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt
+
+    monkeypatch.setattr(subchat_mcp, 'SEND_ACK_TIMEOUT', .01)
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+
+    class SlowPreparation(BrowserFixture):
+        async def prepare(self, submission):
+            entered.set()
+            await finish.wait()
+            return ()
+
+        async def send(self, submission):
+            self.sends += 1
+            self.receipt = SubchatReceipt(conversation_id='conversation',
+                                          user_message_id='user', prompt=submission.prompt)
+            return self.receipt
+
+        async def read_answer(self, submission):
+            return SubchatAnswer(conversation_id='conversation', user_message_id='user',
+                                 prompt=submission.prompt, answer_message_id='answer', text='42')
+
+    ledger = Ledger(tmp_path)
+    backend = SlowPreparation()
+    service = Subchats(SubchatSubmissions(ledger.connection), backend)
+    server = session(service)
+    operation = '9' * 32
+    try:
+        pending = await server.execute(Request(operation_id=operation, tool='subchat_send',
+            arguments={'prompt': 'work', 'model': 'model', 'effort': 'effort'}))
+        await entered.wait()
+        assert pending.state == 'running' and pending.data['state'] == 'prepared'
+        timed = await server.execute(Request(
+            operation_id='7' * 32, tool='subchat_wait',
+            arguments={'operation_id': operation, 'wait_ms': 100}))
+        assert timed.data['state'] == 'prepared'
+        assert timed.data['suggested_poll_interval_ms'] == 10_000
+        waiting = asyncio.create_task(server.execute(Request(
+            operation_id='8' * 32, tool='subchat_wait',
+            arguments={'operation_id': operation, 'wait_ms': 1000})))
+        await asyncio.sleep(.05)
+        assert not waiting.done()
+        finish.set()
+        result = await asyncio.wait_for(waiting, 2)
+        assert result.data['state'] == 'completed' and result.data['answer'] == '42'
+        assert backend.sends == 1
+    finally:
+        finish.set()
+        await server.close()
+        ledger.close()
+
+
 async def test_cancel_and_close_stop_owned_unsent_or_uncertain_tasks(tmp_path, monkeypatch):
     import asyncio
 
