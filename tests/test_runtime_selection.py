@@ -169,3 +169,21 @@ def test_owner_pipe_identity_failure_never_attempts_startup(tmp_path, monkeypatc
     monkeypatch.setattr(connection.subprocess, 'Popen', forbidden)
     with pytest.raises(OwnerPipeIdentityError):
         ensure_agent(tmp_path, replace_idle=True)
+
+
+def test_exited_agent_reports_startup_failure_without_waiting_for_deadline(
+        tmp_path, monkeypatch):
+    from anywhere_computer import connection
+
+    class ExitedChild:
+        def poll(self):
+            return 1
+
+    async def unavailable(*args, **kwargs):
+        raise ConnectionRefusedError('fixture endpoint unavailable')
+
+    monkeypatch.setattr(connection, 'exchange', unavailable)
+    monkeypatch.setattr(connection, 'local_credential', lambda *a, **kw: 'fixture')
+    monkeypatch.setattr(connection.subprocess, 'Popen', lambda *a, **kw: ExitedChild())
+    with pytest.raises(RuntimeError, match='exited before becoming ready'):
+        ensure_agent(tmp_path)
