@@ -503,6 +503,8 @@ async def test_mcp_session_owner_isolates_saved_operations_and_downloads(tmp_pat
             foreign = await call(alice, tool, bob_id)
             assert foreign.state == 'failed'
             assert foreign.data['error_code'] == 'unknown_operation'
+            assert foreign.data['dispatched'] is None
+            assert foreign.data['automatic_retry'] is False
         listing = await alice.execute(Request(operation_id='d' * 32,
                                               tool='subchat_list', arguments={}))
         assert [item['operation_id'] for item in listing.data['submissions']] == [alice_id]

@@ -681,6 +681,8 @@ async def test_local_status_and_capabilities_match_session_without_opening_chrom
             operation_id="b" * 32, tool="subchat_status",
             arguments={"operation_id": operation_id}), frozenset({"subchat_status"}))
         assert private.state == "failed" and private.data["error_code"] == "unknown_operation"
+        assert private.data["dispatched"] is None
+        assert private.data["automatic_retry"] is False
         mismatch = await lazy.execute("grant-a", Request(
             operation_id="d" * 32, tool="subchat_status",
             arguments={"operation_id": foreign_id}), frozenset({"subchat_status"}))
