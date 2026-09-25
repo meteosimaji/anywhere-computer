@@ -26,6 +26,8 @@ SessionFactory = Callable[[str], MCPSession]
 HTTPResult = tuple[int, dict[str, JsonValue] | bytes | None, dict[str, str]]
 HTTPRoute = Callable[[str, dict[str, str], bytes, str], Awaitable[HTTPResult]]
 HEADER_LIMIT = 16384
+SESSION_EXPIRED_HEADER = "x-anywhere-mcp-session-expired"
+AUTH_REJECTED_HEADER = "x-anywhere-mcp-auth-rejected"
 
 
 @dataclass
@@ -36,8 +38,9 @@ class HTTPSession:
 
 
 class HTTPFailure(Exception):
-    def __init__(self, status: int) -> None:
+    def __init__(self, status: int, headers: dict[str, str] | None = None) -> None:
         self.status = status
+        self.headers = headers or {}
 
 
 class HTTPMCP:
@@ -148,11 +151,11 @@ class HTTPMCP:
         authorization = headers.get("authorization", "")
         scheme, _, token = authorization.partition(" ")
         if scheme.lower() != "bearer" or not token or " " in token:
-            raise HTTPFailure(401)
+            raise HTTPFailure(401, {AUTH_REJECTED_HEADER: "true"})
         # Called after reading the entire body, including for existing sessions and DELETE.
         owner = await self.authenticate(token)
         if not owner:
-            raise HTTPFailure(401)
+            raise HTTPFailure(401, {AUTH_REJECTED_HEADER: "true"})
         marker = self._bearer.set((asyncio.current_task(), token))
         try:
             return await self._dispatch_authenticated(method, headers, body, owner)
@@ -178,7 +181,9 @@ class HTTPMCP:
         session_id = headers.get("mcp-session-id")
         session = self.sessions.get(session_id) if session_id else None
         if session_id and (session is None or session.owner != owner):
-            raise HTTPFailure(404)
+            # This authenticated rejection occurs before protocol.handle. It is
+            # the only 404 for which a client may safely retry a tool call.
+            raise HTTPFailure(404, {SESSION_EXPIRED_HEADER: "true"})
         if headers.get("mcp-protocol-version", PROTOCOL_VERSION) != PROTOCOL_VERSION:
             raise HTTPFailure(400)
         if method == "GET":
@@ -256,7 +261,7 @@ class HTTPMCP:
                     else:
                         status, response, extra = await self._dispatch(method, headers, body)
             except HTTPFailure as error:
-                status, response, extra = error.status, None, {}
+                status, response, extra = error.status, None, dict(error.headers)
                 if status == 401:
                     extra["WWW-Authenticate"] = self.auth_challenge
             except (ValueError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):

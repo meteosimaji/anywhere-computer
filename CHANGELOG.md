@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a41 / Plugin 0.2.0-alpha.41 — unpublished candidate (2026-09-25)
+
+- Retry an HTTP MCP tool call after 401 or 404 only when the authenticated
+  server marks a pre-dispatch authentication or session rejection. Treat an
+  unmarked response as an unknown outcome and retain the operation ID for
+  recovery instead of replaying a possible write.
+
 ## 0.2.0a40 / Plugin 0.2.0-alpha.40 — unpublished candidate (2026-09-25)
 
 - Expose an owner- and account-scoped, read-only Subchat submission list over

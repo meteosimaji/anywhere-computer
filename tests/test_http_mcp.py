@@ -10,7 +10,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
 from anywhere_computer.engine import Engine
-from anywhere_computer.http_mcp import HTTPMCP
+from anywhere_computer.http_mcp import AUTH_REJECTED_HEADER, HTTPMCP, SESSION_EXPIRED_HEADER
 from anywhere_computer.mcp_server import MCPSession
 
 HEADERS = {
@@ -189,6 +189,12 @@ async def test_http_identity_origin_expiry_and_revocation(http_agent):
         assert (
             unauthorized.status_code == 401 and unauthorized.headers["www-authenticate"] == "Bearer"
         )
+        assert unauthorized.headers[AUTH_REJECTED_HEADER] == "true"
+        assert SESSION_EXPIRED_HEADER not in unauthorized.headers
+        missing_route = await http.post("/missing", json=INITIALIZE)
+        assert missing_route.status_code == 404
+        assert AUTH_REJECTED_HEADER not in missing_route.headers
+        assert SESSION_EXPIRED_HEADER not in missing_route.headers
         response = await http.post("/mcp", json=INITIALIZE)
         session = response.headers["mcp-session-id"]
         http.headers["MCP-Session-Id"] = session
@@ -199,11 +205,16 @@ async def test_http_identity_origin_expiry_and_revocation(http_agent):
         ping = {"jsonrpc": "2.0", "id": 2, "method": "ping"}
         stolen = await http.post("/mcp", json=ping, headers={"Authorization": "Bearer other-token"})
         assert stolen.status_code == 404
+        assert stolen.headers[SESSION_EXPIRED_HEADER] == "true"
         identities.pop("test-owner-token")
-        assert (await http.post("/mcp", json=ping)).status_code == 401
+        revoked = await http.post("/mcp", json=ping)
+        assert revoked.status_code == 401
+        assert revoked.headers[AUTH_REJECTED_HEADER] == "true"
         identities["test-owner-token"] = "owner"
         adapter.sessions[session].touched -= 1801
-        assert (await http.post("/mcp", json=ping)).status_code == 404
+        expired = await http.post("/mcp", json=ping)
+        assert expired.status_code == 404
+        assert expired.headers[SESSION_EXPIRED_HEADER] == "true"
         assert not adapter.sessions
 
 

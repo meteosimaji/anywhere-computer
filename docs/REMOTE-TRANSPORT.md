@@ -173,14 +173,17 @@ Credential refresh also uses the existing cross-process lock. A late HTTP 401
 for an access token that another process has already replaced uses the saved new
 pair instead of refreshing it again.
 
-Automatic recovery is limited to explicit pre-dispatch rejections by this agent:
-HTTP 401 can renew the exact rejected token once, and HTTP 404 can initialize a
-new session once. A session removed between the initialization response and
-its completion notification also gets one fresh handshake, before any tool is
-sent. The rejected request can then be sent with the same operation ID. This is an application contract with this server, not a blanket guarantee
-that retrying a write against any HTTP service is safe. Timeouts, HTTP 408/500,
-connection loss, malformed JSON/SSE, and mismatched request/operation IDs never
-retry the tool call. They return `unknown` with the caller's known operation ID.
+Automatic recovery of a tool call is limited to HTTP 401/404 responses marked
+by this agent as pre-dispatch authentication or session rejection. A marked 401
+can renew the exact rejected token once; a marked 404 can initialize a new
+session once. A session removed between the initialization response and its
+completion notification also gets one fresh handshake, before any tool is
+sent. The rejected request can then be sent with the same operation ID. An
+unmarked 401/404 from a proxy or older server does not prove the write was
+rejected. It returns `unknown` for a tool call, as do timeouts, HTTP 408/500,
+connection loss, malformed JSON/SSE, and mismatched request/operation IDs.
+These outcomes never retry the tool call. The caller can reconnect and query
+`operations_get` with the known operation ID, without repeating the write.
 The caller can reconnect and query `operations_get`, without repeating the write.
 
 Tests exercise explicit session expiry, access expiry, revocation, observer
