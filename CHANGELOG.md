@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a56 / Plugin 0.2.0-alpha.56 — unpublished candidate (2026-09-26)
+
+- Close the browser and Playwright driver when isolated session creation is
+  cancelled before registration, preventing orphan processes after a disconnect.
+- Disable Python bytecode writes for native manager status and enrollment
+  children so those readers do not alter a verified portable runtime.
+
 ## 0.2.0a49 / Plugin 0.2.0-alpha.49 — unpublished candidate (2026-09-25)
 
 - Keep Subchat sessions open through active browser preparation and uncertain

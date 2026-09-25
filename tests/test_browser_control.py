@@ -107,6 +107,215 @@ async def test_dead_browser_session_releases_capacity_without_touching_live_owne
         await control.close()
 
 
+@pytest.mark.parametrize("cancel_at", ["new_context", "new_page"])
+async def test_cancelled_browser_open_closes_unregistered_resources(monkeypatch, cancel_at):
+    pytest.importorskip("playwright.async_api")
+    reached = asyncio.Event()
+    calls = []
+
+    class Context:
+        async def new_page(self):
+            if cancel_at == "new_page":
+                reached.set()
+                await asyncio.Future()
+            raise AssertionError("Unexpected page creation")
+
+    class Browser:
+        async def new_context(self, **_kwargs):
+            if cancel_at == "new_context":
+                reached.set()
+                await asyncio.Future()
+            return Context()
+
+        async def close(self):
+            calls.append("browser.close")
+
+    class Chromium:
+        async def launch(self, **_kwargs):
+            return Browser()
+
+    class Driver:
+        chromium = Chromium()
+
+        async def start(self):
+            return self
+
+        async def stop(self):
+            calls.append("driver.stop")
+
+    driver = Driver()
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: driver)
+    control = BrowserControl()
+    opening = asyncio.create_task(control.open(owner="owner-a"))
+    await asyncio.wait_for(reached.wait(), 5)
+    opening.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await opening
+    assert calls == ["browser.close", "driver.stop"]
+    assert control.entries == {}
+    await control.close()
+    assert calls == ["browser.close", "driver.stop"]
+
+
+async def test_cancelled_playwright_start_stops_connection(monkeypatch):
+    pytest.importorskip("playwright.async_api")
+    reached = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    class Driver:
+        async def stop(self):
+            calls.append("driver.stop")
+
+    class Manager:
+        async def start(self):
+            reached.set()
+            await release.wait()
+            return Driver()
+
+    manager = Manager()
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: manager)
+    control = BrowserControl()
+    opening = asyncio.create_task(control.open(owner="owner-a"))
+    await asyncio.wait_for(reached.wait(), 5)
+    opening.cancel()
+    release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(opening, 5)
+    assert calls == ["driver.stop"]
+    assert control.entries == {}
+
+
+async def test_failed_playwright_start_preserves_original_error_and_unlocks(monkeypatch):
+    pytest.importorskip("playwright.async_api")
+
+    class Manager:
+        async def start(self):
+            raise FileNotFoundError("Playwright driver missing")
+
+        async def __aexit__(self, *_args):
+            raise AttributeError("_output")
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", Manager)
+    control = BrowserControl()
+    with pytest.raises(FileNotFoundError, match="Playwright driver missing"):
+        await control.open(owner="owner-a")
+    assert not control._lock.locked()
+    assert control.entries == {}
+
+
+async def test_failed_playwright_start_closes_started_transport(monkeypatch):
+    pytest.importorskip("playwright.async_api")
+    calls = []
+
+    class Transport:
+        _output = object()
+
+    class Connection:
+        _transport = Transport()
+
+    class Manager:
+        _connection = Connection()
+
+        async def start(self):
+            raise RuntimeError("Protocol initialization failed")
+
+        async def __aexit__(self, *_args):
+            calls.append("manager.exit")
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", Manager)
+    control = BrowserControl()
+    with pytest.raises(RuntimeError, match="Protocol initialization failed"):
+        await control.open(owner="owner-a")
+    assert calls == ["manager.exit"]
+    assert not control._lock.locked()
+
+
+async def test_cancelled_playwright_start_has_bounded_wait_and_late_cleanup(monkeypatch):
+    pytest.importorskip("playwright.async_api")
+    monkeypatch.setattr("anywhere_computer.browser_control._CLEANUP_WAIT_SECONDS", 0.01)
+    reached = asyncio.Event()
+    release = asyncio.Event()
+    stopped = asyncio.Event()
+
+    class Driver:
+        async def stop(self):
+            stopped.set()
+
+    class Manager:
+        async def start(self):
+            reached.set()
+            await release.wait()
+            return Driver()
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", Manager)
+    control = BrowserControl()
+    opening = asyncio.create_task(control.open(owner="owner-a"))
+    await asyncio.wait_for(reached.wait(), 5)
+    opening.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(opening, 1)
+    assert not control._lock.locked()
+    assert control.entries == {}
+    release.set()
+    await asyncio.wait_for(stopped.wait(), 5)
+
+
+@pytest.mark.parametrize("second_cancel_at", ["browser_close", "driver_stop"])
+async def test_repeated_cancellation_finishes_browser_open_cleanup(
+    monkeypatch, second_cancel_at,
+):
+    pytest.importorskip("playwright.async_api")
+    context_reached = asyncio.Event()
+    cleanup_reached = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    calls = []
+
+    class Browser:
+        async def new_context(self, **_kwargs):
+            context_reached.set()
+            await asyncio.Future()
+
+        async def close(self):
+            calls.append("browser.close.started")
+            if second_cancel_at == "browser_close":
+                cleanup_reached.set()
+                await release_cleanup.wait()
+            calls.append("browser.close.finished")
+
+    class Chromium:
+        async def launch(self, **_kwargs):
+            return Browser()
+
+    class Driver:
+        chromium = Chromium()
+
+        async def start(self):
+            return self
+
+        async def stop(self):
+            calls.append("driver.stop.started")
+            if second_cancel_at == "driver_stop":
+                cleanup_reached.set()
+                await release_cleanup.wait()
+            calls.append("driver.stop.finished")
+
+    driver = Driver()
+    monkeypatch.setattr("playwright.async_api.async_playwright", lambda: driver)
+    control = BrowserControl()
+    opening = asyncio.create_task(control.open(owner="owner-a"))
+    await asyncio.wait_for(context_reached.wait(), 5)
+    opening.cancel()
+    await asyncio.wait_for(cleanup_reached.wait(), 5)
+    opening.cancel()
+    release_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(opening, 5)
+    assert calls == ["browser.close.started", "browser.close.finished",
+                     "driver.stop.started", "driver.stop.finished"]
+    assert control.entries == {}
+
+
 async def test_status_reports_closed_page_as_ended(tmp_path):
     pytest.importorskip("playwright.async_api")
     engine = Engine(tmp_path / "state")

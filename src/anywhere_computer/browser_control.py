@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import uuid
+from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from pydantic import JsonValue
@@ -22,6 +24,38 @@ class BrowserNavigationUnknown(Exception):
 
 class BrowserActionUnknown(Exception):
     """A page action may have run, but its outcome could not be confirmed."""
+
+
+_CLEANUP_WAIT_SECONDS = 5.0
+_LOG = logging.getLogger(__name__)
+
+
+def _cleanup_done(task: asyncio.Task[None]) -> None:
+    try:
+        task.result()
+    except BaseException:
+        _LOG.warning("Browser startup cleanup did not complete successfully")
+
+
+async def _finish_cleanup(cleanup: Coroutine[Any, Any, None]) -> None:
+    """Await cleanup through repeated cancellation, but do not hold the lock forever."""
+    task = asyncio.create_task(cleanup)
+    deadline = asyncio.get_running_loop().time() + _CLEANUP_WAIT_SECONDS
+    while True:
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            task.add_done_callback(_cleanup_done)
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(task), remaining)
+            return
+        except asyncio.CancelledError:
+            if task.done():
+                await task
+                return
+        except TimeoutError:
+            task.add_done_callback(_cleanup_done)
+            return
 
 
 @dataclass
@@ -85,16 +119,51 @@ class BrowserControl:
                 from playwright.async_api import async_playwright
             except ImportError as error:
                 raise ValueError("Playwright browser dependency unavailable") from error
-            driver = await async_playwright().start()
+            manager = async_playwright()
+            starting = asyncio.create_task(manager.start())
+            try:
+                driver = await asyncio.shield(starting)
+            except BaseException:
+                # Playwright 1.58 starts its connection before start() returns.
+                # A failed transport may have no output pipe, so only stop a
+                # driver that actually returned from start().
+                async def stop_starting() -> None:
+                    try:
+                        started = await starting
+                    except BaseException:
+                        # In Playwright 1.58, stop_async requires the transport's
+                        # output pipe. A failed subprocess spawn has no pipe.
+                        connection = getattr(manager, "_connection", None)
+                        transport = getattr(connection, "_transport", None)
+                        if getattr(transport, "_output", None) is not None:
+                            await manager.__aexit__(None, None, None)
+                        return
+                    await started.stop()
+
+                try:
+                    await _finish_cleanup(stop_starting())
+                except BaseException:
+                    _LOG.warning("Browser startup cleanup did not complete successfully")
+                raise
             browser = None
             try:
                 browser = await driver.chromium.launch(headless=True, channel=self.channel)
                 context = await browser.new_context(accept_downloads=False)
                 page = await context.new_page()
-            except Exception:
-                if browser is not None:
-                    await browser.close()
-                await driver.stop()
+            except BaseException:
+                # Cancellation can arrive before the session is registered, so
+                # close both resources here; close() cannot discover them later.
+                async def close_started() -> None:
+                    try:
+                        if browser is not None:
+                            await browser.close()
+                    finally:
+                        await driver.stop()
+
+                try:
+                    await _finish_cleanup(close_started())
+                except BaseException:
+                    _LOG.warning("Browser startup cleanup did not complete successfully")
                 raise
             session_id = uuid.uuid4().hex
             tab_id = uuid.uuid4().hex
