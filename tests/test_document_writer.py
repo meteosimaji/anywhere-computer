@@ -202,7 +202,7 @@ async def test_targeted_docx_edit_reports_diff_and_preserves_other_parts(tmp_pat
                 "new_text": "日本語 43"}))
         assert conflict.state == "failed" and path.read_bytes() == original
         assert conflict.data["error_code"] == "document_changed"
-        assert conflict.data["dispatched"] is False
+        assert conflict.data["edit_applied"] is False
         assert conflict.data["next_action"] == "Read the document again before editing."
         paragraph_conflict = await engine.execute(Request(operation_id=uuid.uuid4().hex,
             tool="documents_edit_paragraph", arguments={"path": str(path), "paragraph": 2,
@@ -210,7 +210,7 @@ async def test_targeted_docx_edit_reports_diff_and_preserves_other_parts(tmp_pat
                 "new_text": "日本語 43"}))
         assert paragraph_conflict.state == "failed" and path.read_bytes() == original
         assert paragraph_conflict.data["error_code"] == "paragraph_changed"
-        assert paragraph_conflict.data["dispatched"] is False
+        assert paragraph_conflict.data["edit_applied"] is False
         edited = await engine.execute(Request(operation_id=uuid.uuid4().hex,
             tool="documents_edit_paragraph", arguments={"path": str(path), "paragraph": 2,
                 "expected_sha256": digest, "expected_text": "日本語 42",
@@ -278,8 +278,13 @@ async def test_targeted_docx_edit_reports_late_external_change(
         assert reply.state == "failed"
         assert reply.error == expected_error
         assert reply.data["error_code"] == "document_changed"
-        assert reply.data["dispatched"] is False
+        assert reply.data["edit_applied"] is False
+        assert "dispatched" not in reply.data
         assert path.read_bytes() == external
+        backup = engine.files.backups / sha256(original)
+        assert backup.exists() is (stage == "replace")
+        if stage == "replace":
+            assert backup.read_bytes() == original
     finally:
         await engine.close()
 

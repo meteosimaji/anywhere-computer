@@ -1635,8 +1635,8 @@ class Engine:
                     code, action = fixed
                     reply = Reply(
                         operation_id=request.operation_id, state="failed", error=str(error),
-                        data={"error_code": code, "dispatched": False,
-                              "execution_state": "not_dispatched", "next_action": action},
+                        data={"error_code": code, "edit_applied": False,
+                              "next_action": action},
                     )
                 else:
                     reply = Reply(

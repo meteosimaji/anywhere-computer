@@ -27,9 +27,11 @@ Before replacement it checks that all other extracted paragraphs are unchanged,
 and that every other ZIP package part has identical content. A concurrent file
 change fails the atomic hash check. This is a constrained targeted edit, not a
 rendered preview or general Word editing. Signed documents are rejected.
-If the file hash or expected paragraph text has changed, the operation fails before
-writing with `document_changed` or `paragraph_changed`. Read the document again and
-reassess the edit with its current hash and text; do not replay the old request.
+If the file hash or expected paragraph text has changed, the operation reports
+`document_changed` or `paragraph_changed` with `edit_applied: false`. A late conflict
+can leave an internal backup, but the proposed edit is not applied to the target.
+Read the document again and reassess the edit with its current hash and text;
+do not replay the old request.
 Documents whose main Word XML contains markup compatibility attributes or
 elements (including `mc:Ignorable`) are also rejected before writing, because
 the XML serializer cannot preserve namespace declarations used only by those
