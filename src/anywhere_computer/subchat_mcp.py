@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import re
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
@@ -35,6 +36,7 @@ from .subchat_state import (
     SubchatHTTPSelection,
     SubchatList,
     SubchatOperationNotFound,
+    SubchatRequestConflict,
     SubchatSelectionError,
     SubchatSubmission,
     SubchatWorkContext,
@@ -91,12 +93,15 @@ QUEUE_WATCH_INTERVAL = 5.0
 SEND_ACK_TIMEOUT = 2.0
 WAIT_POLL_INTERVAL_MS = 10_000
 READ_ONLY_TOOLS = frozenset({
-    'subchat_capabilities', 'subchat_catalog', 'subchat_list',
+    'subchat_capabilities', 'subchat_activity', 'subchat_catalog', 'subchat_list',
     'subchat_recover', 'subchat_status', 'subchat_wait', 'subchat_download_file',
     'subchat_download_image', 'subchat_refresh_auth',
 })
 
 _BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
+    'subchat_activity': (Contract, 'Report counts of live work owned by this MCP controller. '
+        'No browser or account request is made. Use to decide whether an idle plugin '
+        'session can close without interrupting a send or queue watch.'),
     'subchat_queue_watch': (QueueWatch, 'Explicitly arm or disarm automatic delivery of an '
         'existing queued input while this MCP controller remains alive. Requires an already '
         'open owned browser tab; never launches Chrome. Checks every five seconds, stops on '
@@ -314,10 +319,25 @@ def session(service: Subchats, *,
     recoveries: dict[str, asyncio.Task[SubchatSubmission]] = {}
     sends: dict[str, asyncio.Task[SubchatSubmission]] = {}
 
+    def save_preparation_failure(operation_id: str, error: BaseException) -> None:
+        if not isinstance(error, SubchatPreparationFailed):
+            return
+        cause = error.__cause__
+        reason = error.reason or (_PREPARATION_REASONS.get(str(cause))
+                  if isinstance(cause, ValueError) else None)
+        if reason is None or re.fullmatch(r'[a-z_]{1,64}', reason) is None:
+            reason = 'unknown'
+        service.store.record_preparation_failure(
+            operation_id, owner=owner, reason=reason)
+
     def raise_failed_preparation(operation_id: str, current: SubchatSubmission) -> None:
         """Expose a late send failure while its unsent ledger row is still prepared."""
-        if current.state != 'prepared':
+        if current.state not in {'prepared', 'queued'}:
             return
+        persisted = service.store.preparation_failure(operation_id, owner=owner)
+        if persisted is not None:
+            raise SubchatPreparationFailed(
+                'Saved preparation failure', reason=persisted)
         sending = sends.get(operation_id)
         if sending is not None and sending.done() and not sending.cancelled():
             error = sending.exception()
@@ -400,9 +420,13 @@ def session(service: Subchats, *,
                 if not done.cancelled():
                     # Retain late failures for the next observer, not just logs.
                     error = done.exception()
-                    if error is None and recoveries.get(operation_id) is done:
+                    if error is not None:
+                        save_preparation_failure(operation_id, error)
+                    if ((error is None or isinstance(error, SubchatPreparationFailed))
+                            and recoveries.get(operation_id) is done):
                         # A successful observation is durable even when still pending.
-                        # Retain only late failures for the next explicit observer.
+                        # Preparation failures are durable; retain other late
+                        # errors for the next explicit observer.
                         recoveries.pop(operation_id)
 
             task.add_done_callback(completed)
@@ -416,6 +440,9 @@ def session(service: Subchats, *,
                     return current
                 raise
             except Exception:
+                error = task.exception() if task.done() and not task.cancelled() else None
+                if error is not None:
+                    save_preparation_failure(operation_id, error)
                 if recoveries.get(operation_id) is task:
                     recoveries.pop(operation_id)
                 raise
@@ -591,6 +618,21 @@ def session(service: Subchats, *,
                         watch_queue(watch.operation_id))
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={'submission_operation_id': watch.operation_id, **data})
+            if request.tool == 'subchat_activity':
+                Contract.model_validate(request.arguments)
+                sends_active = sum(not task.done() for task in sends.values())
+                recoveries_active = sum(not task.done()
+                                        for task in recoveries.values())
+                watches_active = sum(not task.done() for task in
+                                     server.queue_watches.values())
+                return Reply(operation_id=request.operation_id, state='completed',
+                             data={'state': 'active' if (sends_active or recoveries_active
+                                                        or watches_active) else 'idle',
+                                   'active_count': sends_active + recoveries_active
+                                                   + watches_active,
+                                   'active_sends': sends_active,
+                                   'active_recoveries': recoveries_active,
+                                   'active_queue_watches': watches_active})
             if request.tool == 'subchat_capabilities' and capabilities is not None:
                 Contract.model_validate(request.arguments)
                 reported = capabilities()
@@ -735,6 +777,8 @@ def session(service: Subchats, *,
                     result = prepared
                 else:
                     if sending is None:
+                        service.store.clear_preparation_failure(
+                            request.operation_id, owner=owner)
                         async def dispatch() -> SubchatSubmission:
                             async with browser_lock:
                                 return await service.send(
@@ -747,11 +791,14 @@ def session(service: Subchats, *,
                         sends[request.operation_id] = sending
 
                         def completed(done: asyncio.Task[SubchatSubmission]) -> None:
-                            # Keep a late failure available to status/recover.
-                            # A successful result is already durable in the ledger.
-                            if (sends.get(request.operation_id) is done
-                                    and (done.cancelled() or done.exception() is None)):
-                                sends.pop(request.operation_id)
+                            # Save a late preparation failure before releasing
+                            # this controller's task reference.
+                            if sends.get(request.operation_id) is done:
+                                error = done.exception() if not done.cancelled() else None
+                                if error is not None:
+                                    save_preparation_failure(request.operation_id, error)
+                                if error is None or isinstance(error, SubchatPreparationFailed):
+                                    sends.pop(request.operation_id)
 
                         sending.add_done_callback(completed)
                     try:
@@ -769,6 +816,12 @@ def session(service: Subchats, *,
                     result = service.store.get(target.operation_id, owner=owner)
                     raise_failed_preparation(target.operation_id, result)
                 else:
+                    current = service.store.get(target.operation_id, owner=owner)
+                    if current.state == 'queued':
+                        # Recover is the explicit retry for a queued child
+                        # whose previous preparation failed before dispatch.
+                        service.store.clear_preparation_failure(
+                            target.operation_id, owner=owner)
                     result = await observe(target.operation_id)
             else:
                 raise ValueError('Unknown subchat tool')
@@ -837,6 +890,12 @@ def session(service: Subchats, *,
                                'Check the ID and ledger path, then use subchat_list.',
                          data={'error_code': 'unknown_operation', 'dispatched': False,
                                'automatic_retry': False})
+        except SubchatRequestConflict:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='This operation ID belongs to a different Subchat request. '
+                               'Inspect its saved status and use a new ID for different input.',
+                         data={'error_code': 'request_conflict', 'dispatched': False,
+                               'automatic_retry': False})
         except SubchatConcurrentSend as error:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Another Subchat send is active in this conversation. '
@@ -859,8 +918,10 @@ def session(service: Subchats, *,
                                'dispatched': False})
         except SubchatPreparationFailed as error:
             cause = error.__cause__
-            reason = (_PREPARATION_REASONS.get(str(cause))
+            reason = error.reason or (_PREPARATION_REASONS.get(str(cause))
                       if isinstance(cause, ValueError) else None)
+            if request.tool == 'subchat_send':
+                save_preparation_failure(request.operation_id, error)
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Adapter preparation failed before dispatch. Check for an existing '
                                'draft, active generation, missing HTTP selection or unavailable '

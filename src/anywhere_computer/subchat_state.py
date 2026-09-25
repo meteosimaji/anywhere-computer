@@ -5,6 +5,7 @@ may inspect the conversation, but may not dispatch the same submission again.
 """
 
 import json
+import re
 import sqlite3
 import time
 from typing import Literal
@@ -25,6 +26,12 @@ class SubchatOperationNotFound(ValueError):
     """No operation with this ID is visible in the selected owner and ledger."""
 
     code = 'unknown_operation'
+
+
+class SubchatRequestConflict(ValueError):
+    """An existing operation ID has different immutable request arguments."""
+
+    code = 'request_conflict'
 
 
 class SubchatConcurrentSend(ValueError):
@@ -152,6 +159,9 @@ class SubchatSubmissions:
             self._answer_types_available = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
                 "AND name='subchat_answer_types'").fetchone() is not None
+            self._preparation_failures_available = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='subchat_preparation_failures'").fetchone() is not None
             return
         with connection:
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_generation_responses ('
@@ -163,6 +173,10 @@ class SubchatSubmissions:
                                'user_message_id TEXT NOT NULL, account_id TEXT NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_submissions ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, body TEXT NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_preparation_failures ('
+                               'operation_id TEXT PRIMARY KEY, owner TEXT, '
+                               'reason TEXT NOT NULL)')
+            self._preparation_failures_available = True
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_answer_types ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, '
                                'answer_message_id TEXT NOT NULL, answer_type TEXT NOT NULL)')
@@ -324,6 +338,43 @@ class SubchatSubmissions:
             )
             return True
 
+    def record_preparation_failure(
+        self, operation_id: str, *, owner: str | None, reason: str,
+    ) -> None:
+        if not self._preparation_failures_available:
+            return
+        if re.fullmatch(r'[a-z_]{1,64}', reason) is None:
+            raise ValueError('Invalid Subchat preparation failure reason')
+        with self.connection:
+            saved = self.get(operation_id, owner=owner)
+            if saved.state not in {'prepared', 'queued'}:
+                return
+            self.connection.execute(
+                'INSERT OR REPLACE INTO subchat_preparation_failures VALUES (?,?,?)',
+                (operation_id, owner, reason),
+            )
+
+    def preparation_failure(
+        self, operation_id: str, *, owner: str | None,
+    ) -> str | None:
+        self.get(operation_id, owner=owner)
+        if not self._preparation_failures_available:
+            return None
+        row = self.connection.execute(
+            'SELECT reason FROM subchat_preparation_failures '
+            'WHERE operation_id=? AND owner IS ?', (operation_id, owner),
+        ).fetchone()
+        return row[0] if row is not None else None
+
+    def clear_preparation_failure(self, operation_id: str, *, owner: str | None) -> None:
+        self.get(operation_id, owner=owner)
+        if self._preparation_failures_available:
+            with self.connection:
+                self.connection.execute(
+                    'DELETE FROM subchat_preparation_failures '
+                    'WHERE operation_id=? AND owner IS ?', (operation_id, owner),
+                )
+
     def get(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
         row = self.connection.execute(
             'SELECT owner, body FROM subchat_submissions WHERE operation_id=?',
@@ -423,7 +474,8 @@ class SubchatSubmissions:
             existing.after_operation_id, existing.resources, existing.http_selection) != (
                 prompt, model, effort, conversation_id, work_context, after_operation_id,
                 resources, http_selection):
-            raise ValueError('Subchat submission ID was already used for different arguments')
+            raise SubchatRequestConflict(
+                'Subchat submission ID was already used for different arguments')
         return existing
 
     def _replace(self, old: SubchatSubmission, new: SubchatSubmission,

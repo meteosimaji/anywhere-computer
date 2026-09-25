@@ -512,7 +512,9 @@ class Engine:
             "services; require the user's authorization for the underlying action. Does not "
             "invoke a Codex model. Treat a lost response as unknown and never blindly retry. "
             "Returns text/data and bounded images, not another plugin's interactive UI "
-            "or native app controls. Optional session_id preserves runtime state between calls.",
+            "or native app controls. Subchat send, message, recover, wait and queue watch "
+            "require a session_id from codex_plugin_session_open so pending work survives "
+            "the call; keep it open through result recovery.",
             CodexPluginCall, codex_plugin_call, destructive=True, open_world=True,
         )
 

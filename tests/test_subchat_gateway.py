@@ -1025,7 +1025,7 @@ async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same
         assert store.get(operation_id, owner="grant").state == "prepared"
         assert backend.sends == 0
         await asyncio.sleep(.04)
-        assert gateway._gateway is not None
+        assert gateway._gateway is None
 
         for tool in ("subchat_status", "subchat_recover"):
             observed = await gateway.execute("grant", Request(
@@ -1041,7 +1041,7 @@ async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same
         assert private.data["error_code"] == "unknown_operation"
         conflict = await gateway.execute("grant", send.model_copy(update={
             "arguments": {**send.arguments, "prompt": "different"}}), scopes)
-        assert conflict.state == "failed" and conflict.data["dispatched"] is False
+        assert conflict.state == "failed" and conflict.data.get("dispatched") is False, conflict
         assert attempts == 1 and backend.sends == 0
         # Only this explicit same-ID send may attempt preparation again.
         monkeypatch.setattr(subchat_mcp, "SEND_ACK_TIMEOUT", .0001)
@@ -1058,7 +1058,7 @@ async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same
                     pass
             retried = await gateway.execute("grant", send, scopes)
         assert (retried.state == "unknown" or
-                (retried.state == "completed" and retried.data.get("state") == "sending"))
+                (retried.state == "completed" and retried.data.get("state") == "sending")), retried
         assert attempts == 2 and backend.sends == 1
         duplicate = await gateway.execute("grant", send, scopes)
         assert (duplicate.state == "unknown" or

@@ -1,3 +1,4 @@
+import pytest
 from test_subchat_lifecycle import BrowserFixture
 
 from anywhere_computer.models import Request
@@ -5,6 +6,63 @@ from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
 from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatSubmissions
+
+
+async def test_late_non_preparation_error_remains_observable(tmp_path, monkeypatch):
+    import asyncio
+
+    from anywhere_computer import subchat_mcp
+    from anywhere_computer.subchat import SubchatUnsupported
+
+    monkeypatch.setattr(subchat_mcp, 'SEND_ACK_TIMEOUT', .001)
+    release = asyncio.Event()
+
+    class UnsupportedBrowser(BrowserFixture):
+        async def prepare(self, submission):
+            await release.wait()
+            raise SubchatUnsupported('http_session_required')
+
+    ledger = Ledger(tmp_path)
+    server = session(Subchats(SubchatSubmissions(ledger.connection), UnsupportedBrowser()))
+    operation = '1' * 32
+    try:
+        pending = await server.execute(Request(operation_id=operation,
+            tool='subchat_send', arguments={'prompt': 'work', 'model': 'model',
+                                            'effort': 'effort'}))
+        assert pending.state == 'running'
+        release.set()
+        with pytest.raises(SubchatUnsupported):
+            await server.sends[operation]
+        await asyncio.sleep(0)
+        assert operation in server.sends
+        observed = await server.execute(Request(operation_id='2' * 32,
+            tool='subchat_status', arguments={'operation_id': operation}))
+        assert observed.data['error_code'] == 'http_session_required'
+    finally:
+        release.set()
+        await server.close()
+        ledger.close()
+
+
+async def test_untrusted_preparation_reason_is_sanitized(tmp_path):
+    from anywhere_computer.subchat import SubchatPreparationFailed
+
+    class InvalidReason(Subchats):
+        async def send(self, *args, **kwargs):
+            raise SubchatPreparationFailed('private', reason='private account@example.com')
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    server = session(InvalidReason(store, BrowserFixture()))
+    try:
+        observed = await server.execute(Request(operation_id='3' * 32,
+            tool='subchat_send', arguments={'prompt': 'work', 'model': 'model',
+                                            'effort': 'effort'}))
+        assert observed.state == 'failed'
+        assert store.preparation_failure('3' * 32, owner=None) == 'unknown'
+    finally:
+        await server.close()
+        ledger.close()
 
 
 async def test_slow_send_returns_pending_and_same_id_recovers_final(tmp_path, monkeypatch):
@@ -162,6 +220,9 @@ async def test_cancel_and_close_stop_owned_unsent_or_uncertain_tasks(tmp_path, m
             arguments={'prompt': 'dispatched', 'model': 'model', 'effort': 'effort'}))
         await entered_send.wait()
         assert pending.state == 'running' and store.get(uncertain, owner=None).state == 'sending'
+        activity = await server.execute(Request(operation_id='3' * 32,
+            tool='subchat_activity', arguments={}))
+        assert activity.data['active_sends'] == 1
         denied = await server.execute(Request(operation_id='1' * 32,
             tool='subchat_cancel', arguments={'operation_id': uncertain}))
         assert denied.state == 'failed'
@@ -197,7 +258,8 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
         await server.handle({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         catalog = await call('tools/list', {})
         names = {tool['name'] for tool in catalog['result']['tools']}
-        assert names == {'subchat_send', 'subchat_recover', 'subchat_status', 'subchat_wait',
+        assert names == {'subchat_activity', 'subchat_send', 'subchat_recover',
+                        'subchat_status', 'subchat_wait',
                         'subchat_message', 'subchat_cancel', 'subchat_delete',
                         'subchat_list', 'subchat_queue_watch'}
         listed = await call('tools/call', {'name': 'subchat_list', 'arguments': {}})
@@ -387,7 +449,8 @@ asyncio.run(main())
                     await client.initialize()
                     tools = await client.list_tools()
                     assert {tool.name for tool in tools.tools} == {
-                        'subchat_send', 'subchat_recover', 'subchat_status', 'subchat_wait',
+                        'subchat_activity', 'subchat_send', 'subchat_recover',
+                        'subchat_status', 'subchat_wait',
                         'subchat_message', 'subchat_cancel', 'subchat_delete',
                         'subchat_list', 'subchat_queue_watch'}
                     sent = await client.call_tool('subchat_send', arguments)
@@ -644,6 +707,11 @@ async def test_late_preparation_failure_is_reported_by_reads_and_explicit_retry(
             await server.sends[operation]
         except subchat_mcp.SubchatPreparationFailed:
             pass
+        activity = await server.execute(Request(operation_id='7' * 32,
+            tool='subchat_activity', arguments={}))
+        assert activity.data['active_sends'] == 0
+        await server.close()
+        server = session(Subchats(store, backend))
         for tool in ('subchat_status', 'subchat_recover', 'subchat_wait'):
             observed = await server.execute(Request(operation_id='e' * 32, tool=tool,
                 arguments={'operation_id': operation, **({'wait_ms': 100}

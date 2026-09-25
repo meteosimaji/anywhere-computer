@@ -27,6 +27,10 @@ MAX_CURSOR = 2048
 MAX_CATALOG = 30
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.:/-]{1,200}$")
 _DENIED_TOOL_PREFIXES = ("codex_plugin_", "devices_", "connection_setup_", "mcp__codex_app__")
+STATEFUL_SUBCHAT_TOOLS = frozenset({
+    "subchat_send", "subchat_message", "subchat_recover", "subchat_wait",
+    "subchat_queue_watch",
+})
 
 
 class PluginPreflightError(ValueError):
@@ -754,5 +758,11 @@ async def call_codex_plugin_tool(
 ) -> dict[str, JsonValue]:
     # Reject recursive routes before starting any installed runtime.
     _validate_call(server, tool, catalog_sha256)
+    if tool in STATEFUL_SUBCHAT_TOOLS:
+        raise PluginPreflightError(
+            "plugin_session_required",
+            "Open codex_plugin_session_open, then inspect and call this Subchat tool "
+            "with the returned session_id. Keep that session open through answer recovery.",
+        )
     async with PluginContext(cwd) as context:
         return await context.call(server, tool, arguments, catalog_sha256)

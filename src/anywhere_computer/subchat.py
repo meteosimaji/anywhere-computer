@@ -121,6 +121,10 @@ class SubchatOutcomeUnknown(RuntimeError):
 class SubchatPreparationFailed(ValueError):
     """Preparation failed before dispatch; provider details remain local."""
 
+    def __init__(self, message: str, *, reason: str | None = None) -> None:
+        super().__init__(message)
+        self.reason = reason
+
 
 class SubchatPreflightFailed(ValueError):
     """HTTP preparation ended before any generation POST was claimed."""
