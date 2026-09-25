@@ -3,7 +3,7 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0a60 / Plugin 0.2.0-alpha.60 — unpublished candidate (2026-09-26)
+## 0.2.0a61 / Plugin 0.2.0-alpha.61 — unpublished candidate (2026-09-26)
 
 - Keep an owned Browser tab's last explicit navigation outcome visible through
   later document or SPA navigation. Observe an uncertain navigation without

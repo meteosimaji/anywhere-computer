@@ -5,7 +5,6 @@ import json
 import os
 import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -87,7 +86,12 @@ def _run(command: list[str], *, timeout: int, env: dict[str, str],
         output, _ = process.communicate(timeout=timeout)
     except subprocess.TimeoutExpired as error:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
+            # On POSIX, a negative PID targets the dedicated process group.
+            # Windows never renders, but keep this module type-checkable there.
+            if sys.platform == "darwin":
+                os.kill(-process.pid, 9)
+            else:
+                process.kill()
         except ProcessLookupError:
             pass
         process.communicate()
