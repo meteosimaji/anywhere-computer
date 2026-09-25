@@ -203,6 +203,7 @@ async def test_idle_session_keeps_background_subchat_alive_until_work_ends(
             self.cwd = str(Path(cwd).resolve())
             self.alive = False
             self.active_count = 1
+            self.activity_error = False
             self.activity_probes = 0
 
         async def open(self):
@@ -213,6 +214,8 @@ async def test_idle_session_keeps_background_subchat_alive_until_work_ends(
 
         async def inspect(self, **kwargs):
             assert kwargs == {"server": "chat-subchat", "tool": "subchat_activity"}
+            if self.activity_error:
+                raise ValueError("activity unavailable")
             return {"servers": [{"server": "chat-subchat", "tools": [{
                 "name": "subchat_activity", "catalog_sha256": "1" * 64,
             }]}]}
@@ -243,6 +246,11 @@ async def test_idle_session_keeps_background_subchat_alive_until_work_ends(
         assert (await pool.status(session_id, owner="peer-a"))["state"] == "open"
         assert entry.context.alive and entry.context.activity_probes == 1
         now[0] = 62
+        entry.context.activity_error = True
+        await pool.expire_idle()
+        assert (await pool.status(session_id, owner="peer-a"))["state"] == "open"
+        now[0] = 93
+        entry.context.activity_error = False
         entry.context.active_count = 0
         await pool.expire_idle()
         assert (await pool.status(session_id, owner="peer-a"))["state"] == "expired"
