@@ -17,7 +17,6 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, f
 
 from .authorization import GrantIdentity
 from .models import Contract, OperationId, Reply, Request
-from .subchat import SubchatPreparationFailed
 from .subchat_mcp import (
     ReadOnlyHTTPCatalog,
     SubchatSession,
@@ -217,10 +216,6 @@ class SubchatGateway:
         """Keep owned sends and detached observations alive across HTTP idle gaps."""
         return (any(not entry[2].done() for entry in self.pending.values())
                 or any(core.recoveries for core in self.cores.values())
-                or any(task.done() and not task.cancelled()
-                       and isinstance(task.exception(), SubchatPreparationFailed)
-                       for core in self.cores.values()
-                       for task in getattr(core, 'sends', {}).values())
                 or any((live := getattr(core, 'live_transport', None)) is not None and live()
                        for core in self.cores.values())
                 or any(not task.done() for core in self.cores.values()

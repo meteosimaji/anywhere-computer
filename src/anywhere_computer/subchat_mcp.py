@@ -322,7 +322,7 @@ def session(service: Subchats, *,
         if not isinstance(error, SubchatPreparationFailed):
             return
         cause = error.__cause__
-        reason = (_PREPARATION_REASONS.get(str(cause))
+        reason = error.reason or (_PREPARATION_REASONS.get(str(cause))
                   if isinstance(cause, ValueError) else None)
         service.store.record_preparation_failure(
             operation_id, owner=owner, reason=reason or 'unknown')
@@ -419,9 +419,11 @@ def session(service: Subchats, *,
                     error = done.exception()
                     if error is not None:
                         save_preparation_failure(operation_id, error)
-                    if error is None and recoveries.get(operation_id) is done:
+                    if ((error is None or isinstance(error, SubchatPreparationFailed))
+                            and recoveries.get(operation_id) is done):
                         # A successful observation is durable even when still pending.
-                        # Retain only late failures for the next explicit observer.
+                        # Preparation failures are durable; retain other late
+                        # errors for the next explicit observer.
                         recoveries.pop(operation_id)
 
             task.add_done_callback(completed)

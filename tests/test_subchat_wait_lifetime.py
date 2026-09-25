@@ -87,6 +87,7 @@ async def test_queued_preparation_failure_survives_controller_restart(tmp_path):
         with pytest.raises(ValueError):
             await server.recoveries[child]
         await asyncio.sleep(0)
+        assert child not in server.recoveries
         await server.close()
         server = session(service)
         failed = await server.execute(Request(operation_id='8' * 32,
