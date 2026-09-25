@@ -363,7 +363,7 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
             "anywhere_computer", "serve", "--state-dir", str(directory),
             executable=selection.executable if selection is not None else None,
         )
-        subprocess.Popen(
+        child = subprocess.Popen(
             command,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -371,7 +371,10 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
             start_new_session=os.name != "nt",
             creationflags=(0x00000008 | 0x00000200) if os.name == "nt" else 0,
         )
-        deadline = time.monotonic() + 12
+        # Windows runners can spend more than twelve seconds starting a fresh
+        # interpreter under load. Bound the wait, but fail immediately if the
+        # selected child actually exits before publishing its endpoint.
+        deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
             try:
                 reply = asyncio.run(
@@ -385,5 +388,9 @@ def ensure_agent(directory: Path, *, replace_idle: bool = False) -> dict[str, Js
                     return reply.data
             except (OSError, ValueError, TimeoutError, OwnerPipeTimeout):
                 pass
+            if child.poll() is not None:
+                raise RuntimeError(
+                    "Agent exited before becoming ready. Run anywhere serve to see startup errors."
+                )
             time.sleep(0.1)
         raise RuntimeError("Agent did not become ready. Run anywhere serve to see startup errors.")

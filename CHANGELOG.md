@@ -3,6 +3,11 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a42 / Plugin 0.2.0-alpha.42 — unpublished candidate (2026-09-25)
+
+- Allow a bounded longer startup window for a freshly launched agent under
+  load, and report a child process that exits before readiness immediately.
+
 ## 0.2.0a41 / Plugin 0.2.0-alpha.41 — unpublished candidate (2026-09-25)
 
 - Retry an HTTP MCP tool call after 401 or 404 only when the authenticated
