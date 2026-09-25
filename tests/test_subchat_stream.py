@@ -42,10 +42,15 @@ async def test_stream_started_before_observer_expiry_keeps_late_response_candida
                     return response;
                 };
             }''')
-            await page.evaluate(STREAM + '\nobserveSubchatStream', 'saveCandidate')
-            await page.evaluate('''() => fetch('/unused', {
-                headers:{'chatgpt-account-id':'account'},
-                body:JSON.stringify({messages:[{id:'input'}]})})''')
+            # Register and start fetch in one browser task. A separate
+            # Playwright round trip can outlast the deliberately shortened
+            # 20 ms observer window on a loaded CI runner.
+            await page.evaluate(STREAM + '''\n() => {
+                observeSubchatStream('saveCandidate');
+                return fetch('/unused', {
+                    headers:{'chatgpt-account-id':'account'},
+                    body:JSON.stringify({messages:[{id:'input'}]})});
+            }''')
             await asyncio.wait_for(candidate.wait(), 3)
             assert observed == [('input', '11111111-2222-3333-4444-555555555555',
                                  'account')]
