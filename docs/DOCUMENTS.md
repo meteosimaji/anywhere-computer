@@ -57,8 +57,11 @@ length are bounded. Truncated text is marked. XML DTD/entity declarations are
 rejected and only UTF-8 OOXML parts are currently accepted. Named pipes are
 rejected before a read can wait indefinitely.
 
-`documents_preview` renders one DOCX, XLSX or PPTX page to a PNG using an installed local
-LibreOffice (`soffice`), `pdfinfo`, `pdftoppm`, and macOS `sandbox-exec`. Supply
+`documents_preview` renders one DOCX, XLSX or PPTX page to a PNG using LibreOffice
+(`soffice`), `pdfinfo`, `pdftoppm`, and macOS `sandbox-exec`. A portable macOS build
+can include the first three programs under `renderers/macos`; otherwise they must
+be installed locally. A partial bundled renderer is reported unavailable instead
+of mixing bundled programs with host programs. Supply
 the absolute `path`, the exact `expected_sha256` from `documents_read`, and a
 one-based `page` (default 1). Results include the same hash, total page count,
 `rendered: true`, `mime_type: image/png`, and base64 PNG data. The workspace UI
@@ -81,8 +84,9 @@ and 2 MiB PNG per page. Conversion and rasterization have time and file-size
 limits, timed-out child process groups are stopped, and at most two previews
 render concurrently per engine. The
 preview is a local LibreOffice interpretation, not a Microsoft Office fidelity
-guarantee. A packaged renderer remains future work. Spreadsheets can paginate
-according to saved print settings; slides render in presentation order.
+guarantee. Spreadsheets can paginate according to saved print settings; slides
+render in presentation order. The standard portable build does not currently
+include a renderer; see [the packaging requirements](PORTABLE.md).
 
 Limits: 16 MiB input, 64 MiB declared expanded ZIP size, 4096 ZIP entries,
 4 MiB per XML part, approximately 512 kB per result page, 32768 characters per

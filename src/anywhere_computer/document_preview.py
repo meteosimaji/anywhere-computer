@@ -5,7 +5,6 @@ import io
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,6 +17,7 @@ from pydantic import JsonValue
 from .documents import WORD, OfficePackage
 from .files import absolute_path, read_bytes, sha256
 from .models import PreviewDocument
+from .renderer_location import find_renderer
 
 MAX_PDF_BYTES = 16 * 1024 * 1024
 MAX_PNG_BYTES = 2 * 1024 * 1024
@@ -39,10 +39,10 @@ def _sandbox_policy(root: Path) -> str:
 
 
 def _renderer(name: str) -> str:
-    path = shutil.which(name)
+    path = find_renderer(name)
     if path is None:
         raise DocumentPreviewUnavailable(
-            f"Document preview unavailable: {name} is not installed")
+            f"Document preview unavailable: {name} is unavailable")
     return path
 
 

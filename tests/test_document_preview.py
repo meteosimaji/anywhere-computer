@@ -159,7 +159,7 @@ async def test_unavailable_renderer_has_safe_error_code_at_tool_boundary(tmp_pat
     import anywhere_computer.document_preview as preview
 
     path = docx(tmp_path / "plain.docx")
-    monkeypatch.setattr(preview.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(preview, "find_renderer", lambda _name: None)
     engine = Engine(tmp_path / "engine")
     try:
         reply = await engine.execute(Request(
@@ -210,7 +210,7 @@ def test_missing_renderer_is_explicit(tmp_path, monkeypatch):
     import anywhere_computer.document_preview as preview
 
     path = docx(tmp_path / "plain.docx")
-    monkeypatch.setattr(preview.shutil, "which", lambda name: None)
+    monkeypatch.setattr(preview, "find_renderer", lambda name: None)
     with pytest.raises(ValueError, match="preview unavailable: soffice"):
         preview_document(args(path))
 

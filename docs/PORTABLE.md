@@ -33,6 +33,31 @@ uv run --offline python scripts/build_portable.py \
 
 `--runtime` で信頼済みベースランタイムを明示できる。仮想環境と外部へ出る symlink は
 拒否する。BUILD マーカーは由来の証明ではないため、取得元の信頼性はビルド側で確認する。
+
+macOS の文書プレビューを手動インストール不要にするビルド経路は `--renderer-bundle`
+です。ビルド担当者が検証済みの実体ディレクトリを絶対パスで渡します。ディレクトリには
+`LibreOffice.app/Contents/MacOS/soffice`、`bin/pdfinfo`、`bin/pdftoppm` の
+実行可能ファイル、`LICENSES/LibreOffice.txt`、`LICENSES/Poppler.txt`、
+`SOURCES.json` が必要です。JSON には `libreoffice` と `poppler` それぞれの
+`version`、`binary_source`、`source_code` を記録します。例えば:
+
+```sh
+uv run --offline python scripts/build_portable.py \
+  --renderer-bundle /absolute/reviewed-renderer \
+  --output dist/anywhere-portable-renderer-macos.zip
+```
+
+ビルダーはこの一式を `renderers/macos` に同梱し、manifest にハッシュを記録します。
+実行時は同梱版を優先し、一部が欠けた場合はホスト上の実行ファイルと混在させません。
+通常の ZIP ビルドと Quality CI の公開候補には、現時点ではこのオプションを指定して
+いません。そのため、その配布物は従来どおりローカルの LibreOffice と PDF ツールを
+必要とします。正式な配布候補にする前に、対象 Mac/CPU で外部 Homebrew パスに
+依存しない動的ライブラリ構成、移設後の `documents_preview` 実行、ZIP の容量制限、
+コード署名と公証を確認します。LibreOffice と Poppler には本体 MIT とは異なる
+ライセンスと第三者依存があるため、同梱したバージョンの通知、ソース提供方法、
+再配布条件をリリース担当者が確認してください。ファイルの存在検査だけでは
+ライセンス適合性やバイナリの移設可能性は証明できません。
+
 既存の出力ファイルは上書きしない。配布 ZIP は dist に置き、リポジトリへ追加しない。
 Python と第三者依存のライセンスは runtime 内に保持し、本体の MIT と区別する。
 

@@ -180,3 +180,47 @@ def test_native_helper_requires_explicit_executable(tmp_path, monkeypatch, helpe
             tmp_path, runtime, tmp_path / "output.zip", **{kind: helper},
         )
     assert not (tmp_path / "output.zip").exists()
+
+
+def renderer_fixture(root):
+    for name in ("LibreOffice.app/Contents/MacOS/soffice",
+                 "bin/pdfinfo", "bin/pdftoppm"):
+        executable = root / name
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        executable.write_text("#!/bin/sh\n")
+        executable.chmod(0o755)
+    licenses = root / "LICENSES"
+    licenses.mkdir()
+    (licenses / "LibreOffice.txt").write_text("LibreOffice license fixture")
+    (licenses / "Poppler.txt").write_text("Poppler license fixture")
+    (root / "SOURCES.json").write_text(
+        '{"libreoffice":{"version":"1","binary_source":"https://example.test/lo",'
+        '"source_code":"https://example.test/lo-source"},'
+        '"poppler":{"version":"1","binary_source":"https://example.test/poppler",'
+        '"source_code":"https://example.test/poppler-source"}}')
+    return root
+
+
+def test_renderer_bundle_requires_executables_licenses_and_sources(tmp_path):
+    renderer = renderer_fixture(tmp_path / "renderer")
+    portable_builder.validate_renderer_bundle(renderer)
+    (renderer / "LICENSES/Poppler.txt").unlink()
+    with pytest.raises(ValueError, match="LICENSES/Poppler.txt"):
+        portable_builder.validate_renderer_bundle(renderer)
+
+
+def test_renderer_bundle_rejects_escaping_links_and_unsupported_host(tmp_path, monkeypatch):
+    renderer = renderer_fixture(tmp_path / "renderer")
+    (renderer / "escape").symlink_to(tmp_path)
+    with pytest.raises(ValueError, match="escapes"):
+        portable_builder.validate_renderer_bundle(renderer)
+    (renderer / "escape").unlink()
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    (runtime / "BUILD").write_text("fixture")
+    monkeypatch.setattr(portable_builder.sys, "platform", "win32")
+    with pytest.raises(ValueError, match="macOS only"):
+        portable_builder.build_portable(
+            tmp_path, runtime, tmp_path / "output.zip", renderer_bundle=renderer,
+        )
+    assert not (tmp_path / "output.zip").exists()
