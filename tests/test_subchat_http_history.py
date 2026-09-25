@@ -30,6 +30,102 @@ def sample():
     return submission, payload
 
 
+IMAGE_PART = {'content_type': 'image_asset_pointer',
+              'asset_pointer': 'sediment://file_' + 'a' * 32,
+              'mime_type': 'image/png', 'size_bytes': 128, 'width': 1, 'height': 1}
+
+
+@pytest.mark.parametrize(('parts', 'content_type', 'expected_text', 'expected_type'), [
+    (['Part one', ' and part two'], 'text', 'Part one and part two', 'text'),
+    (['Caption ', IMAGE_PART],
+     'multimodal_text', 'Caption ', 'multimodal'),
+    ([IMAGE_PART],
+     'multimodal_text', None, 'image'),
+])
+def test_finished_multipart_and_image_final(parts, content_type, expected_text, expected_type):
+    submission, payload = sample()
+    payload['messages'][1]['content'] = {'content_type': content_type, 'parts': parts}
+    answer = project_history(json.dumps(payload).encode(), submission)
+    assert answer is not None
+    assert (answer.answer_message_id, answer.text, answer.answer_type) == (
+        'answer', expected_text, expected_type)
+
+
+@pytest.mark.parametrize(('caption', 'expected_type'), [
+    ('Caption', 'multimodal'), (None, 'image'),
+])
+def test_multiple_bound_images_still_form_one_finished_answer(caption, expected_type):
+    submission, payload = sample()
+    parts = ([caption] if caption is not None else []) + [IMAGE_PART.copy(), IMAGE_PART.copy()]
+    payload['messages'][1]['content'] = {'content_type': 'multimodal_text', 'parts': parts}
+    observed = project_history(json.dumps(payload).encode(), submission)
+    assert observed is not None
+    assert (observed.answer_message_id, observed.text, observed.answer_type) == (
+        'answer', caption, expected_type)
+
+
+async def test_finished_image_tool_and_empty_final_complete_without_invented_text(tmp_path):
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    submission, payload = sample()
+    payload['messages'][1]['content']['parts'] = ['']
+    binding = payload['messages'][0]['metadata']
+    payload['messages'].insert(1, {
+        'id': 'tool-image', 'author': {'role': 'tool'},
+        'content': {'content_type': 'multimodal_text', 'parts': [IMAGE_PART.copy()]},
+        'metadata': {**binding, 'async_source': 'image-generation'},
+        'status': 'finished_successfully', 'channel': 'final',
+    })
+
+    class Reader:
+        async def read_answer(self, saved):
+            return project_observation(json.dumps(payload).encode(), saved)
+
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        store.prepare(submission.operation_id, submission.prompt, submission.model,
+                      submission.effort, owner=None)
+        store.begin_send(submission.operation_id, owner=None)
+        store.submitted(submission.operation_id, submission.conversation_id,
+                        submission.user_message_id, owner=None)
+        saved = await Subchats(store, Reader()).recover(submission.operation_id, owner=None)
+        assert saved.state == 'completed'
+        assert saved.answer_message_id == 'answer'
+        assert saved.answer is None and saved.answer_type == 'image'
+        assert store.get(submission.operation_id, owner=None) == saved
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('invalid', ['wrong_turn', 'unfinished_tool', 'invalid_pointer',
+                                    'unfinished_final'])
+def test_empty_final_requires_finished_bound_image(invalid):
+    submission, payload = sample()
+    payload['messages'][1]['content']['parts'] = ['']
+    binding = payload['messages'][0]['metadata']
+    tool = {
+        'id': 'tool-image', 'author': {'role': 'tool'},
+        'content': {'content_type': 'multimodal_text', 'parts': [IMAGE_PART.copy()]},
+        'metadata': {**binding, 'async_source': 'image-generation'},
+        'status': 'finished_successfully', 'channel': 'final',
+    }
+    payload['messages'].insert(1, tool)
+    if invalid == 'wrong_turn':
+        tool['metadata']['working_turn_id'] = 'other'
+    elif invalid == 'unfinished_tool':
+        tool['status'] = 'in_progress'
+    elif invalid == 'invalid_pointer':
+        tool['content']['parts'][0]['asset_pointer'] = 'sediment://unknown'
+    else:
+        payload['messages'][2]['end_turn'] = False
+    observed = project_observation(json.dumps(payload).encode(), submission)
+    assert observed.reason == ('final_not_complete' if invalid == 'unfinished_final'
+                               else 'final_text_unavailable')
+
+
 @pytest.mark.parametrize('case', ['complete', 'other_turn', 'missing_source',
                                  'regenerate', 'shared_turn', 'multiple_finals',
                                  'other_exchange', 'empty_source', 'missing_request',
@@ -75,7 +171,7 @@ def test_async_final_with_new_request_identity(case):
 @pytest.mark.parametrize('case', ['complete', 'interrupted', 'thinking', 'empty', 'other_request',
                                   'missing_binding', 'multiple_finals', 'missing_user',
                                   'wrong_prompt', 'wrong_conversation', 'unknown_finish',
-                                  'shared_binding'])
+                                  'shared_binding', 'prior_final'])
 def test_history_completion_and_identity(case):
     submission, payload = sample()
     user, answer = payload['messages']
@@ -94,6 +190,8 @@ def test_history_completion_and_identity(case):
         payload['messages'].append({**answer, 'id': 'another'})
     elif case == 'shared_binding':
         payload['messages'].append({**user, 'id': 'another-user'})
+    elif case == 'prior_final':
+        payload['messages'].reverse()
     elif case == 'missing_user':
         payload['messages'].remove(user)
     elif case == 'wrong_prompt':
@@ -116,6 +214,7 @@ def test_history_completion_and_identity(case):
                 'other_request': 'final_not_observed', 'missing_binding': 'correlation_unavailable',
                 'multiple_finals': 'final_ambiguous', 'missing_user': 'input_not_observed',
                 'unknown_finish': 'final_not_complete', 'shared_binding': 'correlation_ambiguous',
+                'prior_final': 'final_not_observed',
             }
             observation = project_observation(json.dumps(payload).encode(), submission)
             assert observation.reason == reasons[case]
@@ -838,6 +937,72 @@ async def test_bound_account_mismatch_does_not_request_conversation(monkeypatch,
     with pytest.raises(ValueError, match='different Chat account'):
         await reader.history(context, saved)
     assert observations == (['catalog'] if bootstrap else [])
+
+
+@pytest.mark.parametrize('verified_account', ['account-a', 'account-b'])
+async def test_fresh_reader_verifies_saved_account_when_get_header_is_absent(
+        monkeypatch, verified_account):
+    from types import SimpleNamespace
+
+    from anywhere_computer import subchat_chrome_login
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
+
+    saved, payload = sample()
+    saved = saved.model_copy(update={'provider_account_id': 'account-a'})
+    context = object()
+    history_requests = []
+    auth_accounts = []
+
+    class Response:
+        status = 200
+        headers = {'content-type': 'application/json'}
+
+        async def body(self):
+            return json.dumps(payload).encode()
+
+        async def dispose(self):
+            pass
+
+    class Request:
+        async def get(self, url, **kwargs):
+            history_requests.append(url)
+            assert kwargs['headers'] == {'authorization': 'Bearer fixture'}
+            return Response()
+
+    async def request_factory():
+        return Request()
+
+    reader = ChatHTTPReader(request_factory)
+
+    async def catalog(selected_context):
+        assert selected_context is context
+        reader._context = context
+        reader._headers = {'authorization': 'Bearer fixture'}
+        reader._catalog_url = 'https://chatgpt.com/backend-api/models?fixture=1'
+        return {}
+
+    async def verify(selected_context, client, *, expected_account_id, page_factory):
+        assert selected_context is context
+        assert expected_account_id == 'account-a'
+        assert page_factory is None
+        auth_accounts.append(verified_account)
+        if verified_account != expected_account_id:
+            raise SubchatAccountMismatch('Chrome login selected another Chat account')
+        return SimpleNamespace(account_id=verified_account)
+
+    monkeypatch.setattr(reader, 'catalog', catalog)
+    monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', verify)
+    if verified_account == 'account-b':
+        with pytest.raises(SubchatAccountMismatch):
+            await reader.history(context, saved)
+        assert history_requests == []
+    else:
+        assert (await reader.history(context, saved)).text == '日本語 result'
+        assert history_requests == [
+            'https://chatgpt.com/backend-api/conversations/' + saved.conversation_id]
+        assert (await reader.history(context, saved)).text == '日本語 result'
+        assert len(history_requests) == 2
+        assert auth_accounts == ['account-a']
 
 
 def test_queued_request_cannot_change_parent_account_after_restart(tmp_path):

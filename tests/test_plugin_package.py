@@ -128,3 +128,25 @@ def test_plugin_packager_refuses_dirty_source_before_writing(tmp_path, monkeypat
     with pytest.raises(ValueError, match="dirty source tree"):
         module.package_plugin(tmp_path)
     assert list(tmp_path.iterdir()) == []
+
+
+def test_plugin_packager_requires_new_version_for_changed_wheel(tmp_path):
+    import importlib.util
+
+    module_spec = importlib.util.spec_from_file_location(
+        "package_plugin", ROOT / "scripts/package_plugin.py"
+    )
+    assert module_spec is not None and module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    bundled = tmp_path / "bundled.whl"
+    built = tmp_path / "built.whl"
+    bundled.write_bytes(b"original")
+    built.write_bytes(b"original")
+    module.require_immutable_wheel(bundled, built, allow_dirty=False)
+
+    built.write_bytes(b"changed")
+    with pytest.raises(ValueError, match="bump the version"):
+        module.require_immutable_wheel(bundled, built, allow_dirty=False)
+    module.require_immutable_wheel(bundled, built, allow_dirty=True)

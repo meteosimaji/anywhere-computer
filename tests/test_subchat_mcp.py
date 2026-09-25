@@ -2,9 +2,119 @@ from test_subchat_lifecycle import BrowserFixture
 
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat import Subchats
+from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
 from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatSubmissions
+
+
+async def test_slow_send_returns_pending_and_same_id_recovers_final(tmp_path, monkeypatch):
+    import asyncio
+
+    from anywhere_computer import subchat_mcp
+    from anywhere_computer.subchat import SubchatAnswer, SubchatReceipt
+
+    monkeypatch.setattr(subchat_mcp, 'SEND_ACK_TIMEOUT', .02)
+    started = asyncio.Event()
+    finish = asyncio.Event()
+
+    class SlowBrowser(BrowserFixture):
+        async def send(self, submission):
+            self.sends += 1
+            started.set()
+            await finish.wait()
+            self.receipt = SubchatReceipt(conversation_id='conversation',
+                                          user_message_id='user', prompt=submission.prompt)
+            return self.receipt
+
+        async def read_answer(self, submission):
+            return SubchatAnswer(conversation_id='conversation', user_message_id='user',
+                                 prompt=submission.prompt, answer_message_id='answer', text='42')
+
+    ledger = Ledger(tmp_path)
+    backend = SlowBrowser()
+    service = Subchats(SubchatSubmissions(ledger.connection), backend)
+    server = session(service, serialize_recovery=True)
+    operation = 'a' * 32
+    send_request = Request(operation_id=operation, tool='subchat_send',
+                           arguments={'prompt': 'work', 'model': 'model', 'effort': 'effort'})
+    try:
+        first = await asyncio.wait_for(server.execute(send_request), .3)
+        await started.wait()
+        assert first.state == 'running' and first.data['send_in_progress'] is True
+        assert first.data['submission_operation_id'] == operation
+        assert backend.sends == 1
+        duplicate = await asyncio.wait_for(server.execute(send_request), .3)
+        assert duplicate.state == 'completed' and duplicate.data['state'] == 'sending'
+        for tool in ('subchat_status', 'subchat_recover'):
+            quick = await asyncio.wait_for(server.execute(Request(
+                operation_id='b' * 32, tool=tool,
+                arguments={'operation_id': operation})), .1)
+            assert quick.data['state'] == 'sending'
+        assert not server.sends[operation].done()
+        finish.set()
+        await asyncio.wait_for(server.sends[operation], .3)
+        final = await asyncio.wait_for(server.execute(Request(
+            operation_id='c' * 32, tool='subchat_recover',
+            arguments={'operation_id': operation})), .3)
+        assert final.data['state'] == 'completed' and final.data['answer'] == '42'
+        assert backend.sends == 1
+    finally:
+        finish.set()
+        await server.close()
+        ledger.close()
+
+
+async def test_cancel_and_close_stop_owned_unsent_or_uncertain_tasks(tmp_path, monkeypatch):
+    import asyncio
+
+    from anywhere_computer import subchat_mcp
+
+    monkeypatch.setattr(subchat_mcp, 'SEND_ACK_TIMEOUT', .02)
+    entered_prepare = asyncio.Event()
+    entered_send = asyncio.Event()
+
+    class SlowBrowser(BrowserFixture):
+        async def prepare(self, submission):
+            if submission.prompt == 'unsent':
+                entered_prepare.set()
+                await asyncio.Event().wait()
+            return ()
+
+        async def send(self, submission):
+            self.sends += 1
+            entered_send.set()
+            await asyncio.Event().wait()
+
+    ledger = Ledger(tmp_path)
+    backend = SlowBrowser()
+    store = SubchatSubmissions(ledger.connection)
+    server = session(Subchats(store, backend))
+    unsent, uncertain = 'd' * 32, 'e' * 32
+    try:
+        pending = await server.execute(Request(operation_id=unsent, tool='subchat_send',
+            arguments={'prompt': 'unsent', 'model': 'model', 'effort': 'effort'}))
+        await entered_prepare.wait()
+        assert pending.state == 'running' and pending.data['state'] == 'prepared'
+        cancelled = await server.execute(Request(operation_id='f' * 32,
+            tool='subchat_cancel', arguments={'operation_id': unsent}))
+        assert cancelled.data['state'] == 'cancelled'
+        assert store.get(unsent, owner=None).state == 'cancelled'
+        assert backend.sends == 0
+        pending = await server.execute(Request(operation_id=uncertain, tool='subchat_send',
+            arguments={'prompt': 'dispatched', 'model': 'model', 'effort': 'effort'}))
+        await entered_send.wait()
+        assert pending.state == 'running' and store.get(uncertain, owner=None).state == 'sending'
+        denied = await server.execute(Request(operation_id='1' * 32,
+            tool='subchat_cancel', arguments={'operation_id': uncertain}))
+        assert denied.state == 'failed'
+        assert not server.sends[uncertain].done()
+        await server.close()
+        assert not server.sends
+        assert store.get(uncertain, owner=None).state == 'sending'
+        assert backend.sends == 1
+    finally:
+        await server.close()
+        ledger.close()
 
 
 async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
@@ -307,12 +417,17 @@ async def test_wait_preserves_thinking_and_releases_browser_between_observations
         timed_out = await pending
         assert timed_out.state == 'completed'
         assert timed_out.data['state'] == 'submitted'
+        assert isinstance(timed_out.data['elapsed_ms'], int)
+        assert 0 <= timed_out.data['elapsed_ms'] <= 2000
+        assert timed_out.data['suggested_poll_interval_ms'] == 10_000
         assert backend.thinking
         assert backend.sends == 1
         backend.thinking = False
         recovered = await server.execute(Request(operation_id='d' * 32, tool='subchat_wait',
             arguments={'operation_id': 'a' * 32, 'wait_ms': 1000}))
         assert recovered.data['answer'] == '42'
+        assert isinstance(recovered.data['elapsed_ms'], int)
+        assert recovered.data['suggested_poll_interval_ms'] is None
         assert backend.sends == 1
     finally:
         if pending is not None and not pending.done():
@@ -430,6 +545,71 @@ async def test_preparation_failure_reports_only_a_known_local_reason(tmp_path):
                                'dispatched': False, 'reason': 'composer_has_draft'}
         assert backend.sends == 0
     finally:
+        await server.close()
+        ledger.close()
+
+
+async def test_late_preparation_failure_is_reported_by_reads_and_explicit_retry(
+        tmp_path, monkeypatch):
+    import asyncio
+
+    from anywhere_computer import subchat_mcp
+
+    monkeypatch.setattr(subchat_mcp, 'SEND_ACK_TIMEOUT', .02)
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+
+    class LateFailureBrowser(BrowserFixture):
+        attempts = 0
+
+        async def prepare(self, submission):
+            self.attempts += 1
+            if self.attempts == 1:
+                entered.set()
+                await finish.wait()
+                raise ValueError('Ordinary Chat composer contains a draft')
+            return await super().prepare(submission)
+
+    ledger = Ledger(tmp_path)
+    backend = LateFailureBrowser()
+    store = SubchatSubmissions(ledger.connection)
+    server = session(Subchats(store, backend))
+    operation = 'd' * 32
+    send = Request(operation_id=operation, tool='subchat_send',
+                   arguments={'prompt': 'work', 'model': 'model', 'effort': 'effort'})
+    try:
+        pending = await server.execute(send)
+        await entered.wait()
+        assert pending.state == 'running' and pending.data['state'] == 'prepared'
+        finish.set()
+        try:
+            await server.sends[operation]
+        except subchat_mcp.SubchatPreparationFailed:
+            pass
+        for tool in ('subchat_status', 'subchat_recover', 'subchat_wait'):
+            observed = await server.execute(Request(operation_id='e' * 32, tool=tool,
+                arguments={'operation_id': operation, **({'wait_ms': 100}
+                           if tool == 'subchat_wait' else {})}))
+            assert observed.state == 'failed'
+            assert observed.data == {'error_code': 'preparation_failed',
+                                     'dispatched': False, 'reason': 'composer_has_draft'}
+        assert store.get(operation, owner=None).state == 'prepared'
+        assert backend.sends == 0
+        monkeypatch.setattr(subchat_mcp, 'SEND_ACK_TIMEOUT', .0001)
+        retried = await server.execute(send)
+        if retried.state == 'running':
+            sending = server.sends.get(operation)
+            if sending is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(sending), timeout=5)
+                except SubchatOutcomeUnknown:
+                    pass
+            retried = await server.execute(send)
+        assert (retried.state == 'unknown' or
+                (retried.state == 'completed' and retried.data.get('state') == 'sending'))
+        assert backend.attempts == 2 and backend.sends == 1
+    finally:
+        finish.set()
         await server.close()
         ledger.close()
 

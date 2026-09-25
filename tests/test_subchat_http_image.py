@@ -1,5 +1,6 @@
 """History-bound image reads never accept caller-supplied assets or dispatch work."""
 import base64
+import json
 import struct
 import zlib
 
@@ -11,6 +12,7 @@ from test_subchat_http_only import credentials, seed
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import Subchats
+from anywhere_computer.subchat_browser.history import project_history
 from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
 from anywhere_computer.subchat_http_image import _image_dimensions
 from anywhere_computer.subchat_mcp import session as mcp_session
@@ -106,6 +108,163 @@ async def test_image_download_accepts_finished_tool_before_final_answer(tmp_path
                     'operation_id': saved.operation_id, 'asset_pointer': 'sediment://' + FILE_ID}))
             assert invalid.state == 'failed'
             assert len(requests) == 9
+    finally:
+        ledger.close()
+
+
+async def test_image_download_after_image_only_final_is_still_bound(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        saved, payload = image_history(store)
+        payload['messages'].append({
+            'id': 'answer', 'author': {'role': 'assistant'},
+            'content': {'content_type': 'text', 'parts': ['']},
+            'metadata': {**payload['messages'][0]['metadata'],
+                         'is_complete': True, 'finish_details': {'type': 'stop'}},
+            'status': 'finished_successfully', 'channel': 'final', 'end_turn': True,
+        })
+        observed = project_history(json.dumps(payload).encode(), saved)
+        assert observed is not None and observed.answer_type == 'image'
+        completed = store.complete(saved.operation_id, observed.answer_message_id, observed.text,
+                                   answer_type=observed.answer_type, owner=None)
+        assert completed.answer is None and completed.answer_type == 'image'
+
+        def serve(request):
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            if request.url.path.startswith('/backend-api/files/download/'):
+                return streamed_json({'status': 'success', 'download_url': CONTENT_URL,
+                                      'file_size_bytes': len(png())})
+            assert str(request.url) == CONTENT_URL
+            return streamed_content(png(), content_type='image/png')
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve),
+                                     follow_redirects=False) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            result = await backend.download_image(saved.operation_id, max_bytes=2_000_000)
+            assert result.content == png() and result.submission_state == 'completed'
+            server = mcp_session(Subchats(store, backend), read_only=True,
+                                 observe_http_catalog=backend.http_catalog)
+            reply = await server.execute(Request(operation_id='e' * 32,
+                tool='subchat_download_image', arguments={'operation_id': saved.operation_id}))
+            assert reply.state == 'completed' and reply.data is not None
+            assert reply.data['final_answer_verified'] is True
+            assert base64.b64decode(reply.data['content_base64']) == png()
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize(('placement', 'legacy_type'), [
+    ('final_only', False), ('tool_with_caption', False), ('tool_with_caption', True),
+])
+async def test_completed_image_projection_matches_download_source(tmp_path, placement,
+                                                                  legacy_type):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        saved, payload = image_history(store)
+        user, tool = payload['messages']
+        final = {'id': 'answer', 'author': {'role': 'assistant'},
+                 'content': {'content_type': 'text', 'parts': ['Caption']},
+                 'metadata': {**user['metadata'], 'is_complete': True,
+                              'finish_details': {'type': 'stop'}},
+                 'status': 'finished_successfully', 'channel': 'final', 'end_turn': True}
+        if placement == 'final_only':
+            final['content'] = {'content_type': 'multimodal_text',
+                                'parts': [tool['content']['parts'][0].copy()]}
+            payload['messages'] = [user, final]
+        else:
+            payload['messages'].append(final)
+        observed = project_history(json.dumps(payload).encode(), saved)
+        assert observed is not None
+        assert observed.answer_type == ('image' if placement == 'final_only' else 'multimodal')
+        completed = store.complete(saved.operation_id, observed.answer_message_id, observed.text,
+                                   answer_type=observed.answer_type, owner=None)
+        if legacy_type:
+            ledger.connection.execute('DELETE FROM subchat_answer_types WHERE operation_id=?',
+                                      (saved.operation_id,))
+            completed = store.get(saved.operation_id, owner=None)
+            assert completed.answer_type is None and completed.answer == 'Caption'
+
+        def serve(request):
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            if request.url.path.startswith('/backend-api/files/download/'):
+                return streamed_json({'status': 'success', 'download_url': CONTENT_URL,
+                                      'file_size_bytes': len(png())})
+            assert str(request.url) == CONTENT_URL
+            return streamed_content(png(), content_type='image/png')
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve),
+                                     follow_redirects=False) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            result = await backend.download_image(completed.operation_id, max_bytes=2_000_000)
+            assert result.content == png() and result.submission_state == 'completed'
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('case', ['two_final_images', 'tool_and_final_image',
+                                  'missing_metadata', 'changed_final'])
+async def test_image_completion_and_download_reject_ambiguous_or_changed_history(tmp_path, case):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        saved, payload = image_history(store)
+        user, tool = payload['messages']
+        final = {'id': 'answer', 'author': {'role': 'assistant'},
+                 'content': {'content_type': 'text', 'parts': ['']},
+                 'metadata': {**user['metadata'], 'is_complete': True,
+                              'finish_details': {'type': 'stop'}},
+                 'status': 'finished_successfully', 'channel': 'final', 'end_turn': True}
+        payload['messages'].append(final)
+        if case == 'two_final_images':
+            payload['messages'] = [user, final]
+            final['content'] = {'content_type': 'multimodal_text',
+                                'parts': [tool['content']['parts'][0].copy()] * 2}
+        elif case == 'tool_and_final_image':
+            final['content'] = {'content_type': 'multimodal_text',
+                                'parts': [tool['content']['parts'][0].copy()]}
+        elif case == 'missing_metadata':
+            del tool['content']['parts'][0]['width']
+        else:
+            observed = project_history(json.dumps(payload).encode(), saved)
+            assert observed is not None and observed.answer_type == 'image'
+            store.complete(saved.operation_id, observed.answer_message_id, observed.text,
+                           answer_type=observed.answer_type, owner=None)
+            final['content'] = {'content_type': 'text', 'parts': ['Changed']}
+        if case in {'two_final_images', 'tool_and_final_image'}:
+            observed = project_history(json.dumps(payload).encode(), saved)
+            assert observed is not None and observed.answer_type == 'image'
+            completed = store.complete(saved.operation_id, observed.answer_message_id,
+                                       observed.text, answer_type=observed.answer_type,
+                                       owner=None)
+            assert completed.state == 'completed'
+        elif case != 'changed_final':
+            assert project_history(json.dumps(payload).encode(), saved) is None
+        requests = []
+
+        def serve(request):
+            requests.append(request)
+            assert request.url.path.startswith('/backend-api/conversations/')
+            return httpx.Response(200, json=payload)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve),
+                                     follow_redirects=False) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            with pytest.raises(ValueError):
+                await backend.download_image(saved.operation_id, max_bytes=2_000_000)
+            assert len(requests) == 1
     finally:
         ledger.close()
 

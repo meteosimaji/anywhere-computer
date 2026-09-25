@@ -3,6 +3,59 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a29 / Plugin 0.2.0-alpha.29 — unpublished candidate (2026-09-25)
+
+- Resolve an unbound queued follow-up through its same-owner predecessor chain
+  after OAuth re-consent. Bound the walk and require a matching saved account
+  before exposing any legacy operation to the new grant.
+
+## 0.2.0a28 / Plugin 0.2.0-alpha.28 — unpublished candidate (2026-09-25)
+
+- Keep an account-matched queued follow-up recoverable after OAuth re-consent
+  when its saved predecessor belongs to the same historical grant. Unbound
+  queues and a different Chat account remain private.
+- Make both delayed-preparation retry tests observe the same operation's
+  eventual result when a slow worker returns its acknowledgement first.
+
+## 0.2.0a27 / Plugin 0.2.0-alpha.27 — unpublished candidate (2026-09-25)
+
+- Let a freshly authorized grant recover an exact legacy Subchat operation
+  saved under an older grant of the same owner, device, and OAuth client.
+  Require the saved Chat account binding to match before crossing grants;
+  unbound or other-client operations remain private.
+
+## 0.2.0a26 / Plugin 0.2.0-alpha.26 — unpublished candidate (2026-09-24)
+
+- Preserve compatibility with older submission readers by moving completed
+  answer types into an atomic side table, including migration of existing rows.
+- Complete image-generating answers with multiple images while requiring an
+  unambiguous single image for the current download operation. Recover legacy
+  text-and-image answers against the exact saved final turn.
+- Settle intercepted browser requests when a completed generation is canceled,
+  and use a fresh owned tab for the next queued turn. Bound the wait for HTTP
+  headers while leaving the generation stream itself unbounded.
+- Surface delayed preparation errors through the original gateway operation
+  and allow an explicit retry with the same ID and unchanged input.
+- Reject a changed wheel under an existing Plugin version during clean release
+  packaging. The previous alpha.25 wheel remains a separate immutable build.
+
+## 0.2.0a25 / Plugin 0.2.0-alpha.25 — unpublished candidate (2026-09-24)
+
+- Keep a browser-prepared HTTPX generation stream alive after its HTTP 200/SSE
+  headers so other Subchats can progress. Save the root conversation identity
+  as it arrives and recover the final answer through authenticated history.
+- Preserve late send preparation errors for status and recovery instead of
+  leaving an unexplained `prepared` result. Report known model picker errors
+  without exposing provider request contents.
+- Bind generated images to the exact final turn, including image-only and
+  text-plus-image answers. Add bounded image download verification.
+- Add a macOS account-pinned Subchat setup command and clarify that UI model
+  labels differ from HTTP catalog display versions.
+- In a live source checkout, a new and follow-up Chat turn completed with
+  HTTPX generation and history recovery. Sampled recording frames kept the
+  user's fullscreen video in front. The installed Plugin and other OSes still
+  require separate verification.
+
 ## 0.2.0a24 / Plugin 0.2.0-alpha.24 — unpublished candidate (2026-09-24)
 
 - Add opt-in, account-pinned direct Subchat tools to the authenticated HTTPS

@@ -70,6 +70,8 @@ async def download_verified_sandbox_file(
     if (saved.state != 'completed' or saved.provider_account_id != session.account_id
             or saved.provider_account_id is None):
         raise SubchatAccountMismatch('Completed Chat belongs to another account')
+    if answer.text is None:
+        raise ValueError('Final answer has no text containing a sandbox file link')
     if (saved.conversation_id is None or _CONVERSATION.fullmatch(saved.conversation_id) is None
             or saved.answer_message_id is None
             or saved.answer_message_id != answer.answer_message_id

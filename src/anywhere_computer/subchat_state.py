@@ -4,6 +4,7 @@ A persisted 'sending' record is intentionally not reset on restart. Its caller
 may inspect the conversation, but may not dispatch the same submission again.
 """
 
+import json
 import sqlite3
 import time
 from typing import Literal
@@ -102,6 +103,7 @@ class SubchatSubmission(Contract):
     user_message_id: str | None = None
     answer_message_id: str | None = None
     answer: str | None = None
+    answer_type: Literal['text', 'image', 'multimodal'] | None = None
     generation_http_status: int | None = Field(default=None, ge=400, le=599)
     reported_settings: SubchatReportedSettings | None = None
     provider_account_id: str | None = Field(default=None, min_length=1, max_length=256)
@@ -112,6 +114,15 @@ class SubchatSubmission(Contract):
     @property
     def wire_prompt(self) -> str:
         return self.resources.prompt(self.prompt) if self.resources else self.prompt
+
+
+def _saved_submission_json(submission: SubchatSubmission) -> str:
+    """Keep new optional fields absent until they have evidence to persist."""
+    excluded = {'reported_settings', 'provider_account_id', 'generation_http_status',
+                'answer_type'}
+    if submission.http_selection is None:
+        excluded.add('http_selection')
+    return submission.model_dump_json(exclude=excluded)
 
 
 class SubchatList(Contract):
@@ -138,6 +149,9 @@ class SubchatSubmissions:
     def __init__(self, connection: sqlite3.Connection, *, initialize: bool = True) -> None:
         self.connection = connection
         if not initialize:
+            self._answer_types_available = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='subchat_answer_types'").fetchone() is not None
             return
         with connection:
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_generation_responses ('
@@ -149,6 +163,36 @@ class SubchatSubmissions:
                                'user_message_id TEXT NOT NULL, account_id TEXT NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_submissions ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, body TEXT NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_answer_types ('
+                               'operation_id TEXT PRIMARY KEY, owner TEXT, '
+                               'answer_message_id TEXT NOT NULL, answer_type TEXT NOT NULL)')
+            self._answer_types_available = True
+            # Older readers reject this new field, including its null value.
+            # Preserve completed types in a separate table before removing it.
+            for operation_id, owner, body in connection.execute(
+                    'SELECT operation_id, owner, body FROM subchat_submissions'):
+                saved_body = json.loads(body)
+                if not isinstance(saved_body, dict) or 'answer_type' not in saved_body:
+                    continue
+                answer_type = saved_body.pop('answer_type')
+                if answer_type is not None:
+                    if (answer_type not in {'text', 'image', 'multimodal'}
+                            or saved_body.get('state') != 'completed'
+                            or not isinstance(saved_body.get('answer_message_id'), str)):
+                        raise ValueError('Invalid saved Subchat answer type')
+                    connection.execute(
+                        'INSERT OR IGNORE INTO subchat_answer_types VALUES (?,?,?,?)',
+                        (operation_id, owner, saved_body['answer_message_id'], answer_type))
+                    existing = connection.execute(
+                        'SELECT owner, answer_message_id, answer_type '
+                        'FROM subchat_answer_types WHERE operation_id=?',
+                        (operation_id,)).fetchone()
+                    if existing != (owner, saved_body['answer_message_id'], answer_type):
+                        raise ValueError('Conflicting saved Subchat answer type')
+                connection.execute(
+                    'UPDATE subchat_submissions SET body=? WHERE operation_id=? AND body=?',
+                    (json.dumps(saved_body, ensure_ascii=False, separators=(',', ':')),
+                     operation_id, body))
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_answer_settings ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, '
                                'answer_message_id TEXT NOT NULL, body TEXT NOT NULL)')
@@ -275,8 +319,7 @@ class SubchatSubmissions:
             updated = saved.model_copy(update={'state': 'preflight_failed'})
             self.connection.execute(
                 'UPDATE subchat_submissions SET body=? WHERE operation_id=? AND owner IS ?',
-                (updated.model_dump_json(exclude={
-                    'reported_settings', 'provider_account_id', 'generation_http_status'}),
+                (_saved_submission_json(updated),
                  operation_id, owner),
             )
             return True
@@ -289,6 +332,14 @@ class SubchatSubmissions:
         if row is None or row[0] != owner:
             raise SubchatOperationNotFound('Unknown subchat submission')
         saved = SubchatSubmission.model_validate_json(row[1])
+        if saved.state == 'completed' and self._answer_types_available:
+            answer_type_row = self.connection.execute(
+                'SELECT answer_type FROM subchat_answer_types WHERE operation_id=? '
+                'AND owner IS ? AND answer_message_id=?',
+                (operation_id, owner, saved.answer_message_id),
+            ).fetchone()
+            if answer_type_row is not None:
+                saved = saved.model_copy(update={'answer_type': answer_type_row[0]})
         binding = self.connection.execute(
             'SELECT account_id FROM subchat_account_bindings WHERE operation_id=? '
             'AND owner IS ? AND user_message_id=?',
@@ -364,9 +415,7 @@ class SubchatSubmissions:
         with self.connection:
             self.connection.execute(
                 'INSERT OR IGNORE INTO subchat_submissions VALUES (?,?,?)',
-                (operation_id, owner, proposed.model_dump_json(
-                    exclude={'reported_settings', 'provider_account_id', 'generation_http_status'} |
-                    ({'http_selection'} if proposed.http_selection is None else set()))),
+                (operation_id, owner, _saved_submission_json(proposed)),
             )
         existing = self.get(operation_id, owner=owner)
         if (existing.prompt, existing.model, existing.effort,
@@ -425,9 +474,7 @@ class SubchatSubmissions:
             cursor = self.connection.execute(
                 'UPDATE subchat_submissions SET body=? '
                 'WHERE operation_id=? AND owner IS ? AND body=?',
-                (new.model_dump_json(exclude={'reported_settings', 'provider_account_id',
-                                              'generation_http_status'} |
-                                     ({'http_selection'} if new.http_selection is None else set())),
+                (_saved_submission_json(new),
                  old.operation_id, owner, row[0]),
             )
             if cursor.rowcount != 1:
@@ -446,6 +493,11 @@ class SubchatSubmissions:
                     'INSERT INTO subchat_answer_settings VALUES (?,?,?,?)',
                     (new.operation_id, owner, new.answer_message_id,
                      new.reported_settings.model_dump_json()),
+                )
+            if new.state == 'completed' and new.answer_type is not None:
+                self.connection.execute(
+                    'INSERT INTO subchat_answer_types VALUES (?,?,?,?)',
+                    (new.operation_id, owner, new.answer_message_id, new.answer_type),
                 )
             if (http_event is not None and self.connection.execute(
                     'SELECT 1 FROM subchat_http_dispatch_claims WHERE operation_id=?',
@@ -603,21 +655,26 @@ class SubchatSubmissions:
             'state': 'submitted', 'conversation_id': conversation_id,
             'user_message_id': user_message_id}), owner)
 
-    def complete(self, operation_id: str, answer_message_id: str, answer: str,
+    def complete(self, operation_id: str, answer_message_id: str, answer: str | None,
                  *, owner: str | None,
+                 answer_type: Literal['text', 'image', 'multimodal'] = 'text',
                  reported_settings: SubchatReportedSettings | None = None) -> SubchatSubmission:
         old = self.get(operation_id, owner=owner)
-        if not answer_message_id.strip() or not answer or answer_message_id == old.user_message_id:
-            raise ValueError('A distinct observed answer identity and text are required')
+        if (not answer_message_id.strip() or answer_message_id == old.user_message_id
+                or answer_type == 'image' and answer is not None
+                or answer_type != 'image' and not answer):
+            raise ValueError('A distinct observed answer identity and content are required')
         if old.state == 'completed':
-            if (old.answer_message_id, old.answer, old.reported_settings) != (
-                    answer_message_id, answer, reported_settings):
+            if (old.answer_message_id, old.answer, old.answer_type or 'text',
+                    old.reported_settings) != (
+                    answer_message_id, answer, answer_type, reported_settings):
                 raise ValueError('Completed subchat answer cannot be replaced')
             return old
         if old.state != 'submitted':
             raise ValueError('Submission identity must be observed before its answer')
         return self._replace(old, old.model_copy(update={
             'state': 'completed', 'answer_message_id': answer_message_id, 'answer': answer,
+            'answer_type': answer_type,
             'reported_settings': reported_settings}), owner, http_event='history_final')
 
     def has_queued_for_conversation(self, conversation_id: str, *, owner: str | None) -> bool:

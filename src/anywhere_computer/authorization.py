@@ -408,6 +408,22 @@ class AuthorizationStore:
         """Internal grant metadata lookup; this does not authenticate a request."""
         return self._grant(grant, time.time())
 
+    def same_principal_grant(self, current: GrantIdentity, candidate: str) -> bool:
+        """Identify a historical grant from this owner, device and OAuth client.
+
+        The current grant must already be authenticated. This lookup does not
+        revive the candidate's permissions or credentials; it only identifies
+        ownership of a legacy operation saved under that grant ID.
+        """
+        with closing(sqlite3.connect(
+            self.database.absolute().as_uri() + "?mode=ro", uri=True,
+        )) as db:
+            row = db.execute(
+                "SELECT owner,device,client FROM grants WHERE id=?", (candidate,)
+            ).fetchone()
+        return row is not None and tuple(row) == (
+            current.owner, current.device, current.client)
+
 
     def retain_active_grants(self, *, owner: str, device: str, client: str) -> int:
         """Local owner administration: remove deadlines only from still-valid grants.

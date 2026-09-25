@@ -23,6 +23,14 @@ def plugin_version(python_version: str) -> str:
     return f"{match[1]}-{label}.{match[3]}"
 
 
+def require_immutable_wheel(target: Path, built: Path, *, allow_dirty: bool) -> None:
+    """A released version must not silently change under an installer cache."""
+    if (target.exists() and not allow_dirty
+            and hashlib.sha256(target.read_bytes()).digest()
+            != hashlib.sha256(built.read_bytes()).digest()):
+        raise ValueError("Bundled wheel for this version changed; bump the version first")
+
+
 def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     if re.fullmatch(r"[a-f0-9]{40}", commit) is None:
@@ -41,6 +49,7 @@ def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
         if len(wheels) != 1:
             raise ValueError("Build must produce exactly one Anywhere Computer wheel")
         wheel = bundled / wheels[0].name
+        require_immutable_wheel(wheel, wheels[0], allow_dirty=allow_dirty)
         shutil.copyfile(wheels[0], wheel)
     with zipfile.ZipFile(wheel) as archive:
         metadata_paths = [name for name in archive.namelist()
@@ -51,6 +60,9 @@ def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
         if metadata["Name"] != "anywhere-computer":
             raise ValueError("Wheel package name does not match this plugin")
         version = plugin_version(metadata["Version"])
+    for stale_wheel in bundled.glob("anywhere_computer-*.whl"):
+        if stale_wheel != wheel:
+            stale_wheel.unlink()
     manifest_path = plugin / ".codex-plugin/plugin.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["version"] = version
@@ -129,6 +141,7 @@ def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
         plugin / ".claude-mcp.json",
         plugin / "LICENSE",
         plugin / "skills/computer-work/SKILL.md",
+        plugin / "skills/subchat/SKILL.md",
         bundled / wheel.name,
         bundled / "dependencies.txt",
         bundled / "checksums.json",

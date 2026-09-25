@@ -6,6 +6,7 @@ visible message identities before dispatch; see the dated acceptance records.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import traceback
@@ -24,7 +25,9 @@ from anywhere_computer.subchat import (
     SubchatStaleTarget,
     SubchatUnsupported,
 )
+from anywhere_computer.subchat_http_download import MAX_FILE_BYTES, SandboxDownload
 from anywhere_computer.subchat_state import (
+    SubchatAccountMismatch,
     SubchatHTTPSelection,
     SubchatSubmission,
     SubchatSubmissions,
@@ -43,6 +46,7 @@ from .catalog import (
 )
 from .efforts import matches_effort, move_effort, snapshot
 from .http_reader import ChatHTTPReader
+from .httpx_generation import HTTPXGenerationPreflightError
 from .request_content import add_resources, generation_input
 
 if TYPE_CHECKING:
@@ -56,6 +60,64 @@ COPY = Path(__file__).with_name('subchat_copy.js').read_text(encoding="utf-8")
 CHAT = re.compile(r'https://chatgpt\.com/c/'
                   r'([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\Z')
 logger = logging.getLogger(__name__)
+
+
+def _stream_conversation_id(body: bytes) -> str | None:
+    """Extract a root SSE identity from an already bounded generation response."""
+    for frame in re.split(rb'\r?\n\r?\n', body):
+        if len(frame) > 512 * 1024:
+            continue
+        data = b'\n'.join(line[5:].lstrip() for line in frame.splitlines()
+                          if line.startswith(b'data:'))
+        try:
+            event = json.loads(data)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(event, dict):
+            continue
+        root = (event.get('v') if event.get('p') == ''
+                and event.get('o') in {'add', 'replace'} else event)
+        if not isinstance(root, dict):
+            continue
+        conversation = root.get('conversation_id')
+        if (isinstance(conversation, str)
+                and CHAT.fullmatch('https://chatgpt.com/c/' + conversation)):
+            return conversation
+    return None
+
+
+class _StreamIdentity:
+    """Inspect complete, bounded SSE frames while the response is still arriving."""
+
+    def __init__(self) -> None:
+        self.pending = bytearray()
+        self.discarding = False
+        self.conversation_id: str | None = None
+
+    def feed(self, chunk: bytes) -> str | None:
+        if self.conversation_id is not None:
+            return self.conversation_id
+        self.pending.extend(chunk)
+        while True:
+            end = self.pending.find(b'\n\n')
+            separator = 2
+            crlf_end = self.pending.find(b'\r\n\r\n')
+            if crlf_end >= 0 and (end < 0 or crlf_end < end):
+                end, separator = crlf_end, 4
+            if end < 0:
+                if len(self.pending) > 512 * 1024:
+                    self.pending.clear()
+                    self.discarding = True
+                return None
+            frame = bytes(self.pending[:end])
+            del self.pending[:end + separator]
+            if self.discarding:
+                self.discarding = False
+                continue
+            if len(frame) <= 512 * 1024:
+                self.conversation_id = _stream_conversation_id(frame)
+                if self.conversation_id is not None:
+                    return self.conversation_id
 
 
 def browser_capabilities(*, http_read: bool,
@@ -112,6 +174,8 @@ class BrowserSubchatBackend:
         self._preparation_touched_pages: set[Page] = set()
         self._unreusable_pages: set[Page] = set()
         self._completed_page_owners: set[str] = set()
+        self._generation_tasks: dict[str, asyncio.Task[object]] = {}
+        self._generation_cleanups: set[asyncio.Task[object]] = set()
         self._closed = False
         if self._context is not None:
             self._context.on('close', self._browser_closed)
@@ -119,6 +183,17 @@ class BrowserSubchatBackend:
     def capabilities(self) -> dict[str, object]:
         return browser_capabilities(http_read=self.http_read,
                                     httpx_generation=self._httpx_generation)
+
+    def has_live_generation(self) -> bool:
+        return any(not task.done() for task in self._generation_tasks.values())
+
+    async def close_generations(self) -> None:
+        tasks = list(self._generation_tasks.values())
+        for task in tasks:
+            if task not in self._generation_cleanups:
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*self._generation_tasks.values(), return_exceptions=True)
 
     def _browser_closed(self, context: BrowserContext) -> None:
         self._closed = True
@@ -219,6 +294,41 @@ class BrowserSubchatBackend:
             return await download_verified_image(
                 saved, history, session=auth, client=client, max_bytes=max_bytes)
 
+    async def download_sandbox_file(self, operation_id: str,
+                                    sandbox_link: str, *, max_bytes: int = MAX_FILE_BYTES
+                                    ) -> SandboxDownload:
+        """Download a saved final-answer link with a freshly verified Chrome account."""
+        from ..subchat_chrome_login import chrome_http_session
+        from ..subchat_http_download import download_verified_sandbox_file
+
+        if not self.http_read or self._store is None:
+            raise SubchatUnsupported('http_session_required')
+        saved = self._store.get(operation_id, owner=self._owner)
+        if saved.state != 'completed':
+            raise ValueError('File download requires a completed operation')
+        account_id = saved.provider_account_id
+        if account_id is None or (self._expected_account_id is not None
+                                  and account_id != self._expected_account_id):
+            raise SubchatAccountMismatch('Completed Chat belongs to another account')
+        if max_bytes <= 0 or max_bytes > MAX_FILE_BYTES:
+            raise ValueError('Invalid file size limit')
+        async with httpx.AsyncClient(
+            trust_env=False, follow_redirects=False,
+            transport=httpx.AsyncHTTPTransport(retries=0),
+        ) as client:
+            context = await self._browser()
+            auth = await chrome_http_session(
+                context, client, expected_account_id=account_id,
+                page_factory=self._new_page if self._background_pages else None)
+            self._http_reader.bind_verified_account(context, auth.account_id)
+            async with asyncio.timeout(20):
+                answer = await self._http_reader.history(context, saved)
+            if not isinstance(answer, SubchatAnswer):
+                raise ValueError('A verified final answer is required for file download')
+            return await download_verified_sandbox_file(
+                saved, answer, sandbox_link, session=auth, client=client,
+                max_bytes=max_bytes)
+
     async def verify_delete_target(self, submission: SubchatSubmission) -> None:
         async with asyncio.timeout(20):
             await self._http_reader.verify_delete_target(await self._read_context(), submission)
@@ -307,7 +417,21 @@ class BrowserSubchatBackend:
         page = self.pages.get(operation_id)
         if page is not None:
             self._completed_page_owners.add(operation_id)
+        generation = self._generation_tasks.get(operation_id)
+        interrupted_generation = generation is not None and not generation.done()
+        if generation is not None and not generation.done():
+            if generation not in self._generation_cleanups:
+                generation.cancel()
+            await asyncio.gather(generation, return_exceptions=True)
+            cleanup = self._generation_tasks.get(operation_id)
+            if cleanup is not None:
+                await asyncio.gather(cleanup, return_exceptions=True)
         if keep_for_queue:
+            if (interrupted_generation and page is not None and not page.is_closed()):
+                # The intercepted POST was aborted after history proved completion.
+                # Its optimistic Stop control may remain visible. Keep ownership
+                # for the queue gate, but prepare the next turn in a fresh tab.
+                self._unreusable_pages.add(page)
             return
         url = ('https://chatgpt.com/c/' + submission.conversation_id
                if submission.conversation_id is not None else None)
@@ -540,6 +664,20 @@ class BrowserSubchatBackend:
         generation_client: httpx.AsyncClient | None = None
         generation_account: str | None = None
         generation_authorization: str | None = None
+        route_installed = False
+        route_cleaned = False
+
+        async def cleanup_route() -> None:
+            nonlocal route_cleaned
+            if route_cleaned:
+                return
+            route_cleaned = True
+            try:
+                if route_installed:
+                    await page.unroute(pattern, augment)
+            finally:
+                if generation_client is not None:
+                    await generation_client.aclose()
         if self._httpx_generation:
             from ..subchat_chrome_login import chrome_http_session
 
@@ -567,7 +705,12 @@ class BrowserSubchatBackend:
             if not request_started.done():
                 request_started.set_result(True)
             accepted = False
+            route_settled = False
             stage = 'request_validation'
+            identity_tracker = _StreamIdentity()
+            current_task = asyncio.current_task()
+            if self._httpx_generation and current_task is not None:
+                self._generation_tasks[submission.operation_id] = current_task
             try:
                 payload = route.request.post_data
                 if payload is None:
@@ -598,20 +741,75 @@ class BrowserSubchatBackend:
                     from .httpx_generation import post_browser_prepared_once
 
                     stage = 'httpx_transport'
+                    def headers_seen(metadata: object) -> None:
+                        nonlocal accepted
+                        from .httpx_generation import HTTPXGenerationResponse
+
+                        assert isinstance(metadata, HTTPXGenerationResponse)
+                        if self._store is not None:
+                            try:
+                                self._store.record_http_event(
+                                    submission.operation_id, 'generation_response',
+                                    owner=self._owner, status=metadata.status)
+                            except Exception as error:
+                                logger.warning('HTTP status checkpoint failed error_type=%s',
+                                               type(error).__name__)
+                        if metadata.status == 200 and metadata.content_type == 'text/event-stream':
+                            accepted = True
+                            if not dispatched.done():
+                                dispatched.set_result(True)
+
+                    def chunk_seen(chunk: bytes) -> None:
+                        if identity_tracker.conversation_id is not None:
+                            return
+                        conversation = identity_tracker.feed(chunk)
+                        if conversation is not None and self._record_conversation is not None:
+                            assert generation_account is not None
+                            if submission.operation_id in self._completed_page_owners:
+                                return
+                            try:
+                                self._record_conversation(submission.operation_id, identity,
+                                                          conversation, generation_account)
+                            except Exception:
+                                # A final history observation can commit while a
+                                # later SSE frame is being processed. Its candidate
+                                # is no longer needed and must not abort the POST.
+                                if (self._store is None or
+                                        self._store.get(submission.operation_id,
+                                                        owner=self._owner).state != 'completed'):
+                                    raise
+
                     response = await post_browser_prepared_once(
                         route.request, generation_client,
                         authorization=generation_authorization,
-                        content=outgoing.encode('utf-8'))
+                        content=outgoing.encode('utf-8'),
+                        on_headers=headers_seen, on_chunk=chunk_seen)
                     stage = 'browser_delivery'
                     if response.status == 200 and response.content_type == 'text/event-stream':
+                        # HTTPX has already read the whole stream. Its browser
+                        # delivery can start after the JS observer has expired.
+                        if (self._record_conversation is not None
+                                and identity_tracker.conversation_id is None):
+                            conversation = _stream_conversation_id(response.body)
+                            if conversation is not None:
+                                assert generation_account is not None
+                                if submission.operation_id not in self._completed_page_owners:
+                                    self._record_conversation(submission.operation_id, identity,
+                                                              conversation, generation_account)
                         await route.fulfill(status=200,
                                             headers={'content-type': 'text/event-stream'},
                                             body=response.body)
+                        route_settled = True
                     else:
                         await route.fulfill(status=response.status,
                                             headers={'content-type': 'application/json'},
                                             body=b'{}')
+                        route_settled = True
                 accepted = True
+            except asyncio.CancelledError:
+                if not route_settled:
+                    await route.abort()
+                raise
             except Exception as error:
                 # Provider details can contain account information; do not expose them.
                 logger.warning('Subchat generation stage=%s error_type=%s',
@@ -622,8 +820,10 @@ class BrowserSubchatBackend:
                                         for frame in frames[-5:]))
                 if str(error).startswith('Invalid browser request header types: '):
                     logger.warning('%s', error)
-                await route.abort()
-                if stage in {'request_validation', 'account_binding'}:
+                if not route_settled:
+                    await route.abort()
+                if (stage in {'request_validation', 'account_binding'}
+                        or isinstance(error, HTTPXGenerationPreflightError)):
                     # The browser may have painted an optimistic user bubble
                     # before its rejected POST. Never reuse this tab as a
                     # verified conversation baseline.
@@ -633,8 +833,21 @@ class BrowserSubchatBackend:
             finally:
                 if not dispatched.done():
                     dispatched.set_result(accepted)
+                if self._httpx_generation:
+                    # Playwright may wait for active callbacks when removing a
+                    # route. Run cleanup only after this callback has returned.
+                    async def finish_route() -> None:
+                        try:
+                            await cleanup_route()
+                        finally:
+                            self._generation_cleanups.discard(asyncio.current_task())
+                            if self._generation_tasks.get(submission.operation_id) is cleanup:
+                                self._generation_tasks.pop(submission.operation_id, None)
 
-        route_installed = False
+                    cleanup = asyncio.create_task(finish_route())
+                    self._generation_cleanups.add(cleanup)
+                    self._generation_tasks[submission.operation_id] = cleanup
+
         try:
             if self._record_conversation is not None or self._record_rejection is not None:
                 binding = 'ac_stream_' + submission.operation_id
@@ -663,19 +876,22 @@ class BrowserSubchatBackend:
             await page.route(pattern, augment)
             route_installed = True
             receipt = await self._send(submission)
-            await asyncio.wait_for(asyncio.shield(request_started), 10)
-            # Keep the HTTPX client and browser route alive for the complete
-            # stream. A valid slow generation is not a failed dispatch.
+            try:
+                await asyncio.wait_for(asyncio.shield(request_started), 120)
+            except TimeoutError:
+                # The click may have scheduled a later fetch. Close its page
+                # before removing interception so it cannot send unobserved.
+                self._unreusable_pages.add(page)
+                await page.close()
+                raise
+            # HTTPX acknowledges a valid SSE response at headers; its owned
+            # route callback continues delivery after this input lock is free.
             if not await asyncio.shield(dispatched):
                 raise ValueError('Generation resource request was not confirmed')
             return receipt
         finally:
-            try:
-                if route_installed:
-                    await page.unroute(pattern, augment)
-            finally:
-                if generation_client is not None:
-                    await generation_client.aclose()
+            if not self._httpx_generation or not claimed:
+                await cleanup_route()
 
     async def _send(self, submission: SubchatSubmission) -> SubchatReceipt | None:
         if submission.state != 'sending':

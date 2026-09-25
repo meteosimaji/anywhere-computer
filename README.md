@@ -14,15 +14,15 @@ require a Codex model turn. Project code is [MIT licensed](LICENSE).
 
 Release assets and their receipts establish what was published. This README
 explains the checked-out source; a development feature is not automatically part
-of an older release. Dated test records describe the tested build and environment.
+of an older release. Historical test records are kept outside this repository.
 
 <!-- BEGIN GENERATED: project-reference -->
 This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a24` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.24` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a29` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.29` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -135,7 +135,9 @@ model catalog GETs returned HTTP 200 in a live check; independent HTTP-only
 generation remains unverified. A local `subchat/login-selection.json` can retain
 the selected profile path and a Chat account ID pin across Plugin
 updates. When the ledger location is overridden, place that file beside the
-selected ledger directory; see the Subchat guide.
+selected ledger directory. On macOS, `anywhere-subchat-setup inspect PROFILE`
+reads the account ID from a private background snapshot; `select` saves a
+verified profile and account pin. See the Subchat guide for the exact commands.
 On macOS, a selected profile with an account ID pin and
 `"enable_background_send": true` in `subchat/login-selection.json` enables the
 background browser-prepared HTTPX send tools when the Plugin starts. Without

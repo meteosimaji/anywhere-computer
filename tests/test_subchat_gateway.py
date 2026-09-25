@@ -8,13 +8,14 @@ from anywhere_computer.authorized_http import AuthorizedDeviceMCP
 from anywhere_computer.http_service import HTTPServiceConfig
 from anywhere_computer.models import Reply, Request
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat import Subchats
+from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
 from anywhere_computer.subchat_gateway import (
     SUBCHAT_GATEWAY_TOOLS,
     LazySubchatGateway,
     SubchatGateway,
     SubchatGatewayConfig,
     _background_account_session,
+    subchat_ledger_owner,
 )
 from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatSubmissions
@@ -213,6 +214,59 @@ async def test_lazy_gateway_idle_waits_for_detached_work_and_service_close(monke
     await asyncio.sleep(.03)
     assert exited == 2
     assert await gateway.catalog("grant", granted) == []
+
+
+@pytest.mark.asyncio
+async def test_lazy_gateway_keeps_generation_running_after_send_ack(monkeypatch, tmp_path):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "profile"), ledger=str(tmp_path / "ledger"),
+        account_id="account", consent="ordinary-chat-browser-control-approved")
+    finish = asyncio.Event()
+    closed = 0
+
+    class Core:
+        def __init__(self):
+            self.calls = {}
+            self.recoveries = {}
+            self.queue_watches = {}
+            self.sends = {}
+
+        async def execute(self, request):
+            async def generate():
+                await finish.wait()
+
+            self.sends[request.operation_id] = asyncio.create_task(generate())
+            return Reply(operation_id=request.operation_id, state="running")
+
+        async def close(self):
+            assert all(task.done() for task in self.sends.values())
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        nonlocal closed
+        actual = SubchatGateway(lambda _grant: Core(), owner=owner)
+        try:
+            yield actual
+        finally:
+            await actual.close()
+            closed += 1
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
+    try:
+        response = await gateway.execute(
+            "grant", Request(operation_id="a" * 32, tool="subchat_send"),
+            frozenset({"subchat_send"}))
+        assert response.state == "running"
+        await asyncio.sleep(.04)
+        assert closed == 0
+        finish.set()
+        await asyncio.wait_for(_until(lambda: closed == 1), timeout=1)
+    finally:
+        finish.set()
+        await gateway.close()
 
 
 @pytest.mark.asyncio
@@ -610,6 +664,246 @@ async def test_authorized_view_rechecks_grant_before_subchat_dispatch():
 
 
 @pytest.mark.asyncio
+async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_access(
+    tmp_path, monkeypatch,
+):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    grants = {
+        grant_id: GrantIdentity(grant_id=grant_id, owner="owner", device="device",
+                                client=client, resource=RESOURCE,
+                                tools=frozenset({"subchat_status", "subchat_recover",
+                                                "subchat_message"}))
+        for grant_id, client in (("old-grant", "client"), ("new-grant", "client"),
+                                 ("other-client", "other"))
+    }
+
+    historical = dict(grants)
+
+    class Store:
+        def current_grant(self, identity):
+            return grants.get(identity)
+
+        def same_principal_grant(self, current, candidate):
+            old = historical.get(candidate)
+            return old is not None and (
+                old.owner, old.device, old.client
+            ) == (current.owner, current.device, current.client)
+
+    class Engine:
+        def catalog(self, granted):
+            return []
+
+    ledger_path = tmp_path / "ledger"
+    ledger = Ledger(ledger_path)
+    operation_id = "a" * 32
+    owner = subchat_ledger_owner(grants["old-grant"], "account")
+    assert owner == subchat_ledger_owner(grants["new-grant"], "account")
+    assert owner != subchat_ledger_owner(grants["other-client"], "account")
+    assert owner != subchat_ledger_owner(grants["new-grant"], "another-account")
+    store = SubchatSubmissions(ledger.connection)
+    store.prepare(operation_id, "prompt", "model", "effort", owner=owner,
+                  conversation_id="conversation")
+    store.begin_send(operation_id, owner=owner, conversation_id="conversation",
+                     user_message_id="message", provider_account_id="account")
+    legacy_id = "e" * 32
+    store.prepare(legacy_id, "legacy", "model", "effort", owner="old-grant")
+    store.begin_send(legacy_id, owner="old-grant", user_message_id="legacy-message",
+                     provider_account_id="account")
+    store.submitted(legacy_id, "legacy-conversation", "legacy-message",
+                    owner="old-grant")
+    bound_root_id = "5" * 32
+    store.prepare(bound_root_id, "root", "model", "effort", owner="old-grant")
+    store.begin_send(bound_root_id, owner="old-grant", user_message_id="root-message",
+                     provider_account_id="account")
+    store.submitted(bound_root_id, "chain-conversation", "root-message",
+                    owner="old-grant")
+    store.complete(bound_root_id, "root-answer", "root answer", owner="old-grant")
+    unbound_child_id = "3" * 32
+    store.prepare(unbound_child_id, "child", "model", "effort", owner="old-grant",
+                  conversation_id="chain-conversation", after_operation_id=bound_root_id)
+    store.begin_send(unbound_child_id, owner="old-grant",
+                     conversation_id="chain-conversation")
+    store.submitted(unbound_child_id, "chain-conversation", "child-message",
+                    owner="old-grant")
+    store.complete(unbound_child_id, "child-answer", "child answer", owner="old-grant")
+    grandchild_id = "4" * 32
+    store.prepare(grandchild_id, "grandchild", "model", "effort", owner="old-grant",
+                  conversation_id="chain-conversation",
+                  after_operation_id=unbound_child_id)
+    wrong_account_id = "f" * 32
+    store.prepare(wrong_account_id, "other", "model", "effort", owner="old-grant")
+    store.begin_send(wrong_account_id, owner="old-grant", user_message_id="other-message",
+                     provider_account_id="another-account")
+    store.submitted(wrong_account_id, "other-conversation", "other-message",
+                    owner="old-grant")
+    wrong_queue_id = "0" * 32
+    store.prepare(wrong_queue_id, "private queue", "model", "effort",
+                  owner="old-grant", conversation_id="other-conversation",
+                  after_operation_id=wrong_account_id)
+    unbound_id = "d" * 32
+    store.prepare(unbound_id, "unbound", "model", "effort", owner="old-grant")
+    gateway = LazySubchatGateway(SubchatGatewayConfig(
+        profile=str(tmp_path / "profile"), ledger=str(ledger_path), account_id="account",
+        consent="ordinary-chat-browser-control-approved"), owner="owner")
+    for tool, operation, arguments in (
+        ("subchat_send", legacy_id, {}),
+        ("subchat_message", "6" * 32, {"target_operation_id": legacy_id}),
+        ("subchat_wait", "7" * 32, {"operation_id": legacy_id}),
+        ("subchat_recover", "8" * 32, {"operation_id": legacy_id}),
+        ("subchat_status", "9" * 32, {"operation_id": legacy_id}),
+    ):
+        assert gateway.owner_for_request(Request(
+            operation_id=operation, tool=tool, arguments=arguments),
+            stable_owner=owner, legacy_grant_id="old-grant") == "old-grant"
+    backend = AuthorizedDeviceMCP(Store(), Engine(), owner="owner", device="device",
+                                  subchat_gateway=gateway)
+
+    class Core:
+        def __init__(self, actual_owner):
+            self.owner = actual_owner
+            self.sends = {}
+            self.queue_watch_states = {}
+
+        async def execute(self, request):
+            if request.tool == "subchat_message":
+                target = store.get(request.arguments["target_operation_id"], owner=self.owner)
+                queued = store.prepare(
+                    request.operation_id, request.arguments["prompt"], target.model,
+                    target.effort, owner=self.owner,
+                    conversation_id=target.conversation_id,
+                    after_operation_id=target.operation_id,
+                )
+                return Reply(operation_id=request.operation_id, state="completed",
+                             data=queued.model_dump(mode="json"))
+            return Reply(operation_id=request.operation_id, state="completed",
+                         data={"operation_id": request.arguments["operation_id"]})
+
+        async def close(self):
+            pass
+
+    core_owners = []
+
+    def core_factory(actual_owner):
+        core_owners.append(actual_owner)
+        return Core(actual_owner)
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        actual = SubchatGateway(core_factory, owner=owner,
+                                account_id=config.account_id)
+        try:
+            yield actual
+        finally:
+            await actual.close()
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+
+    async def status(grant_id):
+        return await backend.session(grant_id).execute(Request(
+            operation_id="b" * 32, tool="subchat_status",
+            arguments={"operation_id": operation_id}))
+
+    try:
+        assert (await status("old-grant")).data["state"] == "sending"
+        legacy_status = await backend.session("old-grant").execute(Request(
+            operation_id="1" * 32, tool="subchat_status",
+            arguments={"operation_id": legacy_id}))
+        assert legacy_status.data["state"] == "submitted"
+        wrong_account = await backend.session("old-grant").execute(Request(
+            operation_id="2" * 32, tool="subchat_status",
+            arguments={"operation_id": wrong_account_id}))
+        assert wrong_account.data["error_code"] == "unknown_operation"
+        recovered = await backend.session("old-grant").execute(Request(
+            operation_id="3" * 32, tool="subchat_recover",
+            arguments={"operation_id": legacy_id}))
+        assert recovered.data["operation_id"] == legacy_id
+        assert core_owners == ["old-grant"]
+        del grants["old-grant"]
+        assert (await status("new-grant")).data["state"] == "sending"
+        legacy_from_new = await backend.session("new-grant").execute(Request(
+            operation_id="4" * 32, tool="subchat_status",
+            arguments={"operation_id": legacy_id}))
+        assert legacy_from_new.data["state"] == "submitted"
+        recovered_from_new = await backend.session("new-grant").execute(Request(
+            operation_id="a" * 32, tool="subchat_recover",
+            arguments={"operation_id": legacy_id}))
+        assert recovered_from_new.data["operation_id"] == legacy_id
+        assert core_owners == ["old-grant"]
+        queued_id = "6" * 32
+        queued = await backend.session("new-grant").execute(Request(
+            operation_id=queued_id, tool="subchat_message",
+            arguments={"mode": "queue", "target_operation_id": legacy_id,
+                       "prompt": "follow-up"}))
+        assert queued.data["state"] == "queued"
+        queued_status = await backend.session("new-grant").execute(Request(
+            operation_id="7" * 32, tool="subchat_status",
+            arguments={"operation_id": queued_id}))
+        assert queued_status.data["state"] == "queued"
+        queued_recovery = await backend.session("new-grant").execute(Request(
+            operation_id="8" * 32, tool="subchat_recover",
+            arguments={"operation_id": queued_id}))
+        assert queued_recovery.data["operation_id"] == queued_id
+        grandchild_status = await backend.session("new-grant").execute(Request(
+            operation_id="8" * 32, tool="subchat_status",
+            arguments={"operation_id": grandchild_id}))
+        assert grandchild_status.data["state"] == "queued"
+        grandchild_recovery = await backend.session("new-grant").execute(Request(
+            operation_id="c" * 32, tool="subchat_recover",
+            arguments={"operation_id": grandchild_id}))
+        assert grandchild_recovery.data["operation_id"] == grandchild_id
+        unbound_from_new = await backend.session("new-grant").execute(Request(
+            operation_id="b" * 32, tool="subchat_status",
+            arguments={"operation_id": unbound_id}))
+        assert unbound_from_new.data["error_code"] == "unknown_operation"
+        wrong_queue_from_new = await backend.session("new-grant").execute(Request(
+            operation_id="9" * 32, tool="subchat_status",
+            arguments={"operation_id": wrong_queue_id}))
+        assert wrong_queue_from_new.data["error_code"] == "unknown_operation"
+        private = await status("other-client")
+        assert private.state == "failed" and private.data["error_code"] == "unknown_operation"
+        private_legacy = await backend.session("other-client").execute(Request(
+            operation_id="5" * 32, tool="subchat_status",
+            arguments={"operation_id": legacy_id}))
+        assert private_legacy.data["error_code"] == "unknown_operation"
+        store.interrupt(legacy_id, owner="old-grant")
+        after_parent_interrupt = await backend.session("new-grant").execute(Request(
+            operation_id="1" * 32, tool="subchat_status",
+            arguments={"operation_id": queued_id}))
+        assert after_parent_interrupt.data["state"] == "queued"
+        store.cancel(queued_id, owner="old-grant")
+        after_child_cancel = await backend.session("new-grant").execute(Request(
+            operation_id="2" * 32, tool="subchat_status",
+            arguments={"operation_id": queued_id}))
+        assert after_child_cancel.data["state"] == "cancelled"
+        # A second submission for the same conversation still sees the first
+        # grant's in-flight send after re-consent.
+        next_id = "c" * 32
+        store.prepare(next_id, "next", "model", "effort", owner=(
+            subchat_ledger_owner(grants["new-grant"], "account")),
+            conversation_id="conversation")
+        from anywhere_computer.subchat_state import SubchatConcurrentSend
+
+        with pytest.raises(SubchatConcurrentSend):
+            store.begin_send(next_id, owner=owner, conversation_id="conversation")
+        different_account_gateway = LazySubchatGateway(SubchatGatewayConfig(
+            profile=str(tmp_path / "profile"), ledger=str(ledger_path),
+            account_id="another-account",
+            consent="ordinary-chat-browser-control-approved"), owner="owner")
+        other_backend = AuthorizedDeviceMCP(Store(), Engine(), owner="owner", device="device",
+                                            subchat_gateway=different_account_gateway)
+        another_account = await other_backend.session("new-grant").execute(Request(
+            operation_id="d" * 32, tool="subchat_status",
+            arguments={"operation_id": operation_id}))
+        assert another_account.state == "failed"
+        assert another_account.data["error_code"] == "unknown_operation"
+        await different_account_gateway.close()
+    finally:
+        await gateway.close()
+        ledger.close()
+
+
+@pytest.mark.asyncio
 async def test_gateway_evicts_only_durable_completed_send_receipts():
     class Core:
         async def catalog(self):
@@ -671,6 +965,109 @@ async def test_failed_preparation_can_retry_exact_id_and_does_not_block_recovery
     assert recovered.state == "completed"
     assert len(gateway.pending) <= 129
     await gateway.close()
+
+
+@pytest.mark.asyncio
+async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same_id_retry(
+    tmp_path, monkeypatch,
+):
+    from test_subchat_lifecycle import BrowserFixture
+
+    import anywhere_computer.subchat_gateway as gateway_module
+    from anywhere_computer import subchat_mcp
+
+    monkeypatch.setattr(subchat_mcp, "SEND_ACK_TIMEOUT", .02)
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+    attempts = 0
+
+    class Backend(BrowserFixture):
+        async def prepare(self, submission):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                entered.set()
+                await finish.wait()
+                raise ValueError("Ordinary Chat composer contains a draft")
+            return await super().prepare(submission)
+
+    ledger = Ledger(tmp_path / "ledger")
+    backend = Backend()
+    store = SubchatSubmissions(ledger.connection)
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "profile"), ledger=str(tmp_path / "ledger"),
+        account_id="account", consent="ordinary-chat-browser-control-approved")
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        assert config is selected and owner == "owner"
+        gateway = SubchatGateway(lambda grant: session(
+            Subchats(store, backend), owner=grant), owner=owner)
+        try:
+            yield gateway
+        finally:
+            await gateway.close()
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    gateway = LazySubchatGateway(selected, owner="owner", idle_close_seconds=.01)
+    operation_id = "a" * 32
+    send = Request(operation_id=operation_id, tool="subchat_send", arguments={
+        "prompt": "work", "model": "model", "effort": "effort"})
+    scopes = frozenset({"subchat_send", "subchat_status", "subchat_recover"})
+    try:
+        first = await gateway.execute("grant", send, scopes)
+        await entered.wait()
+        assert first.state == "running" and attempts == 1
+        finish.set()
+        core = gateway._gateway.cores["grant"]
+        with pytest.raises(subchat_mcp.SubchatPreparationFailed):
+            await core.sends[operation_id]
+        assert store.get(operation_id, owner="grant").state == "prepared"
+        assert backend.sends == 0
+        await asyncio.sleep(.04)
+        assert gateway._gateway is not None
+
+        for tool in ("subchat_status", "subchat_recover"):
+            observed = await gateway.execute("grant", Request(
+                operation_id="b" * 32 if tool == "subchat_status" else "c" * 32,
+                tool=tool, arguments={"operation_id": operation_id}), scopes)
+            assert observed.state == "failed"
+            assert observed.data == {"error_code": "preparation_failed",
+                                     "dispatched": False,
+                                     "reason": "composer_has_draft"}
+        private = await gateway.execute("other-grant", Request(
+            operation_id="d" * 32, tool="subchat_status",
+            arguments={"operation_id": operation_id}), scopes)
+        assert private.data["error_code"] == "unknown_operation"
+        conflict = await gateway.execute("grant", send.model_copy(update={
+            "arguments": {**send.arguments, "prompt": "different"}}), scopes)
+        assert conflict.state == "failed" and conflict.data["dispatched"] is False
+        assert attempts == 1 and backend.sends == 0
+        # Only this explicit same-ID send may attempt preparation again.
+        monkeypatch.setattr(subchat_mcp, "SEND_ACK_TIMEOUT", .0001)
+        retried = await gateway.execute("grant", send, scopes)
+        if retried.state == "running":
+            # A slow worker may reach the ACK deadline before the deterministic
+            # fixture reports its uncertain dispatch. Await that same task;
+            # the same-ID lookup below checks its durable outcome without replay.
+            sending = core.sends.get(operation_id)
+            if sending is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(sending), timeout=5)
+                except SubchatOutcomeUnknown:
+                    pass
+            retried = await gateway.execute("grant", send, scopes)
+        assert (retried.state == "unknown" or
+                (retried.state == "completed" and retried.data.get("state") == "sending"))
+        assert attempts == 2 and backend.sends == 1
+        duplicate = await gateway.execute("grant", send, scopes)
+        assert (duplicate.state == "unknown" or
+                (duplicate.state == "completed" and duplicate.data.get("state") == "sending"))
+        assert backend.sends == 1
+    finally:
+        finish.set()
+        await gateway.close()
+        ledger.close()
 
 
 @pytest.mark.asyncio

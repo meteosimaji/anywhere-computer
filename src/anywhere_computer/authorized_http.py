@@ -14,7 +14,12 @@ from .mcp_server import INSTRUCTIONS as MCP_INSTRUCTIONS
 from .mcp_server import OPERATION_META, MCPSession, rpc_error
 from .models import OperationId, Reply, Request
 from .remote_bridge import RemoteAgent
-from .subchat_gateway import SUBCHAT_GATEWAY_TOOLS, LazySubchatGateway, SubchatGateway
+from .subchat_gateway import (
+    SUBCHAT_GATEWAY_TOOLS,
+    LazySubchatGateway,
+    SubchatGateway,
+    subchat_ledger_owner,
+)
 
 
 class SubchatHTTPSession(MCPSession):
@@ -124,8 +129,10 @@ class AuthorizedDeviceMCP:
             )
 
         async def catalog() -> list[JsonValue]:
-            granted = current().tools
-            subchat = (await self.subchat_gateway.catalog(current().grant_id, granted)
+            grant = current()
+            granted = grant.tools
+            subchat = (await self.subchat_gateway.catalog(
+                subchat_ledger_owner(grant, self.subchat_gateway.account_id), granted)
                        if self.subchat_gateway is not None else [])
             if self.device_directory is None or not granted & ROUTER_TOOLS:
                 return [*await local_catalog(), *subchat]
@@ -142,7 +149,17 @@ class AuthorizedDeviceMCP:
                 if self.subchat_gateway is None or grant.owner != self.subchat_gateway.owner:
                     return Reply(operation_id=request.operation_id, state="failed",
                                  error="Subchat gateway is unavailable")
-                return await self.subchat_gateway.execute(grant.grant_id, request, grant.tools)
+                subchat_owner = subchat_ledger_owner(grant, self.subchat_gateway.account_id)
+                if (request.tool in grant.tools
+                        and isinstance(self.subchat_gateway, LazySubchatGateway)):
+                    subchat_owner = await asyncio.to_thread(
+                        self.subchat_gateway.owner_for_request, request,
+                        stable_owner=subchat_owner, legacy_grant_id=grant.grant_id,
+                        same_principal_grant=lambda candidate: self.store.same_principal_grant(
+                            grant, candidate),
+                    )
+                return await self.subchat_gateway.execute(
+                    subchat_owner, request, grant.tools)
             if request.tool not in ROUTER_TOOLS:
                 return await local_execute(request)
             if self.device_directory is None or request.tool not in grant.tools:

@@ -3,8 +3,10 @@ function observeSubchatStream(binding, expectedAccount = null) {
   const original = window.fetch;
   let active = true;
   const wrapped = async function (...args) {
+    // An owned fetch can resolve after the observer's installation window.
+    const observing = active;
     const response = await Reflect.apply(original, this, args);
-    if (!active || response.url !== 'https://chatgpt.com/backend-api/f/conversation') return response;
+    if (!observing || response.url !== 'https://chatgpt.com/backend-api/f/conversation') return response;
     let input, account;
     try {
       const body = JSON.parse(args[1]?.body);

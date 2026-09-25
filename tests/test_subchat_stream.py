@@ -9,6 +9,50 @@ from anywhere_computer.subchat_browser.backend import STREAM
 from anywhere_computer.subchat_state import SubchatSubmissions
 
 
+async def test_stream_started_before_observer_expiry_keeps_late_response_candidate():
+    playwright = pytest.importorskip('playwright.async_api')
+    async with playwright.async_playwright() as driver:
+        try:
+            browser = await driver.chromium.launch(channel='chrome', headless=True)
+        except playwright.Error as error:
+            if 'not found' in str(error) or "doesn't exist" in str(error):
+                pytest.skip('Chrome required for stream observation')
+            raise
+        try:
+            page = await browser.new_page()
+            candidate = asyncio.Event()
+            observed = []
+
+            def save(source, message, conversation, account):
+                observed.append((message, conversation, account))
+                candidate.set()
+
+            await page.expose_binding('saveCandidate', save)
+            await page.evaluate('''() => {
+                const nativeTimeout = window.setTimeout;
+                window.setTimeout = (callback, delay) =>
+                    nativeTimeout(callback, delay === 60000 ? 20 : delay);
+                window.fetch = async () => {
+                    await new Promise(resolve => nativeTimeout(resolve, 50));
+                    const response = new Response(
+                        'data: {"conversation_id":"11111111-2222-3333-4444-555555555555"}\\n\\n',
+                        {headers:{'content-type':'text/event-stream'}});
+                    Object.defineProperty(response, 'url',
+                        {value:'https://chatgpt.com/backend-api/f/conversation'});
+                    return response;
+                };
+            }''')
+            await page.evaluate(STREAM + '\nobserveSubchatStream', 'saveCandidate')
+            await page.evaluate('''() => fetch('/unused', {
+                headers:{'chatgpt-account-id':'account'},
+                body:JSON.stringify({messages:[{id:'input'}]})})''')
+            await asyncio.wait_for(candidate.wait(), 3)
+            assert observed == [('input', '11111111-2222-3333-4444-555555555555',
+                                 'account')]
+        finally:
+            await browser.close()
+
+
 async def test_parallel_stream_candidates_survive_restart_without_acceptance(tmp_path):
     playwright = pytest.importorskip('playwright.async_api')
     ledger = Ledger(tmp_path)

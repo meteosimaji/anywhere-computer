@@ -129,6 +129,32 @@ to use its existing login. To retain the choice across Plugin updates, create
 with `{"chrome_source_profile":"/absolute/path/to/Chrome/Default",
 "expected_account_id":"your-Chat-account-ID"}`. The account ID is optional,
 but pinning it prevents a different logged-in account from being accepted.
+On macOS, `anywhere-subchat-setup inspect '/absolute/path/to/Chrome/Default'`
+observes the account ID through a private profile snapshot. It leaves the source
+profile unchanged and requests a background Chrome launch with no startup window.
+From a source checkout, run
+`uv run --locked --extra browser anywhere-subchat-setup inspect '/absolute/path/to/Chrome/Default'`.
+For an installed Codex or Claude Plugin, run the setup entry point from the
+Plugin's bundled wheel and requirements, using the absolute path to the
+installed Plugin directory:
+
+```sh
+PLUGIN_ROOT=/absolute/path/to/installed/anywhere-computer
+WHEEL=$(find "$PLUGIN_ROOT/bundled" -maxdepth 1 -name 'anywhere_computer-*.whl' -print -quit)
+uv tool run --python 3.12 --from "$WHEEL" \
+  --with-requirements "$PLUGIN_ROOT/bundled/dependencies.txt" \
+  anywhere-subchat-setup inspect '/absolute/path/to/Chrome/Default'
+```
+
+Replace `inspect` with `select` and add the options below after reviewing the
+account ID. A base wheel installation needs its optional `browser` extra for
+inspection; the Plugin's bundled requirements already include Playwright.
+After checking the ID,
+`anywhere-subchat-setup select '/absolute/path/to/Chrome/Default' --expect-account-id ID`
+saves the verified profile and account pin in a mode-0600 selection file. Selection
+keeps the Plugin read-only. Add `--enable-background-send` to `select` only when
+you explicitly intend to enable background browser-prepared sending. Restart the
+Plugin after selection. The setup command prints no cookies, tokens, or email.
 `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` and
 `ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID` override their respective file values.
 Neither setting contains cookies or tokens. In read-only HTTP mode, the Plugin

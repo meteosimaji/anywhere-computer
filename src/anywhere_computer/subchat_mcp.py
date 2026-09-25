@@ -88,6 +88,8 @@ class ChatImage(OperationId):
 
 
 QUEUE_WATCH_INTERVAL = 5.0
+SEND_ACK_TIMEOUT = 2.0
+WAIT_POLL_INTERVAL_MS = 10_000
 READ_ONLY_TOOLS = frozenset({
     'subchat_capabilities', 'subchat_catalog', 'subchat_list',
     'subchat_recover', 'subchat_status', 'subchat_wait', 'subchat_download_file',
@@ -118,7 +120,8 @@ _BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
                        'checkpoint without browser interaction.'),
     'subchat_wait': (Wait, 'Wait for an answer without stopping generation or resending. '
                      'Other subchats can progress between observations. Timeout returns '
-                     'the current saved state, not a failed generation.'),
+                     'the current saved state, elapsed_ms and a suggested next poll interval; '
+                     'it is not a failed generation or a provider ETA.'),
 }
 _CAPABILITIES_DEFINITION = (
     Contract, 'Read configured transport capabilities without network or browser work.')
@@ -191,8 +194,9 @@ INSTRUCTIONS = (
     'thinking_effort (including null); still provide observed UI model/effort labels. '
     'The adapter rechecks availability and rejects a different wire model or effort before '
     'forwarding. Queue follow-ups inherit the selection; never guess IDs from labels. '
-    'Choose request_id before subchat_send. Its response is a submission receipt, not a '
-    'finished answer. Poll subchat_recover with operation_id equal to that send request_id. '
+    'Choose request_id before subchat_send. Its response may be a pending local checkpoint '
+    'while the owned send continues; it is not a finished answer or permission to resend. '
+    'Poll subchat_recover with operation_id equal to that send request_id. '
     'subchat_message mode=queue persists a follow-up bound to the target operation; '
     'recover/wait on its message operation dispatches only after that target completes. '
     'subchat_cancel cancels only a local queued/prepared input, never generation. '
@@ -211,7 +215,8 @@ INSTRUCTIONS = (
     'reply_interrupted means saved partial output was not accepted as a final answer; '
     'inspect the conversation instead of automatically resending or releasing its queue. '
     'subchat_wait defaults to one second, allows at most ten seconds, and returns the '
-    'current saved state; '
+    'current saved state, elapsed_ms and a suggested_poll_interval_ms while pending; '
+    'the interval is a client polling hint, not a provider ETA. '
     'a pending result can be waited on again without stopping generation. '
     'subchat_status reads the saved record without browser interaction. '
     'When present, http_progress is the latest saved transport checkpoint, not proof of a '
@@ -249,13 +254,19 @@ INSTRUCTIONS = (
 class SubchatSession(MCPSession):
     def __init__(self, catalog: ToolCatalog, execute: Execute,
                  tasks: dict[str, asyncio.Task[SubchatSubmission]],
-                 *, instructions: str = INSTRUCTIONS) -> None:
+                 sends: dict[str, asyncio.Task[SubchatSubmission]],
+                 *, instructions: str = INSTRUCTIONS,
+                 live_transport: Callable[[], bool] | None = None,
+                 close_transport: Callable[[], Awaitable[None]] | None = None) -> None:
         self.recoveries = tasks
+        self.sends = sends
         self.closed = False
         self.calls: dict[asyncio.Task[Reply], Request] = {}
         self.queue_watches: dict[str, asyncio.Task[None]] = {}
         self.queue_watch_states: dict[str, dict[str, JsonValue]] = {}
         self.queue_watch_deadlines: dict[str, float] = {}
+        self.live_transport = live_transport
+        self.close_transport = close_transport
 
         async def managed(request: Request) -> Reply:
             if self.closed:
@@ -275,11 +286,15 @@ class SubchatSession(MCPSession):
 
     async def close(self) -> None:
         self.closed = True
-        tasks = [*self.queue_watches.values(), *self.recoveries.values(), *self.calls]
+        tasks = [*self.queue_watches.values(), *self.recoveries.values(),
+                 *self.sends.values(), *self.calls]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        if self.close_transport is not None:
+            await self.close_transport()
         self.recoveries.clear()
+        self.sends.clear()
         self.calls.clear()
         self.queue_watches.clear()
         self.queue_watch_states.clear()
@@ -297,6 +312,17 @@ def session(service: Subchats, *,
     # Clipboard interception and draft preparation must not interleave across calls.
     browser_lock = asyncio.Lock()
     recoveries: dict[str, asyncio.Task[SubchatSubmission]] = {}
+    sends: dict[str, asyncio.Task[SubchatSubmission]] = {}
+
+    def raise_failed_preparation(operation_id: str, current: SubchatSubmission) -> None:
+        """Expose a late send failure while its unsent ledger row is still prepared."""
+        if current.state != 'prepared':
+            return
+        sending = sends.get(operation_id)
+        if sending is not None and sending.done() and not sending.cancelled():
+            error = sending.exception()
+            if error is not None:
+                raise error
 
     async def watch_queue(operation_id: str) -> None:
         try:
@@ -341,8 +367,14 @@ def session(service: Subchats, *,
         if server.closed:
             raise RuntimeError('Subchat session is closed')
         current = service.store.get(operation_id, owner=owner)
+        raise_failed_preparation(operation_id, current)
         if current.state == 'interrupted':
             raise SubchatInterrupted('Provider interruption is saved; do not resend')
+        # An owned send may still be preparing or awaiting its one generation
+        # response. Its ledger checkpoint is the only safe immediate observation.
+        sending = sends.get(operation_id)
+        if sending is not None and not sending.done():
+            return current
         # Recovering a queued follow-up can dispatch it when its parent is complete.
         # An observation-only server must leave that durable queue untouched.
         if read_only and current.state == 'queued':
@@ -586,10 +618,14 @@ def session(service: Subchats, *,
                 recovery = recoveries.get(target.operation_id)
                 if recovery is not None:
                     pending.append(recovery)
+                sending = sends.get(target.operation_id)
+                if sending is not None:
+                    pending.append(sending)
                 for task in pending:
                     task.cancel()
                 await asyncio.gather(*pending, return_exceptions=True)
                 recoveries.pop(target.operation_id, None)
+                sends.pop(target.operation_id, None)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data=result.model_dump(mode='json'))
             if request.tool == 'subchat_delete':
@@ -613,7 +649,9 @@ def session(service: Subchats, *,
                              data=result.model_dump(mode='json'))
             if request.tool == 'subchat_wait':
                 wait = Wait.model_validate(request.arguments)
+                started = time.monotonic()
                 result = service.store.get(wait.operation_id, owner=owner)
+                raise_failed_preparation(wait.operation_id, result)
                 deadline = asyncio.timeout(wait.wait_ms / 1000)
                 try:
                     async with deadline:
@@ -637,6 +675,10 @@ def session(service: Subchats, *,
                         result = current
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={**result.model_dump(mode='json'),
+                                   'elapsed_ms': max(0, round((time.monotonic() - started) * 1000)),
+                                   'suggested_poll_interval_ms': (
+                                       WAIT_POLL_INTERVAL_MS if result.state in {
+                                           'queued', 'sending', 'submitted'} else None),
                                    **({'http_progress': progress} if (progress :=
                                       service.store.http_progress(result.operation_id,
                                                                   owner=owner)) is not None
@@ -664,17 +706,54 @@ def session(service: Subchats, *,
                 return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_send':
                 args = Send.model_validate(request.arguments)
-                async with browser_lock:
-                    result = await service.send(request.operation_id, args.prompt, args.model,
-                                                args.effort, owner=owner,
-                                                conversation_id=args.conversation_id,
-                                                work_context=args.work_context,
-                                                resources=args.resources,
-                                                http_selection=args.http_selection)
+                prepared = service.store.prepare(
+                    request.operation_id, args.prompt, args.model, args.effort, owner=owner,
+                    conversation_id=args.conversation_id, work_context=args.work_context,
+                    resources=args.resources, http_selection=args.http_selection)
+                sending = sends.get(request.operation_id)
+                if (sending is not None and sending.done() and not sending.cancelled()
+                        and sending.exception() is not None and prepared.state == 'prepared'):
+                    # An exact explicit retry may prepare again. Observation
+                    # never retries, and the ledger still guards dispatch.
+                    sends.pop(request.operation_id)
+                    sending = None
+                if prepared.state != 'prepared':
+                    result = prepared
+                else:
+                    if sending is None:
+                        async def dispatch() -> SubchatSubmission:
+                            async with browser_lock:
+                                return await service.send(
+                                    request.operation_id, args.prompt, args.model, args.effort,
+                                    owner=owner, conversation_id=args.conversation_id,
+                                    work_context=args.work_context, resources=args.resources,
+                                    http_selection=args.http_selection)
+
+                        sending = asyncio.create_task(dispatch())
+                        sends[request.operation_id] = sending
+
+                        def completed(done: asyncio.Task[SubchatSubmission]) -> None:
+                            # Keep a late failure available to status/recover.
+                            # A successful result is already durable in the ledger.
+                            if (sends.get(request.operation_id) is done
+                                    and (done.cancelled() or done.exception() is None)):
+                                sends.pop(request.operation_id)
+
+                        sending.add_done_callback(completed)
+                    try:
+                        result = await asyncio.wait_for(
+                            asyncio.shield(sending), SEND_ACK_TIMEOUT)
+                    except TimeoutError:
+                        current = service.store.get(request.operation_id, owner=owner)
+                        return Reply(operation_id=request.operation_id, state='running',
+                                     data={**current.model_dump(mode='json'),
+                                           'submission_operation_id': request.operation_id,
+                                           'send_in_progress': True})
             elif request.tool in {'subchat_recover', 'subchat_status'}:
                 target = OperationId.model_validate(request.arguments)
                 if request.tool == 'subchat_status':
                     result = service.store.get(target.operation_id, owner=owner)
+                    raise_failed_preparation(target.operation_id, result)
                 else:
                     result = await observe(target.operation_id)
             else:
@@ -802,6 +881,9 @@ def session(service: Subchats, *,
                          error='Subchat call failed; inspect its saved status before retrying.',
                          data={'error_type': type(error).__name__})
 
-    server = SubchatSession(catalog, execute, recoveries,
-                            instructions=INSTRUCTIONS if instructions is None else instructions)
+    server = SubchatSession(
+        catalog, execute, recoveries, sends,
+        instructions=INSTRUCTIONS if instructions is None else instructions,
+        live_transport=getattr(service.backend, 'has_live_generation', None),
+        close_transport=getattr(service.backend, 'close_generations', None))
     return server
