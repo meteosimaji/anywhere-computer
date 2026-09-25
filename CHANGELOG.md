@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a40 / Plugin 0.2.0-alpha.40 — unpublished candidate (2026-09-25)
+
+- Expose an owner- and account-scoped, read-only Subchat submission list over
+  the authenticated HTTPS gateway so a client can recover saved operation IDs
+  without opening Chrome. Continue to require exact-ID validation for legacy
+  grants rather than listing their submissions.
+
 ## 0.2.0a39 / Plugin 0.2.0-alpha.39 — unpublished candidate (2026-09-25)
 
 - Reclaim isolated browser sessions after their page closes or browser

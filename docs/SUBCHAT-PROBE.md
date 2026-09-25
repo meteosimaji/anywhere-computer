@@ -49,6 +49,15 @@ call. Sanitized preparation failures are saved with their operation ID so a
 later status call can report the reason after a controller restart; an exact
 retry clears that prior failure before preparing again.
 
+The separately authorized ChatGPT HTTPS Subchat gateway also exposes
+`subchat_list`. It reads saved operation summaries for the selected account and
+current principal without opening Chrome, so a client can recover an operation
+ID after losing local state. Results are paginated. Operations owned by older
+grant identities remain accessible only through their exact IDs after the
+principal and account checks; the list does not enumerate those legacy rows.
+Publishing this tool does not grant it to an existing OAuth connection. The
+owner must consent to its scope before an ordinary Chat can invoke it.
+
 To enable actual sends through the dedicated Chrome profile, set
 `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process and restart
 its MCP session. This exposes `subchat_send`, `subchat_message` and related

@@ -149,7 +149,7 @@ def direct_gateway_catalog() -> list[JsonValue]:
     """Advertise selected direct tools without opening or authenticating Chrome."""
     definitions = {name: definition for name, definition in _BASE_TOOL_DEFINITIONS.items()
                    if name in {'subchat_message', 'subchat_send', 'subchat_recover',
-                               'subchat_status', 'subchat_wait'}}
+                               'subchat_status', 'subchat_list', 'subchat_wait'}}
     definitions['subchat_capabilities'] = _CAPABILITIES_DEFINITION
     definitions['subchat_catalog'] = _GATEWAY_CATALOG_DEFINITION
     return _tool_catalog(definitions)

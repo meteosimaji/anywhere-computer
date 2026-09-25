@@ -614,6 +614,73 @@ async def test_local_status_and_capabilities_match_session_without_opening_chrom
 
 
 @pytest.mark.asyncio
+async def test_https_subchat_list_recovers_owned_ids_without_chrome(tmp_path, monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    grants = {
+        grant_id: GrantIdentity(grant_id=grant_id, owner="owner", device="device",
+                                client="client", resource=RESOURCE,
+                                tools=frozenset({"subchat_list"}))
+        for grant_id in ("old-grant", "new-grant")
+    }
+
+    class Store:
+        def current_grant(self, identity):
+            return grants.get(identity)
+
+    class Engine:
+        def catalog(self, granted):
+            return []
+
+    @asynccontextmanager
+    async def forbidden_gateway(config, *, owner):
+        raise AssertionError("Listing opened Chrome")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", forbidden_gateway)
+    ledger_path = tmp_path / "ledger"
+    ledger = Ledger(ledger_path)
+    saved = SubchatSubmissions(ledger.connection)
+    stable_owner = subchat_ledger_owner(grants["old-grant"], "account")
+    other_account = subchat_ledger_owner(grants["old-grant"], "other-account")
+    first_id, second_id, hidden_id = "1" * 32, "2" * 32, "3" * 32
+    saved.prepare(first_id, "first", "model", "effort", owner=stable_owner)
+    saved.prepare(second_id, "second", "model", "effort", owner=stable_owner)
+    saved.prepare(hidden_id, "hidden", "model", "effort", owner=other_account)
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "selected" / "Default"), ledger=str(ledger_path),
+        account_id="account", consent="ordinary-chat-browser-control-approved")
+    gateway = LazySubchatGateway(selected, owner="owner")
+    backend = AuthorizedDeviceMCP(Store(), Engine(), owner="owner", device="device",
+                                  subchat_gateway=gateway)
+    try:
+        view = backend.session("new-grant")
+        assert [tool["name"] for tool in await view.catalog()] == ["subchat_list"]
+        first = await view.execute(Request(operation_id="a" * 32, tool="subchat_list",
+                                           arguments={"limit": 1}))
+        assert first.state == "completed"
+        assert [item["operation_id"] for item in first.data["submissions"]] == [second_id]
+        assert isinstance(first.data["next_before"], int)
+        second = await view.execute(Request(operation_id="b" * 32, tool="subchat_list",
+                                            arguments={"limit": 1,
+                                                       "before": first.data["next_before"]}))
+        assert [item["operation_id"] for item in second.data["submissions"]] == [first_id]
+        assert second.data["next_before"] is None
+        invalid = await view.execute(Request(operation_id="c" * 32, tool="subchat_list",
+                                             arguments={"limit": 0}))
+        assert invalid.state == "failed" and invalid.data["error_code"] == "invalid_parameter"
+        denied = await gateway.execute(stable_owner, Request(
+            operation_id="d" * 32, tool="subchat_list"), frozenset())
+        assert denied.state == "failed"
+        grants.pop("new-grant")
+        with pytest.raises(ValueError, match="authorization is no longer available"):
+            await view.execute(Request(operation_id="e" * 32, tool="subchat_list"))
+    finally:
+        await gateway.close()
+        ledger.close()
+
+
+@pytest.mark.asyncio
 async def test_authorized_view_rechecks_grant_before_subchat_dispatch():
     grant = GrantIdentity(grant_id="grant-a", owner="owner", device="device",
                           client="client", resource=RESOURCE,
