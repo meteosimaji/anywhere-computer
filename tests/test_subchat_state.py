@@ -8,8 +8,41 @@ from anywhere_computer.state import Ledger
 from anywhere_computer.subchat_state import (
     SubchatAccountMismatch,
     SubchatConcurrentSend,
+    SubchatList,
+    SubchatRequestConflict,
     SubchatSubmissions,
 )
+
+
+def test_explicit_send_intent_survives_restart_and_rejects_changed_input(tmp_path):
+    key = '1' * 32
+    first_id = '2' * 32
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        saved = store.prepare(first_id, 'prompt', 'model', 'effort',
+                              owner='peer', intent_key=key)
+        assert saved.operation_id == first_id
+        with pytest.raises(SubchatRequestConflict):
+            store.prepare('3' * 32, 'different', 'model', 'effort',
+                          owner='peer', intent_key=key)
+        assert store.prepare('4' * 32, 'prompt', 'model', 'effort',
+                             owner='peer', intent_key=key).operation_id == first_id
+        with pytest.raises(SubchatRequestConflict):
+            store.prepare(first_id, 'prompt', 'model', 'effort',
+                          owner='peer', intent_key='5' * 32)
+    finally:
+        ledger.close()
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        assert store.prepare('6' * 32, 'prompt', 'model', 'effort',
+                             owner='peer', intent_key=key).operation_id == first_id
+        assert store.prepare('7' * 32, 'prompt', 'model', 'effort',
+                             owner='other', intent_key=key).operation_id == '7' * 32
+        assert len(store.list(SubchatList(), owner='peer').submissions) == 1
+    finally:
+        ledger.close()
 
 
 def test_restart_retains_uncertain_send_and_completed_reply(tmp_path):

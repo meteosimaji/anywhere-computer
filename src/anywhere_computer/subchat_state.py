@@ -173,6 +173,13 @@ class SubchatSubmissions:
                                'user_message_id TEXT NOT NULL, account_id TEXT NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_submissions ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, body TEXT NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_send_intents ('
+                               'owner TEXT, intent_key TEXT NOT NULL, '
+                               'operation_id TEXT NOT NULL UNIQUE, '
+                               'PRIMARY KEY (owner, intent_key))')
+            connection.execute('CREATE UNIQUE INDEX IF NOT EXISTS '
+                               'subchat_send_intents_unowned ON '
+                               'subchat_send_intents(intent_key) WHERE owner IS NULL')
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_preparation_failures ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, '
                                'reason TEXT NOT NULL)')
@@ -436,7 +443,8 @@ class SubchatSubmissions:
                 work_context: SubchatWorkContext | None = None,
                 after_operation_id: str | None = None,
                 resources: SubchatResources | None = None,
-                http_selection: SubchatHTTPSelection | None = None) -> SubchatSubmission:
+                http_selection: SubchatHTTPSelection | None = None,
+                intent_key: str | None = None) -> SubchatSubmission:
         if conversation_id is not None and not conversation_id.strip():
             raise ValueError('Conversation identity must not be empty')
         if work_context is not None and work_context.parent_operation_id is not None:
@@ -455,28 +463,53 @@ class SubchatSubmissions:
             if http_selection != target.http_selection:
                 raise ValueError('Queue HTTP selection does not match its target')
             expected_last_user_message_id = target.user_message_id
-        proposed = SubchatSubmission(operation_id=operation_id, prompt=prompt,
-                                     model=model, effort=effort,
-                                     requested_conversation_id=conversation_id,
-                                     conversation_id=conversation_id, work_context=work_context,
-                                     resources=resources, http_selection=http_selection,
-                                     state='queued' if after_operation_id else 'prepared',
-                                     after_operation_id=after_operation_id,
-                                     expected_last_user_message_id=expected_last_user_message_id)
         with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            if intent_key is not None:
+                if re.fullmatch(r'[0-9a-f]{32}', intent_key) is None:
+                    raise ValueError('Invalid Subchat intent key')
+                bound = self.connection.execute(
+                    'SELECT operation_id FROM subchat_send_intents '
+                    'WHERE owner IS ? AND intent_key=?', (owner, intent_key),
+                ).fetchone()
+                if bound is not None:
+                    operation_id = bound[0]
+                else:
+                    existing_binding = self.connection.execute(
+                        'SELECT intent_key FROM subchat_send_intents WHERE operation_id=?',
+                        (operation_id,),
+                    ).fetchone()
+                    if existing_binding is not None or self.connection.execute(
+                            'SELECT 1 FROM subchat_submissions WHERE operation_id=?',
+                            (operation_id,)).fetchone() is not None:
+                        raise SubchatRequestConflict(
+                            'Subchat submission ID already belongs to another intent')
+                    self.connection.execute(
+                        'INSERT INTO subchat_send_intents VALUES (?,?,?)',
+                        (owner, intent_key, operation_id),
+                    )
+            proposed = SubchatSubmission(operation_id=operation_id, prompt=prompt,
+                                         model=model, effort=effort,
+                                         requested_conversation_id=conversation_id,
+                                         conversation_id=conversation_id,
+                                         work_context=work_context,
+                                         resources=resources, http_selection=http_selection,
+                                         state='queued' if after_operation_id else 'prepared',
+                                         after_operation_id=after_operation_id,
+                                         expected_last_user_message_id=expected_last_user_message_id)
             self.connection.execute(
                 'INSERT OR IGNORE INTO subchat_submissions VALUES (?,?,?)',
                 (operation_id, owner, _saved_submission_json(proposed)),
             )
-        existing = self.get(operation_id, owner=owner)
-        if (existing.prompt, existing.model, existing.effort,
-            existing.requested_conversation_id, existing.work_context,
-            existing.after_operation_id, existing.resources, existing.http_selection) != (
-                prompt, model, effort, conversation_id, work_context, after_operation_id,
-                resources, http_selection):
-            raise SubchatRequestConflict(
-                'Subchat submission ID was already used for different arguments')
-        return existing
+            existing = self.get(operation_id, owner=owner)
+            if (existing.prompt, existing.model, existing.effort,
+                existing.requested_conversation_id, existing.work_context,
+                existing.after_operation_id, existing.resources, existing.http_selection) != (
+                    prompt, model, effort, conversation_id, work_context, after_operation_id,
+                    resources, http_selection):
+                raise SubchatRequestConflict(
+                    'Subchat submission ID was already used for different arguments')
+            return existing
 
     def _replace(self, old: SubchatSubmission, new: SubchatSubmission,
                  owner: str | None, *, http_event: str | None = None) -> SubchatSubmission:

@@ -23,8 +23,14 @@ def _snapshot_profile(source: Path, destination: Path) -> None:
     root = source.parent
     local_state = root / "Local State"
     cookie_database = source / "Network/Cookies"
+    if (source.is_symlink() or root.is_symlink() or local_state.is_symlink()
+            or (source / "Network").is_symlink()
+            or cookie_database.is_symlink()):
+        raise ValueError("Selected Chrome profile contains a symbolic link")
     if not cookie_database.is_file():
         cookie_database = source / "Cookies"
+    if cookie_database.is_symlink():
+        raise ValueError("Selected Chrome profile contains a symbolic link")
     if not local_state.is_file() or not cookie_database.is_file():
         raise ValueError("Selected Chrome profile has no Local State or Cookie database")
 
@@ -35,6 +41,8 @@ def _snapshot_profile(source: Path, destination: Path) -> None:
         (source / "Preferences", target_profile / "Preferences"),
         (source / "Secure Preferences", target_profile / "Secure Preferences"),
     ):
+        if source_file.is_symlink():
+            raise ValueError("Selected Chrome profile contains a symbolic link")
         if source_file.is_file():
             shutil.copyfile(source_file, target)
             target.chmod(0o600)

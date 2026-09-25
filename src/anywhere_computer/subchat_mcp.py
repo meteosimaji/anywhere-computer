@@ -11,8 +11,8 @@ from typing import Literal, cast
 from pydantic import Field, JsonValue, TypeAdapter, ValidationError
 
 from . import __version__
+from .mcp_server import REQUEST_ID_SCHEMA, Execute, MCPSession
 from .mcp_server import Catalog as ToolCatalog
-from .mcp_server import Execute, MCPSession
 from .models import Contract, OperationId, Reply, Request
 from .runtime_identity import runtime_identity
 from .subchat import (
@@ -44,6 +44,7 @@ from .subchat_state import (
 
 
 class Send(Contract):
+    intent_key: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
     prompt: str = Field(min_length=1, max_length=100_000)
     model: str = Field(min_length=1, max_length=256)
     effort: str = Field(min_length=1, max_length=256)
@@ -57,6 +58,11 @@ class Message(Contract):
     mode: Literal['queue', 'steer']
     target_operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     prompt: str = Field(min_length=1, max_length=100_000)
+
+
+def public_submission_data(submission: SubchatSubmission) -> dict[str, JsonValue]:
+    """Expose a submission receipt without repeating the caller's full prompt."""
+    return cast(dict[str, JsonValue], submission.model_dump(mode='json', exclude={'prompt'}))
 
 
 class Catalog(Contract):
@@ -117,8 +123,13 @@ _BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
         'Requires matching saved operation and conversation ID and checks the bound account. '
         'Makes one authenticated HTTP PATCH; unknown outcomes are never replayed.'),
     'subchat_message': (Message, 'Queue an exact follow-up to a confirmed submission. '
-                        'Steer returns unsupported without sending or queueing.'),
-    'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels.'),
+                        'A completed tool call confirms local queue registration, not '
+                        'delivery to Chat. Steer returns unsupported without sending.'),
+    'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels. '
+                     'Set one stable intent_key per intended child Chat. After a missing '
+                     'reply or host safety block, inspect subchat_list and subchat_status '
+                     'before considering another send. Never create a new key for the '
+                     'same child; reuse its key only after reconciliation.'),
     'subchat_recover': (OperationId, 'Recover receipt/answer or progress a queued follow-up; '
                         'never replay an uncertain send.'),
     'subchat_status': (OperationId, 'Read the saved submission and latest HTTP transport '
@@ -145,6 +156,20 @@ def _tool_catalog(definitions: dict[str, tuple[type[Contract], str]]) -> list[Js
     }) for name, (schema, description) in definitions.items()]
 
 
+def _require_send_fields(tools: list[JsonValue]) -> list[JsonValue]:
+    for tool in tools:
+        if isinstance(tool, dict) and tool.get('name') == 'subchat_send':
+            schema = tool['inputSchema']
+            if isinstance(schema, dict):
+                properties = schema.setdefault('properties', {})
+                if isinstance(properties, dict):
+                    properties['request_id'] = dict(REQUEST_ID_SCHEMA)
+                required = schema.setdefault('required', [])
+                if isinstance(required, list):
+                    required.extend(('intent_key', 'request_id'))
+    return tools
+
+
 def direct_gateway_catalog() -> list[JsonValue]:
     """Advertise selected direct tools without opening or authenticating Chrome."""
     definitions = {name: definition for name, definition in _BASE_TOOL_DEFINITIONS.items()
@@ -152,7 +177,7 @@ def direct_gateway_catalog() -> list[JsonValue]:
                                'subchat_status', 'subchat_list', 'subchat_wait'}}
     definitions['subchat_capabilities'] = _CAPABILITIES_DEFINITION
     definitions['subchat_catalog'] = _GATEWAY_CATALOG_DEFINITION
-    return _tool_catalog(definitions)
+    return _require_send_fields(_tool_catalog(definitions))
 
 
 def capability_report(reported: dict[str, object], *,
@@ -204,7 +229,12 @@ INSTRUCTIONS = (
     'forwarding. Queue follow-ups inherit the selection; never guess IDs from labels. '
     'Choose request_id before subchat_send. Its response may be a pending local checkpoint '
     'while the owned send continues; it is not a finished answer or permission to resend. '
-    'Poll subchat_recover with operation_id equal to that send request_id. '
+    'For multiple distinct child Chats, choose one stable intent_key per logical slot before '
+    'the first send. Reuse the same intent_key if the transport request_id changes. After '
+    'an ambiguous host safety block, inspect subchat_list and subchat_status before any '
+    'new send; never invent a fresh key for the same slot. '
+    'Poll subchat_recover with the returned submission_operation_id; with a new transport '
+    'request_id for an existing intent, the original submission operation ID is returned. '
     'subchat_message mode=queue persists a follow-up bound to the target operation; '
     'recover/wait on its message operation dispatches only after that target completes. '
     'subchat_cancel cancels only a local queued/prepared input, never generation. '
@@ -264,6 +294,7 @@ class SubchatSession(MCPSession):
                  tasks: dict[str, asyncio.Task[SubchatSubmission]],
                  sends: dict[str, asyncio.Task[SubchatSubmission]],
                  *, instructions: str = INSTRUCTIONS,
+                 require_send_intent: bool = False,
                  live_transport: Callable[[], bool] | None = None,
                  close_transport: Callable[[], Awaitable[None]] | None = None) -> None:
         self.recoveries = tasks
@@ -275,6 +306,7 @@ class SubchatSession(MCPSession):
         self.queue_watch_deadlines: dict[str, float] = {}
         self.live_transport = live_transport
         self.close_transport = close_transport
+        self.require_send_intent = require_send_intent
 
         async def managed(request: Request) -> Reply:
             if self.closed:
@@ -315,6 +347,7 @@ def session(service: Subchats, *,
             instructions: str | None = None,
             serialize_recovery: bool = False,
             read_only: bool = False,
+            require_send_intent: bool = False,
             owner: str | None = None,
             ) -> SubchatSession:
     # Clipboard interception and draft preparation must not interleave across calls.
@@ -519,9 +552,11 @@ def session(service: Subchats, *,
                        if name in READ_ONLY_TOOLS}
 
     async def catalog() -> list[JsonValue]:
-        return _tool_catalog(definitions)
+        tools = _tool_catalog(definitions)
+        return _require_send_fields(tools) if require_send_intent else tools
 
     async def execute(request: Request) -> Reply:
+        send_operation_id = request.operation_id
         if read_only and request.tool not in READ_ONLY_TOOLS:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='This Subchat session permits observation only.',
@@ -687,7 +722,7 @@ def session(service: Subchats, *,
                 recoveries.pop(target.operation_id, None)
                 sends.pop(target.operation_id, None)
                 return Reply(operation_id=request.operation_id, state='completed',
-                             data=result.model_dump(mode='json'))
+                             data=public_submission_data(result))
             if request.tool == 'subchat_delete':
                 target_delete = DeleteRequest.model_validate(request.arguments)
                 async with browser_lock:
@@ -706,7 +741,7 @@ def session(service: Subchats, *,
                 result = service.queue(request.operation_id, message.target_operation_id,
                                        message.prompt, owner=owner)
                 return Reply(operation_id=request.operation_id, state='completed',
-                             data=result.model_dump(mode='json'))
+                             data=public_submission_data(result))
             if request.tool == 'subchat_wait':
                 wait = Wait.model_validate(request.arguments)
                 started = time.monotonic()
@@ -747,7 +782,7 @@ def session(service: Subchats, *,
                         result = current
                 raise_failed_preparation(wait.operation_id, result)
                 return Reply(operation_id=request.operation_id, state='completed',
-                             data={**result.model_dump(mode='json'),
+                             data={**public_submission_data(result),
                                    'elapsed_ms': max(0, round((time.monotonic() - started) * 1000)),
                                    'suggested_poll_interval_ms': (
                                        WAIT_POLL_INTERVAL_MS if result.state in {
@@ -780,53 +815,62 @@ def session(service: Subchats, *,
                 return Reply(operation_id=request.operation_id, state='completed', data=data)
             if request.tool == 'subchat_send':
                 args = Send.model_validate(request.arguments)
+                if require_send_intent and args.intent_key is None:
+                    return Reply(operation_id=request.operation_id, state='failed',
+                                 error='subchat_send requires a stable intent_key before '
+                                       'sending. Reuse the same key for the same child Chat.',
+                                 data={'error_code': 'invalid_parameter',
+                                       'dispatched': False})
                 prepared = service.store.prepare(
                     request.operation_id, args.prompt, args.model, args.effort, owner=owner,
                     conversation_id=args.conversation_id, work_context=args.work_context,
-                    resources=args.resources, http_selection=args.http_selection)
-                sending = sends.get(request.operation_id)
+                    resources=args.resources, http_selection=args.http_selection,
+                    intent_key=args.intent_key)
+                submission_id = prepared.operation_id
+                send_operation_id = submission_id
+                sending = sends.get(submission_id)
                 if (sending is not None and sending.done() and not sending.cancelled()
                         and sending.exception() is not None and prepared.state == 'prepared'):
                     # An exact explicit retry may prepare again. Observation
                     # never retries, and the ledger still guards dispatch.
-                    sends.pop(request.operation_id)
+                    sends.pop(submission_id)
                     sending = None
                 if prepared.state != 'prepared':
                     result = prepared
                 else:
                     if sending is None:
                         service.store.clear_preparation_failure(
-                            request.operation_id, owner=owner)
+                            submission_id, owner=owner)
                         async def dispatch() -> SubchatSubmission:
                             async with browser_lock:
                                 return await service.send(
-                                    request.operation_id, args.prompt, args.model, args.effort,
+                                    submission_id, args.prompt, args.model, args.effort,
                                     owner=owner, conversation_id=args.conversation_id,
                                     work_context=args.work_context, resources=args.resources,
                                     http_selection=args.http_selection)
 
                         sending = asyncio.create_task(dispatch())
-                        sends[request.operation_id] = sending
+                        sends[submission_id] = sending
 
                         def completed(done: asyncio.Task[SubchatSubmission]) -> None:
                             # Save a late preparation failure before releasing
                             # this controller's task reference.
-                            if sends.get(request.operation_id) is done:
+                            if sends.get(submission_id) is done:
                                 error = done.exception() if not done.cancelled() else None
                                 if error is not None:
-                                    save_preparation_failure(request.operation_id, error)
+                                    save_preparation_failure(submission_id, error)
                                 if error is None or isinstance(error, SubchatPreparationFailed):
-                                    sends.pop(request.operation_id)
+                                    sends.pop(submission_id)
 
                         sending.add_done_callback(completed)
                     try:
                         result = await asyncio.wait_for(
                             asyncio.shield(sending), SEND_ACK_TIMEOUT)
                     except TimeoutError:
-                        current = service.store.get(request.operation_id, owner=owner)
+                        current = service.store.get(submission_id, owner=owner)
                         return Reply(operation_id=request.operation_id, state='running',
-                                     data={**current.model_dump(mode='json'),
-                                           'submission_operation_id': request.operation_id,
+                                     data={**public_submission_data(current),
+                                           'submission_operation_id': submission_id,
                                            'send_in_progress': True})
             elif request.tool in {'subchat_recover', 'subchat_status'}:
                 target = OperationId.model_validate(request.arguments)
@@ -844,7 +888,7 @@ def session(service: Subchats, *,
             else:
                 raise ValueError('Unknown subchat tool')
             return Reply(operation_id=request.operation_id, state='completed',
-                         data={**result.model_dump(mode='json'),
+                         data={**public_submission_data(result),
                                **({'http_progress': progress} if (progress :=
                                   service.store.http_progress(result.operation_id,
                                                               owner=owner)) is not None else {}),
@@ -852,10 +896,10 @@ def session(service: Subchats, *,
                                   if result.operation_id in server.queue_watch_states else {})})
         except asyncio.CancelledError:
             if request.tool == 'subchat_send' and not server.closed:
-                current = service.store.get(request.operation_id, owner=owner)
+                current = service.store.get(send_operation_id, owner=owner)
                 if current.state == 'cancelled':
                     return Reply(operation_id=request.operation_id, state='completed',
-                                 data=current.model_dump(mode='json'))
+                                 data=public_submission_data(current))
             raise
         except SubchatBrowserClosed:
             return Reply(operation_id=request.operation_id, state='failed',
@@ -939,7 +983,7 @@ def session(service: Subchats, *,
             reason = error.reason or (_PREPARATION_REASONS.get(str(cause))
                       if isinstance(cause, ValueError) else None)
             if request.tool == 'subchat_send':
-                save_preparation_failure(request.operation_id, error)
+                save_preparation_failure(send_operation_id, error)
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Adapter preparation failed before dispatch. Check for an existing '
                                'draft, active generation, missing HTTP selection or unavailable '
@@ -977,6 +1021,7 @@ def session(service: Subchats, *,
     server = SubchatSession(
         catalog, execute, recoveries, sends,
         instructions=INSTRUCTIONS if instructions is None else instructions,
+        require_send_intent=require_send_intent,
         live_transport=getattr(service.backend, 'has_live_generation', None),
         close_transport=getattr(service.backend, 'close_generations', None))
     return server

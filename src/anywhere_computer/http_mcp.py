@@ -19,7 +19,8 @@ from urllib.parse import urlsplit
 from pydantic import JsonValue
 
 from .connection import WIRE_LIMIT
-from .mcp_server import PROTOCOL_VERSION, MCPSession, rpc_error
+from .mcp_server import OPERATION_META, PROTOCOL_VERSION, MCPSession, _reply_result, rpc_error
+from .models import Reply
 
 Authenticate = Callable[[str], Awaitable[str | None]]
 SessionFactory = Callable[[str], MCPSession]
@@ -28,6 +29,7 @@ HTTPRoute = Callable[[str, dict[str, str], bytes, str], Awaitable[HTTPResult]]
 HEADER_LIMIT = 16384
 SESSION_EXPIRED_HEADER = "x-anywhere-mcp-session-expired"
 AUTH_REJECTED_HEADER = "x-anywhere-mcp-auth-rejected"
+DISPATCH_RECEIPT_WAIT = 45.0
 
 
 @dataclass
@@ -79,6 +81,8 @@ class HTTPMCP:
         self.auth_challenge = auth_challenge
         self.sessions: dict[str, HTTPSession] = {}
         self.tasks: set[asyncio.Task[None]] = set()
+        self.dispatch_tasks: set[asyncio.Task[tuple[int, dict[str, JsonValue] | None,
+                                                  dict[str, str]]]] = set()
         self.hosts: frozenset[str] = frozenset()
         self.server: asyncio.Server | None = None
 
@@ -99,6 +103,8 @@ class HTTPMCP:
             self.server = None
         if self.tasks:
             await asyncio.gather(*list(self.tasks), return_exceptions=True)
+        if self.dispatch_tasks:
+            await asyncio.gather(*list(self.dispatch_tasks), return_exceptions=True)
         self.sessions.clear()
 
     async def _read(self, reader: asyncio.StreamReader) -> tuple[str, str, dict[str, str], bytes]:
@@ -153,14 +159,87 @@ class HTTPMCP:
         if scheme.lower() != "bearer" or not token or " " in token:
             raise HTTPFailure(401, {AUTH_REJECTED_HEADER: "true"})
         # Called after reading the entire body, including for existing sessions and DELETE.
-        owner = await self.authenticate(token)
+        async with asyncio.timeout(10):
+            owner = await self.authenticate(token)
         if not owner:
             raise HTTPFailure(401, {AUTH_REJECTED_HEADER: "true"})
+        receipt = self._recoverable_call(body)
+        if method == "POST" and receipt is not None:
+            identity, name, operation_id = receipt
+            if len(self.dispatch_tasks) >= 32:
+                raise HTTPFailure(503)
+
+            async def dispatched() -> tuple[int, dict[str, JsonValue] | None, dict[str, str]]:
+                marker = self._bearer.set((asyncio.current_task(), token))
+                try:
+                    return await self._dispatch_authenticated(method, headers, body, owner)
+                finally:
+                    self._bearer.reset(marker)
+
+            task = asyncio.create_task(dispatched())
+            self.dispatch_tasks.add(task)
+
+            def completed(done: asyncio.Task[tuple[int, dict[str, JsonValue] | None,
+                                                 dict[str, str]]]) -> None:
+                self.dispatch_tasks.discard(done)
+                if not done.cancelled():
+                    done.exception()
+
+            task.add_done_callback(completed)
+            try:
+                return await asyncio.wait_for(asyncio.shield(task), DISPATCH_RECEIPT_WAIT)
+            except TimeoutError:
+                if name.startswith("subchat_"):
+                    next_action = (
+                        "Use subchat_list to locate the saved submission ID, then "
+                        "subchat_status or subchat_recover. The transport request ID may "
+                        "differ from the saved ID. A missing row is inconclusive while "
+                        "this call is processing. Do not repeat the tool call."
+                    )
+                else:
+                    next_action = (
+                        "Poll operations_get with this operation_id using the same "
+                        "authorization grant. Do not repeat the tool call."
+                    )
+                pending = Reply(
+                    operation_id=operation_id, state="running",
+                    data={
+                        "result_pending": True,
+                        "next_action": next_action,
+                    },
+                )
+                return 200, {"jsonrpc": "2.0", "id": identity,
+                             "result": _reply_result(name, pending)}, {}
         marker = self._bearer.set((asyncio.current_task(), token))
         try:
             return await self._dispatch_authenticated(method, headers, body, owner)
         finally:
             self._bearer.reset(marker)
+
+    @staticmethod
+    def _recoverable_call(body: bytes) -> tuple[str | int, str, str] | None:
+        try:
+            packet = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeError):
+            return None
+        if (not isinstance(packet, dict) or packet.get("jsonrpc") != "2.0"
+                or packet.get("method") != "tools/call"):
+            return None
+        identity = packet.get("id")
+        params = packet.get("params")
+        if (isinstance(identity, bool) or not isinstance(identity, (str, int))
+                or not isinstance(params, dict) or not isinstance(params.get("name"), str)):
+            return None
+        arguments, metadata = params.get("arguments", {}), params.get("_meta", {})
+        if not isinstance(arguments, dict) or not isinstance(metadata, dict):
+            return None
+        supplied, meta_id = arguments.get("request_id"), metadata.get(OPERATION_META)
+        if supplied is not None and meta_id is not None and supplied != meta_id:
+            return None
+        operation_id = supplied if supplied is not None else meta_id
+        if not isinstance(operation_id, str) or re.fullmatch(r"[a-f0-9]{32}", operation_id) is None:
+            return None
+        return identity, params["name"], operation_id
 
     def current_bearer(self) -> str:
         """Fresh authenticated token, available only in the handling task."""
