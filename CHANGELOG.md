@@ -3,6 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a28 / Plugin 0.2.0-alpha.28 — unpublished candidate (2026-09-25)
+
+- Keep an account-matched queued follow-up recoverable after OAuth re-consent
+  when its saved predecessor belongs to the same historical grant. Unbound
+  queues and a different Chat account remain private.
+- Make both delayed-preparation retry tests observe the same operation's
+  eventual result when a slow worker returns its acknowledgement first.
+
 ## 0.2.0a27 / Plugin 0.2.0-alpha.27 — unpublished candidate (2026-09-25)
 
 - Let a freshly authorized grant recover an exact legacy Subchat operation

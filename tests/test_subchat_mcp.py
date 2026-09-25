@@ -2,7 +2,7 @@ from test_subchat_lifecycle import BrowserFixture
 
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat import Subchats
+from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
 from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatSubmissions
 
@@ -595,8 +595,18 @@ async def test_late_preparation_failure_is_reported_by_reads_and_explicit_retry(
                                      'dispatched': False, 'reason': 'composer_has_draft'}
         assert store.get(operation, owner=None).state == 'prepared'
         assert backend.sends == 0
+        monkeypatch.setattr(subchat_mcp, 'SEND_ACK_TIMEOUT', .0001)
         retried = await server.execute(send)
-        assert retried.state == 'unknown'
+        if retried.state == 'running':
+            sending = server.sends.get(operation)
+            if sending is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(sending), timeout=5)
+                except SubchatOutcomeUnknown:
+                    pass
+            retried = await server.execute(send)
+        assert (retried.state == 'unknown' or
+                (retried.state == 'completed' and retried.data.get('state') == 'sending'))
         assert backend.attempts == 2 and backend.sends == 1
     finally:
         finish.set()
