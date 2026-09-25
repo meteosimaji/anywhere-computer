@@ -174,6 +174,14 @@ _TERMINAL_INPUT_REJECTIONS: dict[str, tuple[str, str]] = {
         "Wait for the active terminal input to finish before retrying; no input was sent.",
     ),
 }
+_DOCUMENT_EDIT_REJECTIONS: dict[str, tuple[str, str]] = {
+    "Document changed; read it again": (
+        "document_changed", "Read the document again before editing."
+    ),
+    "Paragraph changed; read it again": (
+        "paragraph_changed", "Read the document again before editing."
+    ),
+}
 _NATIVE_GUI_FAILURES: dict[str, str] = {
     "Native GUI request exceeds limit": "native_gui_request_too_large",
     "Invalid native GUI response framing": "native_gui_invalid_response",
@@ -1607,6 +1615,14 @@ class Engine:
                     )
                 elif (request.tool == "terminal_input" and type(error) is ValueError
                       and (fixed := _TERMINAL_INPUT_REJECTIONS.get(str(error))) is not None):
+                    code, action = fixed
+                    reply = Reply(
+                        operation_id=request.operation_id, state="failed", error=str(error),
+                        data={"error_code": code, "dispatched": False,
+                              "execution_state": "not_dispatched", "next_action": action},
+                    )
+                elif (request.tool == "documents_edit_paragraph" and type(error) is ValueError
+                      and (fixed := _DOCUMENT_EDIT_REJECTIONS.get(str(error))) is not None):
                     code, action = fixed
                     reply = Reply(
                         operation_id=request.operation_id, state="failed", error=str(error),
