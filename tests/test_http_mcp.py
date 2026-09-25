@@ -9,6 +9,7 @@ import pytest
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
+from anywhere_computer import http_mcp
 from anywhere_computer.engine import Engine
 from anywhere_computer.http_mcp import AUTH_REJECTED_HEADER, HTTPMCP, SESSION_EXPIRED_HEADER
 from anywhere_computer.mcp_server import MCPSession
@@ -335,6 +336,78 @@ async def test_disconnected_http_observer_does_not_cancel_dispatched_work(http_a
         finish.set()
         writer.close()
         await writer.wait_closed()
+
+
+@pytest.mark.parametrize("tool_name", ["test_slow_write", "subchat_send"])
+async def test_slow_http_dispatch_returns_recoverable_receipt(
+    http_agent, tmp_path, monkeypatch, tool_name,
+):
+    adapter, engine, _, port = http_agent
+    from anywhere_computer.models import Empty
+
+    catalog_started, release_catalog = asyncio.Event(), asyncio.Event()
+    target = tmp_path / "one-write.txt"
+    writes = 0
+
+    async def write_once(args: Empty):
+        nonlocal writes
+        writes += 1
+        target.write_text("done", encoding="utf-8")
+        return {"written": True}
+
+    async def slow_catalog():
+        catalog_started.set()
+        await release_catalog.wait()
+        return engine.catalog()
+
+    engine.register(tool_name, "Slow dispatch test", Empty, write_once)
+    adapter.session_factory = lambda owner: MCPSession(slow_catalog, engine.execute)
+    monkeypatch.setattr(http_mcp, "DISPATCH_RECEIPT_WAIT", 0.05)
+    operation_id = uuid.uuid4().hex
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}",
+                                     headers=HEADERS, timeout=5) as http:
+            initialized = await http.post("/mcp", json=INITIALIZE)
+            session = initialized.headers["mcp-session-id"]
+            common = {"MCP-Session-Id": session}
+            await http.post("/mcp", headers=common,
+                            json={"jsonrpc": "2.0", "method": "notifications/initialized"})
+            response = await http.post("/mcp", headers=common, json={
+                "jsonrpc": "2.0", "id": 9, "method": "tools/call",
+                "params": {"name": tool_name, "arguments": {"request_id": operation_id}},
+            })
+            assert catalog_started.is_set()
+            assert response.status_code == 200
+            receipt = response.json()
+            assert receipt["id"] == 9
+            assert receipt["result"]["structuredContent"]["operation_id"] == operation_id
+            assert receipt["result"]["structuredContent"]["state"] == "running"
+            assert receipt["result"]["isError"] is False
+            guidance = receipt["result"]["structuredContent"]["data"]["next_action"]
+            if tool_name == "subchat_send":
+                assert "subchat_list" in guidance and "operations_get" not in guidance
+            else:
+                assert "operations_get" in guidance
+            assert writes == 0
+            release_catalog.set()
+            async with asyncio.timeout(3):
+                while True:
+                    recovery = await http.post("/mcp", headers=common, json={
+                        "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+                        "params": {"name": "operations_get", "arguments": {
+                            "operation_id": operation_id,
+                        }},
+                    })
+                    outcome = recovery.json()["result"]["structuredContent"]["data"]
+                    if outcome["state"] == "completed":
+                        break
+                    await asyncio.sleep(0.01)
+            assert outcome["operation_id"] == operation_id
+            assert outcome["data"] == {"written": True}
+            assert target.read_text(encoding="utf-8") == "done"
+            assert writes == 1
+    finally:
+        release_catalog.set()
 
 
 @pytest.mark.parametrize("challenge", ["", "   ", "Bearer\r\nInjected: value"])

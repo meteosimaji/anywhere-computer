@@ -5,7 +5,38 @@ from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
 from anywhere_computer.subchat_mcp import session
-from anywhere_computer.subchat_state import SubchatSubmissions
+from anywhere_computer.subchat_state import SubchatList, SubchatSubmissions
+
+
+async def test_intent_key_reuses_one_dispatch_across_new_request_ids(tmp_path):
+    ledger = Ledger(tmp_path)
+    browser = BrowserFixture()
+    store = SubchatSubmissions(ledger.connection)
+    server = session(Subchats(store, browser), require_send_intent=True)
+    first_id = '1' * 32
+    args = {'intent_key': '2' * 32, 'prompt': 'one child',
+            'model': 'model', 'effort': 'effort'}
+    try:
+        missing = await server.execute(Request(operation_id='3' * 32,
+            tool='subchat_send', arguments={key: value for key, value in args.items()
+                                           if key != 'intent_key'}))
+        assert missing.data['error_code'] == 'invalid_parameter'
+        assert browser.sends == 0
+        assert store.list(SubchatList(), owner=None).submissions == []
+        first = await server.execute(Request(operation_id=first_id,
+            tool='subchat_send', arguments=args))
+        assert first.state == 'unknown'
+        second = await server.execute(Request(operation_id='4' * 32,
+            tool='subchat_send', arguments=args))
+        assert second.data['operation_id'] == first_id
+        assert browser.sends == 1
+        conflict = await server.execute(Request(operation_id='5' * 32,
+            tool='subchat_send', arguments={**args, 'prompt': 'changed'}))
+        assert conflict.data['error_code'] == 'request_conflict'
+        assert browser.sends == 1
+    finally:
+        await server.close()
+        ledger.close()
 
 
 async def test_late_non_preparation_error_remains_observable(tmp_path, monkeypatch):
@@ -319,10 +350,13 @@ async def test_cancel_and_close_stop_owned_unsent_or_uncertain_tasks(tmp_path, m
             arguments={'prompt': 'unsent', 'model': 'model', 'effort': 'effort'}))
         await entered_prepare.wait()
         assert pending.state == 'running' and pending.data['state'] == 'prepared'
+        assert 'prompt' not in pending.data
         cancelled = await server.execute(Request(operation_id='f' * 32,
             tool='subchat_cancel', arguments={'operation_id': unsent}))
         assert cancelled.data['state'] == 'cancelled'
+        assert 'prompt' not in cancelled.data
         assert store.get(unsent, owner=None).state == 'cancelled'
+        assert store.get(unsent, owner=None).prompt == 'unsent'
         assert backend.sends == 0
         pending = await server.execute(Request(operation_id=uncertain, tool='subchat_send',
             arguments={'prompt': 'dispatched', 'model': 'model', 'effort': 'effort'}))
@@ -347,7 +381,8 @@ async def test_cancel_and_close_stop_owned_unsent_or_uncertain_tasks(tmp_path, m
 async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
     ledger = Ledger(tmp_path)
     backend = BrowserFixture()
-    server = session(Subchats(SubchatSubmissions(ledger.connection), backend))
+    store = SubchatSubmissions(ledger.connection)
+    server = session(Subchats(store, backend))
     serial = 0
 
     async def call(method, params):
@@ -379,14 +414,21 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
         assert unknown['result']['isError'] is True
         assert unknown['result']['structuredContent']['operation_id'] == op
         assert unknown['result']['structuredContent']['state'] == 'unknown'
+        assert arguments['prompt'] not in str(unknown['result'])
         duplicate = await call('tools/call', {'name': 'subchat_send', 'arguments': arguments})
         assert duplicate['result']['structuredContent']['data']['state'] == 'sending'
+        assert arguments['prompt'] not in str(duplicate['result'])
         target = {'operation_id': op}
         pending = await call('tools/call', {'name': 'subchat_recover', 'arguments': target})
         assert pending['result']['structuredContent']['data']['state'] == 'submitted'
+        assert arguments['prompt'] not in str(pending['result'])
         backend.thinking = False
         done = await call('tools/call', {'name': 'subchat_recover', 'arguments': target})
         assert done['result']['structuredContent']['data']['answer'] == '42'
+        assert arguments['prompt'] not in str(done['result'])
+        waited = await call('tools/call', {'name': 'subchat_wait', 'arguments': target})
+        assert waited['result']['structuredContent']['data']['state'] == 'completed'
+        assert arguments['prompt'] not in str(waited['result'])
         assert backend.sends == 1
         invalid = await call('tools/call', {'name': 'subchat_recover',
                                            'arguments': {**target, 'owner': 'injected'}})
@@ -395,9 +437,10 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
         # A queued send is dispatched by a different recovery request. Losing
         # its receipt must identify the submission, not that observer request.
         queued_id, observer_id = '3' * 32, '4' * 32
-        await call('tools/call', {'name': 'subchat_message', 'arguments': {
+        queued = await call('tools/call', {'name': 'subchat_message', 'arguments': {
             'request_id': queued_id, 'mode': 'queue', 'target_operation_id': op,
             'prompt': 'follow-up'}})
+        assert 'follow-up' not in str(queued['result'])
         lost = await call('tools/call', {'name': 'subchat_recover', 'arguments': {
             'request_id': observer_id, 'operation_id': queued_id}})
         reply = lost['result']['structuredContent']
@@ -408,6 +451,8 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
         saved = await call('tools/call', {'name': 'subchat_status', 'arguments': {
             'operation_id': reply['data']['submission_operation_id']}})
         assert saved['result']['structuredContent']['data']['state'] == 'sending'
+        assert 'follow-up' not in str(saved['result'])
+        assert store.get(queued_id, owner=None).prompt == 'follow-up'
         assert backend.sends == 2
     finally:
         ledger.close()

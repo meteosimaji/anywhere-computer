@@ -63,6 +63,18 @@ def test_snapshot_requires_selected_login_and_valid_database(tmp_path):
         _snapshot_profile(source, tmp_path / "another")
 
 
+def test_snapshot_rejects_symlinked_local_state(tmp_path):
+    source = profile_fixture(tmp_path / "source", "Default")
+    local_state = source.parent / "Local State"
+    contents = local_state.read_bytes()
+    local_state.unlink()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.write_bytes(contents)
+    local_state.symlink_to(elsewhere)
+    with pytest.raises(ValueError, match="symbolic link"):
+        _snapshot_profile(source, tmp_path / "clone")
+
+
 def test_snapshot_includes_committed_wal_cookie_without_touching_live_database(tmp_path):
     source = profile_fixture(tmp_path / "source", "Default")
     with closing(sqlite3.connect(source / "Cookies")) as live:

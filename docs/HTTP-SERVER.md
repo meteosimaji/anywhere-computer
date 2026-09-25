@@ -77,6 +77,33 @@ Chrome を起動せずに表示し、ログイン状態は検証しません。
 上記のローカル参照は利用できます。検証失敗後は10秒間の再試行間隔を置きます。
 選択したアカウントと異なるログインでは送信できません。
 
+### macOS LaunchAgent 用の Chrome ログインを保存する
+
+macOS の LaunchAgent から通常の Chrome プロファイルを直接読むと、macOS の
+プライバシー保護で拒否される場合があります。HTTP サービスを停止した状態で、
+ログイン済みのプロファイルを対話シェルから明示的に選び、サービスの状態ディレクトリに
+Cookie データベースを ChatGPT ドメインに絞り、Chrome の `Local State` と
+`Preferences`、`Secure Preferences` も含むスナップショットを保存できます。
+
+```sh
+anywhere-subchat-setup inspect '/Users/you/Library/Application Support/Google/Chrome/Default'
+anywhere-subchat-setup stage '/Users/you/Library/Application Support/Google/Chrome/Default' \
+  --expect-account-id ACCOUNT_ID_FROM_INSPECT \
+  --http-state-dir '/Users/you/Library/Application Support/Anywhere Computer/chatgpt'
+```
+
+`--http-state-dir` は `anywhere http-serve` に渡す `--state-dir` と同じディレクトリです。
+サービスとその監視プロセスを停止してから実行してください。稼働中はロックで失敗します。
+このコマンドは保存済みアカウント ID と検査結果の一致を要求し、HTTP 設定の
+`subchat.profile` だけを原子的に切り替えます。OAuth grant、端末、scope、
+操作記録は変更しません。Chrome のログインが更新されたときは同じコマンドで
+新しいスナップショットに更新できます。コマンドが前回作成した古い HTTPS 用
+スナップショットは切り替え後に削除します。サービスを再起動し、
+`subchat_catalog` などで実際の認証状態を確認してください。
+
+保存先にはログイン用 Cookie が含まれます。状態ディレクトリへのアクセスは
+同じ macOS ユーザーに限定し、バックアップや共有先にも注意してください。
+
 この経路は macOS の選択済み Chrome プロファイルから認証を読み、ブラウザー内で
 送信を準備した後、生成 POST を HTTPX で行います。Chrome の起動は必要ですが、
 通常タブを作らない背景タブを使用します。ログイン切れや Chrome の変更による

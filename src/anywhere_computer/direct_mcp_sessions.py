@@ -148,7 +148,7 @@ class DirectMCPSessions:
             self.owner_released(entry.owner)
 
     async def _background_active(self, entry: _Entry) -> bool:
-        if not entry.background_subchat:
+        if not entry.background_subchat or entry.context.cleanup_confirmed:
             return False
         if entry.activity_probe is None:
             entry.activity_probe = asyncio.create_task(
@@ -169,8 +169,9 @@ class DirectMCPSessions:
                 raise ValueError('Subchat activity result is malformed')
             return count > 0
         except Exception:
-            # A failed observation cannot establish that background work has stopped.
-            return True
+            # A failed observation leaves activity unknown unless the owned
+            # transport has finished cleanup and can no longer host that work.
+            return not entry.context.cleanup_confirmed
         finally:
             if entry.activity_probe is not None and entry.activity_probe.done():
                 entry.activity_probe = None
@@ -379,8 +380,9 @@ class DirectMCPSessions:
             raise RuntimeError('Direct MCP session is busy; inspect the existing operation')
         async with entry.lock:
             if entry.state == 'open':
-                if any(watch.state == 'watching' and self.clock() < watch.deadline
-                       for watch in entry.watches.values()):
+                if (not entry.context.cleanup_confirmed
+                        and any(watch.state == 'watching' and self.clock() < watch.deadline
+                                for watch in entry.watches.values())):
                     raise RuntimeError('Direct MCP session is busy; '
                                        'a Subchat queue watch is active')
                 if await self._background_active(entry):

@@ -24,9 +24,12 @@ including an explicit null `thinking_effort`. The HTTP catalog's
 `selected_display_version` can differ from the UI model label: for example,
 `5.6` and `GPT-5.6 Sol` are distinct fields. Do not substitute another model
 or effort. Save a fresh 32-character lowercase hex
-request ID before `subchat_send`. If its result is pending or unknown, retain
-that ID and use `subchat_recover` or `subchat_wait`; never replay an uncertain
-send with a new ID.
+request ID and one stable 32-character lowercase hex `intent_key` for each
+intended child Chat before direct `subchat_send`. A returned
+`submission_operation_id` is the ID for `subchat_recover` or `subchat_wait`;
+it can differ from a later transport request ID for the same intent. If a
+result is missing, blocked, or unknown, inspect `subchat_list` and the saved
+status before another send. Never invent a new intent key for the same child.
 
 Treat `queued` as local acceptance, `sending` as unconfirmed dispatch, and
 `submitted` as a receipt. `completed` confirms a verified final turn; saved

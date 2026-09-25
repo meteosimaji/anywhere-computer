@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 import sqlite3
 import sys
 import time
@@ -22,6 +23,7 @@ from .subchat_mcp import (
     SubchatSession,
     capability_report,
     direct_gateway_catalog,
+    public_submission_data,
 )
 from .subchat_state import (
     SubchatAccountMismatch,
@@ -40,6 +42,7 @@ SUBCHAT_GATEWAY_TOOLS = frozenset({
     "subchat_recover", "subchat_wait", "subchat_status", "subchat_list",
 })
 _IDLE_CLOSE_SECONDS = 15.0
+_PENDING_RECEIPT_SECONDS = 20.0
 logger = logging.getLogger(__name__)
 
 
@@ -201,12 +204,17 @@ class SubchatGateway:
         try:
             # Leave room under HTTPMCP's 60-second deadline. Long work remains
             # attached to the service and can be collected by its exact ID.
-            return await asyncio.wait_for(asyncio.shield(task), timeout=20)
+            return await asyncio.wait_for(asyncio.shield(task),
+                                          timeout=_PENDING_RECEIPT_SECONDS)
         except TimeoutError:
+            # An intent key may resolve a fresh transport ID to an older
+            # submission ID inside the still-running core. Do not claim the
+            # transport ID is the saved submission identity here.
             return Reply(operation_id=request.operation_id, state="running",
-                         data={"submission_operation_id": request.operation_id,
-                               "next_action": "Use subchat_status or subchat_recover "
-                                              "with this operation_id"})
+                         data={"result_pending": True,
+                               "next_action": "Use subchat_list to locate the saved "
+                                              "submission ID, then subchat_status or "
+                                              "subchat_recover. Do not resend."})
 
     async def close(self) -> None:
         # Closing the service is a lifecycle boundary; HTTP disconnect is not.
@@ -243,6 +251,7 @@ class LazySubchatGateway:
         self._resources: AsyncExitStack | None = None
         self._closed = False
         self._retry_after = 0.0
+        self._failure_code = "gateway_unavailable"
         self._active_calls = 0
         self._idle_task: asyncio.Task[None] | None = None
         self._idle_close_seconds = idle_close_seconds
@@ -270,10 +279,14 @@ class LazySubchatGateway:
                 await resources.aclose()
                 # Provider errors can carry private URLs or account data.
                 logger.warning("Subchat gateway unavailable: %s", type(error).__name__)
+                self._failure_code = ("chrome_profile_access_denied"
+                                      if isinstance(error, PermissionError)
+                                      else "gateway_unavailable")
                 self._retry_after = time.monotonic() + 10
                 return None
             self._resources = resources
             self._gateway = gateway
+            self._failure_code = "gateway_unavailable"
             self._active_calls += 1
             return gateway
 
@@ -375,9 +388,39 @@ class LazySubchatGateway:
             return await self._local_read(grant_id, request)
         gateway = await self._acquire()
         if gateway is None:
+            # A retry can carry the same operation ID as a send already in the
+            # ledger. Inspect that ID before describing any send as unsent.
+            send_unrecorded = False
+            if request.tool == "subchat_send":
+                try:
+                    saved_id = request.operation_id
+                    intent_key = request.arguments.get("intent_key")
+                    if isinstance(intent_key, str) and re.fullmatch(
+                            r"[0-9a-f]{32}", intent_key):
+                        bound_id = await asyncio.to_thread(
+                            self._saved_intent_id, grant_id, intent_key)
+                        if bound_id is not None:
+                            saved_id = bound_id
+                    saved = await asyncio.to_thread(
+                        self._saved_status, grant_id, request.operation_id,
+                        saved_id, None)
+                except SubchatOperationNotFound:
+                    send_unrecorded = not isinstance(intent_key, str)
+                except SubchatAccountMismatch:
+                    return Reply(operation_id=request.operation_id, state="failed",
+                                 error="The selected Chat account does not match the saved "
+                                       "operation. Use the original account to inspect it.",
+                                 data={"error_code": "account_mismatch",
+                                       "automatic_retry": False})
+                else:
+                    return saved
+            data: dict[str, JsonValue] = {"error_code": self._failure_code}
+            if (request.tool != "subchat_send" or send_unrecorded) and request.tool in {
+                    "subchat_send", "subchat_message", "subchat_catalog"}:
+                data["dispatched"] = False
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Selected Subchat account is unavailable",
-                         data={"dispatched": False})
+                         data=data)
         try:
             return await gateway.execute(grant_id, request, granted)
         finally:
@@ -458,6 +501,22 @@ class LazySubchatGateway:
             store = SubchatSubmissions(connection, initialize=False)
             return store.list(request, owner=grant_id).model_dump(mode="json")
 
+    def _saved_intent_id(self, grant_id: str, intent_key: str) -> str | None:
+        ledger_path = Path(self.config.ledger)
+        database = ledger_path / "operations.sqlite3"
+        if ledger_path.is_symlink() or database.is_symlink() or not database.is_file():
+            return None
+        try:
+            with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro",
+                                         uri=True)) as connection:
+                row = connection.execute(
+                    "SELECT operation_id FROM subchat_send_intents "
+                    "WHERE owner IS ? AND intent_key=?", (grant_id, intent_key),
+                ).fetchone()
+                return row[0] if row is not None else None
+        except sqlite3.Error:
+            return None
+
     def _saved_status(self, grant_id: str, request_id: str, operation_id: str,
                       queue_watch: dict[str, JsonValue] | None) -> Reply:
         ledger_path = Path(self.config.ledger)
@@ -479,7 +538,7 @@ class LazySubchatGateway:
                                "after correcting the issue.",
                          data={"error_code": "preparation_failed", "dispatched": False,
                                "reason": failure_reason})
-        data = result.model_dump(mode="json")
+        data = public_submission_data(result)
         if progress is not None:
             data["http_progress"] = progress
         if queue_watch is not None:
@@ -605,6 +664,7 @@ async def open_subchat_gateway(config: SubchatGatewayConfig, *, owner: str
                 return await backend.http_catalog()
 
             return session(Subchats(store, backend), observe_catalog=catalog,
+                           require_send_intent=True,
                            observe_http_catalog=http_catalog,
                            owner=grant_id, serialize_recovery=True)
 

@@ -109,9 +109,14 @@ then choose the exact available UI `model` and `effort` labels and copy the
 matching available `http_selection` for an HTTP-read send. For example, if the
 current catalog offers GPT-6 Pro with the requested effort, select that exact
 entry; if it is absent, report that it is unavailable instead of silently
-substituting another model. Call `subchat_send` with a fresh request ID, then
-`subchat_wait` or `subchat_recover` using that same operation ID until the saved
-answer is final. A submission receipt alone is not a completed answer.
+substituting another model. For a direct ChatGPT HTTPS send, choose a stable
+`intent_key` for each intended child Chat and a fresh transport request ID.
+The returned `submission_operation_id` identifies the saved send; it may differ
+from the transport ID when the same intent is called again. Use that saved ID
+with `subchat_wait` or `subchat_recover` until the answer is final. If a host
+blocks or loses the reply, inspect `subchat_list` and saved status first; the
+missing reply does not prove that no Chat was created. A submission receipt
+alone is not a completed answer.
 
 `subchat_capabilities` also returns `implementation_version` and
 `implementation_runtime_id` for the Subchat server that answered this call.
@@ -259,7 +264,9 @@ requires a caller-generated 32-character lowercase hexadecimal
 `operation_id`, exact `prompt`, and observed `model` and `effort` labels.
 Optional `conversation_id` targets a follow-up. The MCP `subchat_send` uses a
 32-character lowercase hexadecimal `request_id`; use that send ID as the
-`operation_id` for recovery. A successful send can still be pending.
+`operation_id` for recovery on the legacy local path. The direct HTTPS path
+also requires a stable `intent_key` and returns a canonical
+`submission_operation_id` for recovery. A successful send can still be pending.
 
 Use `status` or `recover` with the original operation ID after an uncertain
 response. Poll while the operation is `sending` or `submitted`. Do not send

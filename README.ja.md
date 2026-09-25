@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a49` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.49` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a53` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.53` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -55,10 +55,12 @@ Codex Pluginの導入にはCodexから使える`uv`が必要です。このチ�
 `anywhere-computer`を導入します。再接続後、独立した`anywhere-computer`と
 `anywhere-subchat`のMCPサーバーを確認し、`subchat_capabilities`で実際の版とモードを確認します。
 
-## subchatで共同作業する
+## subchatに独立した調査を委任する
 
 subchatは、役割を分担した通常のChatGPT Chatです。ChatGPT Workタスクとは別です。
 親が作業範囲を指定し、複数の子から根拠付きの結果を集め、検証して統合する用途を目指します。
+子Chat同士は途中結果を交換しません。独立した担当には並列化が役立ちますが、
+重複する調査では作成と回収の時間が増えます。密接に関連する調査は単一Chatで進めます。
 このチェックアウトのCodex Pluginは、能力・モデル一覧・保存済み操作・結果回収と、
 保存済み回答のsandboxファイルと、保存済み会話に結び付く生成画像を
 上限付きで取得する読み取り専用ツールを
@@ -70,6 +72,10 @@ subchatは、役割を分担した通常のChatGPT Chatです。ChatGPT Workタ�
 macOSでは`anywhere-subchat-setup inspect PROFILE`で背景スナップショットから
 アカウントIDを確認し、`select`でプロファイルとIDを保存できます。具体的な指定方法は
 [Subchatガイド](docs/SUBCHAT-PROBE.md)を参照してください。
+Chromeの保護対象ファイルを読めないHTTPSのLaunchAgentには、サービス停止中に
+`anywhere-subchat-setup stage PROFILE --expect-account-id ID --http-state-dir DIR`で
+選択済みログインをアプリの状態ディレクトリへ保存できます。手順は
+[HTTPサーバーの設定](docs/HTTP-SERVER.md)を参照してください。
 Pluginプロセスに`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send`を
 設定して再接続すると、ログイン済みの専用Chromeプロファイルを使う送信ツールが現れます。
 Chromeは最小化しますが、macOSでの実測では一時的に前面へ出ました。能力表示では

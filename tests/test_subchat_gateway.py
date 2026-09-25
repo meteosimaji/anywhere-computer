@@ -95,6 +95,87 @@ async def test_lazy_gateway_discovery_is_static_and_execute_retries_login(monkey
 
 
 @pytest.mark.asyncio
+async def test_lazy_gateway_reports_background_profile_denial_without_mislabeling_recovery(
+    monkeypatch, tmp_path,
+):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    @asynccontextmanager
+    async def denied_gateway(config, *, owner):
+        raise PermissionError("private profile path must not appear in a reply")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", denied_gateway)
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "Default"), ledger=str(tmp_path / "ledger"),
+        account_id="account", consent="ordinary-chat-browser-control-approved",
+    )
+    ledger = Ledger(tmp_path / "ledger")
+    store = SubchatSubmissions(ledger.connection)
+    already_sent_id = "c" * 32
+    intent_key = "d" * 32
+    store.prepare(already_sent_id, "already sent", "model", "effort", owner="grant",
+                  intent_key=intent_key)
+    store.begin_send(already_sent_id, owner="grant", user_message_id="sent-user",
+                     provider_account_id="account")
+    gateway = LazySubchatGateway(selected, owner="owner")
+    try:
+        sent = await gateway.execute("grant", Request(
+            operation_id="a" * 32, tool="subchat_send", arguments={"prompt": "test"}),
+            frozenset({"subchat_send"}))
+        assert sent.data == {"error_code": "chrome_profile_access_denied",
+                             "dispatched": False}
+        existing = await gateway.execute("grant", Request(
+            operation_id=already_sent_id, tool="subchat_send",
+            arguments={"prompt": "already sent"}), frozenset({"subchat_send"}))
+        assert existing.data["state"] == "sending"
+        assert existing.data.get("dispatched") is not False
+        rebound = await gateway.execute("grant", Request(
+            operation_id="e" * 32, tool="subchat_send",
+            arguments={"prompt": "already sent", "intent_key": intent_key}),
+            frozenset({"subchat_send"}))
+        assert rebound.data["operation_id"] == already_sent_id
+        assert rebound.data["state"] == "sending"
+        assert rebound.data.get("dispatched") is not False
+        recovered = await gateway.execute("grant", Request(
+            operation_id="b" * 32, tool="subchat_recover",
+            arguments={"operation_id": "a" * 32}), frozenset({"subchat_recover"}))
+        assert recovered.data == {"error_code": "chrome_profile_access_denied"}
+        assert "private profile path" not in str(sent) + str(recovered)
+    finally:
+        await gateway.close()
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_pending_gateway_receipt_does_not_guess_canonical_submission_id(monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    monkeypatch.setattr(gateway_module, "_PENDING_RECEIPT_SECONDS", 0.01)
+    release = asyncio.Event()
+
+    class Core:
+        async def execute(self, request):
+            await release.wait()
+            return Reply(operation_id=request.operation_id, state="completed")
+
+        async def close(self):
+            return None
+
+    gateway = SubchatGateway(lambda _grant: Core(), owner="owner")
+    try:
+        request = Request(operation_id="b" * 32, tool="subchat_send",
+                          arguments={"intent_key": "c" * 32})
+        receipt = await gateway.execute("grant", request, frozenset({"subchat_send"}))
+        assert receipt.state == "running"
+        assert "submission_operation_id" not in receipt.data
+        assert "subchat_list" in receipt.data["next_action"]
+    finally:
+        release.set()
+        await gateway.close()
+
+
+@pytest.mark.asyncio
 async def test_lazy_gateway_idle_closes_and_reopens_without_closing_active_calls(
     monkeypatch, tmp_path,
 ):
@@ -520,7 +601,8 @@ async def test_static_discovery_matches_real_gateway_catalog_without_chrome(tmp_
     ledger = Ledger(tmp_path)
     try:
         core = session(Subchats(SubchatSubmissions(ledger.connection), Backend()),
-                       observe_catalog=catalog, owner="grant-a")
+                       observe_catalog=catalog, owner="grant-a",
+                       require_send_intent=True)
         gateway = SubchatGateway(lambda grant: core, owner="owner")
         granted = SUBCHAT_GATEWAY_TOOLS
         actual = await gateway.catalog("grant-a", granted)
@@ -872,7 +954,10 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
             arguments={"operation_id": operation_id}))
 
     try:
-        assert (await status("old-grant")).data["state"] == "sending"
+        current_status = await status("old-grant")
+        assert current_status.data["state"] == "sending"
+        assert "prompt" not in current_status.data
+        assert store.get(operation_id, owner=owner).prompt == "prompt"
         legacy_status = await backend.session("old-grant").execute(Request(
             operation_id="1" * 32, tool="subchat_status",
             arguments={"operation_id": legacy_id}))

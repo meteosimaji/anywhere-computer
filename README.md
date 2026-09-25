@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a49` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.49` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a53` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.53` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -121,12 +121,15 @@ account is pinned, Chrome prepares the request in a background tab, and HTTPX
 sends the generation request. See [HTTP server setup](docs/HTTP-SERVER.md) for
 the opt-in command and recovery rules.
 
-## Cooperative work with subchats
+## Delegated research with subchats
 
 A subchat is an ordinary ChatGPT Chat used for a delegated task, separate from a
 ChatGPT Work task. The experimental adapter supports explicit model selection,
 submission tracking and correlated result recovery. The parent assigns scope,
 compares evidence and verifies proposed changes before integrating them.
+Children do not exchange intermediate results with each other. Sending several
+children can help when the tasks are independent; overlapping research adds
+creation and recovery time. Use a single Chat for one closely related inquiry.
 
 This checkout's Codex Plugin adds a separate Subchat MCP server. Its read-only
 mode has tools for capabilities, catalog, saved operations, result recovery,
@@ -150,6 +153,10 @@ updates. When the ledger location is overridden, place that file beside the
 selected ledger directory. On macOS, `anywhere-subchat-setup inspect PROFILE`
 reads the account ID from a private background snapshot; `select` saves a
 verified profile and account pin. See the Subchat guide for the exact commands.
+For a stopped HTTPS LaunchAgent that cannot read Chrome's protected files,
+`anywhere-subchat-setup stage PROFILE --expect-account-id ID --http-state-dir DIR`
+copies a filtered login into the app's state and atomically switches only the
+existing HTTP Subchat profile selection. See [HTTP server setup](docs/HTTP-SERVER.md).
 On macOS, a selected profile with an account ID pin and
 `"enable_background_send": true` in `subchat/login-selection.json` enables the
 background browser-prepared HTTPX send tools when the Plugin starts. Without

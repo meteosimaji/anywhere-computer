@@ -2,17 +2,23 @@ import asyncio
 import builtins
 import json
 import os
+import sqlite3
 import stat
 import subprocess
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from types import SimpleNamespace
 
 import playwright.async_api
 import pytest
+from test_subchat_chrome_profile import profile_fixture
 
 from anywhere_computer import subchat_chrome_login, subchat_setup
+from anywhere_computer.http_service import HTTPServiceConfig, load_http_config
+from anywhere_computer.locking import ProcessLock
 from anywhere_computer.subchat import SubchatAccessError
+from anywhere_computer.subchat_gateway import SubchatGatewayConfig
 
 
 def test_inspect_then_select_pins_only_verified_account_without_send(tmp_path, monkeypatch,
@@ -194,3 +200,101 @@ async def test_inspection_uses_private_snapshot_and_background_context(tmp_path,
     monkeypatch.setattr(subchat_chrome_login, "chrome_http_session", fake_session)
     assert await subchat_setup.inspect_account(source) == "observed-account"
     assert observed == ["playwright", "snapshot", "background", "client", "account"]
+
+
+def test_stage_plugin_profile_preserves_pin_and_send_consent(tmp_path, monkeypatch):
+    source = profile_fixture(tmp_path / "Chrome", "Default")
+    state = tmp_path / "app/subchat/ledger"
+    state.parent.mkdir(parents=True)
+    selection = state.parent / "login-selection.json"
+    selection.write_text(json.dumps({
+        "chrome_source_profile": str(source), "expected_account_id": "account-a",
+        "enable_background_send": True,
+    }))
+    monkeypatch.setattr(subchat_setup, "plugin_paths", lambda: (tmp_path / "login", state))
+
+    async def inspect(_source):
+        return "account-a"
+
+    monkeypatch.setattr(subchat_setup, "inspect_account", inspect)
+    subchat_setup.main(["stage", str(source), "--expect-account-id", "account-a"])
+    record = json.loads(selection.read_text())
+    staged = Path(record["chrome_source_profile"])
+    assert staged.parent.parent == state.parent / "staged-chrome-profiles"
+    assert record["expected_account_id"] == "account-a"
+    assert record["enable_background_send"] is True
+    assert (staged.parent / "Local State").is_file()
+    with sqlite3.connect(staged / "Cookies") as database:
+        assert database.execute("SELECT COUNT(*) FROM cookies").fetchone()[0] == 2
+    with pytest.raises(SystemExit, match="account pin differs"):
+        subchat_setup.main(["stage", str(source), "--expect-account-id", "other"])
+    assert json.loads(selection.read_text()) == record
+
+
+def test_stage_http_profile_changes_only_config_profile_under_stopped_service(
+    tmp_path, monkeypatch,
+):
+    source = profile_fixture(tmp_path / "Chrome", "Default")
+    directory = tmp_path / "app/chatgpt"
+    config_dir = directory / "http-server"
+    config_dir.mkdir(parents=True)
+    config = HTTPServiceConfig(
+        resource="https://example.com/mcp", owner="owner", device="a" * 32,
+        client="client", port=8768, scopes=frozenset({"subchat_send"}),
+        redirects=frozenset({"https://example.com/callback"}),
+        subchat=SubchatGatewayConfig(
+            profile=str(source), ledger=str(tmp_path / "ledger"), account_id="account-a",
+            consent="ordinary-chat-browser-control-approved"),
+    )
+    (config_dir / "config.json").write_text(config.model_dump_json())
+    authorization = config_dir / "authorization"
+    authorization.mkdir()
+    (authorization / "keep.txt").write_text("OAuth grants untouched")
+
+    async def inspect(_source):
+        return "account-a"
+
+    monkeypatch.setattr(subchat_setup, "inspect_account", inspect)
+    command = ["stage", str(source), "--expect-account-id", "account-a",
+               "--http-state-dir", str(directory)]
+    with ProcessLock(directory / "http-server.lock"):
+        with pytest.raises(SystemExit, match="TimeoutError"):
+            subchat_setup.main(command)
+    assert load_http_config(directory) == config
+    subchat_setup.main(command)
+    updated = load_http_config(directory)
+    assert updated.subchat is not None
+    assert updated.subchat.profile != str(source)
+    assert updated.subchat.profile.startswith(str(config_dir / "staged-chrome-profiles"))
+    assert updated.model_copy(update={"subchat": config.subchat}) == config
+    assert (authorization / "keep.txt").read_text() == "OAuth grants untouched"
+    first_snapshot = Path(updated.subchat.profile).parent
+    subchat_setup.main(command)
+    refreshed = load_http_config(directory)
+    assert refreshed.subchat is not None
+    assert refreshed.subchat.account_id == "account-a"
+    assert refreshed.subchat.profile != updated.subchat.profile
+    assert not first_snapshot.exists()
+    assert (authorization / "keep.txt").read_text() == "OAuth grants untouched"
+
+
+def test_stage_rejects_symlinked_source(tmp_path, monkeypatch):
+    source = profile_fixture(tmp_path / "Chrome", "Default")
+    link = tmp_path / "linked"
+    link.symlink_to(source)
+    monkeypatch.setattr(subchat_setup, "plugin_paths", lambda: (tmp_path / "login",
+                                                                tmp_path / "app/ledger"))
+    with pytest.raises(SystemExit, match="symbolic links"):
+        subchat_setup.main(["stage", str(link), "--expect-account-id", "account-a"])
+
+
+@pytest.mark.asyncio
+async def test_stage_rejects_symlinked_destination_parent(tmp_path):
+    source = tmp_path / "Chrome" / "Default"
+    source.mkdir(parents=True)
+    actual = tmp_path / "actual"
+    actual.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(actual, target_is_directory=True)
+    with pytest.raises(subchat_setup.SetupInputError, match="symlink"):
+        await subchat_setup.stage_profile(source, linked / "snapshots", "account-a")
