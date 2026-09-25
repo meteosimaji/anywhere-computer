@@ -908,7 +908,7 @@ class Engine:
         )
         self.register(
             "documents_preview",
-            "Render one DOCX page as a bounded PNG with a required source SHA-256. "
+            "Render one DOCX, XLSX or PPTX page as a bounded PNG with a required source SHA-256. "
             "Requires local LibreOffice, PDF tools and a network sandbox.",
             PreviewDocument, document_preview, read_only=True,
         )

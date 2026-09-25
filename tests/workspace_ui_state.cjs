@@ -143,11 +143,13 @@ function completed(packet,data) {
     }};
     throw new Error('Unexpected preview fixture tool: '+name);
   };
-  await ui.openPath('/fixture.docx');
-  assert.equal(ui.state.current.kind,'document');
-  assert.match(elements.get('document').textContent,/Document text/);
-  assert.match(elements.get('notice').textContent,/抽出した文字情報を表示しています/);
-  assert.equal(elements.get('notice').dataset.error,'false');
+  for(const extension of ['docx','xlsx','pptx']) {
+    await ui.openPath('/fixture.'+extension);
+    assert.equal(ui.state.current.kind,'document');
+    assert.match(elements.get('document').textContent,/Document text/);
+    assert.match(elements.get('notice').textContent,/抽出した文字情報を表示しています/);
+    assert.equal(elements.get('notice').dataset.error,'false');
+  }
   assert.equal(ui.pending.size,0,'All RPC replies must release their pending requests');
   process.stderr.write('workspace fixture: all assertions completed\n');
   process.stdout.write('workspace mutation recovery: passed\n');
