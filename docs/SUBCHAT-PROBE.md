@@ -184,6 +184,25 @@ saves the verified profile and account pin in a mode-0600 selection file. Select
 keeps the Plugin read-only. Add `--enable-background-send` to `select` only when
 you explicitly intend to enable background browser-prepared sending. Restart the
 Plugin after selection. The setup command prints no cookies, tokens, or email.
+For ordinary macOS Chrome, use the profile-ID workflow to avoid entering a path:
+
+```sh
+anywhere-subchat-setup discover
+anywhere-subchat-setup choose 'Profile 2' --expect-account-id ID_FROM_DISCOVER \
+  --enable-background-send
+```
+
+`discover` inspects at most 20 `Default` or `Profile N` directories under the
+current macOS user's standard Chrome profile store. It reports the Chat account
+ID or an availability state for each; it does not read another directory chosen
+by the caller. `choose` inspects the chosen profile again, requires the observed
+account ID to match, and stores only the profile ID, account pin and send choice.
+Run these commands as the macOS user who owns Chrome and the Plugin state. To
+remove this saved choice, run `anywhere-subchat-setup revoke` and restart the
+Plugin. Environment overrides and an explicit transport setting are separate
+operator settings; remove those as well if they were configured. Existing
+path-based `inspect`, `select` and `stage` remain available for older setups and
+the stopped HTTPS service staging flow.
 `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE` and
 `ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID` override their respective file values.
 Neither setting contains cookies or tokens. In read-only HTTP mode, the Plugin

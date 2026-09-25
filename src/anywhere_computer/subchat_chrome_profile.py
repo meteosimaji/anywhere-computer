@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import shutil
 import sqlite3
 import sys
@@ -13,6 +14,29 @@ from pathlib import Path
 from urllib.parse import quote
 
 from .subchat import SubchatAccessError
+
+
+def chrome_user_data_root() -> Path:
+    """The ordinary macOS Chrome profile store, never a caller-supplied directory."""
+    return Path.home() / "Library/Application Support/Google/Chrome"
+
+
+def chrome_profile_by_id(profile_id: str) -> Path:
+    """Resolve a discovered profile ID without accepting a filesystem path."""
+    if profile_id != "Default" and not (
+        profile_id.startswith("Profile ") and profile_id[8:].isdigit()
+    ):
+        raise ValueError("Select Chrome Default or Profile N")
+    root = chrome_user_data_root()
+    if root.is_symlink() or not root.is_dir():
+        raise ValueError("Chrome profile store is unavailable")
+    source = root / profile_id
+    if source.is_symlink() or not source.is_dir():
+        raise ValueError("Selected Chrome profile is unavailable")
+    getuid = getattr(os, "getuid", None)
+    if getuid is not None and source.stat().st_uid != getuid():
+        raise ValueError("Selected Chrome profile belongs to another user")
+    return source
 
 
 def _snapshot_profile(source: Path, destination: Path) -> None:
@@ -76,5 +100,5 @@ async def temporary_chrome_profile(source: Path) -> AsyncIterator[Path]:
     with tempfile.TemporaryDirectory(prefix="anywhere-subchat-chrome-") as temporary:
         destination = Path(temporary)
         destination.chmod(0o700)
-        await asyncio.to_thread(_snapshot_profile, source.resolve(), destination)
+        await asyncio.to_thread(_snapshot_profile, source, destination)
         yield destination

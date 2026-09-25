@@ -153,6 +153,10 @@ updates. When the ledger location is overridden, place that file beside the
 selected ledger directory. On macOS, `anywhere-subchat-setup inspect PROFILE`
 reads the account ID from a private background snapshot; `select` saves a
 verified profile and account pin. See the Subchat guide for the exact commands.
+For the ordinary macOS Chrome store, `anywhere-subchat-setup discover` lists
+profile IDs with observed Chat account IDs, and `choose 'Profile N'
+--expect-account-id ID --enable-background-send` saves an ID-based selection.
+`anywhere-subchat-setup revoke` removes that selection for the next Plugin start.
 For a stopped HTTPS LaunchAgent that cannot read Chrome's protected files,
 `anywhere-subchat-setup stage PROFILE --expect-account-id ID --http-state-dir DIR`
 copies a filtered login into the app's state and atomically switches only the

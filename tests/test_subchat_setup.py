@@ -14,7 +14,7 @@ import playwright.async_api
 import pytest
 from test_subchat_chrome_profile import profile_fixture
 
-from anywhere_computer import subchat_chrome_login, subchat_setup
+from anywhere_computer import subchat_chrome_login, subchat_chrome_profile, subchat_setup
 from anywhere_computer.http_service import HTTPServiceConfig, load_http_config
 from anywhere_computer.locking import ProcessLock
 from anywhere_computer.subchat import SubchatAccessError
@@ -55,6 +55,61 @@ def test_inspect_then_select_pins_only_verified_account_without_send(tmp_path, m
     subchat_setup.main(["select", str(source), "--expect-account-id", "account-a",
                         "--enable-background-send"])
     assert json.loads(selection.read_text())["enable_background_send"] is True
+
+
+def test_discover_choose_and_revoke_profile_id(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "Library/Application Support/Google/Chrome"
+    for profile_id in ("Default", "Profile 2"):
+        (root / profile_id).mkdir(parents=True)
+    (root / "Personal").mkdir()
+    state = tmp_path / "app/subchat/ledger"
+    monkeypatch.setattr(subchat_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(subchat_chrome_profile, "chrome_user_data_root", lambda: root)
+    monkeypatch.setattr(subchat_setup, "chrome_user_data_root", lambda: root)
+    monkeypatch.setattr(subchat_setup, "plugin_paths", lambda: (tmp_path / "login", state))
+
+    async def inspect(source):
+        return {"Default": "account-a", "Profile 2": "account-b"}[source.name]
+
+    monkeypatch.setattr(subchat_setup, "inspect_account", inspect)
+    subchat_setup.main(["discover"])
+    assert json.loads(capsys.readouterr().out) == {"profiles": [
+        {"profile_id": "Default", "account_id": "account-a", "state": "available"},
+        {"profile_id": "Profile 2", "account_id": "account-b", "state": "available"},
+    ]}
+    with pytest.raises(SystemExit, match="different Chat account"):
+        subchat_setup.main(["choose", "Profile 2", "--expect-account-id", "account-a"])
+    assert not (state.parent / "login-selection.json").exists()
+    with pytest.raises(SystemExit, match="Select Chrome Default or Profile N"):
+        subchat_setup.main(["choose", str(root / "Default"),
+                            "--expect-account-id", "account-a"])
+    subchat_setup.main(["choose", "Profile 2", "--expect-account-id", "account-b",
+                        "--enable-background-send"])
+    result = json.loads(capsys.readouterr().out)
+    assert result["selected"] is True and result["background_send_enabled"] is True
+    record = json.loads((state.parent / "login-selection.json").read_text())
+    assert record == {"chrome_profile_id": "Profile 2",
+                      "expected_account_id": "account-b", "enable_background_send": True}
+    assert stat.S_IMODE((state.parent / "login-selection.json").stat().st_mode) == 0o600
+    subchat_setup.main(["revoke"])
+    assert json.loads(capsys.readouterr().out)["selected"] is False
+    assert not (state.parent / "login-selection.json").exists()
+
+
+def test_discovery_skips_symlink_and_reports_missing_login(tmp_path, monkeypatch):
+    root = tmp_path / "Chrome"
+    (root / "Default").mkdir(parents=True)
+    (root / "Profile 1").symlink_to(root / "Default")
+    monkeypatch.setattr(subchat_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(subchat_chrome_profile, "chrome_user_data_root", lambda: root)
+    monkeypatch.setattr(subchat_setup, "chrome_user_data_root", lambda: root)
+
+    async def expired(_source):
+        raise SubchatAccessError(401)
+
+    monkeypatch.setattr(subchat_setup, "inspect_account", expired)
+    assert asyncio.run(subchat_setup.discover_profiles()) == [
+        {"profile_id": "Default", "state": "login_required"}]
 
 
 def test_setup_authentication_failure_never_saves_selection(tmp_path, monkeypatch):

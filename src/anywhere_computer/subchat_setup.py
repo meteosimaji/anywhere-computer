@@ -18,7 +18,12 @@ from .http_service import load_http_config
 from .locking import ProcessLock
 from .subchat import SubchatAccessError
 from .subchat_browser.background import background_chrome_context, new_background_page
-from .subchat_chrome_profile import _snapshot_profile, temporary_chrome_profile
+from .subchat_chrome_profile import (
+    _snapshot_profile,
+    chrome_profile_by_id,
+    chrome_user_data_root,
+    temporary_chrome_profile,
+)
 from .subchat_plugin import _selection_record, plugin_paths
 
 
@@ -149,10 +154,70 @@ def save_selection(state: Path, source: Path, account_id: str, *, enable_send: b
         Path(temporary).unlink(missing_ok=True)
 
 
+def save_profile_id_selection(state: Path, profile_id: str, account_id: str,
+                              *, enable_send: bool) -> None:
+    """Save an owner-selected Chrome ID, never an arbitrary source path."""
+    chrome_profile_by_id(profile_id)
+    if not account_id or len(account_id) > 256 or any(ord(char) < 33 or ord(char) > 126
+                                                    for char in account_id):
+        raise SetupInputError("Observed Chat account ID is invalid")
+    _private_directory(state.parent)
+    selection = state.parent / "login-selection.json"
+    if selection.is_symlink():
+        raise SetupInputError("Subchat login selection must not be a symlink")
+    content = json.dumps({"chrome_profile_id": profile_id,
+                          "expected_account_id": account_id,
+                          "enable_background_send": enable_send}, separators=(",", ":"))
+    descriptor, temporary = tempfile.mkstemp(prefix=".login-selection-", dir=state.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, selection)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+async def discover_profiles() -> list[dict[str, str]]:
+    """Inspect at most 20 ordinary Chrome profiles without touching live Chrome."""
+    if sys.platform != "darwin":
+        raise SetupInputError("Chrome profile discovery is supported on macOS only")
+    root = chrome_user_data_root()
+    if root.is_symlink() or not root.is_dir():
+        return []
+    profile_ids = ["Default", *(f"Profile {number}" for number in range(1, 100))]
+    available = [profile_id for profile_id in profile_ids
+                 if (root / profile_id).is_dir() and not (root / profile_id).is_symlink()]
+    if len(available) > 20:
+        raise SetupInputError("Chrome has too many profiles to inspect")
+    results = []
+    for profile_id in available:
+        try:
+            account_id = await inspect_account(chrome_profile_by_id(profile_id))
+            results.append({"profile_id": profile_id, "account_id": account_id,
+                            "state": "available"})
+        except SubchatAccessError:
+            results.append({"profile_id": profile_id, "state": "login_required"})
+        except Exception:
+            results.append({"profile_id": profile_id, "state": "unavailable"})
+    return results
+
+
+def revoke_profile_id_selection(state: Path) -> None:
+    """Remove the selected-profile authorization for the next Plugin start."""
+    selection = state.parent / "login-selection.json"
+    if selection.is_symlink():
+        raise SetupInputError("Subchat login selection must not be a symlink")
+    selection.unlink(missing_ok=True)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("inspect", "select", "stage"))
-    parser.add_argument("profile", type=Path, help="Absolute Chrome Default or Profile N path")
+    parser.add_argument("action", choices=("inspect", "select", "stage", "discover",
+                                           "choose", "revoke"))
+    parser.add_argument("profile", nargs="?",
+                        help="Chrome profile ID for choose; path for legacy actions")
     parser.add_argument("--enable-background-send", action="store_true",
                         help="Explicitly enable browser-prepared sending after selection")
     parser.add_argument("--expect-account-id",
@@ -160,15 +225,20 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--http-state-dir", type=Path,
                         help="For stage, update an existing stopped HTTPS service")
     args = parser.parse_args(argv)
-    if args.action != "select" and args.enable_background_send:
-        parser.error("--enable-background-send requires select")
-    if args.action in {"select", "stage"} and not args.expect_account_id:
+    if args.action not in {"select", "choose"} and args.enable_background_send:
+        parser.error("--enable-background-send requires select or choose")
+    if args.action in {"select", "stage", "choose"} and not args.expect_account_id:
         parser.error(f"{args.action} requires --expect-account-id from a prior inspect")
-    if args.action == "inspect" and args.expect_account_id is not None:
-        parser.error("--expect-account-id requires select or stage")
+    if args.action in {"inspect", "discover", "revoke"} and args.expect_account_id is not None:
+        parser.error("--expect-account-id requires select, choose, or stage")
     if args.http_state_dir is not None and args.action != "stage":
         parser.error("--http-state-dir requires stage")
+    if (args.action in {"discover", "revoke"}) != (args.profile is None):
+        parser.error("discover and revoke take no profile; other actions require one")
     try:
+        if args.action == "discover":
+            print(json.dumps({"profiles": asyncio.run(discover_profiles())}))
+            return
         if args.http_state_dir is None:
             try:
                 _, state = plugin_paths()
@@ -180,7 +250,19 @@ def main(argv: list[str] | None = None) -> None:
             if not args.http_state_dir.is_absolute():
                 raise SetupInputError("Select an absolute HTTP state directory")
             state = args.http_state_dir.resolve()
-        source = _source_profile(args.profile, state)
+        if args.action == "revoke":
+            _private_directory(state.parent)
+            with ProcessLock(state.parent / "profile-stage.lock"):
+                revoke_profile_id_selection(state)
+            print(json.dumps({"selected": False, "restart_required": True}))
+            return
+        if args.action == "choose":
+            try:
+                source = chrome_profile_by_id(args.profile)
+            except ValueError as error:
+                raise SetupInputError(str(error)) from None
+        else:
+            source = _source_profile(Path(args.profile), state)
         with ExitStack() as locks:
             if args.action == "stage":
                 if args.http_state_dir is None:
@@ -233,18 +315,24 @@ def main(argv: list[str] | None = None) -> None:
                 if args.action == "select":
                     save_selection(state, source, account_id,
                                    enable_send=args.enable_background_send)
+                elif args.action == "choose":
+                    _private_directory(state.parent)
+                    with ProcessLock(state.parent / "profile-stage.lock"):
+                        save_profile_id_selection(state, args.profile, account_id,
+                                                  enable_send=args.enable_background_send)
         if args.http_state_dir is not None:
             background_send_enabled = None
         elif args.action == "stage":
             background_send_enabled = record.get("enable_background_send") is True
         else:
-            background_send_enabled = args.action == "select" and args.enable_background_send
+            background_send_enabled = (args.action in {"select", "choose"}
+                                       and args.enable_background_send)
         print(json.dumps({"account_id": args.expect_account_id if args.action == "stage"
                           else account_id,
-                          "selected": args.action in {"select", "stage"},
+                          "selected": args.action in {"select", "choose", "stage"},
                           "staged": args.action == "stage",
                           "background_send_enabled": background_send_enabled,
-                          "restart_required": args.action != "inspect"}))
+                          "restart_required": args.action not in {"inspect", "discover"}}))
     except SubchatAccessError as error:
         reason = ("Login is missing or expired" if error.status == 401
                   else "Chat account access was denied")
