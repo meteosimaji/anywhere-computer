@@ -42,13 +42,35 @@ class BrowserControl:
         self.entries: dict[str, _Entry] = {}
         self._lock = asyncio.Lock()
 
+    @staticmethod
+    def _live(entry: _Entry) -> bool:
+        return not entry.page.is_closed() and entry.browser.is_connected()
+
+    async def _reap_dead(self) -> None:
+        """Release ended sessions before enforcing the isolated-browser limit."""
+        for session_id, entry in list(self.entries.items()):
+            if self._live(entry) or entry.lock.locked():
+                continue
+            async with entry.lock:
+                if self._live(entry) or self.entries.get(session_id) is not entry:
+                    continue
+                del self.entries[session_id]
+                try:
+                    await entry.browser.close()
+                except Exception:
+                    pass  # The browser may already have exited.
+                try:
+                    await entry.playwright.stop()
+                except Exception:
+                    pass  # A dead driver must not exhaust session capacity.
+
     def _entry(
         self, args: BrowserSession, owner: str | None, *, require_live: bool = True,
     ) -> _Entry:
         entry = self.entries.get(args.session_id)
         if entry is None or entry.owner != owner or entry.tab_id != args.tab_id:
             raise ValueError("Browser session or tab unavailable for this connection")
-        if require_live and (entry.page.is_closed() or not entry.browser.is_connected()):
+        if require_live and not self._live(entry):
             raise ValueError("Browser session ended; open a new isolated session")
         return entry
 
@@ -56,6 +78,7 @@ class BrowserControl:
         # Each session gets its own ephemeral browser process and context. No
         # persistent profile or existing user tab is ever attached here.
         async with self._lock:
+            await self._reap_dead()
             if len(self.entries) >= 4:
                 raise ValueError("Browser session capacity reached")
             try:
@@ -166,14 +189,15 @@ class BrowserControl:
                 "text": text[:16384], "text_truncated": len(text) > 16384}
 
     async def stop(self, args: BrowserSession, *, owner: str | None) -> dict[str, JsonValue]:
-        entry = self._entry(args, owner, require_live=False)
-        async with entry.lock:
-            self._entry(args, owner, require_live=False)
-            try:
-                await entry.browser.close()
-            finally:
-                await entry.playwright.stop()
+        async with self._lock:
+            entry = self._entry(args, owner, require_live=False)
+            async with entry.lock:
+                self._entry(args, owner, require_live=False)
                 del self.entries[args.session_id]
+                try:
+                    await entry.browser.close()
+                finally:
+                    await entry.playwright.stop()
         return {"session_id": args.session_id, "tab_id": args.tab_id, "state": "closed"}
 
     async def close(self) -> None:

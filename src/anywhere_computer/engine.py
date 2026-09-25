@@ -1363,7 +1363,7 @@ class Engine:
             if owner is None or browser_entry.owner == owner:
                 blocker_details.append({
                     "resource": "browser_session", "id": session_id,
-                    "state": ("running" if browser_entry.browser.is_connected() else "ended"),
+                    "state": ("running" if self.browser._live(browser_entry) else "ended"),
                     "stop_tool": "browser_close", "tab_id": browser_entry.tab_id,
                     "stop_available": (not browser_entry.lock.locked()
                                        and browser_entry.owner == owner),
