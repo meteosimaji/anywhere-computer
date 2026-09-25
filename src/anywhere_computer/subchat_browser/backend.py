@@ -550,7 +550,8 @@ class BrowserSubchatBackend:
         self.validate_send_selection(submission.http_selection)
         if self.http_read:
             assert submission.http_selection is not None
-            require_http_selection(await self.http_catalog(), submission.http_selection)
+            require_http_selection(await self.http_catalog(), submission.http_selection,
+                                   model=submission.model, effort=submission.effort)
         if submission.resources is not None and not self.http_read:
             raise ValueError('Resource sends require HTTP history verification')
         url = self._url(submission)

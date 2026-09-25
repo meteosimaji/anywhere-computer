@@ -205,6 +205,7 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
 
                     data = catalog()
                     data['models'][0]['slug'] = 'observed'
+                    data['models'][0]['title'] = 'Future model'
                     data['versions'][0]['id'] = 'fixture'
                     data['versions'][0]['intelligence_presets'][0].update(
                         model_slug='observed', thinking_effort=None)

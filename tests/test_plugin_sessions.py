@@ -244,16 +244,22 @@ async def test_idle_session_keeps_background_subchat_alive_until_work_ends(
         await pool.call(session_id, owner="peer-a", cwd=str(tmp_path),
                         server="chat-subchat", tool=tool, arguments={},
                         catalog_sha256="1" * 64)
+        with pytest.raises(PluginPreflightError, match="session_busy"):
+            await pool.stop(session_id, owner="peer-a")
+        assert entry.context.alive
         now[0] = 31
         await pool.expire_idle()
         assert (await pool.status(session_id, owner="peer-a"))["state"] == "open"
-        assert entry.context.alive and entry.context.activity_probes == 1
+        assert entry.context.alive and entry.context.activity_probes == 2
         now[0] = 62
         entry.context.activity_error = True
         await pool.expire_idle()
         status = await pool.status(session_id, owner="peer-a")
         assert status["state"] == "open"
         assert status["background_activity_probe_failures"] == 1
+        with pytest.raises(PluginPreflightError, match="session_busy"):
+            await pool.stop(session_id, owner="peer-a")
+        assert entry.context.alive
         now[0] = 93
         entry.context.activity_error = False
         entry.context.active_count = 0
@@ -312,6 +318,28 @@ async def test_namespaced_subchat_activity_protects_idle_session(tmp_path, monke
         assert status["state"] == "open"
         assert status["background_activity_protected"] is True
         assert pool.entries[session_id].context.activity_probes == 1
+    finally:
+        await pool.close()
+
+
+async def test_explicit_close_succeeds_after_subchat_background_work_finishes(
+    contexts, tmp_path, monkeypatch,
+):
+    pool = PluginSessions()
+    try:
+        session_id = (await pool.open(str(tmp_path), owner="peer-a"))["session_id"]
+        entry = pool.entries[session_id]
+        entry.background_servers.add(("chat-subchat", "subchat_activity"))
+
+        async def inactive(_entry):
+            assert _entry is entry
+            return False
+
+        monkeypatch.setattr(pool, "_subchat_active", inactive)
+        closed = await pool.stop(session_id, owner="peer-a")
+        assert closed["state"] == "closed"
+        assert closed["cleanup_confirmed"] is True
+        assert not contexts[0].alive
     finally:
         await pool.close()
 

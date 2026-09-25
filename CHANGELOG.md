@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a47 / Plugin 0.2.0-alpha.47 — unpublished candidate (2026-09-25)
+
+- Reject mismatched Subchat UI model and effort labels against the selected
+  HTTP catalog choice before browser dispatch or HTTP generation.
+- Keep an explicit Plugin bridge session open while Subchat background work is
+  active, including after the initial tool call has returned.
+
 ## 0.2.0a46 / Plugin 0.2.0-alpha.46 — unpublished candidate (2026-09-25)
 
 - Warn on the owner consent page when a client omits available Subchat tools.

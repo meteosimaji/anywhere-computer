@@ -161,6 +161,81 @@ def test_exact_http_selection_is_revalidated(change, field, reason):
         assert (caught.value.field, caught.value.reason) == (field, reason)
 
 
+@pytest.mark.parametrize(('model', 'effort', 'field'), [
+    ('GPT-5.6 Sol', 'Instant', 'model'),
+    ('最新', 'Thinking', 'effort'),
+])
+def test_http_choice_labels_bind_to_selected_version_and_preset(model, effort, field):
+    from anywhere_computer.subchat_browser.catalog import require_http_selection
+    from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSelectionError
+
+    payload = catalog()
+    payload['versions'][0]['id'] = 'latest'
+    payload['versions'][0]['display_text'] = '最新'
+    payload['versions'][0]['intelligence_presets'][0]['title'] = 'Instant'
+    payload['models'][0]['title'] = 'GPT-5.6 Sol'
+    payload['versions'].append({**payload['versions'][0], 'id': '5.6',
+                                'display_text': 'GPT-5.6 Sol'})
+    projected = project_http_catalog(json.dumps(payload).encode())
+    selected = SubchatHTTPSelection.model_validate(
+        projected['versions'][0]['choices'][0]['http_selection'])
+    with pytest.raises(SubchatSelectionError) as caught:
+        require_http_selection(projected, selected, model=model, effort=effort)
+    assert (caught.value.field, caught.value.reason) == (field, 'mismatch')
+    require_http_selection(projected, selected, model='最新', effort='Instant')
+
+
+def test_http_model_title_can_differ_from_version_label():
+    from anywhere_computer.subchat_browser.catalog import require_http_selection
+    from anywhere_computer.subchat_state import SubchatHTTPSelection
+
+    projected = project_http_catalog(json.dumps(catalog()).encode())
+    selected = SubchatHTTPSelection.model_validate(
+        projected['versions'][0]['choices'][0]['http_selection'])
+    require_http_selection(projected, selected, model='Future Chat', effort='Future effort')
+
+
+async def test_browser_rejects_mismatched_http_choice_before_opening_page(tmp_path):
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import (
+        SubchatHTTPSelection,
+        SubchatSelectionError,
+        SubchatSubmissions,
+    )
+
+    payload = catalog()
+    payload['versions'][0]['id'] = 'latest'
+    payload['versions'][0]['display_text'] = '最新'
+    payload['versions'][0]['intelligence_presets'][0]['title'] = 'Instant'
+    payload['models'][0]['title'] = 'GPT-5.6 Sol'
+    payload['versions'].append({**payload['versions'][0], 'id': '5.6',
+                                'display_text': 'GPT-5.6 Sol'})
+    selection = SubchatHTTPSelection.model_validate(project_http_catalog(
+        json.dumps(payload).encode())['versions'][0]['choices'][0]['http_selection'])
+
+    async def forbidden():
+        pytest.fail('Mismatched labels must not open a browser page')
+
+    ledger = Ledger(tmp_path)
+    try:
+        backend = BrowserSubchatBackend(forbidden, http_read=True)
+
+        async def observed_catalog():
+            return project_http_catalog(json.dumps(payload).encode())
+
+        backend.http_catalog = observed_catalog
+        service = Subchats(SubchatSubmissions(ledger.connection), backend)
+        with pytest.raises(SubchatSelectionError) as caught:
+            await service.send('a' * 32, 'prompt', 'GPT-5.6 Sol', 'Instant', owner=None,
+                               http_selection=selection)
+        assert (caught.value.field, caught.value.reason) == ('model', 'mismatch')
+        assert service.store.get('a' * 32, owner=None).state == 'prepared'
+    finally:
+        ledger.close()
+
+
 @pytest.mark.parametrize('preset_id', ['7', 7.0, True])
 def test_http_selection_does_not_coerce_preset_id(preset_id):
     from pydantic import ValidationError
