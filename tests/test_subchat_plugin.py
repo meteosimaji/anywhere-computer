@@ -123,6 +123,8 @@ def test_plugin_reads_persistent_local_chrome_selection(tmp_path, monkeypatch):
 
 
 def test_profile_id_selection_resolves_only_ordinary_chrome_store(tmp_path, monkeypatch):
+    if os.name == 'nt':
+        pytest.skip('Chrome profile ID selection is currently macOS-only')
     root = tmp_path / 'Library/Application Support/Google/Chrome'
     source = root / 'Profile 2'
     source.mkdir(parents=True)

@@ -64,6 +64,8 @@ def test_inspect_then_select_pins_only_verified_account_without_send(tmp_path, m
 
 
 def test_discover_choose_and_revoke_profile_id(tmp_path, monkeypatch, capsys):
+    if os.name == 'nt':
+        pytest.skip('Chrome profile ID selection is currently macOS-only')
     root = tmp_path / "Library/Application Support/Google/Chrome"
     for profile_id in ("Default", "Profile 2"):
         (root / profile_id).mkdir(parents=True)
