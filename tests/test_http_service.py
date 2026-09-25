@@ -59,6 +59,8 @@ async def authenticate(http, *, client_id="native", redirect=REDIRECT, scopes=SC
     assert metadata["authorization_response_iss_parameter_supported"] is True
     resource_metadata = (await http.get("/.well-known/oauth-protected-resource")).json()
     assert resource_metadata["authorization_servers"] == [metadata["issuer"]]
+    assert set(resource_metadata["scopes_supported"]) == scopes
+    assert set(metadata["scopes_supported"]) == scopes
     response = await http.get(
         "/authorize",
         params={

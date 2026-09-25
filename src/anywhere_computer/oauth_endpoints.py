@@ -17,12 +17,17 @@ class OAuthEndpoints:
     def __init__(
         self, store: AuthorizationStore, *, authorization_endpoint: str,
         authorization_response_iss_supported: bool = False,
+        advertised_scopes: frozenset[str] | None = None,
     ) -> None:
         validate_authorization_url(authorization_endpoint)
         resource = urlsplit(store.resource)
         if resource.path != "/mcp":
             raise ValueError("This HTTP adapter requires a canonical /mcp resource path")
         self.store = store
+        self.advertised_scopes = (store.known_tools if advertised_scopes is None
+                                  else advertised_scopes)
+        if not self.advertised_scopes <= store.known_tools:
+            raise ValueError("Advertised OAuth scopes contain unsupported tools")
         self.issuer = urlunsplit((resource.scheme, resource.netloc, "", "", ""))
         self.authorization_endpoint = authorization_endpoint
         # External embeddings must opt in only when their consent responses
@@ -52,7 +57,7 @@ class OAuthEndpoints:
             {
                 "resource": self.store.resource,
                 "authorization_servers": [self.issuer],
-                "scopes_supported": list(sorted(self.store.known_tools)),
+                "scopes_supported": list(sorted(self.advertised_scopes)),
                 "bearer_methods_supported": ["header"],
             },
             {},
@@ -76,7 +81,7 @@ class OAuthEndpoints:
                 "authorization_response_iss_parameter_supported": (
                     self.authorization_response_iss_supported
                 ),
-                "scopes_supported": list(sorted(self.store.known_tools)),
+                "scopes_supported": list(sorted(self.advertised_scopes)),
             },
             {},
         )

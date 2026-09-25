@@ -3,6 +3,11 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a44 / Plugin 0.2.0-alpha.44 — unpublished candidate (2026-09-25)
+
+- Advertise only the HTTP tools enabled for this device in OAuth discovery.
+  Prevent ChatGPT app registration from offering known but unavailable scopes.
+
 ## 0.2.0a43 / Plugin 0.2.0-alpha.43 — unpublished candidate (2026-09-25)
 
 - Allow a bounded longer startup window for a freshly launched agent under

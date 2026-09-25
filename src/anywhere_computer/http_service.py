@@ -265,6 +265,7 @@ async def http_service(
                     oauth = OAuthEndpoints(
                         store, authorization_endpoint=consent.authorization_endpoint,
                         authorization_response_iss_supported=True,
+                        advertised_scopes=config.scopes,
                     )
                     adapter = HTTPMCP(
                         backend.authenticate,
