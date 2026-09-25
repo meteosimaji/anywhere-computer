@@ -6,6 +6,7 @@ import zipfile
 
 import pytest
 
+from anywhere_computer import files as file_module
 from anywhere_computer.document_writer import (
     create_word,
     create_workbook,
@@ -200,6 +201,16 @@ async def test_targeted_docx_edit_reports_diff_and_preserves_other_parts(tmp_pat
                 "expected_sha256": "0" * 64, "expected_text": "日本語 42",
                 "new_text": "日本語 43"}))
         assert conflict.state == "failed" and path.read_bytes() == original
+        assert conflict.data["error_code"] == "document_changed"
+        assert conflict.data["edit_applied"] is False
+        assert conflict.data["next_action"] == "Read the document again before editing."
+        paragraph_conflict = await engine.execute(Request(operation_id=uuid.uuid4().hex,
+            tool="documents_edit_paragraph", arguments={"path": str(path), "paragraph": 2,
+                "expected_sha256": digest, "expected_text": "outdated",
+                "new_text": "日本語 43"}))
+        assert paragraph_conflict.state == "failed" and path.read_bytes() == original
+        assert paragraph_conflict.data["error_code"] == "paragraph_changed"
+        assert paragraph_conflict.data["edit_applied"] is False
         edited = await engine.execute(Request(operation_id=uuid.uuid4().hex,
             tool="documents_edit_paragraph", arguments={"path": str(path), "paragraph": 2,
                 "expected_sha256": digest, "expected_text": "日本語 42",
@@ -222,6 +233,58 @@ async def test_targeted_docx_edit_reports_diff_and_preserves_other_parts(tmp_pat
             tool="files_restore", arguments={"path": str(path), "backup_id": digest,
                 "expected_sha256": edited.data["sha256"]}))
         assert restored.state == "completed" and path.read_bytes() == original
+    finally:
+        await engine.close()
+
+
+@pytest.mark.parametrize("stage, expected_error", [
+    ("lock", "File changed or expected_sha256 is missing; read it again"),
+    ("replace", "Concurrent modification detected before replacement"),
+])
+async def test_targeted_docx_edit_reports_late_external_change(
+    tmp_path, monkeypatch, stage, expected_error,
+):
+    engine = Engine(tmp_path / "state")
+    path = tmp_path / "paragraphs.docx"
+    original = create_word("first\nsecond\nlast")
+    external = create_word("external\nsecond\nlast")
+    path.write_bytes(original)
+    if stage == "lock":
+        write = engine.files._write_bytes
+
+        def changed_before_lock(*args):
+            path.write_bytes(external)
+            return write(*args)
+
+        monkeypatch.setattr(engine.files, "_write_bytes", changed_before_lock)
+    else:
+        read = file_module.read_bytes
+        target_reads = 0
+
+        def changed_before_replace(target):
+            nonlocal target_reads
+            if target == path:
+                target_reads += 1
+                if target_reads == 2:
+                    path.write_bytes(external)
+            return read(target)
+
+        monkeypatch.setattr(file_module, "read_bytes", changed_before_replace)
+    try:
+        reply = await engine.execute(Request(operation_id=uuid.uuid4().hex,
+            tool="documents_edit_paragraph", arguments={"path": str(path), "paragraph": 2,
+                "expected_sha256": sha256(original), "expected_text": "second",
+                "new_text": "changed"}))
+        assert reply.state == "failed"
+        assert reply.error == expected_error
+        assert reply.data["error_code"] == "document_changed"
+        assert reply.data["edit_applied"] is False
+        assert "dispatched" not in reply.data
+        assert path.read_bytes() == external
+        backup = engine.files.backups / sha256(original)
+        assert backup.exists() is (stage == "replace")
+        if stage == "replace":
+            assert backup.read_bytes() == original
     finally:
         await engine.close()
 
