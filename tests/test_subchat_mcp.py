@@ -712,12 +712,13 @@ async def test_wait_preserves_thinking_and_releases_browser_between_observations
         ledger.close()
 
 
-async def test_wait_does_not_disguise_provider_timeout_as_normal_thinking(tmp_path):
+@pytest.mark.parametrize('error_type', [TimeoutError, ConnectionError])
+async def test_wait_does_not_disguise_observation_failure_as_thinking(tmp_path, error_type):
     from anywhere_computer.models import Request
 
     class BrokenBrowser(BrowserFixture):
         async def read_answer(self, submission):
-            raise TimeoutError('private provider details')
+            raise error_type('private provider details')
 
     ledger = Ledger(tmp_path)
     backend = BrokenBrowser()
@@ -729,7 +730,11 @@ async def test_wait_does_not_disguise_provider_timeout_as_normal_thinking(tmp_pa
         failed = await server.execute(Request(operation_id='b' * 32, tool='subchat_wait',
             arguments={'operation_id': 'a' * 32, 'wait_ms': 1000}))
         assert failed.state == 'failed'
-        assert failed.data['error_type'] == 'TimeoutError'
+        assert failed.data['error_type'] == error_type.__name__
+        assert failed.data['submission_operation_id'] == 'a' * 32
+        assert failed.data['dispatched'] is None
+        assert failed.data['automatic_retry'] is False
+        assert 'subchat_send again' in failed.error
         assert 'private provider details' not in failed.model_dump_json()
         assert service.store.get('a' * 32, owner=None).state == 'submitted'
         assert backend.sends == 1
