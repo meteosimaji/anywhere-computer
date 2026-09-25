@@ -9,6 +9,7 @@ CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     "literal_search": frozenset({"search_start", "search_results", "search_list",
                                   "search_stop"}),
     "office_text_read": frozenset({"documents_read"}),
+    "office_rendered_preview": frozenset({"documents_preview"}),
     "audio_capture": frozenset({"audio_status", "audio_capture"}),
     "gui_native": frozenset({"gui_native_windows", "gui_native_observe", "gui_native_close",
                              "gui_native_set_value", "gui_native_press"}),

@@ -30,7 +30,7 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
 <section id="welcome" class="empty"><div><h2>ファイルを開いて、<br>作業を始めましょう。</h2><p>上の欄にファイルやフォルダーのパスを入力してください。内容を確認してから、そのまま編集できます。</p></div><span class="file-visual" data-kind="folder" aria-hidden="true"></span></section>
 <section id="folder" hidden><div class="section-heading"><h2 id="folder-title">ファイルとフォルダー。</h2><span id="folder-count" class="caption"></span></div><ul id="entries" class="file-list"></ul><button id="more-entries" hidden>さらに表示</button></section>
 <section id="text-panel" class="work-card" hidden><div class="toolbar"><strong>テキスト</strong><span id="read-status" class="caption"></span><span class="spacer"></span><button id="more-text" hidden>続きを読み込む</button><button id="undo" disabled>編集を戻す</button><button class="primary" id="save" disabled>保存</button></div><textarea id="editor" aria-label="ファイルの内容" spellcheck="false" readonly></textarea><p id="file-meta" class="caption"></p></section>
-<section id="preview" class="work-card" hidden><div class="toolbar"><strong id="preview-title">プレビュー</strong><button id="more-document" hidden>続きを読み込む</button></div><img id="image" alt="選択した画像のプレビュー" hidden><pre id="document"></pre></section>
+<section id="preview" class="work-card" hidden><div class="toolbar"><strong id="preview-title">プレビュー</strong><span id="preview-page" class="caption" hidden></span><button id="more-preview" hidden>次のページ</button><button id="more-document" hidden>続きを読み込む</button></div><img id="image" alt="選択した画像のプレビュー" hidden><pre id="document"></pre></section>
 <section id="settings" hidden><p class="settings-intro caption">この接続先の設定です。同じエージェントに接続するクライアントで共有されます。</p><div class="settings-grid"><div class="setting wide"><label for="default-shell">既定のシェル</label><p>次回の端末実行に使う実行ファイルのパス。空欄ならOSの既定を使います。</p><div class="setting-control"><input id="default-shell" placeholder="OSの既定を使用" autocomplete="off"><button id="set-shell">適用</button></div></div><div class="setting"><label for="read-limit">読込み</label><p>一度に読み込む行数の上限。</p><div class="setting-control"><input id="read-limit" aria-label="読込行数の上限" type="number" min="1" max="5000"><button id="set-read">適用</button></div></div><div class="setting"><label for="write-limit">書込み</label><p>一度に書き込む行数の上限。</p><div class="setting-control"><input id="write-limit" aria-label="書込行数の上限" type="number" min="1" max="100000"><button id="set-write">適用</button></div></div></div></section>
 <section id="setup" hidden>
 <p class="settings-intro caption">このコンピューターを、ほかの場所から使うための接続設定です。</p>
@@ -118,6 +118,7 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     if(state.objectUrl) URL.revokeObjectURL(state.objectUrl);
     state.objectUrl=null;state.current=null;state.dirty=false;$("editor").value="";
     $("image").hidden=true;$("image").removeAttribute("src");$("document").textContent="";
+    $("preview-page").hidden=true;$("more-preview").hidden=true;
   }
   async function call(name,args={}, {target=state.target, mutation=false}={}) {
     if(!state.ready) throw new Error("ホストに接続されていません。");
@@ -138,7 +139,9 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     }
     if(reply.state!=="completed") {
       if(mutation && reply.state!=="failed") uncertain(operationId,target,name,args);
-      throw new Error(reply.error || "操作がまだ完了していません。");
+      const error=new Error(reply.error || "操作がまだ完了していません。");
+      error.code=reply.data?.error_code;
+      throw error;
     }
     if(!reply.data || typeof reply.data!=="object" || (routed && (reply.data.device_id!==target || !reply.data.result))) {
       if(mutation) uncertain(operationId,target,name,args);
@@ -217,8 +220,19 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     const suffix=path.split(".").pop().toLowerCase();
     if(["png","jpg","jpeg","gif","webp"].includes(suffix)) return loadImage(path,info);
     if(["docx","xlsx","pptx"].includes(suffix)) {
-      state.current={kind:"document",path,offset:0,hash:null};show("preview");$("preview-title").textContent="文書の内容";
-      return nextDocument();
+      state.current={kind:"document",path,offset:0,hash:null,previewPage:1};show("preview");$("preview-title").textContent="文書の内容";
+      await nextDocument();
+      if(suffix==="docx") {
+        if(!state.tools.has("documents_preview")) {
+          message("書式プレビューはこの接続で利用できません。抽出した文字情報を表示しています。");
+        } else {
+          try {await nextPreview();} catch(error) {
+            if(error?.code!=="preview_unavailable") throw error;
+            message("書式プレビューはこの端末で利用できません。抽出した文字情報を表示しています。");
+          }
+        }
+      }
+      return;
     }
     state.current={kind:"text",path,text:"",hash:null,offset:0,complete:false,mixed:false};show("text-panel");
     return nextText();
@@ -271,6 +285,22 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     $("document").textContent+=text+"\n";
     $("more-document").hidden=!page.truncated || !Number.isInteger(page.next_offset) || page.next_offset<=file.offset;
     file.offset=page.next_offset;message("抽出した文書内容です。元の書式やページ配置は再現していません。");
+  }
+  async function nextPreview() {
+    const file=state.current;
+    if(file?.kind!=="document" || !file.path.toLowerCase().endsWith(".docx") || !file.hash) return;
+    const page=await call("documents_preview",{path:file.path,expected_sha256:file.hash,page:file.previewPage});
+    if(page.sha256!==file.hash || page.page!==file.previewPage || !Number.isInteger(page.pages) || page.pages<page.page || page.pages>20 || page.mime_type!=="image/png" || typeof page.data_base64!=="string" || page.data_base64.length>4*1024*1024) throw new Error("書式プレビューの結果が不正です。");
+    const bytes=Uint8Array.from(atob(page.data_base64),char=>char.charCodeAt(0));
+    if(bytes.length<8 || [137,80,78,71,13,10,26,10].some((value,index)=>bytes[index]!==value)) throw new Error("書式プレビューの画像が不正です。");
+    if(state.objectUrl) URL.revokeObjectURL(state.objectUrl);
+    state.objectUrl=URL.createObjectURL(new Blob([bytes],{type:"image/png"}));
+    $("image").src=state.objectUrl;$("image").alt=`文書の${page.page}ページ目`;
+    $("image").hidden=false;$("preview-title").textContent="文書の書式プレビュー";
+    $("preview-page").textContent=`${page.page} / ${page.pages} ページ`;$("preview-page").hidden=false;
+    file.previewPage++;
+    $("more-preview").hidden=file.previewPage>page.pages;
+    message("元の書式を反映したページ画像を表示しています。下には抽出した文字情報もあります。");
   }
   async function settingsView() {
     const values=await call("settings_get");clearFile();show("settings");
@@ -406,7 +436,7 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
   $("path").onkeydown=event=>{if(event.key==="Enter"){event.preventDefault();$("open").click();}};
   $("back").onclick=()=>navigate(()=>job(()=>openPath(state.history.pop(),{remember:false})));
   $("more-entries").onclick=()=>job(()=>openPath(state.current.path,{remember:false,limit:Math.min(2000,state.limit*2)}));
-  $("more-text").onclick=()=>job(nextText);$("more-document").onclick=()=>job(nextDocument);
+  $("more-text").onclick=()=>job(nextText);$("more-document").onclick=()=>job(nextDocument);$("more-preview").onclick=()=>job(nextPreview);
   $("editor").oninput=changed;$("save").onclick=()=>job(saveText);
   $("undo").onclick=()=>{$("editor").value=normalize(state.current.text);changed();message("保存前の内容に戻しました。");};
   $("keep").onclick=()=>{state.pendingNavigation=null;$("discard").close();};

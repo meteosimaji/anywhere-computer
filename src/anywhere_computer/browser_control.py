@@ -59,6 +59,13 @@ async def _finish_cleanup(cleanup: Coroutine[Any, Any, None]) -> None:
 
 
 @dataclass
+class _Navigation:
+    requested_url: str
+    outcome: str = "unconfirmed"
+    observed_url: str | None = None
+
+
+@dataclass
 class _Entry:
     owner: str | None
     session_id: str
@@ -68,6 +75,7 @@ class _Entry:
     context: BrowserContext
     page: Page
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    last_navigation: _Navigation | None = None
 
 
 class BrowserControl:
@@ -180,6 +188,10 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
+            # Record the attempt before goto: a timeout or lost snapshot can
+            # occur after the browser has already changed pages.
+            navigation = _Navigation(requested_url=args.url)
+            entry.last_navigation = navigation
             try:
                 response = await entry.page.goto(args.url, wait_until="domcontentloaded",
                                                  timeout=15000)
@@ -188,6 +200,8 @@ class BrowserControl:
                 raise BrowserNavigationUnknown(
                     "Browser navigation outcome unconfirmed; observe the same tab before retrying"
                 ) from error
+            navigation.outcome = "confirmed"
+            snapshot["last_navigation"] = self._navigation_state(navigation)
             snapshot["http_status"] = response.status if response is not None else None
             return snapshot
 
@@ -253,9 +267,22 @@ class BrowserControl:
         text = await entry.page.evaluate(
             "limit => (document.body?.innerText || '').slice(0, limit + 1)", 16384
         )
-        return {"session_id": entry.session_id, "tab_id": entry.tab_id,
-                "url": entry.page.url, "title": title[:512],
-                "text": text[:16384], "text_truncated": len(text) > 16384}
+        observed_url = entry.page.url
+        snapshot: dict[str, JsonValue] = {
+            "session_id": entry.session_id, "tab_id": entry.tab_id,
+            "url": observed_url, "title": title[:512],
+            "text": text[:16384], "text_truncated": len(text) > 16384,
+        }
+        if entry.last_navigation is not None:
+            entry.last_navigation.observed_url = observed_url
+            snapshot["last_navigation"] = self._navigation_state(entry.last_navigation)
+        return snapshot
+
+    @staticmethod
+    def _navigation_state(navigation: _Navigation) -> dict[str, JsonValue]:
+        return {"requested_url": navigation.requested_url,
+                "outcome": navigation.outcome,
+                "observed_url": navigation.observed_url}
 
     async def stop(self, args: BrowserSession, *, owner: str | None) -> dict[str, JsonValue]:
         async with self._lock:

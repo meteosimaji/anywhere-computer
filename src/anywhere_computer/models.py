@@ -153,6 +153,11 @@ class ReadDocument(FilePath):
     limit: int = Field(default=100, ge=1, le=100)
 
 
+class PreviewDocument(FilePath):
+    expected_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    page: int = Field(default=1, ge=1, le=20)
+
+
 class FormulaCell(Contract):
     formula: str = Field(min_length=1, max_length=8192)
 

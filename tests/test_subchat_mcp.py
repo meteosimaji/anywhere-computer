@@ -8,6 +8,32 @@ from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatList, SubchatSubmissions
 
 
+async def test_unexpected_send_error_is_unknown_and_never_invites_replay(tmp_path):
+    class UnexpectedSend(Subchats):
+        async def send(self, *args, **kwargs):
+            raise RuntimeError("private provider response")
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    server = session(UnexpectedSend(store, BrowserFixture()), require_send_intent=True)
+    operation = 'a' * 32
+    try:
+        result = await server.execute(Request(
+            operation_id=operation, tool='subchat_send',
+            arguments={'intent_key': 'b' * 32, 'prompt': 'private prompt',
+                       'model': 'model', 'effort': 'effort'}))
+        assert result.state == 'unknown'
+        assert result.data['submission_operation_id'] == operation
+        assert result.data['dispatched'] is None
+        assert result.data['automatic_retry'] is False
+        assert 'private provider response' not in result.model_dump_json()
+        assert 'private prompt' not in result.model_dump_json()
+        assert store.get(operation, owner=None).state == 'prepared'
+    finally:
+        await server.close()
+        ledger.close()
+
+
 async def test_intent_key_reuses_one_dispatch_across_new_request_ids(tmp_path):
     ledger = Ledger(tmp_path)
     browser = BrowserFixture()

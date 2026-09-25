@@ -57,10 +57,32 @@ length are bounded. Truncated text is marked. XML DTD/entity declarations are
 rejected and only UTF-8 OOXML parts are currently accepted. Named pipes are
 rejected before a read can wait indefinitely.
 
+`documents_preview` renders one DOCX page to a PNG using an installed local
+LibreOffice (`soffice`), `pdfinfo`, `pdftoppm`, and macOS `sandbox-exec`. Supply
+the absolute `path`, the exact `expected_sha256` from `documents_read`, and a
+one-based `page` (default 1). Results include the same hash, total page count,
+`rendered: true`, `mime_type: image/png`, and base64 PNG data. The workspace UI
+uses this for DOCX page previews and leaves extracted text below the image.
+If any renderer component is absent, the tool reports an explicit unavailable
+error. It does not silently substitute text extraction for a rendered image.
+
+Rendering uses a private temporary copy and LibreOffice profile. Each conversion
+and PDF inspection subprocess runs without network access and cannot write outside
+that temporary directory. These processes retain local read access for fonts and
+renderer libraries, so this is not a full filesystem sandbox. The original hash
+is checked again before returning. External
+OOXML relationships, fields, active content, and embedded objects are rejected.
+Inputs retain the 16 MiB read limit; output is capped at 20 pages, 16 MiB PDF,
+and 2 MiB PNG per page. Conversion and rasterization have time and file-size
+limits, timed-out child process groups are stopped, and at most two previews
+render concurrently per engine. The
+preview is a local LibreOffice interpretation, not a Microsoft Office fidelity
+guarantee. XLSX and PPTX rendering and a packaged renderer remain future work.
+
 Limits: 16 MiB input, 64 MiB declared expanded ZIP size, 4096 ZIP entries,
 4 MiB per XML part, approximately 512 kB per result page, 32768 characters per
 text field. Strict OOXML namespaces, encrypted documents, legacy binary Office,
-PDF, OCR, rendering, headers/footers/comments/notes, formatting interpretation,
+PDF, OCR, rendering within `documents_read`, headers/footers/comments/notes, formatting interpretation,
 charts and document editing are not implemented in this reader. A workbook
 without a selected worksheet defaults to its first listed sheet; a non-worksheet
 sheet type is reported as unsupported.
