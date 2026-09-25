@@ -3,6 +3,11 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a36 / Plugin 0.2.0-alpha.36 — unpublished candidate (2026-09-25)
+
+- Invalidate a Codex plugin tool selection when the server's reported
+  authentication status changes, without rejecting normal runtime startup.
+
 ## 0.2.0a35 / Plugin 0.2.0-alpha.35 — unpublished candidate (2026-09-25)
 
 - Protect explicit bridge sessions while their Subchat controller reports an

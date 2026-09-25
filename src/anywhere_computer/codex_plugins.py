@@ -121,12 +121,16 @@ def _json_object(value: object, message: str) -> dict[str, JsonValue]:
 
 
 
-def _descriptor_digest(server: str, cwd: str, tool: dict[str, JsonValue]) -> str:
+def _descriptor_digest(
+    server: str, cwd: str, tool: dict[str, JsonValue], *,
+    auth_status: JsonValue,
+) -> str:
     payload = json.dumps({
         "server": server, "cwd": cwd, "name": tool["name"],
         "description": tool.get("description", ""),
         "inputSchema": tool.get("inputSchema", {}),
         "annotations": tool.get("annotations", {}),
+        "auth_status": auth_status,
     }, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False)
     return hashlib.sha256(payload.encode()).hexdigest()
 
@@ -390,7 +394,10 @@ async def _start_and_catalog(
                     "inputSchema": raw_tool["inputSchema"], "annotations": clean_annotations,
                     "server": server,
                 }
-                clean["catalog_sha256"] = _descriptor_digest(server, cwd, clean)
+                clean["catalog_sha256"] = _descriptor_digest(
+                    server, cwd, clean,
+                    auth_status=row.get("authStatus"),
+                )
                 clean["call_arguments"] = {
                     "cwd": cwd, "server": server, "tool": name,
                     "catalog_sha256": clean["catalog_sha256"],
