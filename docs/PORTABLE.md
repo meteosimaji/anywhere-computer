@@ -20,6 +20,17 @@ macOSの常駐更新手順は[更新ガイド](UPDATING.md)を参照してくだ
 uv run --offline python scripts/build_portable.py --output dist/anywhere-portable.zip
 ```
 
+macOS でネイティブ GUI 操作を含める場合は、同じ Mac で補助プログラムをビルドし、
+`--gui-helper` に絶対パスを渡す。補助プログラムがない ZIP では
+`gui_native` は利用不可と報告される。Quality CI の macOS 配布 ZIP にはこれを含める。
+
+```sh
+mkdir -p dist
+swiftc native/macos/AXHelper.swift -o dist/anywhere-gui
+uv run --offline python scripts/build_portable.py \
+  --gui-helper "$(pwd)/dist/anywhere-gui" --output dist/anywhere-portable-macos.zip
+```
+
 `--runtime` で信頼済みベースランタイムを明示できる。仮想環境と外部へ出る symlink は
 拒否する。BUILD マーカーは由来の証明ではないため、取得元の信頼性はビルド側で確認する。
 既存の出力ファイルは上書きしない。配布 ZIP は dist に置き、リポジトリへ追加しない。
