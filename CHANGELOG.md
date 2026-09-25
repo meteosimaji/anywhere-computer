@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a31 / Plugin 0.2.0-alpha.31 — unpublished candidate (2026-09-25)
+
+- Require an explicit, persistent ChatGPT plugin bridge session for Subchat
+  send, message, recover, wait and queue-watch calls. A temporary context now
+  rejects these calls before dispatch, instead of losing pending work on close.
+
 ## 0.2.0a30 / Plugin 0.2.0-alpha.30 — unpublished candidate (2026-09-25)
 
 - Make `subchat_wait` observe an active browser preparation instead of returning
