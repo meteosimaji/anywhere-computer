@@ -62,6 +62,7 @@ class PendingConsent:
     csrf_hash: str = field(repr=False)
     expires: float
     generation: int
+    missing_subchat_tools: bool
 
 
 def _digest(value: str) -> str:
@@ -159,6 +160,13 @@ class BrowserAuthorization:
             if any(tool.startswith("terminal_") for tool in record.tools)
             else "Allowed tools can access data available to this device’s user."
         )
+        scope_notice = (
+            "<p class=scope-notice role=note>Some Subchat tools available on this device were not "
+            "requested by this connection. Approving this page will not grant "
+            "them. To use Subchat, update or recreate the client connection "
+            "with the intended Subchat tools, then review a new consent page.</p>"
+            if record.missing_subchat_tools else ""
+        )
         return (
             "<!doctype html><html lang=en><meta charset=utf-8>"
             "<meta name=viewport content='width=device-width, initial-scale=1'>"
@@ -175,13 +183,14 @@ class BrowserAuthorization:
             ".password-row{display:flex;gap:8px;align-items:center}"
             ".password-row input{min-width:0;flex:1}"
             ".password-row button{margin:0;flex:none;background:white;color:#244a6f}"
-            "small{color:#475669}@media(max-width:680px){main{margin:12px;padding:20px}}"
+            "small{color:#475669}.scope-notice{padding:12px;border-left:4px solid #9b5800;"
+            "background:#fff5e5}@media(max-width:680px){main{margin:12px;padding:20px}}"
             "</style><main><small>Anywhere Computer</small><h1>Allow this connection?</h1>"
             f"<dl><dt>Client ID</dt><dd>{escape(record.client)}</dd>"
             f"<dt>Device</dt><dd>{escape(self.device)}</dd>"
             f"<dt>Resource</dt><dd>{escape(record.resource)}</dd>"
             f"<dt>Return address</dt><dd>{escape(record.redirect)}</dd></dl>"
-            f"<p>Requested tools</p><ul>{tools}</ul><p>{warning}</p>"
+            f"<p>Requested tools</p><ul>{tools}</ul><p>{warning}</p>{scope_notice}"
             "<p>This connection remains authorized until revoked. "
             "Deny it if you did not request it.</p>"
             f"<p class=error role=alert>{escape(error)}</p>"
@@ -252,6 +261,12 @@ class BrowserAuthorization:
             tools=tools,
             challenge=params["code_challenge"],
         )
+        missing_subchat_tools = any(
+            tool.startswith("subchat_")
+            for tool in self.store.enrolled_tools(
+                owner=self.credentials.owner, device=self.device
+            ) - tools
+        )
         identity, browser, csrf = (
             secrets.token_hex(16),
             secrets.token_urlsafe(32),
@@ -268,6 +283,7 @@ class BrowserAuthorization:
             _digest(csrf),
             now + 300,
             generation,
+            missing_subchat_tools,
         )
         self.pending[identity] = record
         headers = self._headers(record.redirect)

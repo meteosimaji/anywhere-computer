@@ -71,6 +71,51 @@ async def test_consent_issues_one_bound_code(browser, authority):
     assert authority.verify(token.value, resource=RESOURCE).tools == frozenset({"files_read"})
 
 
+async def test_consent_warns_when_client_omits_available_subchat_tools(tmp_path, monkeypatch):
+    from anywhere_computer.authorization import AuthorizationStore
+
+    tools = frozenset({"files_read", "subchat_send", "subchat_recover"})
+    store = AuthorizationStore(tmp_path / "auth", resource=RESOURCE, known_tools=tools)
+    store.register_client("client", frozenset({REDIRECT}))
+    store.enroll_device("owner", "device", tools)
+    credentials = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
+    monkeypatch.setattr(credentials, "verify", lambda password: password == "synthetic-password")
+    consent = BrowserAuthorization(store, credentials, device="device")
+    try:
+        query = urlencode({
+            "response_type": "code", "client_id": "client", "redirect_uri": REDIRECT,
+            "resource": RESOURCE, "scope": "files_read", "state": "client-state",
+            "code_challenge": pkce_s256(VERIFIER), "code_challenge_method": "S256",
+        })
+        status, page, response_headers = await consent.authorize("GET", {}, b"", query)
+        assert status == 200
+        assert b"Some Subchat tools available on this device were not requested" in page
+        assert b"Approving this page will not grant them" in page
+        assert b"<li><code>subchat_send</code></li>" not in page
+        fields = dict(re.findall(r"name=(request_id|csrf) value='([^']+)'", page.decode()))
+        status, _, approved = await decide(consent, fields, {
+            "origin": "https://computer.example",
+            "content-type": "application/x-www-form-urlencoded",
+            "cookie": response_headers["Set-Cookie"].split(";", 1)[0],
+        })
+        assert status == 303
+        code = parse_qs(urlsplit(approved["Location"]).query)["code"][0]
+        token = redeem(store, code)
+        assert store.verify(token.value, resource=RESOURCE).tools == frozenset({"files_read"})
+
+        complete_query = urlencode({
+            "response_type": "code", "client_id": "client", "redirect_uri": REDIRECT,
+            "resource": RESOURCE, "scope": "files_read subchat_send subchat_recover",
+            "state": "client-state", "code_challenge": pkce_s256(VERIFIER),
+            "code_challenge_method": "S256",
+        })
+        status, complete_page, _ = await consent.authorize("GET", {}, b"", complete_query)
+        assert status == 200
+        assert b"Some Subchat tools available on this device" not in complete_page
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("failure", ["origin", "null_origin", "cookie", "csrf", "password"])
 async def test_invalid_consent_does_not_consume_request(browser, failure):
     fields, headers = await begin(browser)
