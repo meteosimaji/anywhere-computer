@@ -58,14 +58,10 @@ impl Worker {
         #[cfg(target_os = "windows")]
         command.creation_flags(0x08000000);
         let mut child = command
-            .args([
-                "-I",
-                "-X",
-                "utf8",
-                "-m",
+            .args(super::python_module_args(
                 "anywhere_computer.enrollment_worker",
-                "--state-dir",
-            ])
+            ))
+            .arg("--state-dir")
             .arg(directory)
             .arg("--config")
             .arg(config)

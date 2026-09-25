@@ -6,6 +6,10 @@ use tokio::io::AsyncReadExt;
 const SNAPSHOT_LIMIT: usize = 262_144;
 mod enrollment;
 
+fn python_module_args(module: &'static str) -> [&'static str; 6] {
+    ["-B", "-I", "-X", "utf8", "-m", module]
+}
+
 fn decode_snapshot(bytes: Vec<u8>) -> Result<String, &'static str> {
     if bytes.len() > SNAPSHOT_LIMIT {
         return Err("状態情報が表示上限を超えています。");
@@ -147,7 +151,8 @@ async fn run_management_selected(
     #[cfg(target_os = "windows")]
     process.creation_flags(0x08000000); // CREATE_NO_WINDOW
     let mut child = process
-        .args(["-I", "-X", "utf8", "-m", "anywhere_computer", command])
+        .args(python_module_args("anywhere_computer"))
+        .arg(command)
         .args(
             host.directory
                 .iter()
@@ -223,6 +228,13 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packaged_python_readers_do_not_write_bytecode() {
+        for module in ["anywhere_computer", "anywhere_computer.enrollment_worker"] {
+            assert_eq!(python_module_args(module)[0], "-B");
+        }
+    }
 
     #[test]
     fn bootstrap_failure_is_returned_to_the_ui_without_launching_a_reader() {
