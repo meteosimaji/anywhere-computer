@@ -1,3 +1,4 @@
+import pytest
 from test_subchat_lifecycle import BrowserFixture
 
 from anywhere_computer.models import Request
@@ -5,6 +6,63 @@ from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
 from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatSubmissions
+
+
+async def test_late_non_preparation_error_remains_observable(tmp_path, monkeypatch):
+    import asyncio
+
+    from anywhere_computer import subchat_mcp
+    from anywhere_computer.subchat import SubchatUnsupported
+
+    monkeypatch.setattr(subchat_mcp, 'SEND_ACK_TIMEOUT', .001)
+    release = asyncio.Event()
+
+    class UnsupportedBrowser(BrowserFixture):
+        async def prepare(self, submission):
+            await release.wait()
+            raise SubchatUnsupported('http_session_required')
+
+    ledger = Ledger(tmp_path)
+    server = session(Subchats(SubchatSubmissions(ledger.connection), UnsupportedBrowser()))
+    operation = '1' * 32
+    try:
+        pending = await server.execute(Request(operation_id=operation,
+            tool='subchat_send', arguments={'prompt': 'work', 'model': 'model',
+                                            'effort': 'effort'}))
+        assert pending.state == 'running'
+        release.set()
+        with pytest.raises(SubchatUnsupported):
+            await server.sends[operation]
+        await asyncio.sleep(0)
+        assert operation in server.sends
+        observed = await server.execute(Request(operation_id='2' * 32,
+            tool='subchat_status', arguments={'operation_id': operation}))
+        assert observed.data['error_code'] == 'http_session_required'
+    finally:
+        release.set()
+        await server.close()
+        ledger.close()
+
+
+async def test_untrusted_preparation_reason_is_sanitized(tmp_path):
+    from anywhere_computer.subchat import SubchatPreparationFailed
+
+    class InvalidReason(Subchats):
+        async def send(self, *args, **kwargs):
+            raise SubchatPreparationFailed('private', reason='private account@example.com')
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    server = session(InvalidReason(store, BrowserFixture()))
+    try:
+        observed = await server.execute(Request(operation_id='3' * 32,
+            tool='subchat_send', arguments={'prompt': 'work', 'model': 'model',
+                                            'effort': 'effort'}))
+        assert observed.state == 'failed'
+        assert store.preparation_failure('3' * 32, owner=None) == 'unknown'
+    finally:
+        await server.close()
+        ledger.close()
 
 
 async def test_slow_send_returns_pending_and_same_id_recovers_final(tmp_path, monkeypatch):

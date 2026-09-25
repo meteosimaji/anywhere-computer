@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import re
 import time
 from collections.abc import Awaitable, Callable
 from contextlib import nullcontext
@@ -324,8 +325,10 @@ def session(service: Subchats, *,
         cause = error.__cause__
         reason = error.reason or (_PREPARATION_REASONS.get(str(cause))
                   if isinstance(cause, ValueError) else None)
+        if reason is None or re.fullmatch(r'[a-z_]{1,64}', reason) is None:
+            reason = 'unknown'
         service.store.record_preparation_failure(
-            operation_id, owner=owner, reason=reason or 'unknown')
+            operation_id, owner=owner, reason=reason)
 
     def raise_failed_preparation(operation_id: str, current: SubchatSubmission) -> None:
         """Expose a late send failure while its unsent ledger row is still prepared."""
@@ -794,7 +797,8 @@ def session(service: Subchats, *,
                                 error = done.exception() if not done.cancelled() else None
                                 if error is not None:
                                     save_preparation_failure(request.operation_id, error)
-                                sends.pop(request.operation_id)
+                                if error is None or isinstance(error, SubchatPreparationFailed):
+                                    sends.pop(request.operation_id)
 
                         sending.add_done_callback(completed)
                     try:
