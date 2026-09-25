@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a30` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.30` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a31` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.31` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -75,6 +75,13 @@ The marketplace entry is in `.agents/plugins/marketplace.json`; the Plugin runs
 its bundled wheel through `uv`. Restart the Plugin session, then check that
 `anywhere-computer` and `anywhere-subchat` appear as separate MCP servers. Call
 `subchat_capabilities` to confirm the Subchat server's actual mode and version.
+When accessing Subchat through ChatGPT's `codex_plugin_call` bridge, open
+`codex_plugin_session_open` first, then pass its `session_id` to
+`codex_plugin_tools` and each Subchat send, message, recover, wait or queue-watch
+call. Keep the session open until the answer is recovered, then close it with
+`codex_plugin_session_close`. The temporary bridge context cannot retain a
+pending send after its call ends, so those stateful calls without a session are
+rejected before dispatch.
 If a prior manual `codex mcp` registration uses the same server name, its stale
 wheel path can shadow the Plugin; see the [Subchat guide](docs/SUBCHAT-PROBE.md)
 before diagnosing a zero-tool runtime as a Plugin packaging failure.

@@ -265,6 +265,22 @@ async def test_preflight_failure_unsubscribes_without_dispatch(stub_catalog, tmp
     assert "mcpServer/tool/call" not in methods
 
 
+@pytest.mark.parametrize("tool", [
+    "subchat_send", "subchat_message", "subchat_recover", "subchat_wait",
+    "subchat_queue_watch",
+])
+async def test_stateful_subchat_requires_persistent_plugin_session(
+    stub_catalog, tmp_path, tool,
+):
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(
+            str(tmp_path), "anywhere-subchat", tool, {}, "1" * 64,
+        )
+    assert caught.value.code == "plugin_session_required"
+    assert "codex_plugin_session_open" in caught.value.action
+    assert stub_catalog["calls"] == []
+
+
 async def test_inspection_supplies_exact_call_arguments(stub_catalog, tmp_path):
     result = await list_codex_plugin_tools(str(tmp_path), server="demo", tool="echo")
     descriptor = result["servers"][0]["tools"][0]
