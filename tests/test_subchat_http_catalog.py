@@ -162,10 +162,10 @@ def test_exact_http_selection_is_revalidated(change, field, reason):
 
 
 @pytest.mark.parametrize(('model', 'effort', 'field'), [
-    ('GPT-5.6 Sol', 'Instant', 'model'),
-    ('最新', 'Thinking', 'effort'),
+    ('最新', 'Instant', 'model'),
+    ('GPT-5.6 Sol', 'Thinking', 'effort'),
 ])
-def test_http_choice_labels_bind_to_selected_version_and_preset(model, effort, field):
+def test_http_choice_labels_bind_to_selected_model_and_preset(model, effort, field):
     from anywhere_computer.subchat_browser.catalog import require_http_selection
     from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSelectionError
 
@@ -182,23 +182,39 @@ def test_http_choice_labels_bind_to_selected_version_and_preset(model, effort, f
     with pytest.raises(SubchatSelectionError) as caught:
         require_http_selection(projected, selected, model=model, effort=effort)
     assert (caught.value.field, caught.value.reason) == (field, 'mismatch')
-    require_http_selection(projected, selected, model='最新', effort='Instant')
+    require_http_selection(projected, selected, model='GPT-5.6 Sol', effort='Instant')
 
 
 def test_http_model_title_can_differ_from_version_label():
     from anywhere_computer.subchat_browser.catalog import require_http_selection
-    from anywhere_computer.subchat_state import SubchatHTTPSelection
+    from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSelectionError
 
     projected = project_http_catalog(json.dumps(catalog()).encode())
     selected = SubchatHTTPSelection.model_validate(
         projected['versions'][0]['choices'][0]['http_selection'])
     require_http_selection(projected, selected, model='Future Chat', effort='Future effort')
+    with pytest.raises(SubchatSelectionError) as caught:
+        require_http_selection(projected, selected, model='Future version',
+                               effort='Future effort')
+    assert (caught.value.field, caught.value.reason) == ('model', 'mismatch')
+
+
+def test_send_schema_identifies_http_model_title_and_effort_title():
+    from anywhere_computer.subchat_mcp import direct_gateway_catalog
+
+    send, = [tool for tool in direct_gateway_catalog() if tool['name'] == 'subchat_send']
+    assert 'model_title' in send['inputSchema']['properties']['model']['description']
+    assert 'version label' in send['inputSchema']['properties']['model']['description']
+    assert 'title' in send['inputSchema']['properties']['effort']['description']
+    assert 'model_title' in send['description']
 
 
 async def test_browser_rejects_mismatched_http_choice_before_opening_page(tmp_path):
+    from anywhere_computer.models import Request
     from anywhere_computer.state import Ledger
     from anywhere_computer.subchat import Subchats
     from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_mcp import session
     from anywhere_computer.subchat_state import (
         SubchatHTTPSelection,
         SubchatSelectionError,
@@ -207,7 +223,7 @@ async def test_browser_rejects_mismatched_http_choice_before_opening_page(tmp_pa
 
     payload = catalog()
     payload['versions'][0]['id'] = 'latest'
-    payload['versions'][0]['display_text'] = '最新'
+    payload['versions'][0]['display_text'] = '5.6'
     payload['versions'][0]['intelligence_presets'][0]['title'] = 'Instant'
     payload['models'][0]['title'] = 'GPT-5.6 Sol'
     payload['versions'].append({**payload['versions'][0], 'id': '5.6',
@@ -228,10 +244,23 @@ async def test_browser_rejects_mismatched_http_choice_before_opening_page(tmp_pa
         backend.http_catalog = observed_catalog
         service = Subchats(SubchatSubmissions(ledger.connection), backend)
         with pytest.raises(SubchatSelectionError) as caught:
-            await service.send('a' * 32, 'prompt', 'GPT-5.6 Sol', 'Instant', owner=None,
+            await service.send('a' * 32, 'prompt', '5.6', 'Instant', owner=None,
                                http_selection=selection)
         assert (caught.value.field, caught.value.reason) == ('model', 'mismatch')
         assert service.store.get('a' * 32, owner=None).state == 'prepared'
+        server = session(service)
+        try:
+            reply = await server.execute(Request(operation_id='b' * 32, tool='subchat_send',
+                arguments={'prompt': 'prompt', 'model': '5.6', 'effort': 'Instant',
+                           'http_selection': selection.model_dump()}))
+            assert reply.state == 'failed'
+            assert reply.data == {
+                'error_code': 'invalid_parameter', 'field': 'model', 'reason': 'mismatch',
+                'dispatched': False, 'corrected_request_requires_new_operation_id': True}
+            assert 'model_title' in (reply.error or '')
+            assert service.store.get('b' * 32, owner=None).state == 'prepared'
+        finally:
+            await server.close()
     finally:
         ledger.close()
 

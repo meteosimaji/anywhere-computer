@@ -125,7 +125,18 @@ jobs:
       - run: uv run python scripts/verify_tunnel_pipe.py --download-for-test
       - run: uv build
       - name: Build portable distribution
-        run: uv run python scripts/build_portable.py --allow-downloads --output dist/portable-${{ matrix.os }}.zip
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == "macOS" ]]; then
+            mkdir -p dist
+            swiftc native/macos/AXHelper.swift -o dist/anywhere-gui
+            uv run python scripts/build_portable.py --allow-downloads \
+              --gui-helper "$(pwd)/dist/anywhere-gui" \
+              --output dist/portable-${{ matrix.os }}.zip
+          else
+            uv run python scripts/build_portable.py --allow-downloads \
+              --output dist/portable-${{ matrix.os }}.zip
+          fi
       - name: Extract and verify relocated portable runtime
         shell: bash
         run: |
@@ -145,6 +156,9 @@ jobs:
             uv run python scripts/verify_portable.py 'dist/relocation 日本語/Anywhere Computer'
           else
             uv run python scripts/verify_portable.py 'dist/relocation 日本語/Anywhere Computer' --runtime-only
+            if [[ "$RUNNER_OS" == "macOS" ]]; then
+              test -x 'dist/relocation 日本語/Anywhere Computer/native/anywhere-gui'
+            fi
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

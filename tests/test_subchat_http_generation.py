@@ -441,10 +441,10 @@ async def test_invalid_model_selection_reports_field_without_generation(tmp_path
                 ledger.close()
 
 
-async def test_http_only_rejects_other_version_label_before_reservation(tmp_path):
+async def test_http_only_rejects_version_label_before_reservation(tmp_path):
     payload = catalog()
     payload['versions'][0]['id'] = 'latest'
-    payload['versions'][0]['display_text'] = '最新'
+    payload['versions'][0]['display_text'] = '5.6'
     payload['versions'][0]['intelligence_presets'][0]['title'] = 'Instant'
     payload['models'][0]['title'] = 'GPT-5.6 Sol'
     payload['versions'].append({**payload['versions'][0], 'id': '5.6',
@@ -457,7 +457,7 @@ async def test_http_only_rejects_other_version_label_before_reservation(tmp_path
                     project_http_catalog(json.dumps(payload).encode())['versions'][0]
                     ['choices'][0]['http_selection'])
                 with pytest.raises(SubchatSelectionError) as caught:
-                    await service.send('b' * 32, 'test', 'GPT-5.6 Sol', 'Instant',
+                    await service.send('b' * 32, 'test', '5.6', 'Instant',
                                        owner=None, http_selection=selected)
                 assert (caught.value.field, caught.value.reason) == ('model', 'mismatch')
                 assert store.get('b' * 32, owner=None).state == 'prepared'

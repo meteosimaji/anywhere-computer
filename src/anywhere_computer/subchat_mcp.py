@@ -46,8 +46,12 @@ from .subchat_state import (
 class Send(Contract):
     intent_key: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
     prompt: str = Field(min_length=1, max_length=100_000)
-    model: str = Field(min_length=1, max_length=256)
-    effort: str = Field(min_length=1, max_length=256)
+    model: str = Field(min_length=1, max_length=256, description=(
+        'For source=http, copy the exact model_title from the chosen available '
+        'subchat_catalog choice. A version label such as 5.6 is not the model name.'))
+    effort: str = Field(min_length=1, max_length=256, description=(
+        'For source=http, copy the exact title from the same available '
+        'subchat_catalog choice.'))
     conversation_id: str | None = None
     work_context: SubchatWorkContext | None = None
     resources: SubchatResources | None = None
@@ -126,6 +130,8 @@ _BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
                         'A completed tool call confirms local queue registration, not '
                         'delivery to Chat. Steer returns unsupported without sending.'),
     'subchat_send': (Send, 'Send one ordinary Chat message with exact model/effort labels. '
+                     'For an HTTP catalog choice, model is its model_title (not the '
+                     'version label), and effort is its title. '
                      'Set one stable intent_key per intended child Chat. After a missing '
                      'reply or host safety block, inspect subchat_list and subchat_status '
                      'before considering another send. Never create a new key for the '
@@ -224,7 +230,8 @@ INSTRUCTIONS = (
     'mode does not acquire that handoff and exposes read-only tools; browser-send '
     'uses browser_prepared generation. '
     'Keep its version_id, preset_id, model_slug and explicit '
-    'thinking_effort (including null); still provide observed UI model/effort labels. '
+    'thinking_effort (including null); set model to that choice\'s model_title '
+    'and effort to its title. The version label is not the model field. '
     'The adapter rechecks availability and rejects a different wire model or effort before '
     'forwarding. Queue follow-ups inherit the selection; never guess IDs from labels. '
     'Choose request_id before subchat_send. Its response may be a pending local checkpoint '
@@ -939,9 +946,14 @@ def session(service: Subchats, *,
                                **({'dispatched': False}
                                   if error.code == 'http_generation_unavailable' else {})})
         except SubchatSelectionError as error:
+            guidance = ('For an HTTP catalog choice, set model to the exact model_title '
+                        'of the selected available choice, effort to its title, and copy '
+                        'http_selection unchanged. ' if error.field == 'model' else
+                        'Inspect subchat_catalog source=http and use the exact available '
+                        'choice. ')
             return Reply(operation_id=request.operation_id, state='failed',
                          error='The selected Chat model parameter is invalid or unavailable. '
-                               'Inspect subchat_catalog source=http, then use a new request ID '
+                               + guidance + 'Use a new request ID '
                                'for corrected input. The saved original remains unsent.',
                          data={'error_code': error.code, 'field': error.field,
                                'reason': error.reason, 'dispatched': False,
