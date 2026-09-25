@@ -95,10 +95,12 @@ def test_workspace_mutation_recovery_in_javascript():
         pytest.skip("Node.js is required for the development-only UI script test")
     root = Path(__file__).resolve().parents[1]
     try:
+        # Windows CI has intermittently spent over 20 seconds starting Node
+        # before this fixture's first stderr marker. Keep the guard bounded.
         result = subprocess.run(
             [node, str(root / "tests/workspace_ui_state.cjs"),
              str(root / "src/anywhere_computer/web/workspace.html")],
-            capture_output=True, text=True, encoding="utf-8", timeout=15, check=True,
+            capture_output=True, text=True, encoding="utf-8", timeout=60, check=True,
         )
     except (subprocess.TimeoutExpired, subprocess.CalledProcessError) as error:
         # TimeoutExpired may retain bytes even when text=True. Fixture output
