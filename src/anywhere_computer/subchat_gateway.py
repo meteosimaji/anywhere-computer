@@ -23,7 +23,13 @@ from .subchat_mcp import (
     capability_report,
     direct_gateway_catalog,
 )
-from .subchat_state import SubchatAccountMismatch, SubchatOperationNotFound, SubchatSubmissions
+from .subchat_state import (
+    SubchatAccountMismatch,
+    SubchatList,
+    SubchatOperationNotFound,
+    SubchatPage,
+    SubchatSubmissions,
+)
 
 if TYPE_CHECKING:
     import httpx
@@ -31,7 +37,7 @@ if TYPE_CHECKING:
 
 SUBCHAT_GATEWAY_TOOLS = frozenset({
     "subchat_capabilities", "subchat_catalog", "subchat_send", "subchat_message",
-    "subchat_recover", "subchat_wait", "subchat_status",
+    "subchat_recover", "subchat_wait", "subchat_status", "subchat_list",
 })
 _IDLE_CLOSE_SECONDS = 15.0
 logger = logging.getLogger(__name__)
@@ -365,7 +371,7 @@ class LazySubchatGateway:
         if request.tool not in granted & SUBCHAT_GATEWAY_TOOLS:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Subchat tool is not granted")
-        if request.tool in {"subchat_status", "subchat_capabilities"}:
+        if request.tool in {"subchat_status", "subchat_capabilities", "subchat_list"}:
             return await self._local_read(grant_id, request)
         gateway = await self._acquire()
         if gateway is None:
@@ -378,7 +384,7 @@ class LazySubchatGateway:
             await self._release()
 
     async def _local_read(self, grant_id: str, request: Request) -> Reply:
-        """Read configured capabilities or one owned saved operation without Chrome."""
+        """Read configured capabilities or owned saved operations without Chrome."""
         if self._closed:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Selected Subchat account is unavailable",
@@ -392,6 +398,10 @@ class LazySubchatGateway:
                              data=capability_report(browser_capabilities(
                                  http_read=True, httpx_generation=True),
                                  queue_watch_supported=False))
+            if request.tool == "subchat_list":
+                page = SubchatList.model_validate(request.arguments)
+                data = await asyncio.to_thread(self._saved_list, grant_id, page)
+                return Reply(operation_id=request.operation_id, state="completed", data=data)
             target = OperationId.model_validate(request.arguments)
             queue_watch = None
             gateway = self._gateway
@@ -435,6 +445,18 @@ class LazySubchatGateway:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Subchat call failed; inspect its saved status before retrying.",
                          data={"error_type": type(error).__name__})
+
+    def _saved_list(self, grant_id: str, request: SubchatList) -> dict[str, JsonValue]:
+        ledger_path = Path(self.config.ledger)
+        database = ledger_path / "operations.sqlite3"
+        if ledger_path.is_symlink() or database.is_symlink():
+            raise ValueError("Selected Subchat ledger is unavailable")
+        if not database.is_file():
+            return SubchatPage(submissions=[], next_before=None).model_dump(mode="json")
+        with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro",
+                                     uri=True)) as connection:
+            store = SubchatSubmissions(connection, initialize=False)
+            return store.list(request, owner=grant_id).model_dump(mode="json")
 
     def _saved_status(self, grant_id: str, request_id: str, operation_id: str,
                       queue_watch: dict[str, JsonValue] | None) -> Reply:
