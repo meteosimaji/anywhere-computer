@@ -53,6 +53,10 @@ async def watched(tmp_path, monkeypatch):
 async def test_watch_dispatches_after_parent_without_client_recovery_and_never_replays(watched):
     service, provider, server, parent, child, watch = watched
     assert (await watch()).data['state'] == 'watching'
+    activity = await server.execute(Request(operation_id='9' * 32,
+        tool='subchat_activity', arguments={}))
+    assert activity.data['active_queue_watches'] == 1
+    assert activity.data['state'] == 'active'
     task = server.queue_watches[child]
     await asyncio.sleep(.03)
     assert provider.reads > 0 and provider.sends == [parent]
@@ -67,6 +71,9 @@ async def test_watch_dispatches_after_parent_without_client_recovery_and_never_r
     assert not task.done()
     assert (await watch()).data['state'] == 'watching'
     assert (await watch(False)).data['state'] == 'disabled'
+    activity = await server.execute(Request(operation_id='8' * 32,
+        tool='subchat_activity', arguments={}))
+    assert activity.data['active_queue_watches'] == 0
     assert (await watch()).state == 'failed'  # uncertain send cannot be armed again
     assert provider.sends == [parent, child]
 

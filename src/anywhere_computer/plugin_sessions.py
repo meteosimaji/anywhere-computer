@@ -18,6 +18,8 @@ MAX_SESSIONS = 4
 MAX_RETIRED = 128
 IDLE_TIMEOUT = 300
 REAPER_INTERVAL = 5.0
+ACTIVITY_PROBE_INTERVAL = 30.0
+ACTIVITY_PROBE_TIMEOUT = 15.0
 SESSION_TOOLS = frozenset({
     "codex_plugin_session_open", "codex_plugin_session_status", "codex_plugin_session_close",
 })
@@ -34,6 +36,8 @@ class _Entry:
     created: float = field(default_factory=time.time)
     state: SessionState = "opening"
     cleanup_confirmed: bool = False
+    background_servers: set[str] = field(default_factory=set)
+    next_activity_probe: float = 0.0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
 
 
@@ -101,7 +105,49 @@ class PluginSessions:
         if not entry.context.alive:
             await self._retire(entry, "unusable")
         elif self.clock() - entry.last_used >= entry.idle_timeout:
+            if entry.background_servers:
+                now = self.clock()
+                if now < entry.next_activity_probe:
+                    return
+                try:
+                    active = await asyncio.wait_for(
+                        self._subchat_active(entry), timeout=ACTIVITY_PROBE_TIMEOUT,
+                    )
+                except (TimeoutError, OSError, ValueError, RuntimeError):
+                    # Uncertain activity must not kill an in-flight generation.
+                    entry.next_activity_probe = now + ACTIVITY_PROBE_INTERVAL
+                    return
+                if active:
+                    entry.next_activity_probe = now + ACTIVITY_PROBE_INTERVAL
+                    return
             await self._retire(entry, "expired")
+
+    async def _subchat_active(self, entry: _Entry) -> bool:
+        for server in entry.background_servers:
+            catalog = await entry.context.inspect(server=server, tool="subchat_activity")
+            rows = catalog.get("servers")
+            if not isinstance(rows, list):
+                raise ValueError("Subchat activity catalog is malformed")
+            selected = next((row for row in rows if isinstance(row, dict)
+                             and row.get("server") == server), None)
+            tools = selected.get("tools") if selected is not None else None
+            if not isinstance(tools, list):
+                raise ValueError("Subchat activity tool is unavailable")
+            descriptor = next((tool for tool in tools if isinstance(tool, dict)
+                               and tool.get("name") == "subchat_activity"), None)
+            digest = descriptor.get("catalog_sha256") if descriptor is not None else None
+            if not isinstance(digest, str):
+                raise ValueError("Subchat activity tool is unavailable")
+            result = await entry.context.call(server, "subchat_activity", {}, digest)
+            content = result.get("structured_content")
+            data = content.get("data") if isinstance(content, dict) else None
+            count = data.get("active_count") if isinstance(data, dict) else None
+            if (result.get("is_error") is True or not isinstance(count, int)
+                    or isinstance(count, bool) or count < 0):
+                raise ValueError("Subchat activity result is malformed")
+            if count:
+                return True
+        return False
 
     async def open(
         self, cwd: str, *, owner: str | None, idle_timeout: int = IDLE_TIMEOUT,
@@ -211,6 +257,8 @@ class PluginSessions:
         codex_plugins._validate_call(server, tool, catalog_sha256)
         async with self._lease(session_id, owner=owner, cwd=cwd) as entry:
             result = await entry.context.call(server, tool, arguments, catalog_sha256)
+            if tool in {"subchat_send", "subchat_queue_watch"} and not result.get("is_error"):
+                entry.background_servers.add(server)
             return {**result, "session_id": session_id}
 
     async def status(self, session_id: str, *, owner: str | None) -> dict[str, JsonValue]:

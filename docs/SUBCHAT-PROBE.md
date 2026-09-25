@@ -12,7 +12,7 @@ installation and `uv` prerequisite are described in the [README](../README.md#ge
 After installation, restart the Plugin session and confirm both MCP servers are
 available before using the Subchat tools. In read-only mode the server exposes
 `subchat_capabilities`,
-`subchat_catalog`, `subchat_list`, `subchat_status`, `subchat_recover` and
+`subchat_activity`, `subchat_catalog`, `subchat_list`, `subchat_status`, `subchat_recover` and
 `subchat_wait`, plus `subchat_download_file` and `subchat_download_image`. A selected Chrome login profile adds
 `subchat_refresh_auth`, which reacquires the same account through a headless
 snapshot and authenticated GETs. A 401 on an authenticated read also triggers one
@@ -33,6 +33,17 @@ remove that entry with `codex mcp remove NAME` and let the installed Plugin
 provide the server. Keep the Plugin enabled and reopen its MCP session before
 checking `subchat_capabilities` again. Plugin updates do not rewrite unrelated
 manual MCP registrations.
+
+When ChatGPT calls Subchat through Anywhere Computer's `codex_plugin_call`
+bridge, open `codex_plugin_session_open` with the workspace cwd first. Pass its
+`session_id` to `codex_plugin_tools` and each `codex_plugin_call` for Subchat
+send, message, recover, wait or queue watch. A one-call bridge context rejects
+these operations before dispatch, including when the MCP server was registered
+under a different name. Keep the session through final answer recovery and
+close it explicitly. Idle cleanup consults `subchat_activity`; it preserves a
+session while a send, recovery or queue watch is live, then allows normal idle
+expiry after the work finishes. An explicit session close or Engine shutdown
+still ends that local background work.
 
 To enable actual sends through the dedicated Chrome profile, set
 `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process and restart

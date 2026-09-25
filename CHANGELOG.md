@@ -3,6 +3,15 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a32 / Plugin 0.2.0-alpha.32 — unpublished candidate (2026-09-25)
+
+- Protect explicit bridge sessions while their Subchat controller reports an
+  active send, recovery or queue watch. Probe activity before idle cleanup,
+  and retain the session when the probe cannot establish a safe stop.
+- Require a session for stateful Subchat tool names even if the MCP server has
+  a custom registration name. Document the bridge workflow in the Subchat
+  skill and guides.
+
 ## 0.2.0a31 / Plugin 0.2.0-alpha.31 — unpublished candidate (2026-09-25)
 
 - Require an explicit, persistent ChatGPT plugin bridge session for Subchat

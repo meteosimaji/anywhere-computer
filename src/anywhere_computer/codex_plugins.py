@@ -758,7 +758,7 @@ async def call_codex_plugin_tool(
 ) -> dict[str, JsonValue]:
     # Reject recursive routes before starting any installed runtime.
     _validate_call(server, tool, catalog_sha256)
-    if server == "anywhere-subchat" and tool in _STATEFUL_SUBCHAT_TOOLS:
+    if tool in _STATEFUL_SUBCHAT_TOOLS:
         raise PluginPreflightError(
             "plugin_session_required",
             "Open codex_plugin_session_open, then inspect and call this Subchat tool "

@@ -162,6 +162,9 @@ async def test_cancel_and_close_stop_owned_unsent_or_uncertain_tasks(tmp_path, m
             arguments={'prompt': 'dispatched', 'model': 'model', 'effort': 'effort'}))
         await entered_send.wait()
         assert pending.state == 'running' and store.get(uncertain, owner=None).state == 'sending'
+        activity = await server.execute(Request(operation_id='3' * 32,
+            tool='subchat_activity', arguments={}))
+        assert activity.data['active_sends'] == 1
         denied = await server.execute(Request(operation_id='1' * 32,
             tool='subchat_cancel', arguments={'operation_id': uncertain}))
         assert denied.state == 'failed'
@@ -197,7 +200,8 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
         await server.handle({'jsonrpc': '2.0', 'method': 'notifications/initialized'})
         catalog = await call('tools/list', {})
         names = {tool['name'] for tool in catalog['result']['tools']}
-        assert names == {'subchat_send', 'subchat_recover', 'subchat_status', 'subchat_wait',
+        assert names == {'subchat_activity', 'subchat_send', 'subchat_recover',
+                        'subchat_status', 'subchat_wait',
                         'subchat_message', 'subchat_cancel', 'subchat_delete',
                         'subchat_list', 'subchat_queue_watch'}
         listed = await call('tools/call', {'name': 'subchat_list', 'arguments': {}})
@@ -387,7 +391,8 @@ asyncio.run(main())
                     await client.initialize()
                     tools = await client.list_tools()
                     assert {tool.name for tool in tools.tools} == {
-                        'subchat_send', 'subchat_recover', 'subchat_status', 'subchat_wait',
+                        'subchat_activity', 'subchat_send', 'subchat_recover',
+                        'subchat_status', 'subchat_wait',
                         'subchat_message', 'subchat_cancel', 'subchat_delete',
                         'subchat_list', 'subchat_queue_watch'}
                     sent = await client.call_tool('subchat_send', arguments)
@@ -644,6 +649,9 @@ async def test_late_preparation_failure_is_reported_by_reads_and_explicit_retry(
             await server.sends[operation]
         except subchat_mcp.SubchatPreparationFailed:
             pass
+        activity = await server.execute(Request(operation_id='7' * 32,
+            tool='subchat_activity', arguments={}))
+        assert activity.data['active_sends'] == 1
         for tool in ('subchat_status', 'subchat_recover', 'subchat_wait'):
             observed = await server.execute(Request(operation_id='e' * 32, tool=tool,
                 arguments={'operation_id': operation, **({'wait_ms': 100}

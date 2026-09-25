@@ -9,6 +9,14 @@ saved submissions and authenticated history but cannot send. A send-capable mode
 still requires browser preparation; it is not independent HTTP-only generation.
 Do not infer provider authorization from a successful local call.
 
+If calling this server through ChatGPT's `codex_plugin_call` bridge, first open
+`codex_plugin_session_open` and pass its `session_id` to tool inspection and
+every stateful Subchat call. Keep the session open while sending, waiting, or
+watching a queue, then close it after the result is recovered. A temporary
+bridge context rejects stateful Subchat calls before dispatch. A long running
+send or queue watch keeps the explicit session alive during idle periods;
+`subchat_activity` reports live work without opening Chrome.
+
 For a new send, inspect `subchat_catalog` with `source=ui` for the exact `model`
 label and effort label shown in the Chat picker. In a send-capable HTTP mode,
 also inspect `source=http` and copy the matching choice's `http_selection`,

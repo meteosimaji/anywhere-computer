@@ -192,6 +192,65 @@ async def test_busy_session_cannot_be_closed_or_expired(contexts, tmp_path):
         await pool.close()
 
 
+@pytest.mark.parametrize("tool", ["subchat_send", "subchat_queue_watch"])
+async def test_idle_session_keeps_background_subchat_alive_until_work_ends(
+    tmp_path, monkeypatch, tool,
+):
+    now = [0.0]
+
+    class Context:
+        def __init__(self, cwd):
+            self.cwd = str(Path(cwd).resolve())
+            self.alive = False
+            self.active_count = 1
+            self.activity_probes = 0
+
+        async def open(self):
+            self.alive = True
+
+        async def close(self):
+            self.alive = False
+
+        async def inspect(self, **kwargs):
+            assert kwargs == {"server": "chat-subchat", "tool": "subchat_activity"}
+            return {"servers": [{"server": "chat-subchat", "tools": [{
+                "name": "subchat_activity", "catalog_sha256": "1" * 64,
+            }]}]}
+
+        async def call(self, server, name, arguments, catalog_sha256):
+            assert server == "chat-subchat" and catalog_sha256 == "1" * 64
+            if name == "subchat_activity":
+                self.activity_probes += 1
+                return {"is_error": False, "structured_content": {
+                    "state": "completed", "data": {"active_count": self.active_count},
+                }}
+            assert name == tool
+            return {"is_error": False, "structured_content": {
+                "state": "running" if tool == "subchat_send" else "completed",
+                "data": {"state": "prepared" if tool == "subchat_send" else "watching"},
+            }}
+
+    monkeypatch.setattr(codex_plugins, "PluginContext", Context)
+    pool = PluginSessions(clock=lambda: now[0])
+    try:
+        session_id = (await pool.open(str(tmp_path), owner="peer-a", idle_timeout=30))["session_id"]
+        entry = pool.entries[session_id]
+        await pool.call(session_id, owner="peer-a", cwd=str(tmp_path),
+                        server="chat-subchat", tool=tool, arguments={},
+                        catalog_sha256="1" * 64)
+        now[0] = 31
+        await pool.expire_idle()
+        assert (await pool.status(session_id, owner="peer-a"))["state"] == "open"
+        assert entry.context.alive and entry.context.activity_probes == 1
+        now[0] = 62
+        entry.context.active_count = 0
+        await pool.expire_idle()
+        assert (await pool.status(session_id, owner="peer-a"))["state"] == "expired"
+        assert not entry.context.alive
+    finally:
+        await pool.close()
+
+
 async def test_capacity_is_bounded_and_released(contexts, tmp_path):
     pool = PluginSessions(max_sessions=2)
     try:

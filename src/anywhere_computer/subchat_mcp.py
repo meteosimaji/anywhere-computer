@@ -91,12 +91,15 @@ QUEUE_WATCH_INTERVAL = 5.0
 SEND_ACK_TIMEOUT = 2.0
 WAIT_POLL_INTERVAL_MS = 10_000
 READ_ONLY_TOOLS = frozenset({
-    'subchat_capabilities', 'subchat_catalog', 'subchat_list',
+    'subchat_capabilities', 'subchat_activity', 'subchat_catalog', 'subchat_list',
     'subchat_recover', 'subchat_status', 'subchat_wait', 'subchat_download_file',
     'subchat_download_image', 'subchat_refresh_auth',
 })
 
 _BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
+    'subchat_activity': (Contract, 'Report counts of live work owned by this MCP controller. '
+        'No browser or account request is made. Use to decide whether an idle plugin '
+        'session can close without interrupting a send or queue watch.'),
     'subchat_queue_watch': (QueueWatch, 'Explicitly arm or disarm automatic delivery of an '
         'existing queued input while this MCP controller remains alive. Requires an already '
         'open owned browser tab; never launches Chrome. Checks every five seconds, stops on '
@@ -591,6 +594,27 @@ def session(service: Subchats, *,
                         watch_queue(watch.operation_id))
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={'submission_operation_id': watch.operation_id, **data})
+            if request.tool == 'subchat_activity':
+                Contract.model_validate(request.arguments)
+                def needs_controller(task: asyncio.Task[SubchatSubmission]) -> bool:
+                    # Late failures are retained only in this controller until
+                    # an explicit observer receives them.
+                    return (not task.done() or
+                            not task.cancelled() and task.exception() is not None)
+
+                sends_active = sum(needs_controller(task) for task in sends.values())
+                recoveries_active = sum(needs_controller(task)
+                                        for task in recoveries.values())
+                watches_active = sum(not task.done() for task in
+                                     server.queue_watches.values())
+                return Reply(operation_id=request.operation_id, state='completed',
+                             data={'state': 'active' if (sends_active or recoveries_active
+                                                        or watches_active) else 'idle',
+                                   'active_count': sends_active + recoveries_active
+                                                   + watches_active,
+                                   'active_sends': sends_active,
+                                   'active_recoveries': recoveries_active,
+                                   'active_queue_watches': watches_active})
             if request.tool == 'subchat_capabilities' and capabilities is not None:
                 Contract.model_validate(request.arguments)
                 reported = capabilities()
