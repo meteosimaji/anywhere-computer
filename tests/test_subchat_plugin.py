@@ -163,6 +163,7 @@ def test_profile_id_selection_resolves_only_ordinary_chrome_store(tmp_path, monk
 
 
 def test_legacy_profile_path_must_be_standard_or_managed(tmp_path, monkeypatch):
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'darwin')
     state = tmp_path / 'subchat/ledger'
     state.parent.mkdir()
     selection = state.parent / 'login-selection.json'
