@@ -1027,6 +1027,15 @@ def session(service: Subchats, *,
                          data={'error_code': 'delete_unknown', 'automatic_retry': False})
         except Exception as error:
             # Never expose provider error text, invalid prompt contents or account data.
+            if request.tool in {'subchat_wait', 'subchat_recover'}:
+                target_id = request.arguments.get('operation_id')
+                return Reply(operation_id=request.operation_id, state='failed',
+                             error='Subchat observation failed. The saved submission may have '
+                                   'been sent; inspect subchat_status and recover the same '
+                                   'operation ID. Do not call subchat_send again.',
+                             data={'error_type': type(error).__name__,
+                                   'submission_operation_id': target_id,
+                                   'dispatched': None, 'automatic_retry': False})
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Subchat call failed; inspect its saved status before retrying.',
                          data={'error_type': type(error).__name__})
