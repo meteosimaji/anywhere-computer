@@ -1027,6 +1027,14 @@ def session(service: Subchats, *,
                          data={'error_code': 'delete_unknown', 'automatic_retry': False})
         except Exception as error:
             # Never expose provider error text, invalid prompt contents or account data.
+            if request.tool == 'subchat_send':
+                return Reply(operation_id=request.operation_id, state='unknown',
+                             error='Subchat send outcome is unconfirmed. Inspect subchat_list '
+                                   'and subchat_status with the saved operation ID before '
+                                   'considering another send.',
+                             data={'error_type': type(error).__name__,
+                                   'submission_operation_id': send_operation_id,
+                                   'dispatched': None, 'automatic_retry': False})
             if request.tool in {'subchat_wait', 'subchat_recover'}:
                 target_id = request.arguments.get('operation_id')
                 return Reply(operation_id=request.operation_id, state='failed',

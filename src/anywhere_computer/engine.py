@@ -22,6 +22,7 @@ from .capability_contract import CAPABILITY_TOOLS
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
+from .document_preview import DocumentPreviewUnavailable, preview_document
 from .document_writer import edit_document_paragraph, write_document
 from .documents import read_document
 from .downloads import Downloads
@@ -59,6 +60,7 @@ from .models import (
     OpenWorkspace,
     OperationId,
     PluginSessionId,
+    PreviewDocument,
     ReadBinary,
     ReadDocument,
     ReadFile,
@@ -233,6 +235,7 @@ class Engine:
         self.gui_mcp = GUIMCP(self.direct_mcp_sessions)
         self.native_gui = NativeGUI()
         self.browser = BrowserControl()
+        self._document_preview_slots = asyncio.Semaphore(2)
         # Transport-owned identity, inherited by the durable execution task only.
         # Tool arguments cannot set this value; None is the local execution scope.
         self._plugin_owner: ContextVar[str | None] = ContextVar("plugin_owner", default=None)
@@ -326,7 +329,9 @@ class Engine:
                       "Navigation may have web side effects; never replay an unknown outcome.",
                       BrowserNavigate, browser_navigate, destructive=True, open_world=True)
         self.register("browser_observe", "Observe the exact owned tab without navigating. "
-                      "Returns URL, title and bounded visible text.", BrowserSession,
+                      "Returns URL, title, bounded visible text and the last explicit "
+                      "navigation outcome when present. An unconfirmed outcome remains "
+                      "unconfirmed even when the requested URL is observed.", BrowserSession,
                       browser_observe, read_only=True, open_world=True)
         self.register("browser_click", "Click one visible, enabled element matching an exact "
                       "CSS selector in the owned tab. May have web side effects; inspect an "
@@ -735,6 +740,10 @@ class Engine:
         async def document(args: ReadDocument) -> Result:
             return await asyncio.to_thread(read_document, args)
 
+        async def document_preview(args: PreviewDocument) -> Result:
+            async with self._document_preview_slots:
+                return await asyncio.to_thread(preview_document, args)
+
         async def document_write(args: WriteDocument) -> Result:
             return await asyncio.to_thread(write_document, self.files, args)
 
@@ -896,6 +905,12 @@ class Engine:
             ReadDocument,
             document,
             read_only=True,
+        )
+        self.register(
+            "documents_preview",
+            "Render one DOCX page as a bounded PNG with a required source SHA-256. "
+            "Requires local LibreOffice, PDF tools and a network sandbox.",
+            PreviewDocument, document_preview, read_only=True,
         )
         self.register(
             "documents_write",
@@ -1238,6 +1253,11 @@ class Engine:
             "remote": False,
             "office": False,
             "office_text_read": True,
+            "office_rendered_preview_adapter": {
+                "available": platform.system() == "Darwin",
+                "requires": "LibreOffice, pdfinfo, pdftoppm and macOS sandbox-exec",
+                "runtime_verified": False,
+            },
             "gui": False,
             "gui_native_adapter": {
                 "available": True, "provider": "macos_ax",
@@ -1263,7 +1283,8 @@ class Engine:
             for name, value in capabilities.items()
             if isinstance(value, bool)
         }
-        for name in ("gui_native_adapter", "gui_mcp_adapter"):
+        for name in ("gui_native_adapter", "gui_mcp_adapter",
+                     "office_rendered_preview_adapter"):
             capability_diagnostics[name] = {
                 "running_implementation": "present",
                 "runtime_available": "unknown",
@@ -1273,7 +1294,7 @@ class Engine:
                 "acceptance": "not_verified",
             }
         for name in ("skills", "codex_skills", "audio_capture", "gui_native", "gui_mcp",
-                     "browser_isolated"):
+                     "browser_isolated", "office_rendered_preview"):
             required_tools = CAPABILITY_TOOLS[name]
             capability_diagnostics[name] = {
                 "running_implementation": (
@@ -1281,7 +1302,8 @@ class Engine:
                 ),
                 "runtime_available": "unknown",
                 "connection_authorization": "not_observed",
-                "helper": "not_checked" if name == "browser_isolated" else "not_required",
+                "helper": "not_checked" if name in {"browser_isolated",
+                                                   "office_rendered_preview"} else "not_required",
                 "os_permission": ("not_checked" if name == "gui_mcp" else "not_required"),
                 "acceptance": "not_verified",
             }
@@ -1489,6 +1511,14 @@ class Engine:
             try:
                 result = await tool.handler(arguments)
                 reply = Reply(operation_id=request.operation_id, state="completed", data=result)
+            except DocumentPreviewUnavailable:
+                reply = Reply(
+                    operation_id=request.operation_id, state="failed",
+                    error="Document preview is unavailable on this device.",
+                    data={"error_code": "preview_unavailable", "dispatched": False,
+                          "next_action": "Use documents_read for extracted text or install "
+                          "the macOS renderer prerequisites before retrying."},
+                )
             except codex_plugins.PluginPreflightError as error:
                 data: Result = {
                     "error_code": error.code, "next_action": error.action,

@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a59` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.59` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a60` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.60` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -200,6 +200,12 @@ addition to opening, navigating, observing and closing an owned tab. Actions
 require a single visible target and return an unknown outcome if the result
 cannot be observed; inspect the tab before another action. Existing Chrome
 profiles and tabs are not part of this isolated-browser interface.
+The same session and tab IDs continue across document and SPA navigation.
+Snapshots include `last_navigation` for the most recent explicit navigation:
+its requested URL, confirmed or unconfirmed outcome, and latest observed URL.
+After an unconfirmed navigation, `browser_observe` reads the live tab without
+replaying the request. A matching observed URL does not prove the attempted
+navigation completed.
 
 For explicit local agent-to-agent text delivery, `anywhere-peer --help` describes
 owner provisioning and its separate MCP stdio server. Give each local peer its

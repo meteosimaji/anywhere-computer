@@ -7,7 +7,7 @@ const {webcrypto} = require('node:crypto');
 const html = fs.readFileSync(process.argv[2], 'utf8');
 let script = html.split('<script>')[1].split('</script>')[0];
 script = script.replace('  controls();\n  if(window.parent',
-  '  globalThis.testUI={state,pending,call,resolveMutation,listDevices,selectDevice,setupCall,planSetup,confirmSetup,controls};return;\n  if(window.parent');
+  '  globalThis.testUI={state,pending,call,openPath,resolveMutation,listDevices,selectDevice,setupCall,planSetup,confirmSetup,controls};return;\n  if(window.parent');
 const elements = new Map();
 let listener;
 let responder;
@@ -21,9 +21,9 @@ const parent = {postMessage(packet) {
 const context = vm.createContext({
   crypto:webcrypto, TextEncoder, setTimeout, clearTimeout,
   document:{getElementById(id) {
-    if(!elements.has(id)) elements.set(id,{hidden:true,dataset:{},value:'draft',replaceChildren(){},append(){}});
+    if(!elements.has(id)) elements.set(id,{hidden:true,dataset:{},value:'draft',textContent:'',replaceChildren(){},append(){},setAttribute(){},removeAttribute(){}});
     return elements.get(id);
-  },querySelectorAll:()=>[],createElement:()=>({})},
+  },querySelectorAll:()=>[],createElement:()=>({append(){},setAttribute(){},replaceChildren(){}}),createTextNode:text=>({textContent:text})},
   window:{parent,addEventListener:(_, callback)=>{listener=callback;}}
 });
 vm.runInContext(script,context);
@@ -129,6 +129,25 @@ function completed(packet,data) {
   assert.equal(elements.get('setup-tab').hidden,true);
   before=calls;await assert.rejects(ui.setupCall('connection_setup_status'));
   assert.equal(calls,before,'Missing local setup capability must prevent dispatch');
+  ui.state.tools=new Set(['files_info','documents_read','documents_preview']);
+  responder=packet=>{
+    const name=packet.params.name;
+    if(name==='files_info') return completed(packet,{directory:false,size:100});
+    if(name==='documents_read') return completed(packet,{
+      sha256:'a'.repeat(64),offset:0,next_offset:null,truncated:false,entries:[{text:'Document text'}]
+    });
+    if(name==='documents_preview') return {structuredContent:{
+      operation_id:packet.params._meta['io.github.meteosimaji.anywhere-computer/operation_id'],
+      state:'failed',error:'Document preview is unavailable on this device.',
+      data:{error_code:'preview_unavailable',dispatched:false}
+    }};
+    throw new Error('Unexpected preview fixture tool: '+name);
+  };
+  await ui.openPath('/fixture.docx');
+  assert.equal(ui.state.current.kind,'document');
+  assert.match(elements.get('document').textContent,/Document text/);
+  assert.match(elements.get('notice').textContent,/抽出した文字情報を表示しています/);
+  assert.equal(elements.get('notice').dataset.error,'false');
   assert.equal(ui.pending.size,0,'All RPC replies must release their pending requests');
   process.stderr.write('workspace fixture: all assertions completed\n');
   process.stdout.write('workspace mutation recovery: passed\n');

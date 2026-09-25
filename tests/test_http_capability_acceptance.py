@@ -297,6 +297,9 @@ for line in sys.stdin:
                 result = await call("documents_read", {"path": document})
                 assert "Document" in str(result) if format_ == "docx" else "42" in str(result)
                 if format_ == "docx":
+                    await call("documents_preview", {
+                        "path": document, "expected_sha256": "0" * 64,
+                    }, expected="failed")
                     edited = await call("documents_edit_paragraph", {
                         "path": document, "paragraph": 1,
                         "expected_sha256": result["sha256"],

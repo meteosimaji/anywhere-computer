@@ -6,7 +6,7 @@ import uuid
 import pytest
 
 from anywhere_computer import engine as engine_module
-from anywhere_computer.browser_control import BrowserControl
+from anywhere_computer.browser_control import BrowserControl, BrowserNavigationUnknown
 from anywhere_computer.engine import Engine
 from anywhere_computer.models import (
     BrowserClick,
@@ -44,6 +44,105 @@ async def local_page():
     finally:
         server.close()
         await server.wait_closed()
+
+
+@pytest.fixture
+async def navigation_site():
+    requests = []
+
+    async def serve(reader, writer):
+        try:
+            request = await reader.readuntil(b"\r\n\r\n")
+        except asyncio.IncompleteReadError:
+            writer.close()
+            return
+        path = request.split(b" ", 2)[1].decode()
+        if path != "/favicon.ico":
+            requests.append(path)
+        page = b"Second document" if path == "/next" else b"First document"
+        body = (b"<html><head><title>Navigation fixture</title></head><body><p id='content'>"
+                + page + b"</p><a id='next' href='/next'>Next</a>"
+                + b"<button id='spa' onclick=\"history.pushState({}, '', '/spa');"
+                + b"document.querySelector('#content').textContent='SPA document'\">SPA</button>"
+                + b"</body></html>")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\n"
+                     + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                     + body)
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    try:
+        yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}", requests
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+async def test_browser_navigation_continuity_across_documents_and_spa(navigation_site):
+    pytest.importorskip("playwright.async_api")
+    base, requests = navigation_site
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="owner-a")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        first = await control.navigate(BrowserNavigate(**ids, url=base + "/first"),
+                                       owner="owner-a")
+        assert first["last_navigation"] == {
+            "requested_url": base + "/first", "outcome": "confirmed",
+            "observed_url": base + "/first",
+        }
+        second = await control.click(BrowserClick(**ids, selector="#next"), owner="owner-a")
+        assert second["url"] == base + "/next"
+        assert "Second document" in second["text"]
+        spa = await control.click(BrowserClick(**ids, selector="#spa"), owner="owner-a")
+        assert spa["url"] == base + "/spa"
+        assert "SPA document" in spa["text"]
+        observed = await control.observe(BrowserSession(**ids), owner="owner-a")
+        assert observed["url"] == base + "/spa"
+        assert observed["last_navigation"] == {
+            "requested_url": base + "/first", "outcome": "confirmed",
+            "observed_url": base + "/spa",
+        }
+        assert requests == ["/first", "/next"]
+    finally:
+        await control.close()
+
+
+async def test_ambiguous_navigation_reconciles_observation_without_replay(
+    navigation_site, monkeypatch,
+):
+    pytest.importorskip("playwright.async_api")
+    base, requests = navigation_site
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="owner-a")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        entry = control.entries[ids["session_id"]]
+        original_goto = entry.page.goto
+
+        async def lost_completion(*args, **kwargs):
+            await original_goto(*args, **kwargs)
+            raise TimeoutError("completion acknowledgement lost")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(entry.page, "goto", lost_completion)
+            with pytest.raises(BrowserNavigationUnknown, match="observe the same tab"):
+                await control.navigate(BrowserNavigate(**ids, url=base + "/next"),
+                                       owner="owner-a")
+        assert requests == ["/next"]
+        with pytest.raises(ValueError, match="unavailable"):
+            await control.observe(BrowserSession(**ids), owner="owner-b")
+        observed = await control.observe(BrowserSession(**ids), owner="owner-a")
+        assert observed["url"] == base + "/next"
+        assert "Second document" in observed["text"]
+        assert observed["last_navigation"] == {
+            "requested_url": base + "/next", "outcome": "unconfirmed",
+            "observed_url": base + "/next",
+        }
+        assert requests == ["/next"]
+    finally:
+        await control.close()
 
 
 async def test_isolated_browser_exact_owner_tab_and_stale_references(local_page):

@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a60 / Plugin 0.2.0-alpha.60 — unpublished candidate (2026-09-26)
+
+- Keep an owned Browser tab's last explicit navigation outcome visible through
+  later document or SPA navigation. Observe an uncertain navigation without
+  replaying its request.
+- Add a hash-bound macOS DOCX page preview with bounded, sandboxed local
+  rendering and a text fallback when rendering is unavailable. The renderer
+  remains an external prerequisite; XLSX/PPTX rendering is not yet supported.
+- Report unexpected Subchat send failures as unconfirmed outcomes with a saved
+  operation ID and no automatic retry.
+
 ## 0.2.0a56 / Plugin 0.2.0-alpha.56 — unpublished candidate (2026-09-26)
 
 - Close the browser and Playwright driver when isolated session creation is
