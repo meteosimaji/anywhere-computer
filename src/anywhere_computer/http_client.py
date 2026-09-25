@@ -24,6 +24,7 @@ from . import __version__
 from .authorization import validate_authorization_url
 from .client_tokens import ClientAuthorizationRequired, ClientTokens
 from .connection import WIRE_LIMIT
+from .http_mcp import AUTH_REJECTED_HEADER, SESSION_EXPIRED_HEADER
 from .mcp_server import (
     OPERATION_CAPABILITY,
     OPERATION_META,
@@ -173,12 +174,18 @@ class HTTPBackend:
             headers["MCP-Protocol-Version"] = PROTOCOL_VERSION
         response = self.wire(self.tokens.resource, "POST", packet, headers)
         if response.status == 401:
-            # Our server verifies authorization before dispatch. An explicit 401
-            # is different from a timeout/lost response. Try renewal only once.
+            # Only our pre-dispatch marker makes replay of a tool call safe.
+            # Initialization and catalog requests can renew without that proof.
+            if (packet.get("method") == "tools/call"
+                    and response.headers.get(AUTH_REJECTED_HEADER) != "true"):
+                return response
             token = self.tokens.access_token(rejected_token=token)
             headers["Authorization"] = "Bearer " + token
             response = self.wire(self.tokens.resource, "POST", packet, headers)
             if response.status == 401:
+                if (packet.get("method") == "tools/call"
+                        and response.headers.get(AUTH_REJECTED_HEADER) != "true"):
+                    return response
                 raise ClientAuthorizationRequired(
                     "Remote authorization was rejected; authorize again"
                 )
@@ -210,6 +217,11 @@ class HTTPBackend:
         if not isinstance(result, dict):
             raise ConnectionError("Remote response lacks a valid result")
         return result
+
+    @staticmethod
+    def _session_expired(response: HTTPResponse) -> bool:
+        return (response.status == 404
+                and response.headers.get(SESSION_EXPIRED_HEADER) == "true")
 
     def _ensure_session(self, *, retry_notification: bool = True) -> None:
         if self.session_id is not None:
@@ -246,7 +258,7 @@ class HTTPBackend:
         acknowledged = self._post(
             {"jsonrpc": "2.0", "method": "notifications/initialized"}, session=session
         )
-        if acknowledged.status == 404 and retry_notification:
+        if self._session_expired(acknowledged) and retry_notification:
             # A session can disappear between initialize and its notification.
             # No tool has been sent yet. Start a fresh handshake once, without ID.
             self._ensure_session(retry_notification=False)
@@ -265,12 +277,18 @@ class HTTPBackend:
         }
         self._ensure_session()
         response = self._post(packet, session=self.session_id)
-        if response.status == 404:
-            # A terminated session is explicitly rejected before executing tools.
-            # Reinitialize once; do not use this path for network/parse errors.
+        if self._session_expired(response):
+            # Only the authenticated agent's missing-session marker proves that
+            # this request was rejected before tool dispatch.
             self.session_id = None
             self._ensure_session()
             response = self._post(packet, session=self.session_id)
+        if (response.status == 404 and method == "tools/call"
+                and not self._session_expired(response)):
+            raise ConnectionError("Remote tool outcome was not confirmed")
+        if (response.status == 401 and method == "tools/call"
+                and response.headers.get(AUTH_REJECTED_HEADER) != "true"):
+            raise ConnectionError("Remote tool outcome was not confirmed")
         return self._result(response, identity)
 
     async def catalog(self) -> list[JsonValue]:

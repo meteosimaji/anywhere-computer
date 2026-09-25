@@ -202,6 +202,63 @@ async def test_lost_write_response_is_not_retried_and_can_be_looked_up(http_remo
     assert not adapter.sessions
 
 
+async def test_unmarked_404_after_write_remains_unknown_without_replay(http_remote, tmp_path):
+    backend, _, _, _, calls, _ = http_remote
+    await backend.catalog()
+    original = backend.wire
+
+    def unmarked_404(resource, method, packet, headers):
+        response = original(resource, method, packet, headers)
+        if packet and packet.get("method") == "tools/call" and (
+            packet["params"]["name"] == "files_write"
+        ):
+            return HTTPResponse(404, {}, None)
+        return response
+
+    backend.wire = unmarked_404
+    path = tmp_path / "unmarked-404.txt"
+    write = operation("files_write", path=str(path), text="one effect")
+    unknown = await backend.execute(write)
+    assert unknown.state == "unknown" and unknown.operation_id == write.operation_id
+    assert path.read_text(encoding="utf-8") == "one effect"
+    writes = [packet for packet in calls if packet and packet.get("method") == "tools/call"
+              and packet["params"]["name"] == "files_write"]
+    assert len(writes) == 1
+    assert writes[0]["params"]["_meta"][OPERATION_META] == write.operation_id
+    backend.wire = original
+    recovered = await backend.execute(operation("operations_get", operation_id=write.operation_id))
+    assert recovered.data["state"] == "completed"
+
+
+async def test_unmarked_401_after_write_remains_unknown_without_replay(http_remote, tmp_path):
+    backend, _, _, _, calls, faults = http_remote
+    await backend.catalog()
+    original = backend.wire
+
+    def unmarked_401(resource, method, packet, headers):
+        response = original(resource, method, packet, headers)
+        if packet and packet.get("method") == "tools/call" and (
+            packet["params"]["name"] == "files_write"
+        ):
+            return HTTPResponse(401, {"www-authenticate": "Bearer"}, None)
+        return response
+
+    backend.wire = unmarked_401
+    path = tmp_path / "unmarked-401.txt"
+    write = operation("files_write", path=str(path), text="one effect")
+    unknown = await backend.execute(write)
+    assert unknown.state == "unknown" and unknown.operation_id == write.operation_id
+    assert path.read_text(encoding="utf-8") == "one effect"
+    writes = [packet for packet in calls if packet and packet.get("method") == "tools/call"
+              and packet["params"]["name"] == "files_write"]
+    assert len(writes) == 1
+    assert writes[0]["params"]["_meta"][OPERATION_META] == write.operation_id
+    assert faults["refreshes"] == 0
+    backend.wire = original
+    recovered = await backend.execute(operation("operations_get", operation_id=write.operation_id))
+    assert recovered.data["state"] == "completed"
+
+
 async def test_explicit_401_renews_once_and_revocation_never_dispatches(http_remote, tmp_path):
     backend, _, authority, _, calls, faults = http_remote
     await backend.catalog()
