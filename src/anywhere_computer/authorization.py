@@ -270,6 +270,14 @@ class AuthorizationStore:
             raise AuthorizationError("access_denied")
         return int(target[3])
 
+    def enrolled_tools(self, *, owner: str, device: str) -> frozenset[str]:
+        """Return the currently available tools for an active enrolled device."""
+        row = self.db.execute(
+            "SELECT tools FROM authorized_devices WHERE id=? AND owner=? AND active=1",
+            (device, owner),
+        ).fetchone()
+        return frozenset(json.loads(row[0])) if row is not None else frozenset()
+
     def exchange_code(
         self,
         *,
