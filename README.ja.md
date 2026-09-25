@@ -44,7 +44,11 @@ GitHubの「Download ZIP」はソースコードです。CodexへのPlugin導入
 
 ソースからの最短手順とローカルMCP設定は[英語READMEのGet started](README.md#get-started)を正本としています。
 コマンド列をこの翻訳へ重複掲載せず、同じ手順を参照します。OS資格情報ストアが必要で、
-ChatGPT接続には公開HTTPS URL・認証・ChatGPT側の登録も必要です。
+現在のChatGPT接続手順には公開HTTPS URL・認証・ChatGPT側の登録が必要です。
+ChatGPTからこのMacの`localhost`へ直接接続はできません。所有ドメインを使わない
+非公開の開発用接続には[Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+という選択肢がありますが、本プロジェクトでは未検証です。公開Pluginの提出には
+安定した公開HTTPSエンドポイントが必要です。
 日常の起動・診断・常駐設定は日本語の運用ガイドを参照してください。
 Codex Pluginの導入にはCodexから使える`uv`が必要です。このチェックアウトを使う場合は
 [英語READMEの導入コマンド](README.md#get-started)でローカルmarketplaceを登録し、

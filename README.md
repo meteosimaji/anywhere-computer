@@ -109,6 +109,11 @@ For ChatGPT, choose its HTTPS route in `setup`. You still need a public HTTPS MC
 URL, authentication and registration in ChatGPT. Installing the Codex Plugin does
 not perform those steps. Hosting, tunnels and managed pairing are not silently
 provisioned. Use the setup and client guides above for the actual connection steps.
+ChatGPT cannot call a Mac's `localhost` MCP address directly. For private
+developer-mode testing without an owned domain, [OpenAI's Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels) is
+another transport to evaluate; it requires an OpenAI Platform tunnel and a local
+`tunnel-client`, and this project has not yet qualified that path. Public Plugin
+submission still requires a stable public HTTPS endpoint.
 On macOS, an explicitly selected, logged-in Chrome profile can also provide
 direct `subchat_*` tools on that HTTPS MCP connection. Adding those scopes requires
 a new OAuth consent; existing grants are not silently expanded. The selected

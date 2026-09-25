@@ -11,6 +11,15 @@
 
 先に、利用する固定 HTTPS URL を決めます。以下のホスト名は説明用です。
 サーバーの作成だけでは外部から到達可能になりません。
+ChatGPT のクラウド側は、この Mac の `localhost` に直接接続できません。所有ドメインを
+使わない非公開の開発用接続には、OpenAI の
+[Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+を検討できます。
+OpenAI Platform 側のトンネルとローカルの `tunnel-client` が必要で、この経路は
+Anywhere Computer ではまだ実機検証していません。公開 Plugin の提出には安定した
+公開 HTTPS エンドポイントが必要です。
+トンネルは MCP 通信を運びますが、OAuth 認可サーバーを自動では公開しません。
+所有者パスワードによる OAuth 接続には、認可画面へ到達できる経路も別途必要です。
 
 ```sh
 anywhere http-configure --resource https://your-agent.example/mcp --owner owner --client-id anywhere-native --scope files_read --scope files_write --scope operations_get --port 8768
@@ -37,6 +46,7 @@ anywhere http-serve
 
 ```sh
 anywhere http-add-tools --scope subchat_capabilities --scope subchat_catalog \
+  --scope subchat_list \
   --scope subchat_send --scope subchat_recover --scope subchat_status \
   --scope subchat_wait --scope subchat_message \
   --subchat-profile /absolute/path/to/Chrome/Default \
