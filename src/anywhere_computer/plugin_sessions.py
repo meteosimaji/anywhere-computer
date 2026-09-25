@@ -163,7 +163,9 @@ class PluginSessions:
             content = result.get("structured_content")
             data = content.get("data") if isinstance(content, dict) else None
             count = data.get("active_count") if isinstance(data, dict) else None
-            if (result.get("is_error") is True or not isinstance(count, int)
+            if (result.get("is_error") is True or not isinstance(content, dict)
+                    or content.get("state") != "completed" or not isinstance(data, dict)
+                    or not isinstance(count, int)
                     or isinstance(count, bool) or count < 0):
                 raise ValueError("Subchat activity result is malformed")
             if count:

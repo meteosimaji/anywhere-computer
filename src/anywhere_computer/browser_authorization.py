@@ -40,6 +40,19 @@ _PASSWORD_VISIBILITY_SCRIPT = """(() => {
     toggle.setAttribute('aria-label', 'Hide password');
   });
   field.form.addEventListener('submit', hide);
+  let submitted = false;
+  field.form.addEventListener('submit', (event) => {
+    if (submitted) { event.preventDefault(); return; }
+    submitted = true;
+    const status = document.getElementById('submit-status');
+    status.textContent = 'Processing your decision…';
+    // Defer disabling: the submitter's name must remain in the encoded form.
+    setTimeout(() => {
+      for (const button of field.form.querySelectorAll('button[type=submit]')) {
+        button.disabled = true;
+      }
+    }, 0);
+  });
   window.addEventListener('pagehide', hide);
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) hide();
@@ -155,11 +168,23 @@ class BrowserAuthorization:
     def _page(self, identity: str, record: PendingConsent, csrf: str, *, error: str = "") -> bytes:
         escape = html.escape
         tools = "".join(f"<li><code>{escape(tool)}</code></li>" for tool in sorted(record.tools))
+        abilities = []
+        if "files_write" in record.tools:
+            abilities.append("change files")
+        if any(tool.startswith("terminal_") for tool in record.tools):
+            abilities.append("run commands as this device user")
+        if any(tool.startswith("gui_") for tool in record.tools):
+            abilities.append("control apps")
+        if any(tool in {"mcp_call", "codex_plugin_call"} for tool in record.tools):
+            abilities.append("call other connected services")
+        if "subchat_send" in record.tools:
+            abilities.append("send Chat messages")
         warning = (
-            "Terminal access allows commands to run with this device user’s permissions."
-            if any(tool.startswith("terminal_") for tool in record.tools)
-            else "Allowed tools can access data available to this device’s user."
+            "This connection can " + ", ".join(abilities) + "."
+            if abilities else "This connection can read data available to this device user."
         )
+        destination = urlsplit(record.redirect).hostname or record.redirect
+        error_html = f"<p id=auth-error class=error role=alert>{escape(error)}</p>" if error else ""
         scope_notice = (
             "<p class=scope-notice role=note>Some Subchat tools available on this device were not "
             "requested by this connection. Approving this page will not grant "
@@ -180,32 +205,44 @@ class BrowserAuthorization:
             "border:1px solid #244a6f;border-radius:6px;background:#244a6f;"
             "color:white;font:inherit}"
             "button[name=deny]{background:white;color:#244a6f}.error{color:#a12622}"
+            "summary{cursor:pointer;font-weight:600}details{margin:16px 0}"
+            "details ul{padding-right:8px}"
             ".password-row{display:flex;gap:8px;align-items:center}"
             ".password-row input{min-width:0;flex:1}"
             ".password-row button{margin:0;flex:none;background:white;color:#244a6f}"
             "small{color:#475669}.scope-notice{padding:12px;border-left:4px solid #9b5800;"
             "background:#fff5e5}@media(max-width:680px){main{margin:12px;padding:20px}}"
             "</style><main><small>Anywhere Computer</small><h1>Allow this connection?</h1>"
-            f"<dl><dt>Client ID</dt><dd>{escape(record.client)}</dd>"
+            f"<p>Access will be sent to <strong>{escape(destination)}</strong>.</p>"
+            f"<h2>What this connection can do</h2><p>{warning}</p>{scope_notice}"
+            f"<details open><summary>Requested tools ({len(record.tools)})</summary>"
+            f"<ul>{tools}</ul></details>"
+            "<details><summary>Technical details</summary><dl>"
+            f"<dt>Client ID</dt><dd>{escape(record.client)}</dd>"
             f"<dt>Device</dt><dd>{escape(self.device)}</dd>"
             f"<dt>Resource</dt><dd>{escape(record.resource)}</dd>"
-            f"<dt>Return address</dt><dd>{escape(record.redirect)}</dd></dl>"
-            f"<p>Requested tools</p><ul>{tools}</ul><p>{warning}</p>{scope_notice}"
-            "<p>This connection remains authorized until revoked. "
+            f"<dt>Return address</dt><dd>{escape(record.redirect)}</dd></dl></details>"
+            "<p>This connection remains authorized until revoked with "
+            "<code>anywhere http-revoke</code>. "
             "Deny it if you did not request it.</p>"
-            f"<p class=error role=alert>{escape(error)}</p>"
+            f"{error_html}"
             "<form method=post action=/authorize>"
             f"<input type=hidden name=request_id value='{escape(identity)}'>"
             f"<input type=hidden name=csrf value='{escape(csrf)}'>"
-            "<label for=password>Device owner password</label>"
+            "<label for=password>Anywhere Computer owner password</label>"
+            "<p id=password-hint><small>Set with <code>anywhere owner-init</code> "
+            "(at least 8 characters); "
+            "this is not your computer or ChatGPT login password.</small></p>"
             "<div class=password-row>"
             "<input id=password type=password name=password autocomplete=current-password "
-            "maxlength=1024>"
+            f"maxlength=1024 aria-describedby='password-hint{' auth-error' if error else ''}' "
+            f"{'aria-invalid=true ' if error else ''}required>"
             "<button type=button id=password-visibility aria-controls=password "
             "aria-pressed=false aria-label='Show password'>Show</button></div>"
             "<button type=submit name=approve value=yes>Allow connection</button>"
-            "<button type=submit name=deny value=yes>Deny</button>"
-            "</form><p><small>This request expires in 5 minutes. "
+            "<button type=submit name=deny value=yes formnovalidate>Deny</button>"
+            "<p id=submit-status role=status></p>"
+            "</form><p><small>This request expires 5 minutes after it was opened. "
             "Your password is not shared with the connecting client.</small></p></main>"
             f"<script>{_PASSWORD_VISIBILITY_SCRIPT}</script></html>"
         ).encode()
@@ -361,7 +398,11 @@ class BrowserAuthorization:
             if not valid:
                 return (
                     403,
-                    self._page(identity, record, csrf, error="Check your password."),
+                    self._page(identity, record, csrf, error=(
+                        "Check the Anywhere Computer owner password and try again. "
+                        "If you forgot it, stop the HTTP service and run anywhere owner-reset "
+                        "locally. That reset disconnects every client of this device."
+                    )),
                     self._headers(record.redirect),
                 )
         # Verification yields to other requests. Only one decision can consume this

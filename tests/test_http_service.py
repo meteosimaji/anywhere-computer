@@ -12,7 +12,7 @@ from test_http_mcp import INITIALIZE
 
 from anywhere_computer import cli
 from anywhere_computer import http_service as service_module
-from anywhere_computer.authorization import pkce_s256
+from anywhere_computer.authorization import AuthorizationStore, pkce_s256
 from anywhere_computer.client_tokens import ClientCredentialError
 from anywhere_computer.engine import Engine
 from anywhere_computer.files import sha256
@@ -22,6 +22,7 @@ from anywhere_computer.http_service import (
     http_authorization_status,
     http_service,
     load_http_config,
+    reset_http_owner_password,
     revoke_http_device,
 )
 from anywhere_computer.locking import ProcessLock
@@ -493,6 +494,174 @@ async def test_busy_port_releases_service_lock_for_retry(configured, tmp_path):
         await blocker.wait_closed()
     async with http_service(tmp_path, credentials=owner):
         pass
+
+
+def _issued_reset_token(directory, config):
+    store = AuthorizationStore(
+        directory / "http-server" / "authorization",
+        resource=config.resource,
+        known_tools=config.scopes,
+    )
+    try:
+        code = store.approve(
+            owner=config.owner, device=config.device, client=config.client,
+            redirect=REDIRECT, resource=config.resource, tools=SCOPES,
+            challenge=pkce_s256("v" * 43),
+        )
+        token = store.exchange_code(
+            code=code, verifier="v" * 43, client=config.client,
+            redirect=REDIRECT, resource=config.resource,
+        ).value
+    finally:
+        store.close()
+    return token
+
+
+def _verify_reset_token(directory, config, token):
+    store = AuthorizationStore(
+        directory / "http-server" / "authorization",
+        resource=config.resource,
+        known_tools=config.scopes,
+    )
+    try:
+        return store.verify(token, resource=config.resource)
+    finally:
+        store.close()
+
+
+async def test_owner_reset_revokes_old_grants_and_retry_is_safe(
+    configured, tmp_path, monkeypatch
+):
+    config, owner = configured
+    monkeypatch.setattr("anywhere_computer.owner_credentials.secure_backend", lambda: owner.vault)
+    token = _issued_reset_token(tmp_path, config)
+    assert _verify_reset_token(tmp_path, config, token) is not None
+    reset_http_owner_password(tmp_path, "new synthetic owner password")
+    assert owner.verify("new synthetic owner password")
+    assert not owner.verify("synthetic owner password")
+    assert not http_authorization_status(tmp_path)["device_enabled"]
+    assert _verify_reset_token(tmp_path, config, token) is None
+    reset_http_owner_password(tmp_path, "second synthetic owner password")
+    assert owner.verify("second synthetic owner password")
+    assert not http_authorization_status(tmp_path)["device_enabled"]
+    assert enable_http_device(tmp_path)
+    assert _verify_reset_token(tmp_path, config, token) is None
+
+
+async def test_owner_reset_failed_readback_keeps_device_disabled(
+    configured, tmp_path, monkeypatch
+):
+    config, owner = configured
+    monkeypatch.setattr("anywhere_computer.owner_credentials.secure_backend", lambda: owner.vault)
+    token = _issued_reset_token(tmp_path, config)
+    original_read = owner.vault.get_password
+    original_write = owner.vault.set_password
+    written = False
+
+    def write(*args):
+        nonlocal written
+        written = True
+        original_write(*args)
+        raise RuntimeError("private keychain error")
+
+    def read(*args):
+        if written:
+            raise RuntimeError("private keychain error")
+        return original_read(*args)
+
+    monkeypatch.setattr(owner.vault, "set_password", write)
+    monkeypatch.setattr(owner.vault, "get_password", read)
+    with pytest.raises(RuntimeError, match="device remains disabled") as error:
+        reset_http_owner_password(tmp_path, "new synthetic owner password")
+    assert "private keychain error" not in str(error.value)
+    assert not http_authorization_status(tmp_path)["device_enabled"]
+    assert _verify_reset_token(tmp_path, config, token) is None
+
+
+async def test_owner_reset_unwritten_verifier_can_be_retried(
+    configured, tmp_path, monkeypatch
+):
+    config, owner = configured
+    monkeypatch.setattr("anywhere_computer.owner_credentials.secure_backend", lambda: owner.vault)
+    token = _issued_reset_token(tmp_path, config)
+    original_write = owner.vault.set_password
+
+    def refuse_write(*args):
+        raise RuntimeError("private keychain error")
+
+    monkeypatch.setattr(owner.vault, "set_password", refuse_write)
+    with pytest.raises(RuntimeError, match="device remains disabled") as error:
+        reset_http_owner_password(tmp_path, "new synthetic owner password")
+    assert "private keychain error" not in str(error.value)
+    assert owner.verify("synthetic owner password")
+    assert not http_authorization_status(tmp_path)["device_enabled"]
+    assert _verify_reset_token(tmp_path, config, token) is None
+    monkeypatch.setattr(owner.vault, "set_password", original_write)
+    reset_http_owner_password(tmp_path, "new synthetic owner password")
+    assert owner.verify("new synthetic owner password")
+    assert not http_authorization_status(tmp_path)["device_enabled"]
+
+
+async def test_owner_reset_refuses_running_service(configured, tmp_path, monkeypatch):
+    config, owner = configured
+    monkeypatch.setattr("anywhere_computer.owner_credentials.secure_backend", lambda: owner.vault)
+    token = _issued_reset_token(tmp_path, config)
+    async with http_service(tmp_path, credentials=owner):
+        with pytest.raises(TimeoutError, match="http-server.lock"):
+            reset_http_owner_password(tmp_path, "new synthetic owner password")
+    assert owner.verify("synthetic owner password")
+    assert http_authorization_status(tmp_path)["device_enabled"]
+    assert _verify_reset_token(tmp_path, config, token) is not None
+
+
+async def test_owner_reset_refuses_running_shared_agent(configured, tmp_path, monkeypatch):
+    config, owner = configured
+    monkeypatch.setattr("anywhere_computer.owner_credentials.secure_backend", lambda: owner.vault)
+    shared = tmp_path / "shared-agent"
+    shared.mkdir()
+    selected = config.model_copy(update={"shared_agent_directory": str(shared)})
+    (tmp_path / "http-server/config.json").write_text(selected.model_dump_json())
+    token = _issued_reset_token(tmp_path, selected)
+    with ProcessLock(shared / "agent.lock"):
+        with pytest.raises(TimeoutError, match="agent.lock"):
+            reset_http_owner_password(tmp_path, "new synthetic owner password")
+    assert owner.verify("synthetic owner password")
+    assert http_authorization_status(tmp_path)["device_enabled"]
+    assert _verify_reset_token(tmp_path, selected, token) is not None
+
+
+async def test_owner_reset_cli_confirmation_and_secret_free_output(
+    configured, tmp_path, monkeypatch, capsys
+):
+    config, owner = configured
+    monkeypatch.setattr("anywhere_computer.owner_credentials.secure_backend", lambda: owner.vault)
+    token = _issued_reset_token(tmp_path, config)
+    monkeypatch.setattr("sys.argv", ["anywhere", "owner-reset", "--state-dir", str(tmp_path)])
+    monkeypatch.setattr(cli, "has_interactive_input", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: "NO")
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 1
+    assert owner.verify("synthetic owner password")
+    assert http_authorization_status(tmp_path)["device_enabled"]
+    assert _verify_reset_token(tmp_path, config, token) is not None
+    capsys.readouterr()
+    monkeypatch.setattr("builtins.input", lambda prompt: "REVOKE")
+    answers = iter(["new synthetic owner password", "different confirmation"])
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: next(answers))
+    with pytest.raises(SystemExit) as error:
+        cli.main()
+    assert error.value.code == 1
+    assert owner.verify("synthetic owner password")
+    assert http_authorization_status(tmp_path)["device_enabled"]
+    assert _verify_reset_token(tmp_path, config, token) is not None
+    capsys.readouterr()
+    monkeypatch.setattr(cli.getpass, "getpass", lambda prompt: "new synthetic owner password")
+    cli.main()
+    output = capsys.readouterr()
+    assert json.loads(output.out) == {"owner_password_reset": True, "http_device_enabled": False}
+    assert "new synthetic owner password" not in output.out + output.err
+    assert "synthetic owner password" not in output.out + output.err
 
 
 async def test_http_and_local_engines_share_write_lock_without_sharing_ledger(

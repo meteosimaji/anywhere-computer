@@ -71,6 +71,25 @@ async def test_consent_issues_one_bound_code(browser, authority):
     assert authority.verify(token.value, resource=RESOURCE).tools == frozenset({"files_read"})
 
 
+async def test_consent_explains_owner_password_and_keeps_tools_reviewable(browser):
+    fields, _ = await begin(browser)
+    record = browser.pending[fields["request_id"]]
+    page = browser._page(fields["request_id"], record, fields["csrf"]).decode()
+    assert "Anywhere Computer owner password" in page
+    assert "not your computer or ChatGPT login password" in page
+    assert "at least 8 characters" in page
+    assert "<details open><summary>Requested tools (1)</summary>" in page
+    assert "<li><code>files_read</code></li>" in page
+    assert page.index("This connection can read data") < page.index(
+        "Requested tools (1)"
+    )
+    assert "anywhere http-revoke" in page
+    assert "Access will be sent to <strong>client.example</strong>" in page
+    assert "<details><summary>Technical details</summary>" in page
+    assert "required>" in page and "formnovalidate>Deny" in page
+    assert "button.disabled = true" in page
+
+
 async def test_consent_warns_when_client_omits_available_subchat_tools(tmp_path, monkeypatch):
     from anywhere_computer.authorization import AuthorizationStore
 
@@ -134,6 +153,9 @@ async def test_invalid_consent_does_not_consume_request(browser, failure):
     )
     assert status == 403
     assert b"wrong-secret-never-echo" not in body
+    if failure == "password":
+        assert b"Check the Anywhere Computer owner password" in body
+        assert b"anywhere owner-reset" in body
     assert "Location" not in response_headers
     assert (await decide(browser, fields, headers))[0] == 303
 

@@ -378,6 +378,14 @@ class DirectMCPSessions:
         if entry.lock.locked():
             raise RuntimeError('Direct MCP session is busy; inspect the existing operation')
         async with entry.lock:
+            if entry.state == 'open':
+                if any(watch.state == 'watching' and self.clock() < watch.deadline
+                       for watch in entry.watches.values()):
+                    raise RuntimeError('Direct MCP session is busy; '
+                                       'a Subchat queue watch is active')
+                if await self._background_active(entry):
+                    raise RuntimeError('Direct MCP session is busy; Subchat background activity '
+                                       'is active or could not be checked')
             await self._retire(entry, session_id=session_id)
         return self.status(session_id, owner=owner)
 

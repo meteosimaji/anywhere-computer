@@ -177,6 +177,8 @@ class BrowserSubchatBackend:
         self._completed_page_owners: set[str] = set()
         self._generation_tasks: dict[str, asyncio.Task[object]] = {}
         self._generation_cleanups: set[asyncio.Task[object]] = set()
+        # A browser-owned POST outlives its route callback and the send call.
+        self._browser_generations: set[str] = set()
         self._closed = False
         if self._context is not None:
             self._context.on('close', self._browser_closed)
@@ -186,7 +188,10 @@ class BrowserSubchatBackend:
                                     httpx_generation=self._httpx_generation)
 
     def has_live_generation(self) -> bool:
-        return any(not task.done() for task in self._generation_tasks.values())
+        return (any(not task.done() for task in self._generation_tasks.values())
+                or any(not page.is_closed()
+                       for operation_id in self._browser_generations
+                       if (page := self.pages.get(operation_id)) is not None))
 
     async def close_generations(self) -> None:
         tasks = list(self._generation_tasks.values())
@@ -195,6 +200,7 @@ class BrowserSubchatBackend:
                 task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         await asyncio.gather(*self._generation_tasks.values(), return_exceptions=True)
+        self._browser_generations.clear()
 
     def _browser_closed(self, context: BrowserContext) -> None:
         self._closed = True
@@ -415,6 +421,7 @@ class BrowserSubchatBackend:
         if submission.state != 'completed':
             raise ValueError('Only a completed submission can release its browser page')
         operation_id = submission.operation_id
+        self._browser_generations.discard(operation_id)
         page = self.pages.get(operation_id)
         if page is not None:
             self._completed_page_owners.add(operation_id)
@@ -750,6 +757,7 @@ class BrowserSubchatBackend:
                     self._record_request(submission.operation_id, identity, account)
                 if generation_client is None or generation_authorization is None:
                     stage = 'browser_transport'
+                    self._browser_generations.add(submission.operation_id)
                     await route.continue_(post_data=outgoing)
                 else:
                     from .httpx_generation import post_browser_prepared_once
@@ -821,10 +829,12 @@ class BrowserSubchatBackend:
                         route_settled = True
                 accepted = True
             except asyncio.CancelledError:
+                self._browser_generations.discard(submission.operation_id)
                 if not route_settled:
                     await route.abort()
                 raise
             except Exception as error:
+                self._browser_generations.discard(submission.operation_id)
                 # Provider details can contain account information; do not expose them.
                 logger.warning('Subchat generation stage=%s error_type=%s',
                                stage, type(error).__name__)
@@ -875,6 +885,7 @@ class BrowserSubchatBackend:
                         if self._record_rejection is not None:
                             self._record_rejection(submission.operation_id, message,
                                                    status, account)
+                        self._browser_generations.discard(submission.operation_id)
                         return
                     if (not isinstance(conversation, str)
                             or CHAT.fullmatch('https://chatgpt.com/c/' + conversation) is None):
@@ -950,6 +961,9 @@ class BrowserSubchatBackend:
         if not sent:
             raise ValueError('Draft or conversation changed before dispatch; '
                              'recover without replay')
+        if (submission.resources is None and self._record_request is None
+                and submission.http_selection is None):
+            self._browser_generations.add(submission.operation_id)
         # Release the caller's browser lock after one observation. An unavailable
         # receipt is durable 'sending', never permission to click Send again.
         if (submission.resources is not None or self._record_request is not None

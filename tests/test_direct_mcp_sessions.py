@@ -197,6 +197,8 @@ async def test_bounded_subchat_watch_owns_outer_session_and_records_stop(tmp_pat
         await pool.expire_idle()
         assert pool.status(sid, owner='owner')['state'] == 'open'
         assert pool.active_watch_count == 1
+        with pytest.raises(RuntimeError, match='queue watch is active'):
+            await pool.stop(sid, owner='owner')
         assert pool.watch_history(owner='other') == []
         assert pool.watch_history(owner='owner')[0]['state'] == 'watching'
         await pool.call(sid, 'subchat_queue_watch', {'operation_id': identity,
@@ -503,6 +505,10 @@ async def test_idle_expiry_preserves_subchat_background_work(tmp_path, monkeypat
         sid = opened['session_id']
         entry = pool.entries[sid]
         await pool.call(sid, tool, {}, owner='owner')
+        with pytest.raises(RuntimeError, match='Subchat background activity'):
+            await pool.stop(sid, owner='owner')
+        assert pool.status(sid, owner='owner')['state'] == 'open'
+        assert not entry.context.cleanup_confirmed
         now[0] = 31
         await pool.call(sid, 'subchat_status', {}, owner='owner')
         assert pool.status(sid, owner='owner')['state'] == 'open'
@@ -515,6 +521,10 @@ async def test_idle_expiry_preserves_subchat_background_work(tmp_path, monkeypat
         entry.context.activity_error = True
         await pool.expire_idle()
         assert pool.status(sid, owner='owner')['state'] == 'open'
+        with pytest.raises(RuntimeError, match='could not be checked'):
+            await pool.stop(sid, owner='owner')
+        assert pool.status(sid, owner='owner')['state'] == 'open'
+        assert not entry.context.cleanup_confirmed
 
         entry.context.activity_error = False
         entry.context.active_count = 0

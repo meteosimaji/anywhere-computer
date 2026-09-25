@@ -179,6 +179,16 @@ def test_owner_password_is_salted_and_never_written_to_files(tmp_path):
         owner.verify(password)
 
 
+def test_owner_password_accepts_eight_characters_and_rejects_seven(tmp_path):
+    owner = OwnerCredentials(
+        tmp_path, resource="https://computer.example/mcp", owner="owner", vault=MemoryVault()
+    )
+    with pytest.raises(ValueError, match="at least 8"):
+        owner.initialize("1234567")
+    owner.initialize("12345678")
+    assert owner.verify("12345678")
+
+
 def test_invalid_owner_verifier_is_sanitized(tmp_path):
     vault = MemoryVault()
     owner = OwnerCredentials(
@@ -188,7 +198,7 @@ def test_invalid_owner_verifier_is_sanitized(tmp_path):
     with pytest.raises(ClientCredentialError) as error:
         owner.verify("synthetic password")
     assert "do-not-echo" not in str(error.value)
-    with pytest.raises(ValueError, match="at least 16"):
+    with pytest.raises(ValueError, match="at least 8"):
         owner.initialize("short")
 
 

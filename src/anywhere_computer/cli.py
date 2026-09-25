@@ -26,6 +26,7 @@ from .http_service import (
     enable_http_device,
     http_authorization_status,
     load_http_config,
+    reset_http_owner_password,
     retain_http_grants,
     revoke_http_device,
     serve_http,
@@ -78,6 +79,7 @@ def main() -> None:
             "http-mcp",
             "owner-init",
             "owner-change",
+            "owner-reset",
             "login",
             "http-configure",
             "http-add-tools",
@@ -552,7 +554,7 @@ def main() -> None:
                 if args.command == "owner-change"
                 else None
             )
-            password = getpass.getpass("Owner password (at least 16 characters): ")
+            password = getpass.getpass("Owner password (at least 8 characters): ")
             if password != getpass.getpass("Confirm owner password: "):
                 raise ValueError("Owner passwords did not match")
             if current is None:
@@ -561,6 +563,20 @@ def main() -> None:
             else:
                 owner_credentials.change_password(current, password)
                 print(json.dumps({"owner_password_changed": True}))
+        elif args.command == "owner-reset":
+            if not has_interactive_input():
+                raise ValueError("Owner reset requires an interactive terminal")
+            confirmation = input(
+                "Reset the configured owner password and revoke this HTTP device's grants? "
+                "Type REVOKE to continue: "
+            )
+            if confirmation != "REVOKE":
+                raise ValueError("Owner reset cancelled; authorization was not changed")
+            password = getpass.getpass("New owner password (at least 8 characters, hidden): ")
+            if password != getpass.getpass("Confirm new owner password: "):
+                raise ValueError("Owner passwords did not match")
+            reset_http_owner_password(directory, password)
+            print(json.dumps({"owner_password_reset": True, "http_device_enabled": False}))
         elif args.command in {"http-mcp", "login"}:
             tokens = ClientTokens(
                 directory, resource=args.resource, client=args.client_id, profile=args.profile

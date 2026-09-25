@@ -211,7 +211,7 @@ OAuth endpoint class can still be embedded with a different authentication provi
 Trusted initial setup uses `anywhere owner-init --resource https://HOST/mcp
 --owner OWNER` from an interactive terminal. The command asks for the password
 twice without echo; it accepts neither password arguments nor piped input. The
-password must contain at least 16 characters. Only a random salt and scrypt
+password must contain at least 8 characters. Only a random salt and scrypt
 verification digest are saved in the native OS credential store. Existing owner
 credentials cannot be overwritten by initialization. `anywhere owner-change` with
 the same resource, owner and state directory requests the current password and
@@ -221,10 +221,16 @@ one new salted verifier, then reads it back to confirm the outcome. If the old
 record remains, the old password is preserved. If readback cannot establish the
 outcome, it reports an unknown result without retrying or rolling back the write.
 It does not revoke issued grants or undo already completed password checks; use
-`http-revoke` for existing connection revocation. Forgotten-password recovery is
-not implemented. See [HTTP service setup and password changes](HTTP-SERVER.md)
-for the available persistent service commands. Deleting a verifier alone does
-not revoke already issued grants.
+`http-revoke` for existing connection revocation. Forgotten-password recovery
+uses interactive `anywhere owner-reset` against the saved HTTP configuration.
+The HTTP service must be stopped. If it uses a shared local agent, that agent
+must also be stopped so pending consent and in-flight activity have ended.
+The command confirms grant revocation, disables the configured device and
+revokes its grants before writing a new native verifier. The device remains
+disabled even if the credential write or readback is uncertain. Retry after
+restoring credential-store access, then explicitly run `http-enable` and perform
+a new login. See [HTTP service setup and password changes](HTTP-SERVER.md).
+Deleting a verifier alone does not revoke already issued grants.
 
 The form displays the registered client, exact callback, device, resource and
 requested tools. Each approval requires the owner password. Pending requests
@@ -236,8 +242,9 @@ approve/deny submissions consume a request only once; current device/client/tool
 bindings are checked again inside the grant transaction. Denial returns the
 original state and `access_denied` without requiring a password.
 
-HTML has no external assets or scripts and uses no-store, a restrictive CSP and
-no-referrer headers. Wrong passwords are never echoed. Each pending request has
+HTML has no external assets. Its inline password-visibility script is restricted
+by a CSP hash, with no-store caching and a same-origin referrer policy. Wrong
+passwords are never echoed. Each pending request has
 a ten-attempt/60-second limit; failed attempts do not lock other pending requests.
 Only two actual password workers can run at once, and excess work returns busy
 instead of queueing. At most 64 pending requests are retained. These are bounded
