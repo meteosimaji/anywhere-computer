@@ -2,7 +2,7 @@
   "format_version": 1,
   "version": "0.2.0-alpha.31",
   "python_version": "0.2.0a31",
-  "source_commit": "b6aba24a9fe4425418567f50363e3b051695dfe8",
+  "source_commit": "805f6108849f5c265e2ee26944724b53c2db394d",
   "source_dirty": false,
   "validation": "unverified",
   "engine_api": {
