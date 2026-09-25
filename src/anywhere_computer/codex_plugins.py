@@ -33,6 +33,18 @@ STATEFUL_SUBCHAT_TOOLS = frozenset({
 })
 
 
+def _subchat_activity_tool(tool: str) -> str | None:
+    """Find the matching activity tool for a stateful Subchat route."""
+    if tool in STATEFUL_SUBCHAT_TOOLS:
+        return "subchat_activity"
+    for action in STATEFUL_SUBCHAT_TOOLS:
+        if tool.endswith(action):
+            prefix = tool[:-len(action)]
+            if "subchat" in re.split(r"[._:/-]+", prefix):
+                return f"{prefix}subchat_activity"
+    return None
+
+
 class PluginPreflightError(ValueError):
     """A classified failure before any plugin tool dispatch."""
 
@@ -765,7 +777,7 @@ async def call_codex_plugin_tool(
 ) -> dict[str, JsonValue]:
     # Reject recursive routes before starting any installed runtime.
     _validate_call(server, tool, catalog_sha256)
-    if tool in STATEFUL_SUBCHAT_TOOLS:
+    if _subchat_activity_tool(tool) is not None:
         raise PluginPreflightError(
             "plugin_session_required",
             "Open codex_plugin_session_open, then inspect and call this Subchat tool "

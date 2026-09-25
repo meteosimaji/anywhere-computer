@@ -266,8 +266,62 @@ async def test_idle_session_keeps_background_subchat_alive_until_work_ends(
         await pool.close()
 
 
+async def test_namespaced_subchat_activity_protects_idle_session(tmp_path, monkeypatch):
+    now = [0.0]
+    send_tool = "mcp__subchat__subchat_send"
+    activity_tool = "mcp__subchat__subchat_activity"
+
+    class Context:
+        def __init__(self, cwd):
+            self.cwd = str(Path(cwd).resolve())
+            self.alive = False
+            self.activity_probes = 0
+
+        async def open(self):
+            self.alive = True
+
+        async def close(self):
+            self.alive = False
+
+        async def inspect(self, **kwargs):
+            assert kwargs == {"server": "codex_apps", "tool": activity_tool}
+            return {"servers": [{"server": "codex_apps", "tools": [{
+                "name": activity_tool, "catalog_sha256": "1" * 64,
+            }]}]}
+
+        async def call(self, server, tool, arguments, digest):
+            assert server == "codex_apps" and digest == "1" * 64
+            if tool == activity_tool:
+                self.activity_probes += 1
+                return {"is_error": False, "structured_content": {
+                    "data": {"active_count": 1},
+                }}
+            assert tool == send_tool
+            return {"is_error": False, "structured_content": {"state": "running"}}
+
+    monkeypatch.setattr(codex_plugins, "PluginContext", Context)
+    pool = PluginSessions(clock=lambda: now[0])
+    try:
+        session_id = (await pool.open(str(tmp_path), owner="peer-a", idle_timeout=30))["session_id"]
+        await pool.call(session_id, owner="peer-a", cwd=str(tmp_path),
+                        server="codex_apps", tool=send_tool, arguments={},
+                        catalog_sha256="1" * 64)
+        now[0] = 31
+        await pool.expire_idle()
+        status = await pool.status(session_id, owner="peer-a")
+        assert status["state"] == "open"
+        assert status["background_activity_protected"] is True
+        assert pool.entries[session_id].context.activity_probes == 1
+    finally:
+        await pool.close()
+
+
+@pytest.mark.parametrize(("tool", "activity_tool"), [
+    ("subchat_send", "subchat_activity"),
+    ("mcp__subchat__subchat_send", "mcp__subchat__subchat_activity"),
+])
 async def test_old_subchat_plugin_is_rejected_before_stateful_dispatch(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, tool, activity_tool,
 ):
     calls = []
 
@@ -283,7 +337,7 @@ async def test_old_subchat_plugin_is_rejected_before_stateful_dispatch(
             self.alive = False
 
         async def inspect(self, **kwargs):
-            assert kwargs == {"server": "chat-subchat", "tool": "subchat_activity"}
+            assert kwargs == {"server": "chat-subchat", "tool": activity_tool}
             return {"servers": [{"server": "chat-subchat", "tools": []}]}
 
         async def call(self, *args):
@@ -296,7 +350,7 @@ async def test_old_subchat_plugin_is_rejected_before_stateful_dispatch(
         session_id = (await pool.open(str(tmp_path), owner="peer-a"))["session_id"]
         with pytest.raises(PluginPreflightError, match="plugin_activity_unavailable"):
             await pool.call(session_id, owner="peer-a", cwd=str(tmp_path),
-                            server="chat-subchat", tool="subchat_send", arguments={},
+                            server="chat-subchat", tool=tool, arguments={},
                             catalog_sha256="1" * 64)
         assert not calls
         assert (await pool.status(session_id, owner="peer-a"))["state"] == "open"

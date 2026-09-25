@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a38 / Plugin 0.2.0-alpha.38 — unpublished candidate (2026-09-25)
+
+- Require an explicit plugin session for namespaced Subchat send and recovery
+  tools before dispatch. Resolve the matching namespaced activity tool so
+  background work keeps its owning session alive.
+
 ## 0.2.0a37 / Plugin 0.2.0-alpha.37 — unpublished candidate (2026-09-25)
 
 - Wait briefly for an existing Chat's message history to appear before preparing

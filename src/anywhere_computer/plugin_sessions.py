@@ -36,8 +36,8 @@ class _Entry:
     created: float = field(default_factory=time.time)
     state: SessionState = "opening"
     cleanup_confirmed: bool = False
-    background_servers: set[str] = field(default_factory=set)
-    activity_digests: dict[str, str] = field(default_factory=dict)
+    background_servers: set[tuple[str, str]] = field(default_factory=set)
+    activity_digests: dict[tuple[str, str], str] = field(default_factory=dict)
     next_activity_probe: float = 0.0
     activity_probe_failures: int = 0
     lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -128,11 +128,13 @@ class PluginSessions:
                     return
             await self._retire(entry, "expired")
 
-    async def _activity_digest(self, entry: _Entry, server: str) -> str:
-        cached = entry.activity_digests.get(server)
+    async def _activity_digest(self, entry: _Entry, server: str,
+                               activity_tool: str) -> str:
+        key = (server, activity_tool)
+        cached = entry.activity_digests.get(key)
         if cached is not None:
             return cached
-        catalog = await entry.context.inspect(server=server, tool="subchat_activity")
+        catalog = await entry.context.inspect(server=server, tool=activity_tool)
         rows = catalog.get("servers")
         if not isinstance(rows, list):
             raise PluginPreflightError(
@@ -143,7 +145,7 @@ class PluginSessions:
                          and row.get("server") == server), None)
         tools = selected.get("tools") if selected is not None else None
         descriptor = (next((tool for tool in tools if isinstance(tool, dict)
-                            and tool.get("name") == "subchat_activity"), None)
+                            and tool.get("name") == activity_tool), None)
                       if isinstance(tools, list) else None)
         digest = descriptor.get("catalog_sha256") if descriptor is not None else None
         if not isinstance(digest, str):
@@ -151,13 +153,13 @@ class PluginSessions:
                 "plugin_activity_unavailable", "Update the Subchat plugin before using "
                 "stateful calls through this bridge",
             )
-        entry.activity_digests[server] = digest
+        entry.activity_digests[key] = digest
         return digest
 
     async def _subchat_active(self, entry: _Entry) -> bool:
-        for server in entry.background_servers:
-            digest = await self._activity_digest(entry, server)
-            result = await entry.context.call(server, "subchat_activity", {}, digest)
+        for server, activity_tool in entry.background_servers:
+            digest = await self._activity_digest(entry, server, activity_tool)
+            result = await entry.context.call(server, activity_tool, {}, digest)
             content = result.get("structured_content")
             data = content.get("data") if isinstance(content, dict) else None
             count = data.get("active_count") if isinstance(data, dict) else None
@@ -275,11 +277,12 @@ class PluginSessions:
     ) -> dict[str, JsonValue]:
         codex_plugins._validate_call(server, tool, catalog_sha256)
         async with self._lease(session_id, owner=owner, cwd=cwd) as entry:
-            if tool in codex_plugins.STATEFUL_SUBCHAT_TOOLS:
-                await self._activity_digest(entry, server)
+            activity_tool = codex_plugins._subchat_activity_tool(tool)
+            if activity_tool is not None:
+                await self._activity_digest(entry, server, activity_tool)
                 # A wait can start a background recovery, even when this
                 # session did not send the original operation.
-                entry.background_servers.add(server)
+                entry.background_servers.add((server, activity_tool))
             result = await entry.context.call(server, tool, arguments, catalog_sha256)
             return {**result, "session_id": session_id}
 

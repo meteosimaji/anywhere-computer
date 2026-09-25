@@ -293,6 +293,25 @@ async def test_stateful_subchat_requires_persistent_plugin_session(
     assert stub_catalog["calls"] == []
 
 
+@pytest.mark.parametrize("tool", [
+    "mcp__subchat__subchat_send",
+    "mcp__anywhere_subchat__subchat_wait",
+    "subchat.subchat_recover",
+    "anywhere_subchat_subchat_message",
+])
+async def test_namespaced_subchat_requires_session_before_dispatch(
+    stub_catalog, tmp_path, tool,
+):
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await call_codex_plugin_tool(str(tmp_path), "codex_apps", tool, {}, "1" * 64)
+    assert caught.value.code == "plugin_session_required"
+    assert stub_catalog["calls"] == []
+
+
+def test_unrelated_tool_name_is_not_classified_as_subchat():
+    assert codex_plugins._subchat_activity_tool("mcp__other__subchat_send") is None
+
+
 async def test_inspection_supplies_exact_call_arguments(stub_catalog, tmp_path):
     result = await list_codex_plugin_tools(str(tmp_path), server="demo", tool="echo")
     descriptor = result["servers"][0]["tools"][0]
