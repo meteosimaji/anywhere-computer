@@ -1,8 +1,8 @@
 {
   "format_version": 1,
-  "version": "0.2.0-alpha.46",
-  "python_version": "0.2.0a46",
-  "source_commit": "836ab64d87dfe928b0f76fb4f414aef40c788230",
+  "version": "0.2.0-alpha.47",
+  "python_version": "0.2.0a47",
+  "source_commit": "ac2f896f019d74e666843b9e6ce82445f6eab1c0",
   "source_dirty": false,
   "validation": "unverified",
   "engine_api": {
@@ -15,7 +15,7 @@
     "writes": 1
   },
   "artifacts_sha256": {
-    "anywhere_computer-0.2.0a46-py3-none-any.whl": "c89e0ae2ff037b804242881925d28f5c0b8cbb993f08301f26807489eb3f4218",
+    "anywhere_computer-0.2.0a47-py3-none-any.whl": "c75f31cce970db71a3539384e35c12cc0ea481944c9d1a710bbebb9a22cbd4a6",
     "dependencies.txt": "acca0ddf608f0e25f9eaebcc54a75ba4b70731b9fa1b25ac9f0501eadb888189"
   }
 }
