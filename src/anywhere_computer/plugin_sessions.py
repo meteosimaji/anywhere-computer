@@ -118,6 +118,9 @@ class PluginSessions:
                         self._subchat_active(entry), timeout=ACTIVITY_PROBE_TIMEOUT,
                     )
                 except (TimeoutError, OSError, ValueError, RuntimeError):
+                    if not entry.context.alive:
+                        await self._retire(entry, "unusable")
+                        return
                     # Uncertain activity must not kill an in-flight generation.
                     entry.activity_probe_failures += 1
                     entry.next_activity_probe = now + ACTIVITY_PROBE_INTERVAL
@@ -302,12 +305,17 @@ class PluginSessions:
                 "session_busy", "Do not terminate a session with an active call",
             )
         async with entry.lock:
+            if entry.state == "open" and not entry.context.alive:
+                await self._retire(entry, "unusable")
             if entry.state == "open" and entry.background_servers:
                 try:
                     active = await asyncio.wait_for(
                         self._subchat_active(entry), timeout=ACTIVITY_PROBE_TIMEOUT,
                     )
                 except (TimeoutError, OSError, ValueError, RuntimeError) as error:
+                    if not entry.context.alive:
+                        await self._retire(entry, "unusable")
+                        return self._describe(entry)
                     entry.activity_probe_failures += 1
                     raise PluginPreflightError(
                         "session_busy", "Subchat activity could not be checked; keep this "

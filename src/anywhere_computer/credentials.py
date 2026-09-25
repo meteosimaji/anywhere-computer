@@ -8,9 +8,79 @@ from pathlib import Path
 import keyring
 from keyring.backend import KeyringBackend
 from keyring.backends.chainer import ChainerBackend
-from keyring.errors import KeyringError
+from keyring.errors import KeyringError, PasswordSetError
 
 SERVICE = "Anywhere Computer"
+
+
+def _macos_update_password(service: str, account: str, value: str) -> None:
+    """Update an existing Keychain item without changing its owner or ACL.
+
+    keyring 25.7.0 replaces an item with delete/add. On macOS, deletion can
+    fail with errSecInvalidOwnerEdit when another trusted app has accessed the
+    item, even though updating its value is allowed.
+    """
+    import ctypes
+    from ctypes.util import find_library
+
+    from keyring.backends.macOS import api
+
+    security = ctypes.CDLL(find_library("Security"))
+    core_foundation = ctypes.CDLL(find_library("CoreFoundation"))
+    update = security.SecItemUpdate
+    update.restype = ctypes.c_int32
+    update.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
+    data_create = core_foundation.CFDataCreate
+    data_create.restype = ctypes.c_void_p
+    data_create.argtypes = (ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long)
+    release = core_foundation.CFRelease
+    release.restype = None
+    release.argtypes = (ctypes.c_void_p,)
+
+    encoded = value.encode("utf-8")
+    buffer = ctypes.create_string_buffer(encoded)
+    data = data_create(None, buffer, len(encoded))
+    if not data:
+        raise PasswordSetError("Could not prepare Keychain update")
+    try:
+        query = api.create_query(  # type: ignore[no-untyped-call]
+            kSecClass=api.k_("kSecClassGenericPassword"),  # type: ignore[no-untyped-call]
+            kSecAttrService=service,
+            kSecAttrAccount=account,
+        )
+        attributes = api.create_query(  # type: ignore[no-untyped-call]
+            kSecValueData=ctypes.c_void_p(data)
+        )
+        try:
+            status = update(query, attributes)
+        finally:
+            release(attributes)
+            release(query)
+    finally:
+        release(data)
+    if status:
+        raise PasswordSetError(f"Could not update Keychain item (OSStatus {status})")
+
+
+class _UpdatingMacOSKeyring(KeyringBackend):
+    """Keep the native keyring's reads/adds; update existing items in place."""
+
+    priority = 1
+
+    def __init__(self, backend: KeyringBackend) -> None:
+        self.backend = backend
+
+    def get_password(self, service: str, account: str) -> str | None:
+        return self.backend.get_password(service, account)
+
+    def set_password(self, service: str, account: str, value: str) -> None:
+        if self.backend.get_password(service, account) is None:
+            self.backend.set_password(service, account, value)
+        else:
+            _macos_update_password(service, account, value)
+
+    def delete_password(self, service: str, account: str) -> None:
+        self.backend.delete_password(service, account)
 
 
 def has_interactive_input() -> bool:
@@ -56,6 +126,8 @@ def secure_backend() -> KeyringBackend:
     module = type(backend).__module__
     if not module.startswith(secure_modules):
         raise RuntimeError("An OS credential store is required; plaintext stores are unsupported")
+    if module.startswith("keyring.backends.macOS"):
+        return _UpdatingMacOSKeyring(backend)
     return backend
 
 

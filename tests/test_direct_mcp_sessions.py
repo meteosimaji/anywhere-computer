@@ -582,6 +582,58 @@ async def test_hung_subchat_activity_probe_does_not_block_idle_reaper(tmp_path, 
     assert peer.cancelled
 
 
+@pytest.mark.parametrize('action', ['stop', 'expire'])
+@pytest.mark.parametrize('crash_on_probe', [False, True])
+async def test_crashed_child_does_not_keep_background_session_busy(
+    tmp_path, monkeypatch, action, crash_on_probe,
+):
+    from anywhere_computer import direct_mcp_sessions
+
+    now = [0.0]
+
+    class Peer:
+        cleanup_confirmed = False
+
+        def __init__(self, command, cwd):
+            self.activity_probes = 0
+
+        async def open(self):
+            pass
+
+        async def close(self):
+            self.cleanup_confirmed = True
+
+        async def call(self, name, arguments):
+            if name == 'subchat_activity':
+                self.activity_probes += 1
+                if crash_on_probe:
+                    self.cleanup_confirmed = True
+                raise RuntimeError('child connection closed')
+            return {'isError': False, 'structuredContent': {
+                'state': 'completed', 'data': {'state': 'sending'}}}
+
+    monkeypatch.setattr(direct_mcp_sessions, 'DirectMCPContext', Peer)
+    pool = direct_mcp_sessions.DirectMCPSessions(clock=lambda: now[0])
+    try:
+        sid = (await pool.open([sys.executable], tmp_path, owner=None,
+                               idle_timeout=30))['session_id']
+        await pool.call(sid, 'subchat_send', {}, owner=None)
+        peer = pool.entries[sid].context
+        if not crash_on_probe:
+            peer.cleanup_confirmed = True  # The owned transport has fully exited.
+        if action == 'stop':
+            status = await pool.stop(sid, owner=None)
+            assert status['state'] == 'closed'
+        else:
+            now[0] = 31
+            await pool.expire_idle()
+            assert pool.status(sid, owner=None)['state'] == 'expired'
+        assert peer.activity_probes == int(crash_on_probe)
+        assert pool.active_count == 0
+    finally:
+        await pool.close()
+
+
 async def test_real_direct_image_reaches_mcp_projection_and_ledger(tmp_path):
     import uuid
 

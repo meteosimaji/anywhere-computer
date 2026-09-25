@@ -344,6 +344,41 @@ async def test_explicit_close_succeeds_after_subchat_background_work_finishes(
         await pool.close()
 
 
+@pytest.mark.parametrize("action", ["stop", "expire"])
+@pytest.mark.parametrize("crash_on_probe", [False, True])
+async def test_crashed_child_releases_background_session(
+    contexts, tmp_path, monkeypatch, action, crash_on_probe,
+):
+    now = [0.0]
+    pool = PluginSessions(max_sessions=1, clock=lambda: now[0])
+    try:
+        session_id = (await pool.open(str(tmp_path), owner="peer-a",
+                                      idle_timeout=30))["session_id"]
+        entry = pool.entries[session_id]
+        entry.background_servers.add(("chat-subchat", "subchat_activity"))
+        if not crash_on_probe:
+            entry.context.alive = False  # The owned child has already exited.
+
+        async def activity_unavailable(_entry):
+            if crash_on_probe:
+                _entry.context.alive = False
+            raise RuntimeError("child connection closed")
+
+        monkeypatch.setattr(pool, "_subchat_active", activity_unavailable)
+        if action == "stop":
+            closed = await pool.stop(session_id, owner="peer-a")
+        else:
+            now[0] = 31
+            await pool.expire_idle()
+            closed = await pool.status(session_id, owner="peer-a")
+        assert closed["state"] == "unusable"
+        assert closed["cleanup_confirmed"] is True
+        assert closed["background_activity_probe_failures"] == 0
+        assert (await pool.open(str(tmp_path), owner="peer-a"))["state"] == "open"
+    finally:
+        await pool.close()
+
+
 @pytest.mark.parametrize("activity_state", [None, "running", "failed"])
 async def test_zero_subchat_activity_requires_completed_envelope(
     tmp_path, monkeypatch, activity_state,
