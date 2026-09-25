@@ -41,6 +41,8 @@ def _source_profile(value: Path, state: Path) -> Path:
 
 
 def _private_directory(path: Path) -> None:
+    if sys.platform != "darwin":
+        raise SetupInputError("Chrome profile staging is supported on macOS only")
     if any(part.is_symlink() for part in (path, *path.parents)):
         raise SetupInputError("Subchat profile staging directory must not be a symlink")
     path.mkdir(mode=0o700, parents=True, exist_ok=True)
