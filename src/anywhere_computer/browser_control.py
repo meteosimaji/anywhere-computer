@@ -135,12 +135,14 @@ class BrowserControl:
             try:
                 from playwright.async_api import async_playwright
             except ImportError as error:
-                raise ValueError("Playwright browser dependency unavailable") from error
+                raise BrowserStartupUnavailable(
+                    "Isolated browser runtime is unavailable"
+                ) from error
             manager = async_playwright()
             starting = asyncio.create_task(manager.start())
             try:
                 driver = await asyncio.shield(starting)
-            except BaseException:
+            except BaseException as error:
                 # Playwright 1.58 starts its connection before start() returns.
                 # A failed transport may have no output pipe, so only stop a
                 # driver that actually returned from start().
@@ -161,6 +163,10 @@ class BrowserControl:
                     await _finish_cleanup(stop_starting())
                 except BaseException:
                     _LOG.warning("Browser startup cleanup did not complete successfully")
+                if isinstance(error, Exception):
+                    raise BrowserStartupUnavailable(
+                        "Isolated browser runtime could not start"
+                    ) from error
                 raise
             browser = None
             try:

@@ -7,7 +7,11 @@ import pytest
 
 from anywhere_computer import browser_control as browser_control_module
 from anywhere_computer import engine as engine_module
-from anywhere_computer.browser_control import BrowserControl, BrowserNavigationUnknown
+from anywhere_computer.browser_control import (
+    BrowserControl,
+    BrowserNavigationUnknown,
+    BrowserStartupUnavailable,
+)
 from anywhere_computer.engine import Engine
 from anywhere_computer.models import (
     BrowserClick,
@@ -63,6 +67,28 @@ async def test_missing_isolated_browser_reports_pre_dispatch_failure(tmp_path, m
         assert "private path" not in str(reply)
         assert channels == ["msedge"]
         assert stopped == [True]
+        assert engine.browser.entries == {}
+    finally:
+        await engine.close()
+
+
+async def test_missing_playwright_driver_reports_pre_dispatch_failure(tmp_path, monkeypatch):
+    pytest.importorskip("playwright.async_api")
+
+    class Manager:
+        async def start(self):
+            raise FileNotFoundError("private Playwright driver path")
+
+    monkeypatch.setattr("playwright.async_api.async_playwright", Manager)
+    engine = Engine(tmp_path / "state")
+    try:
+        reply = await engine.execute(Request(
+            operation_id=uuid.uuid4().hex, tool="browser_open", arguments={},
+        ), peer="owner-a")
+        assert reply.state == "failed"
+        assert reply.data["error_code"] == "browser_startup_unavailable"
+        assert reply.data["dispatched"] is False
+        assert "private Playwright driver path" not in str(reply)
         assert engine.browser.entries == {}
     finally:
         await engine.close()
@@ -335,7 +361,7 @@ async def test_cancelled_playwright_start_stops_connection(monkeypatch):
     assert control.entries == {}
 
 
-async def test_failed_playwright_start_preserves_original_error_and_unlocks(monkeypatch):
+async def test_failed_playwright_start_hides_internal_error_and_unlocks(monkeypatch):
     pytest.importorskip("playwright.async_api")
 
     class Manager:
@@ -347,7 +373,7 @@ async def test_failed_playwright_start_preserves_original_error_and_unlocks(monk
 
     monkeypatch.setattr("playwright.async_api.async_playwright", Manager)
     control = BrowserControl()
-    with pytest.raises(FileNotFoundError, match="Playwright driver missing"):
+    with pytest.raises(BrowserStartupUnavailable, match="runtime could not start"):
         await control.open(owner="owner-a")
     assert not control._lock.locked()
     assert control.entries == {}
@@ -374,7 +400,7 @@ async def test_failed_playwright_start_closes_started_transport(monkeypatch):
 
     monkeypatch.setattr("playwright.async_api.async_playwright", Manager)
     control = BrowserControl()
-    with pytest.raises(RuntimeError, match="Protocol initialization failed"):
+    with pytest.raises(BrowserStartupUnavailable, match="runtime could not start"):
         await control.open(owner="owner-a")
     assert calls == ["manager.exit"]
     assert not control._lock.locked()
