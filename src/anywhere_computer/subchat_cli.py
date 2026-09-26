@@ -196,7 +196,12 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
               chrome_generation_stdin: bool = False,
               expected_account_id: str | None = None,
               read_only_mcp: bool = False,
-              ledger_owner: str | None = None) -> None:
+              ledger_owner: str | None = None,
+              browser_channel: str = 'chrome') -> None:
+    if browser_channel not in {'chrome', 'msedge'}:
+        raise ValueError('Browser channel must be chrome or msedge')
+    if browser_channel == 'msedge' and sys.platform != 'win32':
+        raise ValueError('Microsoft Edge Subchat login is supported on Windows only')
     if read_only_mcp and (not mcp or not http_only or http_generation is not None
                           or chrome_generation_stdin):
         raise ValueError('Read-only MCP requires HTTP-only mode without generation')
@@ -273,12 +278,14 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     assert profile is not None
                     return await resources.enter_async_context(background_chrome_context(
                         await runtime(), profile, browser_launch_args))
+                headless_browser = httpx_generation and sys.platform == 'win32'
                 context = await (await runtime()).chromium.launch_persistent_context(
-                    str(profile), channel='chrome', headless=False,
+                    str(profile), channel=browser_channel, headless=headless_browser,
                     ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
-                    args=(['--start-minimized'] if minimized else []) + browser_launch_args)
+                    args=(['--start-minimized'] if minimized and not headless_browser else [])
+                    + browser_launch_args)
                 resources.push_async_callback(context.close)
-                if minimized:
+                if minimized and not headless_browser:
                     from .subchat_browser.catalog import minimize_window
 
                     page = context.pages[0] if context.pages else await context.new_page()
@@ -308,7 +315,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                             f'--profile-directory={chrome_login_source_profile.name}')
                     assert profile_root is not None
                     chrome_context = await (await runtime()).chromium.launch_persistent_context(
-                        str(profile_root), channel='chrome', headless=True,
+                        str(profile_root), channel=browser_channel, headless=True,
                         ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
                         args=launch_args)
                     try:
@@ -509,6 +516,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--browser-profile', type=Path,
                         help='Dedicated logged-in Chrome profile, never your normal profile')
+    parser.add_argument('--browser-channel', choices=('chrome', 'msedge'), default='chrome',
+                        help='Installed Chrome or Microsoft Edge for a dedicated profile')
     parser.add_argument('--state-dir', type=Path, required=True,
                         help='Local subchat ledger directory')
     parser.add_argument("--mcp", action="store_true", help="Serve MCP over stdio")
@@ -609,4 +618,5 @@ def main() -> None:
                                                  else None),
                     chrome_generation_stdin=bool(chrome_login
                                                   and args.http_generation_stdin),
-                    expected_account_id=args.expected_account_id))
+                    expected_account_id=args.expected_account_id,
+                    browser_channel=args.browser_channel))

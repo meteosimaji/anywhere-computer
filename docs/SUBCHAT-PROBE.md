@@ -19,11 +19,66 @@ snapshot and authenticated GETs. A 401 on an authenticated read also triggers on
 refresh and one repeat of that GET. Check `subchat_capabilities` first. On macOS,
 a selected profile with an account ID pin and `"enable_background_send": true`
 in `subchat/login-selection.json` enables background browser-prepared HTTPX
-sending at Plugin startup. Without that explicit selection, or on other platforms, the
-default `generation_transport=unavailable` cannot create or send a Chat. Set
+sending at Plugin startup. Windows has a separate dedicated browser selection
+below. Without an explicit selection, the default
+`generation_transport=unavailable` cannot create or send a Chat. Set
 `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=http-read-only` to keep a pinned macOS
 installation read-only. Plugin installation does not configure generation for
 the separate CLI.
+
+### Windows dedicated Chrome or Edge profile
+
+Windows can use a dedicated persistent Chrome or Microsoft Edge profile for
+browser-prepared sending. This does not import a normal browser profile or an
+existing Edge tab. Keep the Plugin stopped while preparing the profile, and run
+one of these commands in an interactive Windows terminal:
+
+```powershell
+anywhere-subchat-setup prepare-dedicated --browser-channel msedge
+# Or: anywhere-subchat-setup prepare-dedicated --browser-channel chrome
+```
+
+The command uses Windows Shell application registration to open the installed,
+normal Edge or Chrome at `https://chatgpt.com/` with the Plugin's dedicated
+profile. It does not use Playwright for interactive login or assume a browser
+installation path. Sign in in that window, close every window using this
+dedicated profile, then press Enter in the terminal and record the returned
+`account_id`. The command verifies the saved login headlessly with
+authenticated GET requests. It does not enable sending. To recheck an
+existing dedicated login without opening a visible window, use
+`anywhere-subchat-setup inspect-dedicated --browser-channel msedge` (or
+`chrome`). Close other processes using that dedicated profile first.
+
+Save the verified browser, account ID, and explicit send consent:
+
+```powershell
+anywhere-subchat-setup choose-dedicated --browser-channel msedge `
+  --expect-account-id ACCOUNT_ID_FROM_SETUP --enable-background-send
+```
+
+The command rechecks the dedicated login and writes a private local selection
+with the browser channel, dedicated profile path, account ID, and send consent;
+it stores no credentials. Restart the Plugin MCP session; a separately
+launched Codex or Claude app reads this selection without inheriting terminal
+environment variables. Omitting `--enable-background-send` saves the browser
+and account for read-only use. `anywhere-subchat-setup revoke` removes the
+selection for the next Plugin start. Conflicting browser, account, source
+profile, or send-profile environment overrides are rejected. On Windows the
+Plugin also rejects custom profile and state paths, so browser cookies remain
+under the current user's LocalAppData directory. An explicit transport
+override cannot bypass the saved send consent. Check
+`subchat_capabilities` for
+`generation_transport=browser_prepared_httpx`, then inspect
+`subchat_catalog` and use exact available model, effort and HTTP selection
+values. The controller verifies the pinned account before generation and
+recovers the final answer from history using the original operation ID.
+Windows browser-prepared HTTPX mode launches the selected dedicated browser
+headlessly for page work, so it should not raise a frontmost window. This
+headless path has unit coverage but still needs a live Windows provider check.
+The setup login window is intentionally visible. Nonactivating background tabs
+are implemented only on macOS. An existing ordinary Edge login is not silently
+copied, and Windows live send/follow-up acceptance must be checked on the
+selected machine before claiming it works there.
 
 An older manual `codex mcp` registration with the same server name can shadow
 the installed Plugin and keep pointing to a removed wheel. Check `codex mcp

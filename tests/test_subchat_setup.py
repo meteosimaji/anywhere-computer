@@ -6,7 +6,7 @@ import sqlite3
 import stat
 import subprocess
 import sys
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -61,6 +61,101 @@ def test_inspect_then_select_pins_only_verified_account_without_send(tmp_path, m
     subchat_setup.main(["select", str(source), "--expect-account-id", "account-a",
                         "--enable-background-send"])
     assert json.loads(selection.read_text())["enable_background_send"] is True
+
+
+def test_windows_dedicated_setup_reports_account_without_enabling_send(
+    tmp_path, monkeypatch, capsys,
+):
+    profile = tmp_path / 'edge-login'
+    state = tmp_path / 'ledger'
+    monkeypatch.setattr(subchat_setup.sys, 'platform', 'win32')
+    monkeypatch.setattr(subchat_setup, 'plugin_paths', lambda: (profile, state))
+    monkeypatch.setattr(subchat_setup, 'ProcessLock', lambda _path: nullcontext())
+    seen = []
+
+    async def prepare(selected_profile, channel):
+        seen.append(('prepare', selected_profile, channel))
+        return 'account-a'
+
+    async def inspect(selected_profile, channel):
+        seen.append(('inspect', selected_profile, channel))
+        return 'account-a'
+
+    monkeypatch.setattr(subchat_setup, 'prepare_dedicated_profile', prepare)
+    monkeypatch.setattr(subchat_setup, 'inspect_dedicated_account', inspect)
+    subchat_setup.main(['prepare-dedicated', '--browser-channel', 'msedge'])
+    assert json.loads(capsys.readouterr().out) == {
+        'account_id': 'account-a', 'browser_channel': 'msedge',
+        'selected': False, 'send_enabled': False, 'restart_required': False,
+    }
+    subchat_setup.main(['inspect-dedicated', '--browser-channel', 'msedge'])
+    assert json.loads(capsys.readouterr().out)['account_id'] == 'account-a'
+    assert seen == [('prepare', profile, 'msedge'), ('inspect', profile, 'msedge')]
+    assert not (state.parent / 'login-selection.json').exists()
+
+    with pytest.raises(SystemExit, match='different Chat account'):
+        subchat_setup.main(['choose-dedicated', '--browser-channel', 'msedge',
+                            '--expect-account-id', 'account-b',
+                            '--enable-background-send'])
+    assert not (state.parent / 'login-selection.json').exists()
+
+    subchat_setup.main(['choose-dedicated', '--browser-channel', 'msedge',
+                        '--expect-account-id', 'account-a', '--enable-background-send'])
+    assert json.loads(capsys.readouterr().out)['send_enabled'] is True
+    assert json.loads((state.parent / 'login-selection.json').read_text()) == {
+        'dedicated_browser_channel': 'msedge', 'dedicated_profile': str(profile),
+        'expected_account_id': 'account-a',
+        'enable_background_send': True,
+    }
+    assert seen[-1] == ('inspect', profile, 'msedge')
+    subchat_setup.main(['revoke'])
+    assert json.loads(capsys.readouterr().out)['selected'] is False
+    assert not (state.parent / 'login-selection.json').exists()
+
+
+async def test_windows_prepare_uses_normal_edge_and_closes_before_account_check(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(subchat_setup.sys, 'platform', 'win32')
+    events = []
+
+    def startfile(executable, operation, *, arguments, cwd):
+        events.append(('launch', executable, operation, arguments, cwd))
+
+    async def inspector(profile, channel):
+        events.append(('inspect', profile, channel))
+        return 'account-a'
+
+    monkeypatch.setattr(subchat_setup.os, 'startfile', startfile, raising=False)
+    monkeypatch.setattr(subchat_setup, 'inspect_dedicated_account', inspector)
+    monkeypatch.setattr(builtins, 'input', lambda _prompt: events.append('owner-enter'))
+    profile = tmp_path / 'edge-login'
+    assert await subchat_setup.prepare_dedicated_profile(profile, 'msedge') == 'account-a'
+    assert events == [
+        ('launch', 'msedge.exe', 'open',
+         subprocess.list2cmdline([f'--user-data-dir={profile}', 'https://chatgpt.com/']),
+         str(profile)),
+        'owner-enter', ('inspect', profile, 'msedge'),
+    ]
+
+
+def test_windows_setup_missing_edge_reports_failure_without_selection(
+    tmp_path, monkeypatch,
+):
+    monkeypatch.setattr(subchat_setup.sys, 'platform', 'win32')
+    state = tmp_path / 'ledger'
+    monkeypatch.setattr(subchat_setup, 'plugin_paths',
+                        lambda: (tmp_path / 'edge-login', state))
+
+    def startfile(*_args, **_kwargs):
+        raise FileNotFoundError('Edge is not installed')
+
+    monkeypatch.setattr(subchat_setup.os, 'startfile', startfile, raising=False)
+    monkeypatch.setattr(builtins, 'input',
+                        lambda _prompt: pytest.fail('Missing browser must not ask for login'))
+    with pytest.raises(SystemExit, match='Subchat login inspection failed: FileNotFoundError'):
+        subchat_setup.main(['prepare-dedicated', '--browser-channel', 'msedge'])
+    assert not (state.parent / 'login-selection.json').exists()
 
 
 def test_discover_choose_and_revoke_profile_id(tmp_path, monkeypatch, capsys):
