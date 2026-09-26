@@ -128,7 +128,8 @@ def test_manager_packaging_keeps_native_executable_and_relative_runtime_layout(
     native.write_bytes(b"native fixture")
     app = tmp_path / "relocated 日本語"
     app.mkdir()
-    portable_builder.include_manager(app, native, platform=platform)
+    portable_builder.include_manager(app, native, platform=platform,
+                                     release_version="0.2.0-alpha.63")
     if platform == "darwin":
         contents = app / "Anywhere Computer Manager.app" / "Contents"
         metadata = plistlib.loads((contents / "Info.plist").read_bytes())
@@ -137,6 +138,10 @@ def test_manager_packaging_keeps_native_executable_and_relative_runtime_layout(
         if os.name != "nt":
             assert executable.stat().st_mode & 0o111
         assert metadata["CFBundlePackageType"] == "APPL"
+        assert metadata["CFBundleIdentifier"] == "org.anywherecomputer.manager.preview"
+        assert metadata["CFBundleShortVersionString"] == "0.2.0"
+        assert metadata["CFBundleVersion"] == "0.2.63"
+        assert metadata["AnywhereComputerReleaseVersion"] == "0.2.0-alpha.63"
     else:
         executable = app / "Anywhere Computer Manager.exe"
     assert executable.read_bytes() == native.read_bytes()
@@ -145,11 +150,29 @@ def test_manager_packaging_keeps_native_executable_and_relative_runtime_layout(
 
 def test_manager_packaging_requires_explicit_existing_file(tmp_path):
     with pytest.raises(ValueError, match="native executable"):
-        portable_builder.include_manager(tmp_path, tmp_path / "missing", platform="win32")
+        portable_builder.include_manager(tmp_path, tmp_path / "missing", platform="win32",
+                                         release_version="0.2.0-alpha.63")
     native = tmp_path / "native"
     native.write_bytes(b"native fixture")
     with pytest.raises(ValueError, match="supports"):
-        portable_builder.include_manager(tmp_path, native, platform="linux")
+        portable_builder.include_manager(tmp_path, native, platform="linux",
+                                         release_version="0.2.0-alpha.63")
+
+
+def test_manager_bundle_versions_follow_release_order_and_reject_invalid_versions():
+    releases = ["0.2.0-alpha.63", "0.2.0-alpha.64", "0.2.0-beta.1",
+                "0.2.0-rc.1", "0.2.0", "0.2.1-alpha.1"]
+    versions = [portable_builder.manager_bundle_versions(version) for version in releases]
+    assert [short for short, _ in versions] == ["0.2.0"] * 5 + ["0.2.1"]
+    assert [build for _, build in versions] == [
+        "0.2.63", "0.2.64", "0.2.100001", "0.2.200001", "0.2.300000", "0.2.1000001",
+    ]
+    assert [tuple(map(int, build.split("."))) for _, build in versions] == sorted(
+        tuple(map(int, build.split("."))) for _, build in versions
+    )
+    for invalid in ("0.2.0-alpha.100000", "0.2.0-preview.1", "0.2.0a63", "0.2"):
+        with pytest.raises(ValueError, match="release|Release"):
+            portable_builder.manager_bundle_versions(invalid)
 
 
 @pytest.mark.parametrize("platform", ["win32", "linux"])

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import plistlib
+import re
 import shutil
 import subprocess
 import sys
@@ -73,13 +74,31 @@ def discard_bytecode(app: Path) -> None:
         path.unlink()
 
 
-def include_manager(app: Path, manager: Path, *, platform: str) -> None:
+def manager_bundle_versions(release_version: str) -> tuple[str, str]:
+    """Map the release version to Apple's numeric bundle version fields."""
+    match = re.fullmatch(
+        r"([0-9]+)\.([0-9]+)\.([0-9]+)(?:-(alpha|beta|rc)\.([0-9]+))?",
+        release_version,
+    )
+    if match is None:
+        raise ValueError("Invalid release version for the macOS manager bundle")
+    major, minor, patch = (int(part) for part in match.group(1, 2, 3))
+    stage, sequence = match.group(4, 5)
+    if sequence is not None and int(sequence) >= 100_000:
+        raise ValueError("Release sequence exceeds the macOS manager bundle range")
+    stage_number = {"alpha": 0, "beta": 1, "rc": 2, None: 3}[stage]
+    build_patch = patch * 1_000_000 + stage_number * 100_000 + int(sequence or 0)
+    return f"{major}.{minor}.{patch}", f"{major}.{minor}.{build_patch}"
+
+
+def include_manager(app: Path, manager: Path, *, platform: str, release_version: str) -> None:
     """Include an explicitly selected native build in the existing file manifest."""
     if not manager.is_absolute() or manager.is_symlink() or not manager.is_file():
         raise ValueError("Manager must be an absolute native executable file")
     if platform == "win32":
         shutil.copyfile(manager, app / "Anywhere Computer Manager.exe")
     elif platform == "darwin":
+        short_version, build_version = manager_bundle_versions(release_version)
         contents = app / "Anywhere Computer Manager.app" / "Contents"
         binary = contents / "MacOS" / "anywhere-computer-manager"
         binary.parent.mkdir(parents=True)
@@ -90,8 +109,9 @@ def include_manager(app: Path, manager: Path, *, platform: str) -> None:
             "CFBundleIdentifier": "org.anywherecomputer.manager.preview",
             "CFBundleName": "Anywhere Computer",
             "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": "0.1.0",
-            "CFBundleVersion": "1",
+            "CFBundleShortVersionString": short_version,
+            "CFBundleVersion": build_version,
+            "AnywhereComputerReleaseVersion": release_version,
             "NSHighResolutionCapable": True,
         }))
     else:
@@ -203,7 +223,8 @@ def build_portable(
             launcher.chmod(0o755)
         write_setup_launcher(app, windows=os.name == "nt")
         if manager is not None:
-            include_manager(app, manager, platform=sys.platform)
+            include_manager(app, manager, platform=sys.platform,
+                            release_version=release["version"])
         for kind, executable in helpers.items():
             if executable is None:
                 continue
