@@ -1254,7 +1254,7 @@ class Engine:
         capabilities: dict[str, JsonValue] = {
             "browser_isolated_adapter": {
                 "available": True,
-                "requires": "Playwright with installed Chromium or Chrome",
+                "requires": "Playwright and installed Edge on Windows or Chrome on macOS/Linux",
                 "runtime_verified": False,
             },
             "files": True,
