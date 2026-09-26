@@ -30,27 +30,40 @@ async def test_stream_started_before_observer_expiry_keeps_late_response_candida
             await page.expose_binding('saveCandidate', save)
             await page.evaluate('''() => {
                 const nativeTimeout = window.setTimeout;
-                window.setTimeout = (callback, delay) =>
-                    nativeTimeout(callback, delay === 60000 ? 20 : delay);
-                window.fetch = async () => {
-                    await new Promise(resolve => nativeTimeout(resolve, 50));
-                    const response = new Response(
-                        'data: {"conversation_id":"11111111-2222-3333-4444-555555555555"}\\n\\n',
-                        {headers:{'content-type':'text/event-stream'}});
-                    Object.defineProperty(response, 'url',
-                        {value:'https://chatgpt.com/backend-api/f/conversation'});
-                    return response;
+                window.setTimeout = (callback, delay, ...args) => {
+                    if (delay === 60000 && !window.expireObserver) {
+                        window.expireObserver = callback;
+                        return 0;
+                    }
+                    return nativeTimeout(callback, delay, ...args);
                 };
+                window.fetch = () => new Promise(resolve => {
+                    window.releaseResponse = () => {
+                        const response = new Response(
+                            'data: {"conversation_id":' +
+                            '"11111111-2222-3333-4444-555555555555"}\\n\\n',
+                            {headers:{'content-type':'text/event-stream'}});
+                        Object.defineProperty(response, 'url',
+                            {value:'https://chatgpt.com/backend-api/f/conversation'});
+                        resolve(response);
+                    };
+                });
             }''')
-            # Register and start fetch in one browser task. A separate
-            # Playwright round trip can outlast the deliberately shortened
-            # 20 ms observer window on a loaded CI runner.
-            await page.evaluate(STREAM + '''\n() => {
+            # Start the fetch before expiring the observer, then release its
+            # response afterward. Keep the independent reader timeout intact.
+            assert await page.evaluate(STREAM + '''\n() => {
                 observeSubchatStream('saveCandidate');
-                return fetch('/unused', {
+                window.pendingFetch = fetch('/unused', {
                     headers:{'chatgpt-account-id':'account'},
                     body:JSON.stringify({messages:[{id:'input'}]})});
+                return Boolean(window.expireObserver && window.releaseResponse);
             }''')
+            await page.evaluate('''() => {
+                window.expireObserver();
+                window.releaseResponse();
+            }''')
+            assert await page.evaluate('''async () => (await window.pendingFetch).text()''') == (
+                'data: {"conversation_id":"11111111-2222-3333-4444-555555555555"}\n\n')
             await asyncio.wait_for(candidate.wait(), 3)
             assert observed == [('input', '11111111-2222-3333-4444-555555555555',
                                  'account')]
