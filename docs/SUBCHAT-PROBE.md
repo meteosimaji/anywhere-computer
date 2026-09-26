@@ -83,15 +83,12 @@ recovers the final answer from history using the original operation ID.
 Windows setup inspection reads the account from an authenticated, same-origin
 GET inside the selected installed browser. Read-only authentication and
 browser-prepared HTTPX sending still use a separate HTTPX client. These Windows
-paths launch the browser headed at an offscreen position.
-The headless Edge path returned 403 for Chat home and authentication on a
-Windows ARM64 VM with a signed-in dedicated profile; the headed offscreen
-browser returned 200 for home, authentication, and catalog in a separate
-manual probe. Whether a launch briefly takes focus from another app remains
-unverified. The setup login window is intentionally visible. Nonactivating
-background tabs are implemented only on macOS. An existing ordinary Edge login
-is not silently copied, and Windows live send/follow-up acceptance must be
-checked on the selected machine before claiming it works there.
+paths launch the browser headed at an offscreen position. The setup login
+window is intentionally visible. An existing ordinary Edge login is not
+silently copied. After selection, verify an actual send and its saved final
+answer on the intended Windows account; setup GET success alone does not prove
+that the separate HTTPX generation request will work. A foreground sample can
+detect visible focus changes, but it cannot exclude a shorter transition.
 
 An older manual `codex mcp` registration with the same server name can shadow
 the installed Plugin and keep pointing to a removed wheel. Check `codex mcp
