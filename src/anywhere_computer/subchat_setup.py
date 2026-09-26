@@ -12,6 +12,7 @@ import sys
 import tempfile
 from contextlib import AsyncExitStack, ExitStack
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -28,7 +29,92 @@ from .subchat_chrome_profile import (
     temporary_chrome_profile,
 )
 from .subchat_cli import WINDOWS_DEDICATED_BROWSER_ARGS
+from .subchat_http_session import ObservedHTTPSession
 from .subchat_plugin import _selection_record, plugin_paths
+
+if TYPE_CHECKING:
+    from playwright.async_api import Page
+
+_DEDICATED_AUTH_URL = "https://chatgpt.com/api/auth/session"
+_DEDICATED_AUTH_LIMIT = 131_072
+_DEDICATED_AUTH_GET = """async ({url, limit}) => {
+    const response = await fetch(url, {method: 'GET', credentials: 'same-origin',
+                                       redirect: 'manual', headers: {accept: 'application/json'}});
+    const result = {url: response.url, status: response.status,
+                    contentType: response.headers.get('content-type'), body: '', oversized: false};
+    if (response.status !== 200) return result;
+    const reader = response.body.getReader();
+    const chunks = [];
+    let size = 0;
+    while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        size += next.value.byteLength;
+        if (size > limit) {
+            await reader.cancel();
+            result.oversized = true;
+            return result;
+        }
+        chunks.push(next.value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    result.body = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+    return result;
+}"""
+
+
+async def _dedicated_browser_account_id(page: Page) -> str:
+    """Read only the account ID using the logged-in browser's own network stack."""
+    # The fixed home navigation establishes the same origin for the browser fetch.
+    home = await page.goto("https://chatgpt.com/", wait_until="domcontentloaded")
+    if home is None or home.url != "https://chatgpt.com/":
+        raise SetupInputError("Dedicated browser did not open ChatGPT")
+    if home.status in (401, 403):
+        raise SubchatAccessError(home.status)
+    if home.status != 200:
+        raise SetupInputError("Dedicated browser did not open ChatGPT")
+    result = await page.evaluate(_DEDICATED_AUTH_GET, {
+        "url": _DEDICATED_AUTH_URL, "limit": _DEDICATED_AUTH_LIMIT})
+    if (not isinstance(result, dict) or result.get("url") != _DEDICATED_AUTH_URL
+            or not isinstance(result.get("status"), int)
+            or isinstance(result["status"], bool)):
+        raise SetupInputError("Dedicated browser authentication response is invalid")
+    status = result["status"]
+    if status in (401, 403):
+        raise SubchatAccessError(status)
+    if status != 200:
+        raise SetupInputError("Dedicated browser authentication GET failed")
+    if result.get("oversized") is True:
+        raise SetupInputError("Dedicated browser authentication response is too large")
+    content_type = result.get("contentType")
+    body = result.get("body")
+    if (not isinstance(content_type, str)
+            or content_type.split(";", 1)[0].strip() != "application/json"
+            or not isinstance(body, str)
+            or len(body.encode("utf-8")) > _DEDICATED_AUTH_LIMIT):
+        raise SetupInputError("Dedicated browser authentication response is invalid")
+    try:
+        data = json.loads(body)
+    except ValueError:
+        raise SetupInputError("Dedicated browser authentication response is invalid") from None
+    account = data.get("account") if isinstance(data, dict) else None
+    user = data.get("user") if isinstance(data, dict) else None
+    if (not isinstance(account, dict) or not isinstance(user, dict)
+            or not isinstance(user.get("email"), str)
+            or not isinstance(data.get("accessToken"), str)):
+        raise SetupInputError("Dedicated browser has no valid Chat account")
+    try:
+        session = ObservedHTTPSession.model_validate({
+            "authorization": "Bearer " + data["accessToken"],
+            "account_id": account.get("id"),
+            "catalog_url": "https://chatgpt.com/backend-api/models?language=ja",
+            "user_email": user.get("email"),
+        })
+    except ValueError:
+        raise SetupInputError("Dedicated browser has no valid Chat account") from None
+    return session.account_id
 
 
 class SetupInputError(ValueError):
@@ -160,8 +246,6 @@ async def inspect_dedicated_account(profile: Path, channel: str) -> str:
         raise SetupInputError("Install browser support with the browser extra") from None
 
     from .subchat_browser import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
-    from .subchat_chrome_login import chrome_http_session
-
     async with async_playwright() as driver:
         try:
             context = await driver.chromium.launch_persistent_context(
@@ -173,10 +257,12 @@ async def inspect_dedicated_account(profile: Path, channel: str) -> str:
                 "Dedicated browser could not open; close all windows using its profile"
             ) from None
         try:
-            async with httpx.AsyncClient(trust_env=False, follow_redirects=False,
-                                         transport=httpx.AsyncHTTPTransport(retries=0)) as client:
-                session = await chrome_http_session(context, client)
-                return session.account_id
+            page = await context.new_page()
+            try:
+                async with asyncio.timeout(20):
+                    return await _dedicated_browser_account_id(page)
+            finally:
+                await page.close()
         finally:
             await context.close()
 

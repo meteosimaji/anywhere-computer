@@ -148,7 +148,32 @@ async def test_windows_dedicated_inspection_uses_headed_offscreen_edge(
     monkeypatch.setattr(subchat_setup.sys, 'platform', 'win32')
     launches = []
 
+    class Page:
+        async def goto(self, url, **options):
+            assert url == 'https://chatgpt.com/'
+            assert options == {'wait_until': 'domcontentloaded'}
+            launches.append('home')
+            return SimpleNamespace(url=url, status=200)
+
+        async def evaluate(self, script, options):
+            assert 'fetch(url' in script
+            assert options == {'url': 'https://chatgpt.com/api/auth/session',
+                               'limit': 131_072}
+            launches.append('auth')
+            return {'url': options['url'], 'status': 200,
+                    'contentType': 'application/json; charset=utf-8',
+                    'body': json.dumps({'account': {'id': 'account-a'},
+                                        'accessToken': 'private-token',
+                                        'user': {'email': 'owner@example.com'}}),
+                    'oversized': False}
+
+        async def close(self):
+            launches.append('page-closed')
+
     class Context:
+        async def new_page(self):
+            return Page()
+
         async def close(self):
             launches.append('closed')
 
@@ -161,19 +186,56 @@ async def test_windows_dedicated_inspection_uses_headed_offscreen_edge(
     async def runtime():
         yield SimpleNamespace(chromium=Chromium())
 
-    async def auth(_context, _client):
-        return SimpleNamespace(account_id='account-a')
-
     monkeypatch.setattr(playwright.async_api, 'async_playwright', runtime)
-    monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', auth)
     profile = tmp_path / 'edge-login'
     assert await subchat_setup.inspect_dedicated_account(profile, 'msedge') == 'account-a'
     assert launches == [
         (str(profile), {'channel': 'msedge', 'headless': False,
                         'ignore_default_args': ['--use-mock-keychain'],
                         'args': list(subchat_cli.WINDOWS_DEDICATED_BROWSER_ARGS)}),
-        'closed',
+        'home', 'auth', 'page-closed', 'closed',
     ]
+
+
+@pytest.mark.parametrize(('status', 'account', 'error'), [
+    (403, 'account-a', SubchatAccessError),
+    (200, '', subchat_setup.SetupInputError),
+    (200, 'bad account', subchat_setup.SetupInputError),
+])
+async def test_windows_dedicated_inspection_rejects_denial_or_invalid_account(
+    status, account, error,
+):
+    class Page:
+        async def goto(self, _url, **_options):
+            return SimpleNamespace(url='https://chatgpt.com/', status=200)
+
+        async def evaluate(self, _script, options):
+            return {'url': options['url'], 'status': status,
+                    'contentType': 'application/json',
+                    'body': json.dumps({'account': {'id': account},
+                                        'accessToken': 'private-token',
+                                        'user': {'email': 'owner@example.com'}}),
+                    'oversized': False}
+
+    with pytest.raises(error):
+        await subchat_setup._dedicated_browser_account_id(Page())
+
+
+async def test_windows_dedicated_inspection_rejects_cross_origin_response():
+    class Page:
+        async def goto(self, _url, **_options):
+            return SimpleNamespace(url='https://chatgpt.com/', status=200)
+
+        async def evaluate(self, _script, _options):
+            return {'url': 'https://other.example/api/auth/session', 'status': 200,
+                    'contentType': 'application/json',
+                    'body': json.dumps({'account': {'id': 'account-a'},
+                                        'accessToken': 'private-token',
+                                        'user': {'email': 'owner@example.com'}}),
+                    'oversized': False}
+
+    with pytest.raises(subchat_setup.SetupInputError):
+        await subchat_setup._dedicated_browser_account_id(Page())
 
 
 def test_windows_setup_missing_edge_reports_failure_without_selection(

@@ -80,8 +80,10 @@ override cannot bypass the saved send consent. Check
 `subchat_catalog` and use exact available model, effort and HTTP selection
 values. The controller verifies the pinned account before generation and
 recovers the final answer from history using the original operation ID.
-Windows setup inspection, read-only authentication, and browser-prepared HTTPX
-sending launch the selected installed browser headed at an offscreen position.
+Windows setup inspection reads the account from an authenticated, same-origin
+GET inside the selected installed browser. Read-only authentication and
+browser-prepared HTTPX sending still use a separate HTTPX client. These Windows
+paths launch the browser headed at an offscreen position.
 The headless Edge path returned 403 for Chat home and authentication on a
 Windows ARM64 VM with a signed-in dedicated profile; the headed offscreen
 browser returned 200 for home, authentication, and catalog in a separate
