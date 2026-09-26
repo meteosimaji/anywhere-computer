@@ -169,27 +169,47 @@ class BrowserAuthorization:
         escape = html.escape
         tools = "".join(f"<li><code>{escape(tool)}</code></li>" for tool in sorted(record.tools))
         abilities = []
-        if "files_write" in record.tools:
+        if record.tools & {"files_write", "files_write_binary", "files_edit", "files_restore",
+                           "files_move", "directories_create", "documents_write",
+                           "documents_edit_paragraph", "upload_commit"}:
             abilities.append("change files")
-        if any(tool.startswith("terminal_") for tool in record.tools):
+        if record.tools & {"terminal_start", "terminal_input", "mcp_session_open"}:
             abilities.append("run commands as this device user")
-        if any(tool.startswith("gui_") for tool in record.tools):
+        if record.tools & {"gui_click", "gui_type", "gui_key", "gui_native_press",
+                           "gui_native_set_value"}:
             abilities.append("control apps")
+        if record.tools & {"browser_navigate", "browser_click", "browser_fill"}:
+            abilities.append("interact with websites")
+        if "devices_call" in record.tools:
+            abilities.append("operate registered computers")
         if any(tool in {"mcp_call", "codex_plugin_call"} for tool in record.tools):
             abilities.append("call other connected services")
-        if "subchat_send" in record.tools:
+        if record.tools & {"subchat_send", "subchat_message"}:
             abilities.append("send Chat messages")
+        if "subchat_delete" in record.tools:
+            abilities.append("hide Chat conversations")
+        if "settings_update" in record.tools:
+            abilities.append("change shared engine settings")
+        if record.tools & {"processes_stop", "terminal_stop", "mcp_session_close"}:
+            abilities.append("stop processes")
         warning = (
             "This connection can " + ", ".join(abilities) + "."
-            if abilities else "This connection can read data available to this device user."
+            if abilities else "This connection can use the requested tools listed below."
         )
         destination = urlsplit(record.redirect).hostname or record.redirect
         error_html = f"<p id=auth-error class=error role=alert>{escape(error)}</p>" if error else ""
+        indirect_notice = (
+            "<p class=scope-notice role=note>Plugin and direct MCP tools can invoke "
+            "other installed services, potentially including Subchat. Direct "
+            "<code>subchat_*</code> scopes do not restrict those separate routes. "
+            "Review the requested plugin and MCP tools before allowing this connection.</p>"
+            if record.tools & {"codex_plugin_call", "mcp_call", "mcp_session_open"} else ""
+        )
         scope_notice = (
             "<p class=scope-notice role=note>Some Subchat tools available on this device were not "
             "requested by this connection. Approving this page will not grant "
-            "them. To use Subchat, update or recreate the client connection "
-            "with the intended Subchat tools, then review a new consent page.</p>"
+            "those direct tools. To add them, the client must request the updated "
+            "tools and the owner must approve a new consent page.</p>"
             if record.missing_subchat_tools else ""
         )
         return (
@@ -214,7 +234,8 @@ class BrowserAuthorization:
             "background:#fff5e5}@media(max-width:680px){main{margin:12px;padding:20px}}"
             "</style><main><small>Anywhere Computer</small><h1>Allow this connection?</h1>"
             f"<p>Access will be sent to <strong>{escape(destination)}</strong>.</p>"
-            f"<h2>What this connection can do</h2><p>{warning}</p>{scope_notice}"
+            f"<h2>What this connection can do</h2><p>{warning}</p>"
+            f"{scope_notice}{indirect_notice}"
             f"<details open><summary>Requested tools ({len(record.tools)})</summary>"
             f"<ul>{tools}</ul></details>"
             "<details><summary>Technical details</summary><dl>"

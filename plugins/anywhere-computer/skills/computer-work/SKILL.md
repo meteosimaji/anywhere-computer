@@ -54,8 +54,13 @@ client credentials. Codex context tools require a locally installed native Codex
 
 To reuse Codex's registered MCP servers (both direct registrations and plugin-provided
 servers), start with codex_plugin_tools, summary=true and the workspace's absolute cwd.
-Use query to narrow discovery, then request the exact server/tool. Do not load every
-tool description when a small selection is sufficient. Enabled configuration is not
+Choose a server from the user's intended task: asking a separate ordinary ChatGPT
+Chat to help can call for `anywhere-subchat` even when the user does not name it.
+ChatGPT Work tasks use a different surface. `query` is a literal substring filter;
+if a paraphrase finds nothing, inspect the unfiltered catalog or exact server.
+Use query to narrow discovery when useful, then request the exact server/tool.
+Do not load every tool description when a small selection is sufficient.
+Enabled configuration is not
 proof of a connected server: inspect runtime_status and availability.
 Select its exact server/tool and use the returned input schema to build arguments. Pass its
 catalog_sha256 and the same cwd to codex_plugin_call. These calls use an ephemeral tool
@@ -120,9 +125,10 @@ profile. Check `subchat_capabilities`: this mode reports
 `generation_transport=browser_prepared`, opens minimized Chrome for sends, and
 may briefly take focus. It is not independent HTTP-only generation. The profile
 must already be logged in and must not be open in another Chrome process. Use
-an exact available `http_selection` from `subchat_catalog`, plus observed UI
-model and effort labels, then recover the original send operation ID. Keep the
-controller running until a pending send is confirmed; a missing answer never
+an exact available `http_selection` from `subchat_catalog` with `source=http`;
+set `model` to that choice's `model_title` and `effort` to its `title`, then
+recover the original send operation ID. Keep the controller running until a
+pending send is confirmed; a missing answer never
 authorizes replay with a new ID. `subchat_download_file` retrieves one exact
 saved final-answer sandbox link (up to 512 KiB of base64), without uploading it
 to another Chat or Library. `subchat_download_image` retrieves a bounded image
@@ -151,10 +157,13 @@ not a universal focus guarantee. HTTPX 200 for that run follows from the
 successful code path rather than a stored status; an earlier run measured it
 directly. This transport does not upload local files into the Chat.
 For a natural-language request to use a Subchat, inspect
-`subchat_capabilities` and `subchat_catalog` first. Select exact available UI
-`model` and `effort` labels and, for HTTP-read sends, copy the matching
-available `http_selection`. If the user asks for GPT-6 Pro, use it only when
-the current catalog offers it with the requested effort; never silently
+`subchat_capabilities` and `subchat_catalog` first. For HTTP-read sends, choose
+an available `source=http` choice, use its exact `model_title` as `model` and
+`title` as `effort`, and copy its `http_selection` unchanged. For a transport
+without HTTP selection, use exact available `source=ui` picker labels. Do not
+replace the HTTP choice's `model_title` with a differing UI label. If the user
+asks for GPT-6 Pro, use it only when the current catalog offers it with the
+requested effort; never silently
 substitute another model. Send with a fresh request ID, then call
 `subchat_wait` or `subchat_recover` with that operation ID until the saved
 answer is final. A submission receipt alone is not a final answer.

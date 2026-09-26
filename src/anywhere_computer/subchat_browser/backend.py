@@ -41,6 +41,7 @@ from .catalog import (
     TOGGLE,
     TRIGGER,
     collect_page,
+    observed_chat_surface,
     picker_ready,
     require_http_selection,
 )
@@ -476,17 +477,11 @@ class BrowserSubchatBackend:
     async def _ready(self, page: Page, submission: SubchatSubmission) -> bool:
         if page.url.rstrip('/') != self._url(submission).rstrip('/'):
             return False
-        chat = page.get_by_role('button', name='Chat', exact=True)
-        chat_radio = page.locator(
-            '[role="radio"][data-tpp-toggle-value="chatgpt"][data-state="on"]'
-            '[aria-checked="true"]')
-        chat_radios = page.locator('[role="radio"][data-tpp-toggle-value="chatgpt"]')
         editor = page.locator(EDITOR)
         stop = page.get_by_role('button', name=re.compile(r'^(停止|Stop|Stop generating)$'))
-        ordinary = (submission.requested_conversation_id is not None
-                    or (await chat_radio.count() == 1 if await chat_radios.count() else
-                        await chat.count() == 1
-                        and await chat.get_attribute('aria-pressed') == 'true'))
+        surface = await observed_chat_surface(page)
+        ordinary = (surface == 'chat' or
+                    (surface == 'unknown' and submission.requested_conversation_id is not None))
         return (ordinary and await page.locator(COMPOSER).count() == 1
                 and await editor.count() == 1 and not (await editor.inner_text()).strip()
                 and await stop.filter(visible=True).count() == 0)
@@ -926,6 +921,10 @@ class BrowserSubchatBackend:
             raise ValueError('Prepared browser page is unavailable')
         if page.url.rstrip('/') != self._url(submission).rstrip('/'):
             raise ValueError('Prepared conversation changed before send')
+        surface = await observed_chat_surface(page)
+        if surface == 'other' or (surface == 'unknown'
+                                  and submission.requested_conversation_id is None):
+            raise ValueError('Ordinary Chat surface changed before send')
         editor = page.locator(EDITOR)
         if await editor.count() != 1 or (await editor.inner_text()).strip():
             raise ValueError('Prepared draft changed before send')

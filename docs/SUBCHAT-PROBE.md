@@ -103,11 +103,17 @@ temporary Dock icon may appear during execution. This does not guarantee the
 same behavior on every macOS/Chrome combination or after provider changes.
 Do not resend an operation whose outcome is uncertain; recover it by operation ID.
 
-In Codex, a natural-language request to use a Subchat still needs explicit tool
-discovery and selection. Inspect `subchat_capabilities` and `subchat_catalog`,
-then choose the exact available UI `model` and `effort` labels and copy the
-matching available `http_selection` for an HTTP-read send. For example, if the
-current catalog offers GPT-6 Pro with the requested effort, select that exact
+In Codex, the model may select Subchat when the user asks a separate ordinary
+ChatGPT Chat to help, even without saying "Subchat". This requires discovery
+of the actual tools and a grant that permits the intended action; a discovery
+match does not authorize sending. ChatGPT Work tasks are a different surface.
+Inspect `subchat_capabilities` and `subchat_catalog`. For an HTTP-read send,
+choose an available `source=http` choice, set `model` to its exact `model_title`
+and `effort` to its exact `title`, and copy its `http_selection` unchanged.
+Version `label` and `selected_display_version` are not the `model` field. For a
+transport without HTTP selection, use the exact `source=ui` picker labels. Do
+not replace an HTTP choice's `model_title` with a differing UI label. For
+example, if the current catalog offers GPT-6 Pro with the requested effort, select that exact
 entry; if it is absent, report that it is unavailable instead of silently
 substituting another model. For a direct ChatGPT HTTPS send, choose a stable
 `intent_key` for each intended child Chat and a fresh transport request ID.

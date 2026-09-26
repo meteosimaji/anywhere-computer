@@ -3,8 +3,9 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const fields = new Map();
-function element() { return {children:[], handlers:{}, textContent:'', disabled:false,
+function element() { return {children:[], handlers:{}, attributes:{}, textContent:'', disabled:false,
   append(...items){this.children.push(...items)}, replaceChildren(){this.children=[]},
+  setAttribute(name, value){this.attributes[name]=String(value)},
   addEventListener(event, fn){this.handlers[event]=fn}}; }
 const get = id => { if(!fields.has(id)) fields.set(id,element()); return fields.get(id); };
 const device = {device_id:'a'.repeat(32),name:'Windows',last_observed_state:'ready',checked_at:null};
@@ -23,11 +24,14 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../desktop/ui/app.js'),'
   await new Promise(resolve=>setImmediate(resolve));
   const row=get('devices').children[0], button=row.children[1], output=row.children[2];
   assert.match(row.textContent,/現在の接続は未確認/);
+  assert.equal(output.attributes.role,'status'); assert.equal(output.attributes['aria-live'],'polite');
   response={schema_version:1,device_id:device.device_id,state:'ready',evidence:'authorized_catalog',observed_at:snapshot.observed_at};
   await button.handlers.click(); assert.match(output.textContent,/実操作は未確認/); assert.equal(button.disabled,false);
   response={...response,device_id:'b'.repeat(32)};
   await button.handlers.click(); assert.match(output.textContent,/確認できませんでした/);
   response=new Error('private diagnostic');
   await button.handlers.click(); assert.equal(calls,3); assert.doesNotMatch(output.textContent,/private/);
+  // Disabled buttons mostly mean "not applicable", not "busy"; status text reports progress.
+  assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../desktop/ui/style.css'),'utf8'),/cursor:\s*wait/);
   console.log('management device UI passed');
 })().catch(error=>{console.error(error);process.exitCode=1});

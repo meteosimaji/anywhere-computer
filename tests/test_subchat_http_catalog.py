@@ -209,6 +209,24 @@ def test_send_schema_identifies_http_model_title_and_effort_title():
     assert 'model_title' in send['description']
 
 
+def test_bundled_subchat_guidance_uses_http_choice_fields():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    sources = (
+        'plugins/anywhere-computer/skills/subchat/SKILL.md',
+        'plugins/anywhere-computer/skills/computer-work/SKILL.md',
+        'docs/SUBCHAT-PROBE.md',
+    )
+    for source in sources:
+        guidance = (root / source).read_text(encoding='utf-8')
+        assert '`source=http`' in guidance, source
+        assert '`model_title`' in guidance, source
+        assert '`title`' in guidance, source
+        assert '`http_selection`' in guidance, source
+        assert '`source=ui`' in guidance, source
+
+
 async def test_browser_rejects_mismatched_http_choice_before_opening_page(tmp_path):
     from anywhere_computer.models import Request
     from anywhere_computer.state import Ledger

@@ -44,6 +44,7 @@ function render(snapshot) {
     const check = document.createElement("button");
     check.type = "button"; check.textContent = "接続を確認";
     const observation = document.createElement("span");
+    observation.setAttribute("role", "status"); observation.setAttribute("aria-live", "polite");
     check.addEventListener("click", async () => {
       check.disabled = true; observation.textContent = " 接続を確認しています…";
       try {

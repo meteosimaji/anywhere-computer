@@ -1,10 +1,13 @@
 ---
 name: subchat
-description: Use the Anywhere Subchat MCP to inspect saved ChatGPT conversations or send and recover an ordinary Chat message when the selected transport permits it.
+description: Use when the user wants a separate ordinary ChatGPT Chat to help with a task, or wants to inspect, send to, or recover a saved Chat conversation through Anywhere Subchat.
 ---
 
-Use the `anywhere-subchat` MCP server for ordinary ChatGPT conversations. Check
-`subchat_capabilities` before choosing a workflow. Its read-only mode can inspect
+Use the `anywhere-subchat` MCP server for a requested separate ordinary ChatGPT
+conversation, including requests that do not say "Subchat". A ChatGPT Work task
+is a different destination. Tool choice follows the user's intent; a discovery
+match alone does not authorize a send. Check `subchat_capabilities` before
+choosing a workflow. Its read-only mode can inspect
 saved submissions and authenticated history but cannot send. A send-capable mode
 still requires browser preparation; it is not independent HTTP-only generation.
 Do not infer provider authorization from a successful local call.
@@ -17,14 +20,15 @@ bridge context rejects stateful Subchat calls before dispatch. A long running
 send or queue watch keeps the explicit session alive during idle periods;
 `subchat_activity` reports live work without opening Chrome.
 
-For a new send, inspect `subchat_catalog` with `source=ui` for the exact `model`
-label and effort label shown in the Chat picker. In a send-capable HTTP mode,
-also inspect `source=http` and copy the matching choice's `http_selection`,
-including an explicit null `thinking_effort`. The HTTP catalog's
-`selected_display_version` can differ from the UI model label: for example,
-`5.6` and `GPT-5.6 Sol` are distinct fields. Do not substitute another model
-or effort. Save a fresh 32-character lowercase hex
-request ID and one stable 32-character lowercase hex `intent_key` for each
+For a new HTTP-read send, inspect `subchat_catalog` with `source=http` and
+choose an available choice. Set `model` to that choice's exact `model_title`,
+`effort` to its exact `title`, and copy its `http_selection` unchanged, including
+an explicit null `thinking_effort`. The version `label` and
+`selected_display_version` are not the `model` field. If the selected transport
+does not use HTTP selection, inspect `source=ui` for the exact picker model and
+effort labels. Do not use a differing UI label as the HTTP send's `model`.
+Do not substitute another model or effort. Save a fresh 32-character lowercase
+hex request ID and one stable 32-character lowercase hex `intent_key` for each
 intended child Chat before direct `subchat_send`. A returned
 `submission_operation_id` is the ID for `subchat_recover` or `subchat_wait`;
 it can differ from a later transport request ID for the same intent. If a

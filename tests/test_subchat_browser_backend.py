@@ -307,6 +307,146 @@ document.querySelector('#menu').addEventListener('keydown', event => {
             await browser.close()
 
 
+async def test_existing_chat_without_home_toggle_remains_ready():
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmission
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            page = await browser.new_page()
+            await page.route('https://chatgpt.com/c/' + CONVERSATION_ID,
+                             lambda route: route.fulfill(status=200,
+                                 content_type='text/html', body=HTML.replace(
+                                     '<button aria-pressed="true">Chat</button>', '')))
+            await page.goto('https://chatgpt.com/c/' + CONVERSATION_ID)
+            backend = BrowserSubchatBackend(page.context)
+            submission = SubchatSubmission(operation_id='a' * 32, prompt='test',
+                model='model', effort='effort', requested_conversation_id=CONVERSATION_ID)
+            assert await backend._ready(page, submission)
+            assert await page.evaluate('window.sends') == 0
+        finally:
+            await browser.close()
+
+
+@pytest.mark.parametrize(('toggle', 'ready'), [
+    ('<button role="radio" data-tpp-toggle-value="chatgpt" data-state="off" '
+     'aria-checked="false">Chat</button><button role="radio" '
+     'data-tpp-toggle-value="work" data-state="on" '
+     'aria-checked="true">Work</button>', False),
+    ('<button role="radio" data-tpp-toggle-value="chatgpt" data-state="on" '
+     'aria-checked="true">Chat</button><button role="radio" '
+     'data-tpp-toggle-value="work" data-state="on" '
+     'aria-checked="false">Work</button>', False),
+    ('', True),
+])
+async def test_existing_chat_rejects_observed_work_but_allows_missing_toggle(
+    toggle, ready,
+):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmission
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            page = await browser.new_page()
+            html = (HTML.replace('<button aria-pressed="true">Chat</button>', toggle)
+                    + "<script>document.querySelector('main').innerHTML="
+                      "'<div data-turn-key=\"prior\"></div>'</script>")
+            await page.route('https://chatgpt.com/c/' + CONVERSATION_ID,
+                             lambda route: route.fulfill(status=200,
+                                 content_type='text/html', body=html))
+            await page.goto('https://chatgpt.com/c/' + CONVERSATION_ID)
+            backend = BrowserSubchatBackend(page.context)
+            submission = SubchatSubmission(operation_id='a' * 32, prompt='test',
+                model='model', effort='effort', requested_conversation_id=CONVERSATION_ID)
+            assert await backend._ready(page, submission) is ready
+            assert await page.evaluate('window.sends') == 0
+        finally:
+            await browser.close()
+
+
+async def test_existing_chat_switch_to_work_after_preparation_stops_before_draft(tmp_path):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            history = HTML + '''<script>document.querySelector('main').innerHTML =
+              '<div data-turn-key="prior"></div>';</script>'''
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=history))
+            backend = BrowserSubchatBackend(context)
+            store = SubchatSubmissions(ledger.connection)
+            prepared = store.prepare('a' * 32, 'prompt', 'Future model',
+                                     'Initial effort', owner=None,
+                                     conversation_id=CONVERSATION_ID)
+            baseline = await backend.prepare(prepared)
+            reserved = store.begin_send(prepared.operation_id, owner=None,
+                baseline_message_ids=baseline,
+                baseline_identity_kind=backend.baseline_identity_kind(prepared))
+            page = backend.pages[prepared.operation_id]
+            await page.evaluate('''() => {
+                document.querySelector('button[aria-pressed="true"]').remove();
+                const work = document.createElement('button');
+                work.setAttribute('role', 'radio');
+                work.dataset.tppToggleValue = 'work';
+                work.dataset.state = 'on';
+                work.setAttribute('aria-checked', 'true');
+                work.textContent = 'Work';
+                document.body.prepend(work);
+            }''')
+            with pytest.raises(ValueError, match='Chat surface changed'):
+                await backend.send(reserved)
+            assert await page.evaluate('window.sends') == 0
+            assert (await page.get_by_role('textbox').inner_text()).strip() == ''
+        finally:
+            ledger.close()
+            await browser.close()
+
+
+@pytest.mark.parametrize('label', [
+    'Workに切り替える', 'Workで続ける', 'Continue in Work',
+])
+async def test_work_suggestion_beside_selected_chat_does_not_block_send(tmp_path, label):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            html = (HTML.replace(
+                '<button aria-pressed="true">Chat</button>',
+                '<button aria-pressed="true">Chat</button>'
+                '<button id="work-suggestion">' + label + '</button>')
+                    + '''<script>
+                      window.workClicks=0;
+                      document.querySelector('#work-suggestion').onclick=() =>
+                        window.workClicks++;
+                    </script>''')
+            await context.route('**/*', lambda route: route.fulfill(
+                content_type='text/html; charset=utf-8', body=html))
+            service = Subchats(SubchatSubmissions(ledger.connection),
+                               BrowserSubchatBackend(context))
+            sent = await service.send('e' * 32, 'ordinary Chat prompt', 'Future model',
+                                      'Initial effort', owner=None)
+            page = context.pages[0]
+            assert sent.state == 'submitted'
+            assert await page.evaluate('window.sends') == 1
+            assert await page.evaluate('window.sentText') == 'ordinary Chat prompt'
+            assert await page.evaluate('window.workClicks') == 0
+        finally:
+            ledger.close()
+            await browser.close()
+
+
 async def test_existing_chat_without_history_stops_before_send(tmp_path, monkeypatch):
     playwright = pytest.importorskip('playwright.async_api')
     from anywhere_computer.subchat_browser import backend as backend_module

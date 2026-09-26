@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a63 / Plugin 0.2.0-alpha.63 — unpublished candidate (2026-09-26)
+
+- Check the selected Chat surface again before sending, including follow-ups.
+  Keep Work suggestion buttons distinct from the selected conversation mode.
+- Require fresh consent when adding Subchat or delegation tools to an HTTP
+  connection, and describe direct and indirect capabilities on the consent page.
+- Clarify model selection and user-requested delegation in the Plugin skills.
+  Keep permission decisions in the host's existing controls.
+- Improve workspace focus, contrast and saved permission summaries without
+  introducing another permission dashboard.
+
 ## 0.2.0a62 / Plugin 0.2.0-alpha.62 — unpublished candidate (2026-09-26)
 
 - Render bounded DOCX, XLSX and PPTX page previews on macOS. Strip spreadsheet
