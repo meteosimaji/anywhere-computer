@@ -17,7 +17,12 @@ from . import __version__, codex_context, codex_plugins, skills_context
 from .audio_capture import AudioCapture, AudioCaptureUnknown, capture_audio
 from .audio_status import inspect_audio, verified_audio_helper
 from .authorization import GrantIdentity, current_grant_read_only
-from .browser_control import BrowserActionUnknown, BrowserControl, BrowserNavigationUnknown
+from .browser_control import (
+    BrowserActionUnknown,
+    BrowserControl,
+    BrowserNavigationUnknown,
+    BrowserStartupUnavailable,
+)
 from .capability_contract import CAPABILITY_TOOLS
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
@@ -1249,7 +1254,7 @@ class Engine:
         capabilities: dict[str, JsonValue] = {
             "browser_isolated_adapter": {
                 "available": True,
-                "requires": "Playwright with installed Chromium or Chrome",
+                "requires": "Playwright and installed Edge on Windows or Chrome on macOS/Linux",
                 "runtime_verified": False,
             },
             "files": True,
@@ -1578,6 +1583,15 @@ class Engine:
                           "execution_state": "unknown", "dispatched": None,
                           "next_action": "Observe the same browser tab and inspect this operation "
                                          "before another action."},
+                )
+            except BrowserStartupUnavailable as error:
+                reply = Reply(
+                    operation_id=request.operation_id, state="failed", error=str(error),
+                    data={"error_code": "browser_startup_unavailable", "dispatched": False,
+                          "execution_state": "not_dispatched",
+                          "next_action": "Install the supported browser for this device or "
+                                         "repair its local Playwright runtime, then open a "
+                                         "new isolated session."},
                 )
             except DirectMCPOutcomeUnknown as error:
                 reply = Reply(

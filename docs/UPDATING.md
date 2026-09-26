@@ -18,6 +18,37 @@
    `autostart-upgrade`、続いて `autostart-start` を実行する。
 5. `status`と実際のMCP接続で版・応答を確認し、必要なら既知の操作IDの結果を回収する。
 
+Windows の旧 alpha から更新する場合は、エンジンと専用ブラウザーを終了し、
+状態保存先をバックアップしてから ACL 移行を行います。新しい版のソース環境で
+次を順に実行してください。最初のコマンドは読み取り専用の事前検査です。
+
+```powershell
+uv run --locked python -m anywhere_computer.private_directory
+uv run --locked python -m anywhere_computer.private_directory --apply-stopped
+```
+
+このコマンドは標準の `%USERPROFILE%\.anywhere-computer\state` と
+`%LOCALAPPDATA%\Anywhere Computer\Anywhere Computer` のうち存在する保存先だけを
+対象にし、両方を事前検査してから権限を変更します。ファイルの内容は移動しません。
+管理者権限が必要な場合は同じ Windows ユーザーで昇格して実行します。独自の
+`--state-dir` を使っていた場合は、既定の 2 保存先とは別に、実際に使っている
+既存の保存先の絶対パスを指定して事前検査と移行を行います。たとえば保存先が
+`C:\AnywhereState` の場合、エンジン、HTTP サービス、専用ブラウザーを停止し、
+バックアップを取ってから次を実行します。
+
+```powershell
+uv run --locked python -m anywhere_computer.private_directory --state-dir C:\AnywhereState
+uv run --locked python -m anywhere_computer.private_directory --state-dir C:\AnywhereState --apply-stopped
+```
+
+カスタム指定はその保存先 1 件だけを対象にします。事前検査はツリー内のリンク、
+ハードリンク、ACL の読み取りと対象パスを起動引数に持つ実行中プロセスを確認します。
+`ANYWHERE_STATE_DIR` など環境変数だけで保存先を受け取ったプロセスは、この確認では
+検出できません。関連するエンジン、HTTP サービス、専用ブラウザーを作業者が停止し、
+停止状態を確認してください。ACL の変更中に
+中断した場合はサービスを起動せず、原因を解消して同じコマンドを再実行します。
+移行が失敗した場合は表示された保存先と ACL を確認してください。
+
 ソースからの起動では `uv run --locked anywhere`、同梱配布物ではmacOS/Linuxの
 `./anywhere`、Windowsの `anywhere.cmd` を使います。以下はソース版の例です。
 山括弧の部分を実際の保存先に置き換えてください。

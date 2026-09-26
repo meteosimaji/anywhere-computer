@@ -3,6 +3,69 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b10 / Plugin 0.2.0-beta.10 — unpublished candidate (2026-09-26)
+
+- Use the installed Microsoft Edge for isolated browser sessions on Windows,
+  while retaining Chrome on macOS and Linux and explicit channel overrides.
+  Report a failed local browser startup before dispatch with a specific error.
+
+## 0.2.0b9 / Plugin 0.2.0-beta.9 — unpublished candidate (2026-09-26)
+
+- Provide a stopped, explicit ACL migration for existing custom Windows state
+  directories, with preflight checks for unsafe links, unreadable ACLs, and
+  matching live processes. Default state migration remains separate.
+
+## 0.2.0b8 / Plugin 0.2.0-beta.8 — unpublished candidate (2026-09-26)
+
+- Verify the selected Windows Edge or Chrome account with a bounded same-origin
+  browser GET during dedicated Subchat setup. This avoids an intermittent 403
+  observed in the separate HTTPX authentication GET without changing the send
+  transport or its account pin.
+
+## 0.2.0b7 / Plugin 0.2.0-beta.7 — unpublished candidate (2026-09-26)
+
+- Give Windows setup catalogs a fresh private state directory and prepare test-owned temporary state with strict ACLs before exercising runtime paths. Legacy installed state still requires the explicit stopped migration.
+
+## 0.2.0b5 / Plugin 0.2.0-beta.5 — unpublished candidate (2026-09-26)
+
+- Make Windows ACL handling type-check cleanly on both Windows and macOS
+  before packaging the release wheel.
+
+## 0.2.0b4 / Plugin 0.2.0-beta.4 — unpublished candidate (2026-09-26)
+
+- Create Windows state and dedicated browser directories with the current user's
+  protected ACL, including when launched elevated. Reject inherited or legacy
+  ACLs and provide a stopped-process migration for the standard alpha engine
+  and Subchat state locations.
+- Share a checked browser definition across Subchat setup, Plugin selection and
+  CLI launch for the supported Chrome and Windows Edge routes.
+- Align Windows browser login tests with the headed offscreen request path.
+
+## 0.2.0b3 / Plugin 0.2.0-beta.3 — unpublished candidate (2026-09-26)
+
+- Treat Windows ConPTY closure after the shell exits as end of output while
+  retaining the Job until descendants exit. Keep active-shell read errors visible.
+- Read framed ConPTY input without a buffered stdin lock during worker shutdown.
+
+## 0.2.0b2 / Plugin 0.2.0-beta.2 — unpublished candidate (2026-09-26)
+
+- Keep Windows saved-state Subchat tools available when a legacy Chrome profile or
+  an account override is configured without a selected dedicated browser. Explain
+  the required setup and keep sending disabled.
+- Preserve quoted executable and script paths when starting Windows ConPTY
+  commands through `cmd.exe`, including portable installations in paths with spaces.
+
+## 0.2.0b1 / Plugin 0.2.0-beta.1 — unpublished candidate (2026-09-26)
+
+- Add a selected, account-pinned Windows Chrome or Edge path for ordinary Chat
+  Subchat. Sending remains disabled until the owner explicitly enables it.
+- Keep macOS browser-prepared HTTP sends in the background; recover uncertain
+  submissions and same-conversation replies from saved receipts.
+- Improve native macOS GUI reads when an optional Accessibility value fails,
+  and render Japanese document previews with local fonts.
+- Bundle portable runtimes for macOS, Windows and Linux. The standard archives
+  do not include LibreOffice or Poppler, and OS signing remains separate.
+
 ## 0.2.0a67 / Plugin 0.2.0-alpha.67 — unpublished candidate (2026-09-26)
 
 - Keep Finder elements visible when an optional AXValue read fails, while

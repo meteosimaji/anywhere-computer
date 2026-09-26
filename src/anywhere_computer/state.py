@@ -10,6 +10,7 @@ from contextlib import closing
 from pathlib import Path
 
 from .models import Reply, Request
+from .private_directory import create_private_directory
 
 LEDGER_SCHEMA_VERSION = 1
 LEDGER_MIN_SUPPORTED_SCHEMA = 0
@@ -60,7 +61,7 @@ def state_directory() -> Path:
 
 
 def prepare_directory(directory: Path) -> None:
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    create_private_directory(directory)
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError("State directory must be a real directory")
     if sys.platform != "win32":

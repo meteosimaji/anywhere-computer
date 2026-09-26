@@ -17,6 +17,7 @@ from test_subchat_chrome_profile import profile_fixture
 from anywhere_computer import subchat_chrome_login, subchat_chrome_profile, subchat_setup
 from anywhere_computer.http_service import HTTPServiceConfig, load_http_config
 from anywhere_computer.locking import ProcessLock
+from anywhere_computer.private_directory import create_private_directory
 from anywhere_computer.subchat import SubchatAccessError
 from anywhere_computer.subchat_gateway import SubchatGatewayConfig
 
@@ -137,6 +138,104 @@ async def test_windows_prepare_uses_normal_edge_and_closes_before_account_check(
          str(profile)),
         'owner-enter', ('inspect', profile, 'msedge'),
     ]
+
+
+async def test_windows_dedicated_inspection_uses_headed_offscreen_edge(
+    tmp_path, monkeypatch,
+):
+    from anywhere_computer import subchat_cli
+
+    monkeypatch.setattr(subchat_setup.sys, 'platform', 'win32')
+    launches = []
+
+    class Page:
+        async def goto(self, url, **options):
+            assert url == 'https://chatgpt.com/'
+            assert options == {'wait_until': 'domcontentloaded'}
+            launches.append('home')
+            return SimpleNamespace(url=url, status=200)
+
+        async def evaluate(self, script, options):
+            assert 'fetch(url' in script
+            assert options == {'url': 'https://chatgpt.com/api/auth/session',
+                               'limit': 131_072}
+            launches.append('auth')
+            return {'url': options['url'], 'status': 200,
+                    'contentType': 'application/json; charset=utf-8',
+                    'body': json.dumps({'account': {'id': 'account-a'},
+                                        'accessToken': 'private-token',
+                                        'user': {'email': 'owner@example.com'}}),
+                    'oversized': False}
+
+        async def close(self):
+            launches.append('page-closed')
+
+    class Context:
+        async def new_page(self):
+            return Page()
+
+        async def close(self):
+            launches.append('closed')
+
+    class Chromium:
+        async def launch_persistent_context(self, profile, **options):
+            launches.append((profile, options))
+            return Context()
+
+    @asynccontextmanager
+    async def runtime():
+        yield SimpleNamespace(chromium=Chromium())
+
+    monkeypatch.setattr(playwright.async_api, 'async_playwright', runtime)
+    profile = tmp_path / 'edge-login'
+    assert await subchat_setup.inspect_dedicated_account(profile, 'msedge') == 'account-a'
+    assert launches == [
+        (str(profile), {'channel': 'msedge', 'headless': False,
+                        'ignore_default_args': ['--use-mock-keychain'],
+                        'args': list(subchat_cli.WINDOWS_DEDICATED_BROWSER_ARGS)}),
+        'home', 'auth', 'page-closed', 'closed',
+    ]
+
+
+@pytest.mark.parametrize(('status', 'account', 'error'), [
+    (403, 'account-a', SubchatAccessError),
+    (200, '', subchat_setup.SetupInputError),
+    (200, 'bad account', subchat_setup.SetupInputError),
+])
+async def test_windows_dedicated_inspection_rejects_denial_or_invalid_account(
+    status, account, error,
+):
+    class Page:
+        async def goto(self, _url, **_options):
+            return SimpleNamespace(url='https://chatgpt.com/', status=200)
+
+        async def evaluate(self, _script, options):
+            return {'url': options['url'], 'status': status,
+                    'contentType': 'application/json',
+                    'body': json.dumps({'account': {'id': account},
+                                        'accessToken': 'private-token',
+                                        'user': {'email': 'owner@example.com'}}),
+                    'oversized': False}
+
+    with pytest.raises(error):
+        await subchat_setup._dedicated_browser_account_id(Page())
+
+
+async def test_windows_dedicated_inspection_rejects_cross_origin_response():
+    class Page:
+        async def goto(self, _url, **_options):
+            return SimpleNamespace(url='https://chatgpt.com/', status=200)
+
+        async def evaluate(self, _script, _options):
+            return {'url': 'https://other.example/api/auth/session', 'status': 200,
+                    'contentType': 'application/json',
+                    'body': json.dumps({'account': {'id': 'account-a'},
+                                        'accessToken': 'private-token',
+                                        'user': {'email': 'owner@example.com'}}),
+                    'oversized': False}
+
+    with pytest.raises(subchat_setup.SetupInputError):
+        await subchat_setup._dedicated_browser_account_id(Page())
 
 
 def test_windows_setup_missing_edge_reports_failure_without_selection(
@@ -375,7 +474,7 @@ async def test_inspection_uses_private_snapshot_and_background_context(tmp_path,
 def test_stage_plugin_profile_preserves_pin_and_send_consent(tmp_path, monkeypatch):
     source = profile_fixture(tmp_path / "Chrome", "Default")
     state = tmp_path / "app/subchat/ledger"
-    state.parent.mkdir(parents=True)
+    create_private_directory(state.parent)
     selection = state.parent / "login-selection.json"
     selection.write_text(json.dumps({
         "chrome_source_profile": str(source), "expected_account_id": "account-a",

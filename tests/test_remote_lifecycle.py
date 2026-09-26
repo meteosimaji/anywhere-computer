@@ -19,6 +19,7 @@ from test_http_service import RESOURCE, authenticate, initialize, setup
 from anywhere_computer.cloudflare_tunnel import TunnelCredential
 from anywhere_computer.http_diagnostics import diagnose_http
 from anywhere_computer.owner_credentials import OwnerCredentials
+from anywhere_computer.private_directory import create_private_directory
 
 
 @pytest.mark.parametrize("kill_stage", ["remote-serve", "remote-watch"])
@@ -26,7 +27,7 @@ async def test_cli_chain_recovers_http_crash_and_cleans_up_owner_loss(
     tmp_path, unused_tcp_port, kill_stage
 ):
     state = tmp_path / "state"
-    state.mkdir()
+    create_private_directory(state)
     await setup(state, unused_tcp_port)
     vault = MemoryVault()
     owner = OwnerCredentials(state, resource=RESOURCE, owner="owner", vault=vault)
