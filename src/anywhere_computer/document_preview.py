@@ -157,8 +157,17 @@ def preview_document(args: PreviewDocument) -> dict[str, JsonValue]:
         profile.mkdir(mode=0o700)
         policy = root / "network.sb"
         policy.write_text(_sandbox_policy(root))
+        fontconfig = ET.Element("fontconfig")
+        for directory in ("/System/Library/Fonts", "/Library/Fonts"):
+            ET.SubElement(fontconfig, "dir").text = directory
+        ET.SubElement(fontconfig, "cachedir").text = str(root / "font-cache")
+        fontconfig_file = root / "fonts.conf"
+        fontconfig_file.write_bytes(ET.tostring(
+            fontconfig, encoding="utf-8", xml_declaration=True))
         env = {**os.environ, "HOME": str(root), "TMPDIR": str(root),
-               "SAL_DISABLE_OPENCL": "1"}
+               "SAL_DISABLE_OPENCL": "1", "FONTCONFIG_FILE": str(fontconfig_file)}
+        # Absolute system font directories must not be rooted elsewhere.
+        env.pop("FONTCONFIG_SYSROOT", None)
         _run([sandbox, "-f", str(policy), office, f"-env:UserInstallation={profile.as_uri()}",
               "--headless", "--convert-to", "pdf:" + OFFICE_FORMATS[extension][1], "--outdir",
               str(output), str(source)], timeout=35, env=env,

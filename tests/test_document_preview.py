@@ -4,6 +4,7 @@ import io
 import json
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import threading
@@ -15,11 +16,16 @@ import psutil
 import pytest
 
 from anywhere_computer.document_preview import _run, _safe_ooxml, _sandbox_policy, preview_document
-from anywhere_computer.document_writer import FormulaCell, create_workbook
+from anywhere_computer.document_writer import (
+    FormulaCell,
+    create_word,
+    create_workbook,
+    edit_document_paragraph,
+)
 from anywhere_computer.engine import Engine
-from anywhere_computer.files import sha256
+from anywhere_computer.files import Files, sha256
 from anywhere_computer.mcp_server import MCPSession
-from anywhere_computer.models import PreviewDocument, Request
+from anywhere_computer.models import EditDocumentParagraph, PreviewDocument, Request
 
 REL = "http://schemas.openxmlformats.org/package/2006/relationships"
 OFFICE_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -55,6 +61,27 @@ def docx(path, *, external=False):
 
 def args(path, page=1):
     return PreviewDocument(path=str(path), expected_sha256=sha256(path.read_bytes()), page=page)
+
+
+def ink_pixels(png: bytes, directory) -> int:
+    image = directory / "page.png"
+    image.write_bytes(png)
+    bitmap = directory / "page.bmp"
+    subprocess.run(["sips", "-s", "format", "bmp", str(image), "--out", str(bitmap)],
+                   capture_output=True, check=True, timeout=15)
+    data = bitmap.read_bytes()
+    assert data[:2] == b"BM"
+    offset = struct.unpack_from("<I", data, 10)[0]
+    width = struct.unpack_from("<i", data, 18)[0]
+    height = abs(struct.unpack_from("<i", data, 22)[0])
+    bits = struct.unpack_from("<H", data, 28)[0]
+    assert width > 0 and height > 0 and bits == 24
+    stride = ((width * 3 + 3) // 4) * 4
+    return sum(
+        min(data[offset + row * stride + column * 3:
+                 offset + row * stride + column * 3 + 3]) < 245
+        for row in range(height) for column in range(width)
+    )
 
 
 def pptx(tmp_path):
@@ -100,6 +127,28 @@ def test_formatted_multipage_docx_renders_distinct_pages_without_changing_source
     png_two = base64.b64decode(second["data_base64"])
     assert png_one.startswith(b"\x89PNG\r\n\x1a\n") and png_two != png_one
     assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("inherited_sysroot", [False, True])
+def test_generated_japanese_docx_remains_visible_after_paragraph_edit(
+    tmp_path, monkeypatch, inherited_sysroot
+):
+    if inherited_sysroot:
+        monkeypatch.setenv("FONTCONFIG_SYSROOT", "/nonexistent/fontconfig-root")
+    else:
+        monkeypatch.delenv("FONTCONFIG_SYSROOT", raising=False)
+    if sys.platform != "darwin" or any(shutil.which(name) is None for name in
+           ("soffice", "pdfinfo", "pdftoppm", "sandbox-exec")):
+        pytest.skip("Local sandboxed document renderer is unavailable")
+    path = tmp_path / "japanese.docx"
+    path.write_bytes(create_word("文書プレビューの実機テスト\n元の日本語段落\nこの段落は保持する"))
+    (tmp_path / "state").mkdir()
+    edit_document_paragraph(Files(tmp_path / "state"), EditDocumentParagraph(
+        path=str(path), paragraph=2, expected_sha256=sha256(path.read_bytes()),
+        expected_text="元の日本語段落", new_text="更新済み：日本語の段落"))
+    result = preview_document(args(path))
+    assert result["rendered"] is True and result["pages"] == 1
+    assert ink_pixels(base64.b64decode(result["data_base64"]), tmp_path) > 0
 
 
 @pytest.mark.parametrize("format_name", ["xlsx", "pptx"])
