@@ -45,9 +45,9 @@ for line in sys.stdin:
             continue
         result = {'observation_id': 'fixture-observation', 'tree': {}}
     else:
-        if mode == 'element_unavailable':
+        if mode in ('element_unavailable', 'value_not_comparable'):
             print(json.dumps({'id': req['id'], 'error': {
-                'code': 'element_unavailable'}}), flush=True)
+                'code': mode}}), flush=True)
             continue
         if mode in ('changed', 'press_changed'):
             code = 'press_target_changed' if mode == 'press_changed' else 'value_changed'
@@ -112,6 +112,8 @@ async def test_owner_binding_and_cross_session_snapshot_invalidation(helper_proc
     ("set_value", "lost", "unknown"), ("press", "lost", "unknown"),
     ("set_value", "changed", "failed"), ("press", "changed", "failed"),
     ("press", "press_changed", "failed"),
+    ("set_value", "value_not_comparable", "failed"),
+    ("press", "value_not_comparable", "failed"),
 ])
 async def test_native_outcome_is_durable_and_not_replayed(
         tmp_path, helper_process, mode, expected, method):

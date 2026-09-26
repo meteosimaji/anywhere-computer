@@ -153,9 +153,19 @@ def test_windows_setup_missing_edge_reports_failure_without_selection(
     monkeypatch.setattr(subchat_setup.os, 'startfile', startfile, raising=False)
     monkeypatch.setattr(builtins, 'input',
                         lambda _prompt: pytest.fail('Missing browser must not ask for login'))
-    with pytest.raises(SystemExit, match='Subchat login inspection failed: FileNotFoundError'):
+    with pytest.raises(SystemExit, match='Could not launch the installed Edge or Chrome'):
         subchat_setup.main(['prepare-dedicated', '--browser-channel', 'msedge'])
     assert not (state.parent / 'login-selection.json').exists()
+
+
+def test_windows_dedicated_setup_reports_invalid_path_configuration(monkeypatch):
+    def invalid_paths():
+        raise ValueError('secret path')
+
+    monkeypatch.setattr(subchat_setup, 'plugin_paths', invalid_paths)
+    with pytest.raises(SystemExit, match='use the default Windows local paths') as error:
+        subchat_setup.main(['inspect-dedicated', '--browser-channel', 'msedge'])
+    assert 'secret path' not in str(error.value)
 
 
 def test_discover_choose_and_revoke_profile_id(tmp_path, monkeypatch, capsys):

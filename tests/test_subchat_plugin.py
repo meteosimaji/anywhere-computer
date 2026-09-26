@@ -388,6 +388,27 @@ def test_windows_plugin_rejects_custom_cookie_storage_paths(tmp_path, monkeypatc
     assert state == tmp_path / 'subchat/ledger'
 
 
+def test_windows_unselected_login_is_not_bootstrapped_for_read_only_mcp(
+    tmp_path, monkeypatch,
+):
+    profile, state = tmp_path / 'edge-login', tmp_path / 'subchat/ledger'
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'win32')
+    monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
+    for name in ('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', 'ANYWHERE_SUBCHAT_BROWSER_CHANNEL',
+                 'ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID'):
+        monkeypatch.delenv(name, raising=False)
+    observed = {}
+
+    async def fake_run(_profile, _state, **options):
+        observed.update(options)
+
+    monkeypatch.setattr(subchat_plugin, 'run', fake_run)
+    subchat_plugin.main()
+    assert observed['chrome_login_profile'] is None
+    assert observed['expected_account_id'] is None
+    assert observed['read_only_mcp'] is True
+
+
 def test_windows_saved_dedicated_selection_enables_default_send_and_rejects_overrides(
     tmp_path, monkeypatch,
 ):

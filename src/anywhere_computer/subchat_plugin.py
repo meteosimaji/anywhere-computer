@@ -188,8 +188,11 @@ def main() -> None:
                              "dedicated browser selection")
     if transport == "http-read-only":
         source, account_id = selected_chrome_login(state)
+        bootstrap_profile = (profile if source is None and (
+            sys.platform != "win32" or selection.get("dedicated_browser_channel") is not None
+        ) else None)
         asyncio.run(run(None, state, mcp=True, http_only=True,
-                        chrome_login_profile=profile if source is None else None,
+                        chrome_login_profile=bootstrap_profile,
                         chrome_login_source_profile=source, expected_account_id=account_id,
                         read_only_mcp=True, browser_channel=browser_channel))
     elif transport == "browser-send":

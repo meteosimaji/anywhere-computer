@@ -33,6 +33,11 @@ browser-prepared sending. This does not import a normal browser profile or an
 existing Edge tab. Keep the Plugin stopped while preparing the profile, and run
 one of these commands in an interactive Windows terminal:
 
+If you are working from a repository checkout, prefix the command with
+`uv run --locked`. For a Plugin-only installation, prefix it with
+`uv tool run --from <wheel-path>`, using the absolute path of the Plugin's
+bundled wheel for `<wheel-path>`.
+
 ```powershell
 anywhere-subchat-setup prepare-dedicated --browser-channel msedge
 # Or: anywhere-subchat-setup prepare-dedicated --browser-channel chrome
@@ -62,7 +67,9 @@ it stores no credentials. Restart the Plugin MCP session; a separately
 launched Codex or Claude app reads this selection without inheriting terminal
 environment variables. Omitting `--enable-background-send` saves the browser
 and account for read-only use. `anywhere-subchat-setup revoke` removes the
-selection for the next Plugin start. Conflicting browser, account, source
+selection for the next Plugin start. On Windows this also prevents the Plugin
+from opening the unselected login, but does not delete the local browser
+profile or its cookies. Conflicting browser, account, source
 profile, or send-profile environment overrides are rejected. On Windows the
 Plugin also rejects custom profile and state paths, so browser cookies remain
 under the current user's LocalAppData directory. An explicit transport

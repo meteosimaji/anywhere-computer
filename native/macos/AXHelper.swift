@@ -272,7 +272,12 @@ private func copyOptionalAttribute(
     }
 }
 
-private func observedValue(_ element: AXUIElement) throws -> CFTypeRef? {
+private struct ReadOnlyValue {
+    let value: CFTypeRef?
+    let comparable: Bool
+}
+
+private func observedValue(_ element: AXUIElement) throws -> ReadOnlyValue {
     var value: CFTypeRef?
     let status = AXUIElementCopyAttributeValue(
         element, kAXValueAttribute as CFString, &value
@@ -280,14 +285,16 @@ private func observedValue(_ element: AXUIElement) throws -> CFTypeRef? {
     return try observedValueResult(status, value)
 }
 
-private func observedValueResult(_ status: AXError, _ value: CFTypeRef?) throws -> CFTypeRef? {
+private func observedValueResult(_ status: AXError, _ value: CFTypeRef?) throws -> ReadOnlyValue {
     switch status {
     case .success:
-        return value
-    case .attributeUnsupported, .noValue, .failure:
+        return ReadOnlyValue(value: value, comparable: true)
+    case .attributeUnsupported, .noValue:
+        return ReadOnlyValue(value: nil, comparable: true)
+    case .failure:
         // Finder can return a generic failure for AXValue on an otherwise
-        // usable child. Its value is optional for read-only observation.
-        return nil
+        // usable child. Keep it visible, but never infer that its value is absent.
+        return ReadOnlyValue(value: nil, comparable: false)
     default:
         throw helperError("ax_error", stage: "copy_attribute",
                           attribute: "AXValue", axStatus: status)
@@ -710,9 +717,10 @@ private final class AXHelper {
         try deadline.check()
         let observedValue = try observedValue(element)
         let press = try pressIdentity(element, readOnly: true)
-        refs[ref] = ObservedElement(element: element, valueDigest: valueDigest(observedValue),
+        let digest = observedValue.comparable ? valueDigest(observedValue.value) : nil
+        refs[ref] = ObservedElement(element: element, valueDigest: digest,
                                     pressIdentity: press)
-        let value = jsonScalar(observedValue)
+        let value = jsonScalar(observedValue.value)
         try deadline.check()
         let enabled = try boolAttribute(element, kAXEnabledAttribute as CFString)
         try deadline.check()
@@ -726,7 +734,7 @@ private final class AXHelper {
             "value": value.0,
             "enabled": enabled ?? NSNull(),
             "settable": settable,
-            "pressable": press != nil,
+            "pressable": press != nil && digest != nil,
             "children": [[String: Any]](),
         ]
         if label.1 { node["label_truncated"] = true }
@@ -968,9 +976,11 @@ private final class AXHelper {
         if try !press && !valueIsSettable(currentElement) {
             throw helperError("value_not_settable")
         }
+        guard let expected = observedElement.valueDigest else {
+            throw helperError("value_not_comparable")
+        }
         let before = try copyOptionalAttribute(currentElement, kAXValueAttribute as CFString)
-        guard let expected = observedElement.valueDigest,
-              let current = valueDigest(before) else {
+        guard let current = valueDigest(before) else {
             throw helperError("value_not_comparable")
         }
         guard expected == current else { throw helperError("value_changed") }

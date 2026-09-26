@@ -143,15 +143,26 @@ async def inspect_dedicated_account(profile: Path, channel: str) -> str:
     """Read the account from a stopped, dedicated Windows browser profile."""
     if sys.platform != "win32":
         raise SetupInputError("Dedicated browser setup is supported on Windows only")
-    from playwright.async_api import async_playwright
+    try:
+        from playwright.async_api import Error as PlaywrightError
+        from playwright.async_api import async_playwright
+    except ModuleNotFoundError as error:
+        if error.name != "playwright":
+            raise
+        raise SetupInputError("Install browser support with the browser extra") from None
 
     from .subchat_browser import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
     from .subchat_chrome_login import chrome_http_session
 
     async with async_playwright() as driver:
-        context = await driver.chromium.launch_persistent_context(
-            str(profile), channel=channel, headless=True,
-            ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS))
+        try:
+            context = await driver.chromium.launch_persistent_context(
+                str(profile), channel=channel, headless=True,
+                ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS))
+        except PlaywrightError:
+            raise SetupInputError(
+                "Dedicated browser could not open; close all windows using its profile"
+            ) from None
         try:
             async with httpx.AsyncClient(trust_env=False, follow_redirects=False,
                                          transport=httpx.AsyncHTTPTransport(retries=0)) as client:
@@ -169,8 +180,12 @@ async def prepare_dedicated_profile(profile: Path, channel: str) -> str:
     executable = "msedge.exe" if channel == "msedge" else "chrome.exe"
     arguments = subprocess.list2cmdline(
         [f"--user-data-dir={profile}", "https://chatgpt.com/"])
-    await asyncio.to_thread(os.startfile, executable, "open", arguments=arguments,
-                            cwd=str(profile))
+    try:
+        await asyncio.to_thread(os.startfile, executable, "open", arguments=arguments,
+                                cwd=str(profile))
+    except OSError:
+        raise SetupInputError(
+            "Could not launch the installed Edge or Chrome browser") from None
     await asyncio.to_thread(input,
         "Sign in to ChatGPT, close all dedicated browser windows, then press Enter here: ")
     return await inspect_dedicated_account(profile, channel)
@@ -322,7 +337,12 @@ def main(argv: list[str] | None = None) -> None:
         parser.error("This action takes no profile; other actions require one")
     try:
         if dedicated:
-            profile, state = plugin_paths()
+            try:
+                profile, state = plugin_paths()
+            except ValueError:
+                raise SetupInputError(
+                    "Subchat setup paths are invalid; use the default Windows local paths"
+                ) from None
             account_id = asyncio.run(
                 prepare_dedicated_profile(profile, args.browser_channel)
                 if args.action == "prepare-dedicated" else

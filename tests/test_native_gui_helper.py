@@ -200,9 +200,11 @@ do {
         && failure.stage == "copy_actions" && failure.axStatus == -25200
 }
 emit(["id": "optional-value", "result": [
-    "failure_absent": try observedValueResult(.failure, nil) == nil,
-    "no_value_absent": try observedValueResult(.noValue, nil) == nil,
-    "success_preserved": (try observedValueResult(.success, "visible" as CFString))
+    "failure_absent": try observedValueResult(.failure, nil).value == nil,
+    "failure_uncomparable": try observedValueResult(.failure, nil).comparable == false,
+    "no_value_absent": try observedValueResult(.noValue, nil).value == nil,
+    "no_value_comparable": try observedValueResult(.noValue, nil).comparable,
+    "success_preserved": (try observedValueResult(.success, "visible" as CFString).value)
         .map { CFEqual($0, "visible" as CFString) } ?? false,
     "other_failure_still_fails": otherFailureStillFails,
     "failure_not_settable": try observedValueSettableResult(.failure, true) == false,
@@ -221,7 +223,8 @@ emit(["id": "optional-value", "result": [
                                  "attribute": "AXValue", "ax_status": -25204}},
         {"id": "unknown", "result": {"attribute": "other"}},
         {"id": "optional-value", "result": {
-            "failure_absent": True, "no_value_absent": True,
+            "failure_absent": True, "failure_uncomparable": True,
+            "no_value_absent": True, "no_value_comparable": True,
             "success_preserved": True, "other_failure_still_fails": True,
             "failure_not_settable": True, "success_settable": True,
             "failure_not_pressable": True, "mutation_press_failure_still_fails": True,

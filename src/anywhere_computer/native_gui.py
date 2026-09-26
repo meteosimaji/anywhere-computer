@@ -193,6 +193,9 @@ class NativeGUI:
                             code == "press_target_changed" and request.get("method") == "press")):
                         raise NativeGUIInputRefused(
                             "Native GUI target changed since observation; input was not attempted")
+                    if keep_session and code == "value_not_comparable":
+                        raise NativeGUIInputRefused(
+                            "Native GUI value could not be compared; input was not attempted")
                     # Never expose arbitrary helper diagnostics or exception text.
                     safe_code = (code if isinstance(code, str) and code in HELPER_ERROR_CODES
                                  else "invalid_response")
