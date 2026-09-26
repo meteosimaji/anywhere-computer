@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from .state import state_directory
+from .subchat_browser_specs import browser_choices, browser_spec
 from .subchat_chrome_profile import chrome_profile_by_id, selected_chrome_source
 from .subchat_cli import run
 
@@ -56,8 +57,12 @@ def selected_browser_channel(state: Path) -> str:
     if selected is not None and configured is not None and selected != configured:
         raise ValueError("Browser channel override conflicts with the selected browser")
     channel = configured if configured is not None else selected or "chrome"
-    if channel not in {"chrome", "msedge"}:
-        raise ValueError("ANYWHERE_SUBCHAT_BROWSER_CHANNEL must be chrome or msedge")
+    if not isinstance(channel, str):
+        raise ValueError("ANYWHERE_SUBCHAT_BROWSER_CHANNEL is unsupported")
+    try:
+        browser_spec(channel, sys.platform)
+    except ValueError as error:
+        raise ValueError("ANYWHERE_SUBCHAT_BROWSER_CHANNEL is unsupported") from error
     return channel
 
 
@@ -147,7 +152,7 @@ def _selection_record(state: Path) -> dict[str, object]:
                      or not record["chrome_profile_id"]))
                 or ("dedicated_browser_channel" in record and
                     (not isinstance(record["dedicated_browser_channel"], str)
-                     or record["dedicated_browser_channel"] not in {"chrome", "msedge"}
+                     or record["dedicated_browser_channel"] not in browser_choices("win32")
                      or not isinstance(record.get("dedicated_profile"), str)
                      or not Path(str(record["dedicated_profile"])).is_absolute()
                      or not isinstance(record.get("expected_account_id"), str)

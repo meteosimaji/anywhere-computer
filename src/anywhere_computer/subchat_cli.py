@@ -25,6 +25,7 @@ from .subchat import (
     Subchats,
     SubchatUnsupported,
 )
+from .subchat_browser_specs import BROWSER_SPECS, browser_spec
 from .subchat_content import SubchatResources
 from .subchat_delete import DeleteRequest, SubchatDeletionUnknown, delete_saved
 from .subchat_state import (
@@ -204,10 +205,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
               read_only_mcp: bool = False,
               ledger_owner: str | None = None,
               browser_channel: str = 'chrome') -> None:
-    if browser_channel not in {'chrome', 'msedge'}:
-        raise ValueError('Browser channel must be chrome or msedge')
-    if browser_channel == 'msedge' and sys.platform != 'win32':
-        raise ValueError('Microsoft Edge Subchat login is supported on Windows only')
+    spec = browser_spec(browser_channel, sys.platform)
     if read_only_mcp and (not mcp or not http_only or http_generation is not None
                           or chrome_generation_stdin):
         raise ValueError('Read-only MCP requires HTTP-only mode without generation')
@@ -286,7 +284,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         await runtime(), profile, browser_launch_args))
                 windows_offscreen = httpx_generation and sys.platform == 'win32'
                 context = await (await runtime()).chromium.launch_persistent_context(
-                    str(profile), channel=browser_channel, headless=False,
+                    str(profile), channel=spec.playwright_channel, headless=False,
                     ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
                     args=(list(WINDOWS_DEDICATED_BROWSER_ARGS) if windows_offscreen else
                           ['--start-minimized'] if minimized else [])
@@ -323,7 +321,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     assert profile_root is not None
                     windows_offscreen = sys.platform == 'win32'
                     chrome_context = await (await runtime()).chromium.launch_persistent_context(
-                        str(profile_root), channel=browser_channel,
+                        str(profile_root), channel=spec.playwright_channel,
                         headless=not windows_offscreen,
                         ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
                         args=(list(WINDOWS_DEDICATED_BROWSER_ARGS)
@@ -526,7 +524,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--browser-profile', type=Path,
                         help='Dedicated logged-in Chrome profile, never your normal profile')
-    parser.add_argument('--browser-channel', choices=('chrome', 'msedge'), default='chrome',
+    parser.add_argument('--browser-channel',
+                        choices=tuple(spec.identifier for spec in BROWSER_SPECS),
+                        default='chrome',
                         help='Installed Chrome or Microsoft Edge for a dedicated profile')
     parser.add_argument('--state-dir', type=Path, required=True,
                         help='Local subchat ledger directory')

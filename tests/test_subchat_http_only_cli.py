@@ -281,7 +281,11 @@ async def test_read_only_plugin_explicit_refresh_after_startup_401(tmp_path, mon
     class PlaywrightManager:
         async def __aenter__(self):
             async def launch(*_args, **kwargs):
-                assert kwargs['headless'] is True
+                windows_login = subchat_cli.sys.platform == 'win32'
+                assert kwargs['headless'] is not windows_login
+                assert kwargs['args'] == (
+                    ['--window-position=-32000,-32000', '--window-size=900,700']
+                    if windows_login else [])
                 events.append('chrome_opened')
                 return Context()
 

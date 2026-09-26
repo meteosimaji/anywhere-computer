@@ -3,6 +3,16 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b4 / Plugin 0.2.0-beta.4 — unpublished candidate (2026-09-26)
+
+- Create Windows state and dedicated browser directories with the current user's
+  protected ACL, including when launched elevated. Reject inherited or legacy
+  ACLs and provide a stopped-process migration for the standard alpha engine
+  and Subchat state locations.
+- Share a checked browser definition across Subchat setup, Plugin selection and
+  CLI launch for the supported Chrome and Windows Edge routes.
+- Align Windows browser login tests with the headed offscreen request path.
+
 ## 0.2.0b3 / Plugin 0.2.0-beta.3 — unpublished candidate (2026-09-26)
 
 - Treat Windows ConPTY closure after the shell exits as end of output while

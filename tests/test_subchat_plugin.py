@@ -816,9 +816,12 @@ async def test_chrome_login_closes_before_plugin_serves_tools(
         async def launch_persistent_context(self, profile, *, channel, headless,
                                             ignore_default_args, args):
             assert profile == str(tmp_path / 'login')
-            assert channel == 'chrome' and headless is True
+            assert channel == 'chrome'
+            windows_login = subchat_cli.sys.platform == 'win32'
+            assert headless is not windows_login
             assert ignore_default_args == ['--use-mock-keychain']
-            assert args == []
+            assert args == (['--window-position=-32000,-32000', '--window-size=900,700']
+                            if windows_login else [])
             events.append('chrome_started')
             return Context()
 

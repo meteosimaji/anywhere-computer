@@ -18,6 +18,22 @@
    `autostart-upgrade`、続いて `autostart-start` を実行する。
 5. `status`と実際のMCP接続で版・応答を確認し、必要なら既知の操作IDの結果を回収する。
 
+Windows の旧 alpha から更新する場合は、エンジンと専用ブラウザーを終了し、
+状態保存先をバックアップしてから ACL 移行を行います。新しい版のソース環境で
+次を順に実行してください。最初のコマンドは読み取り専用の事前検査です。
+
+```powershell
+uv run --locked python -m anywhere_computer.private_directory
+uv run --locked python -m anywhere_computer.private_directory --apply-stopped
+```
+
+このコマンドは標準の `%USERPROFILE%\.anywhere-computer\state` と
+`%LOCALAPPDATA%\Anywhere Computer\Anywhere Computer` のうち存在する保存先だけを
+対象にし、両方を事前検査してから権限を変更します。ファイルの内容は移動しません。
+管理者権限が必要な場合は同じ Windows ユーザーで昇格して実行します。独自の
+状態保存先はこのコマンドの対象外です。移行が失敗した場合はエンジンを再起動せず、
+表示された保存先と ACL を確認してください。
+
 ソースからの起動では `uv run --locked anywhere`、同梱配布物ではmacOS/Linuxの
 `./anywhere`、Windowsの `anywhere.cmd` を使います。以下はソース版の例です。
 山括弧の部分を実際の保存先に置き換えてください。
