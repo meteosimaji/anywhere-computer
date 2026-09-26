@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b9` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.9` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b10` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.10` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -106,6 +106,8 @@ Macのパスを書くだけでアクセス権が増えるわけではなく、�
 `browser_fill`もあります。操作後の確認に失敗した場合は結果不明を返すので、
 同じ操作を繰り返す前にタブを観測してください。既存Chromeのプロファイルや
 タブへの接続は、この隔離ブラウザ機能には含まれません。
+隔離ブラウザの既定起動先はWindowsではインストール済みEdge、macOSとLinuxでは
+Chromeです。起動できない場合は送信前の`browser_startup_unavailable`を返します。
 
 ローカルのエージェント同士で明示的に文章を送る`anywhere-peer` MCPもあります。
 `anywhere-peer --help`に所有者による登録と起動方法を示します。各peerの資格情報は

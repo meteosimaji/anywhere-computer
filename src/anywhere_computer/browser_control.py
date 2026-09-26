@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 import uuid
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
@@ -24,6 +25,10 @@ class BrowserNavigationUnknown(Exception):
 
 class BrowserActionUnknown(Exception):
     """A page action may have run, but its outcome could not be confirmed."""
+
+
+class BrowserStartupUnavailable(Exception):
+    """No isolated tab was registered after local browser startup failed."""
 
 
 _CLEANUP_WAIT_SECONDS = 5.0
@@ -79,8 +84,12 @@ class _Entry:
 
 
 class BrowserControl:
-    def __init__(self, *, channel: str | None = "chrome") -> None:
-        self.channel = channel
+    def __init__(self, *, channel: str | None = "auto") -> None:
+        # The isolated tab has no account profile. Use the browser shipped with
+        # Windows; callers can still request an explicit Playwright channel.
+        self.channel = (
+            "msedge" if sys.platform == "win32" else "chrome"
+        ) if channel == "auto" else channel
         self.entries: dict[str, _Entry] = {}
         self._lock = asyncio.Lock()
 
@@ -158,7 +167,7 @@ class BrowserControl:
                 browser = await driver.chromium.launch(headless=True, channel=self.channel)
                 context = await browser.new_context(accept_downloads=False)
                 page = await context.new_page()
-            except BaseException:
+            except BaseException as error:
                 # Cancellation can arrive before the session is registered, so
                 # close both resources here; close() cannot discover them later.
                 async def close_started() -> None:
@@ -172,6 +181,10 @@ class BrowserControl:
                     await _finish_cleanup(close_started())
                 except BaseException:
                     _LOG.warning("Browser startup cleanup did not complete successfully")
+                if isinstance(error, Exception):
+                    raise BrowserStartupUnavailable(
+                        "Isolated browser could not start with the selected browser"
+                    ) from error
                 raise
             session_id = uuid.uuid4().hex
             tab_id = uuid.uuid4().hex
