@@ -108,6 +108,11 @@ Quality CI では三 OS のそれぞれで同梱 ZIP を生成し、日本語・
 Keychain/Windows Vault/Secret Service 検証を代替しない。成功した ZIP はリポジトリの
 Actions artifact として 14 日保持する。ジョブ定義の追加だけでは Windows/Linux の成功
 実績としない。実際のジョブ結果は別途確認する。
+macOS/Windows の管理 GUI 入り `managed-portable.zip` は別の Quality ジョブで生成・
+移設検査し、Actions artifact として 7 日保持する。`main` への push が成功した場合、
+その ZIP 自体にも GitHub の出所証明を作成し、同じ Quality workflow・commit・
+`refs/heads/main` に結び付くことを検証する。PR や手動実行では証明しない。
+出所証明と配布物内 manifest の整合性検査は、GUI の実機操作や公開を証明しない。
 
 ZIP の公開は出力ディレクトリと同じファイルシステム内の staging で全体を完成させてから、
 排他的な hard link 作成で行う。既存ファイルを置き換えず、作成失敗時に最終ファイル名で

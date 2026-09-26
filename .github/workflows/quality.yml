@@ -198,3 +198,35 @@ jobs:
           --source-digest ${{ github.sha }}
           --source-ref refs/heads/main
           --deny-self-hosted-runners
+  attest-managed-portable:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: management-preview
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: managed-portable-${{ matrix.os }}
+          path: dist
+      - name: Attest the verified managed portable archive
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: dist/managed-portable.zip
+          create-storage-record: false
+      - name: Verify managed portable provenance identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh attestation verify dist/managed-portable.zip
+          --repo meteosimaji/anywhere-computer
+          --signer-workflow meteosimaji/anywhere-computer/.github/workflows/quality.yml
+          --source-digest ${{ github.sha }}
+          --source-ref refs/heads/main
+          --deny-self-hosted-runners
