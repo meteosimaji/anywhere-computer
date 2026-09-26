@@ -56,7 +56,9 @@ async def setup_scopes(mode: str) -> frozenset[str]:
         raise ValueError("Choose read-only, files, or all")
     # Persist the exact current catalog, not a wildcard that expands on updates.
     with tempfile.TemporaryDirectory(prefix="anywhere-setup-catalog-") as raw:
-        engine = Engine(Path(raw))
+        # TemporaryDirectory creates its root with the platform default ACL.
+        # Let the state layer create a private child instead of adopting it.
+        engine = Engine(Path(raw) / "catalog-state")
         try:
             return frozenset(
                 name for name, tool in engine.tools.items()

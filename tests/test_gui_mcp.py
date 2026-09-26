@@ -483,35 +483,31 @@ async def test_exact_window_change_invalidates_previous_window_and_refusal_clear
     ]
 
 
-async def test_missing_window_cannot_dispatch_foreground_input():
-    import tempfile
-    from pathlib import Path
-
+async def test_missing_window_cannot_dispatch_foreground_input(tmp_path):
     from anywhere_computer.engine import Engine
     from anywhere_computer.models import Request
 
-    with tempfile.TemporaryDirectory() as directory:
-        engine = Engine(Path(directory))
-        peer = Peer()
-        engine.gui_mcp = GUIMCP(peer)
-        try:
-            result = await engine.execute(
-                Request(
-                    operation_id="9" * 32,
-                    tool="gui_observe",
-                    arguments={"session_id": "a" * 32, "app": "Editor"},
-                ),
-                peer="owner",
-            )
-            assert result.state == "failed"
-            assert result.data["error_code"] == "invalid_parameter"
-            assert result.data["invalid_params"] == [
-                {"path": ["window_id"], "code": "missing"},
-            ]
-            assert result.data["dispatched"] is False
-            assert not peer.calls and not engine.gui_mcp.observations
-        finally:
-            await engine.close()
+    engine = Engine(tmp_path)
+    peer = Peer()
+    engine.gui_mcp = GUIMCP(peer)
+    try:
+        result = await engine.execute(
+            Request(
+                operation_id="9" * 32,
+                tool="gui_observe",
+                arguments={"session_id": "a" * 32, "app": "Editor"},
+            ),
+            peer="owner",
+        )
+        assert result.state == "failed"
+        assert result.data["error_code"] == "invalid_parameter"
+        assert result.data["invalid_params"] == [
+            {"path": ["window_id"], "code": "missing"},
+        ]
+        assert result.data["dispatched"] is False
+        assert not peer.calls and not engine.gui_mcp.observations
+    finally:
+        await engine.close()
     with pytest.raises(ValidationError):
         GUIObserve(session_id="a" * 32, app="Editor")
 

@@ -42,6 +42,14 @@ def test_existing_directory_is_not_recreated_on_posix(tmp_path):
     assert marker.read_text() == "preserved"
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL integration")
+def test_windows_pytest_tmp_path_is_private_before_state_uses_it(tmp_path):
+    user_sid = private_directory._windows_current_user_sid()
+    private_directory._validate_existing_windows_directory(tmp_path, user_sid)
+    ledger = Ledger(tmp_path)
+    ledger.close()
+
+
 @pytest.mark.skipif(os.name == "nt", reason="Creating symlinks requires a Windows privilege")
 def test_acl_migration_preflight_rejects_links_before_changes(tmp_path):
     root = tmp_path / "state"
