@@ -3,7 +3,7 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0b10 / Plugin 0.2.0-beta.10 — unpublished candidate (2026-09-26)
+## 0.2.0b10 / Plugin 0.2.0-beta.10 — beta prerelease (2026-09-26)
 
 - Use the installed Microsoft Edge for isolated browser sessions on Windows,
   while retaining Chrome on macOS and Linux and explicit channel overrides.
