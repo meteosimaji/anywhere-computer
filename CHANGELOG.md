@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a65 / Plugin 0.2.0-alpha.65 — unpublished candidate (2026-09-26)
+
+- Render Japanese DOCX text with system fonts in the isolated macOS preview.
+  Keep inherited Fontconfig sysroot settings from hiding those fonts.
+- Verify visible PNG pixels after creating and editing a Japanese document.
+
 ## 0.2.0a64 / Plugin 0.2.0-alpha.64 — unpublished candidate (2026-09-26)
 
 - Resolve macOS native GUI apps by a unique regular process when background
