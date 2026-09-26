@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b1 / Plugin 0.2.0-beta.1 — unpublished candidate (2026-09-26)
+
+- Add a selected, account-pinned Windows Chrome or Edge path for ordinary Chat
+  Subchat. Sending remains disabled until the owner explicitly enables it.
+- Keep macOS browser-prepared HTTP sends in the background; recover uncertain
+  submissions and same-conversation replies from saved receipts.
+- Improve native macOS GUI reads when an optional Accessibility value fails,
+  and render Japanese document previews with local fonts.
+- Bundle portable runtimes for macOS, Windows and Linux. The standard archives
+  do not include LibreOffice or Poppler, and OS signing remains separate.
+
 ## 0.2.0a67 / Plugin 0.2.0-alpha.67 — unpublished candidate (2026-09-26)
 
 - Keep Finder elements visible when an optional AXValue read fails, while
