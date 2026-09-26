@@ -115,7 +115,9 @@ def worker() -> None:
     from anywhere_computer.credentials import SERVICE, local_credential, secure_backend
 
     with tempfile.TemporaryDirectory(prefix="portable-agent-") as raw:
-        directory = Path(raw).resolve()
+        # TemporaryDirectory has a platform ACL; the agent creates its own
+        # protected state in a child, just as the installed application does.
+        directory = (Path(raw) / "state").resolve()
         account = "local-agent-" + hashlib.sha256(str(directory).encode()).hexdigest()[:24]
         backend = secure_backend()
         assert backend.get_password(SERVICE, account) is None
