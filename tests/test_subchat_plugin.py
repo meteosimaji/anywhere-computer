@@ -27,6 +27,7 @@ def test_plugin_paths_use_a_dedicated_default(tmp_path, monkeypatch):
 
 
 def test_plugin_paths_allow_absolute_overrides_and_reject_overlap(tmp_path, monkeypatch):
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'linux')
     monkeypatch.setattr(subchat_plugin, 'state_directory', lambda: tmp_path)
     profile = tmp_path / 'separate-chrome-login'
     state = tmp_path / 'separate-ledger'
@@ -42,6 +43,7 @@ def test_plugin_paths_allow_absolute_overrides_and_reject_overlap(tmp_path, monk
 
 
 def test_plugin_entry_uses_headless_http_read_only_mode(tmp_path, monkeypatch):
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'linux')
     profile, state = tmp_path / 'login', tmp_path / 'ledger'
     monkeypatch.delenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', raising=False)
     monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
@@ -64,6 +66,7 @@ def test_plugin_entry_uses_headless_http_read_only_mode(tmp_path, monkeypatch):
 def test_plugin_source_profile_is_explicit_and_browser_send_stays_dedicated(
     tmp_path, monkeypatch,
 ):
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'linux')
     profile, state = tmp_path / 'login', tmp_path / 'ledger'
     source = tmp_path / 'Chrome/Default'
     source.mkdir(parents=True)
@@ -261,6 +264,7 @@ def test_plugin_selection_stat_error_is_sanitized(tmp_path, monkeypatch):
 
 
 def test_plugin_browser_send_opt_in_reuses_login_with_minimized_window(tmp_path, monkeypatch):
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'linux')
     login, state = tmp_path / 'login', tmp_path / 'ledger'
     browser = tmp_path / 'browser-send'
     monkeypatch.setattr(subchat_plugin, 'state_directory', lambda: tmp_path)
@@ -291,6 +295,7 @@ def test_plugin_browser_send_opt_in_reuses_login_with_minimized_window(tmp_path,
 
 
 def test_plugin_httpx_mode_keeps_minimized_fallback_on_other_platforms(tmp_path, monkeypatch):
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'linux')
     profile, state = tmp_path / 'profile', tmp_path / 'ledger'
     monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
     monkeypatch.setenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', 'browser-prepared-httpx')
@@ -370,6 +375,9 @@ def test_dedicated_windows_selection_is_rejected_on_other_platforms(
     selection.chmod(0o600)
     monkeypatch.setattr(subchat_plugin.sys, 'platform', 'darwin')
     monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
+    # Windows cannot represent POSIX private mode bits, so isolate the platform gate.
+    monkeypatch.setattr(subchat_plugin, '_selection_record',
+                        lambda _state: json.loads(selection.read_text()))
     with pytest.raises(ValueError, match='Windows only'):
         subchat_plugin.main()
 

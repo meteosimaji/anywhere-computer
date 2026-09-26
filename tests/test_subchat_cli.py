@@ -43,6 +43,7 @@ async def test_windows_browser_transport_launches_selected_edge(tmp_path, monkey
     monkeypatch.setattr(playwright.async_api, 'async_playwright', runtime)
     monkeypatch.setattr(subchat_cli, 'process_lines', inspect)
     profile = tmp_path / 'edge-login'
+    monkeypatch.setattr(subchat_cli.sys, 'platform', 'linux')
     with pytest.raises(ValueError, match='Windows only'):
         await subchat_cli.run(profile, tmp_path / 'state', browser_channel='msedge')
     monkeypatch.setattr(subchat_cli.sys, 'platform', 'win32')
