@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b8 / Plugin 0.2.0-beta.8 — unpublished candidate (2026-09-26)
+
+- Verify the selected Windows Edge or Chrome account with a bounded same-origin
+  browser GET during dedicated Subchat setup. This avoids an intermittent 403
+  observed in the separate HTTPX authentication GET without changing the send
+  transport or its account pin.
+
 ## 0.2.0b7 / Plugin 0.2.0-beta.7 — unpublished candidate (2026-09-26)
 
 - Give Windows setup catalogs a fresh private state directory and prepare test-owned temporary state with strict ACLs before exercising runtime paths. Legacy installed state still requires the explicit stopped migration.
