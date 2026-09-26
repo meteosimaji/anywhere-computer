@@ -3,6 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a64 / Plugin 0.2.0-alpha.64 — unpublished candidate (2026-09-26)
+
+- Resolve macOS native GUI apps by a unique regular process when background
+  helpers share the bundle ID. Use the kernel process start time to retain
+  window and element identity when AppKit does not report a launch date.
+- Recheck the selected PID, bundle ID, activation policy and process start time
+  before binding Accessibility elements, and reject ambiguous app selections.
+
 ## 0.2.0a63 / Plugin 0.2.0-alpha.63 — unpublished candidate (2026-09-26)
 
 - Check the selected Chat surface again before sending, including follow-ups.
