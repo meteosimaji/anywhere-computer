@@ -17,6 +17,7 @@ from test_subchat_chrome_profile import profile_fixture
 from anywhere_computer import subchat_chrome_login, subchat_chrome_profile, subchat_setup
 from anywhere_computer.http_service import HTTPServiceConfig, load_http_config
 from anywhere_computer.locking import ProcessLock
+from anywhere_computer.private_directory import create_private_directory
 from anywhere_computer.subchat import SubchatAccessError
 from anywhere_computer.subchat_gateway import SubchatGatewayConfig
 
@@ -411,7 +412,7 @@ async def test_inspection_uses_private_snapshot_and_background_context(tmp_path,
 def test_stage_plugin_profile_preserves_pin_and_send_consent(tmp_path, monkeypatch):
     source = profile_fixture(tmp_path / "Chrome", "Default")
     state = tmp_path / "app/subchat/ledger"
-    state.parent.mkdir(parents=True)
+    create_private_directory(state.parent)
     selection = state.parent / "login-selection.json"
     selection.write_text(json.dumps({
         "chrome_source_profile": str(source), "expected_account_id": "account-a",

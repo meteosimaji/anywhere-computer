@@ -5,6 +5,7 @@ import pytest
 
 from anywhere_computer import autostart
 from anywhere_computer import startup_service as service
+from anywhere_computer.private_directory import create_private_directory
 from anywhere_computer.startup_native import StartupSnapshot
 
 
@@ -76,7 +77,7 @@ def registration(tmp_path, monkeypatch):
 
 def test_registration_is_idempotent_and_removal_preserves_config(registration):
     directory, native, calls, definition = registration
-    directory.mkdir()
+    create_private_directory(directory)
     sentinel = directory / "credentials-placeholder"
     sentinel.write_text("untouched")
     first = service.install_startup(directory)

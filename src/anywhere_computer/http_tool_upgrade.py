@@ -48,7 +48,9 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
         if database.is_symlink() or not database.is_file():
             raise ValueError("HTTP authorization database is missing")
         with tempfile.TemporaryDirectory(prefix="anywhere-tool-catalog-") as temporary:
-            engine = Engine(Path(temporary))
+            # The standard temporary root has a platform ACL. Create state
+            # privately beneath it, as setup_scopes does.
+            engine = Engine(Path(temporary) / "catalog-state")
             try:
                 known = (frozenset(engine.tools) | ROUTER_TOOLS
                          | (SUBCHAT_GATEWAY_TOOLS if selection else frozenset())) - LOCAL_ONLY_TOOLS

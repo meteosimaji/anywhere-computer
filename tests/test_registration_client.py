@@ -8,6 +8,7 @@ from test_enrollment_credentials import saved
 
 from anywhere_computer.client_tokens import ClientCredentialError
 from anywhere_computer.enrollment_http import EnrollmentHTTPReply, EnrollmentTransportError
+from anywhere_computer.private_directory import create_private_directory
 from anywhere_computer.registration_client import RegistrationClient
 
 
@@ -161,7 +162,7 @@ def test_invalid_account_endpoint_does_not_create_registration_state(tmp_path, a
 def test_schema_one_pending_record_is_preserved_without_guessing_its_account(tmp_path):
     credentials = saved(tmp_path / "credentials", MemoryVault())
     directory = tmp_path / "registration"
-    directory.mkdir()
+    create_private_directory(directory)
     original = {"attempt_id": "a" * 32, "enrollment_id": "c" * 32,
                 "name": "PC", "device": None}
     database = directory / "registration.sqlite3"

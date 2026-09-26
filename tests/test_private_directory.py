@@ -33,6 +33,7 @@ def test_existing_acl_must_match_protected_inheritable_user_policy():
     assert not validate(user, True, entries[:2] + [(0, 0x08, 0x1F01FF, "S-1-3-4")], user)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory behavior")
 def test_existing_directory_is_not_recreated_on_posix(tmp_path):
     directory = tmp_path / "ledger"
     directory.mkdir()

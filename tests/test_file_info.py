@@ -6,6 +6,7 @@ import pytest
 from anywhere_computer.engine import Engine
 from anywhere_computer.files import inspect_file
 from anywhere_computer.models import Request
+from anywhere_computer.private_directory import create_private_directory
 
 
 def test_metadata_reports_mode_and_distinguishes_creation_from_change(tmp_path):
@@ -62,7 +63,7 @@ def test_missing_entry_and_relative_path_are_not_success(tmp_path):
 
 async def test_file_info_is_exposed_through_engine(tmp_path):
     state = tmp_path / "state"
-    state.mkdir()
+    create_private_directory(state)
     engine = Engine(state)
     target = tmp_path / "file.txt"
     target.write_text("example")

@@ -7,11 +7,12 @@ from anywhere_computer.connection import exchange, serve
 from anywhere_computer.engine import Engine
 from anywhere_computer.engine_selection import EngineSelection, engine_directory
 from anywhere_computer.models import Request
+from anywhere_computer.private_directory import create_private_directory
 
 
 async def test_selected_data_keeps_endpoint_and_existing_operation(tmp_path):
     control, data = tmp_path / 'control', tmp_path / 'data'
-    control.mkdir()
+    create_private_directory(control)
     engine = Engine(data)
     request = Request(operation_id='a' * 32, tool='files_write', arguments={
         'path': str(tmp_path / 'result.txt'), 'text': 'before selection',
