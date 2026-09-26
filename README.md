@@ -72,7 +72,8 @@ codex plugin add anywhere-computer@personal
 ```
 
 The marketplace entry is in `.agents/plugins/marketplace.json`; the Plugin runs
-its bundled wheel through `uv`. Restart the Plugin session, then check that
+its bundled wheel through `uv`. After a Plugin update, start a new Codex task so
+its MCP processes load the updated wheel. Then check that
 `anywhere-computer` and `anywhere-subchat` appear as separate MCP servers. Call
 `subchat_capabilities` to confirm the Subchat server's actual mode and version.
 When accessing Subchat through ChatGPT's `codex_plugin_call` bridge, open
@@ -167,6 +168,9 @@ background browser-prepared HTTPX send tools when the Plugin starts. Without
 an explicit selection, the default remains read-only. On Windows, an owner can
 prepare a dedicated Chrome or Microsoft Edge login and save a verified account,
 browser choice, and send consent with `anywhere-subchat-setup choose-dedicated`.
+If a fresh Windows task reports `http_session_required` from `subchat_catalog`,
+check this dedicated profile selection before diagnosing the Plugin version or
+retrying a send. An updated Plugin does not create a login selection by itself.
 See the [Subchat guide](docs/SUBCHAT-PROBE.md#windows-dedicated-chrome-or-edge-profile)
 for setup and current live-validation limits. Set
 `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=http-read-only` to keep a pinned macOS
