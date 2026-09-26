@@ -417,6 +417,79 @@ def test_windows_unselected_login_is_not_bootstrapped_for_read_only_mcp(
     assert observed['read_only_mcp'] is True
 
 
+@pytest.mark.parametrize('legacy_selection, account_override, source_override', [
+    (None, 'account-a', False),
+    (None, 'account-a', True),
+    ({'chrome_profile_id': 'Profile 2', 'expected_account_id': 'account-a',
+      'enable_background_send': True}, None, False),
+    ({'chrome_source_profile': 'SOURCE', 'expected_account_id': 'account-a',
+      'enable_background_send': True}, None, False),
+])
+def test_windows_legacy_login_configuration_keeps_saved_tools_read_only(
+    tmp_path, monkeypatch, capsys, legacy_selection, account_override, source_override,
+):
+    profile, state = tmp_path / 'edge-login', tmp_path / 'subchat/ledger'
+    state.parent.mkdir()
+    if legacy_selection is not None:
+        record = dict(legacy_selection)
+        if record.get('chrome_source_profile') == 'SOURCE':
+            record['chrome_source_profile'] = str(tmp_path / 'Chrome/Default')
+        (state.parent / 'login-selection.json').write_text(json.dumps(record))
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'win32')
+    monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', raising=False)
+    if source_override:
+        monkeypatch.setenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE',
+                           str(tmp_path / 'Chrome/Default'))
+    else:
+        monkeypatch.delenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE', raising=False)
+    if account_override is None:
+        monkeypatch.delenv('ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID', raising=False)
+    else:
+        monkeypatch.setenv('ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID', account_override)
+    observed = {}
+
+    async def fake_run(browser_profile, _state, **options):
+        observed.update(profile=browser_profile, options=options)
+
+    monkeypatch.setattr(subchat_plugin, 'run', fake_run)
+    subchat_plugin.main()
+    assert observed['profile'] is None
+    assert observed['options']['read_only_mcp'] is True
+    assert observed['options']['chrome_login_profile'] is None
+    assert observed['options']['chrome_login_source_profile'] is None
+    assert observed['options']['expected_account_id'] is None
+    assert 'dedicated browser selection' in capsys.readouterr().err
+
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', 'browser-prepared-httpx')
+    with pytest.raises(ValueError, match='explicitly enabled dedicated browser'):
+        subchat_plugin.main()
+
+
+@pytest.mark.parametrize('legacy_selection, account_override, expected_error', [
+    ({'chrome_profile_id': '../Default'}, None, 'Select Chrome Default or Profile N'),
+    ({'chrome_source_profile': 'relative/Default'}, None, 'absolute path'),
+    (None, ' invalid ', 'nonempty account ID'),
+])
+def test_windows_legacy_login_still_rejects_invalid_selection(
+    tmp_path, monkeypatch, legacy_selection, account_override, expected_error,
+):
+    profile, state = tmp_path / 'edge-login', tmp_path / 'subchat/ledger'
+    state.parent.mkdir()
+    if legacy_selection is not None:
+        (state.parent / 'login-selection.json').write_text(json.dumps(legacy_selection))
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'win32')
+    monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', raising=False)
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE', raising=False)
+    if account_override is None:
+        monkeypatch.delenv('ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID', raising=False)
+    else:
+        monkeypatch.setenv('ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID', account_override)
+    with pytest.raises(ValueError, match=expected_error):
+        subchat_plugin.main()
+
+
 def test_windows_saved_dedicated_selection_enables_default_send_and_rejects_overrides(
     tmp_path, monkeypatch,
 ):

@@ -75,7 +75,13 @@ def selected_chrome_login(state: Path) -> tuple[Path | None, str | None]:
     if configured is None and profile_id is not None:
         if not isinstance(profile_id, str):
             raise ValueError("Subchat Chrome profile ID is invalid")
-        source = chrome_profile_by_id(profile_id)
+        if sys.platform == "win32" and record.get("dedicated_browser_channel") is None:
+            if profile_id != "Default" and not (
+                profile_id.startswith("Profile ") and profile_id[8:].isdigit()
+            ):
+                raise ValueError("Select Chrome Default or Profile N")
+        else:
+            source = chrome_profile_by_id(profile_id)
     elif source_value is not None:
         if not isinstance(source_value, str):
             raise ValueError("Subchat Chrome source profile must be a path")
@@ -101,6 +107,8 @@ def selected_chrome_login(state: Path) -> tuple[Path | None, str | None]:
                                    or account_id.strip() != account_id
                                    or any(ord(character) < 32 for character in account_id)):
         raise ValueError("Subchat expected_account_id must be a nonempty account ID")
+    if sys.platform == "win32" and record.get("dedicated_browser_channel") is None:
+        return None, None
     return source, account_id
 
 
@@ -168,6 +176,16 @@ def main() -> None:
                 or Path(selected_profile).resolve() != profile):
             raise ValueError("Browser profile override conflicts with the dedicated selection")
     browser_channel = selected_browser_channel(state)
+    if sys.platform == "win32" and selection.get("dedicated_browser_channel") is None:
+        if (selection.get("chrome_profile_id") is not None
+                or selection.get("chrome_source_profile") is not None
+                or os.environ.get("ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE") is not None
+                or selection.get("expected_account_id") is not None
+                or os.environ.get("ANYWHERE_SUBCHAT_EXPECTED_ACCOUNT_ID") is not None):
+            print("Windows Subchat Chrome source profile and account settings require a "
+                  "dedicated browser selection; starting saved-state read-only tools "
+                  "without Chrome login. Configure a dedicated browser to enable sending.",
+                  file=sys.stderr)
     transport = os.environ.get("ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT")
     if transport is None:
         # A local explicit send selection and account pin are required.

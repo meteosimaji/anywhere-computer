@@ -141,6 +141,14 @@ def _conpty_input(pty: _ConPTY) -> None:
             break
 
 
+def _conpty_shell_cmdline(shell: str, command: str) -> str:
+    if Path(shell).name.lower() == "cmd.exe":
+        # cmd /s /c removes only these outer quotes. The command's own quotes
+        # must reach cmd unchanged, including a quoted executable with spaces.
+        return f' /s /c "{command}"'
+    return " " + subprocess.list2cmdline(["-c", command])
+
+
 def main_conpty(shell: str, command: str, rows: int, columns: int) -> int:
     """Keep ConPTY and the process Job alive until its process family exits."""
     if os.name != "nt":
@@ -149,8 +157,7 @@ def main_conpty(shell: str, command: str, rows: int, columns: int) -> int:
 
     job = WindowsJob()
     pty = winpty.PTY(columns, rows, backend=winpty.Backend.ConPTY)
-    arguments = ["/c", command] if Path(shell).name.lower() == "cmd.exe" else ["-c", command]
-    pty.spawn(shell, cmdline=" " + subprocess.list2cmdline(arguments), cwd=os.getcwd())
+    pty.spawn(shell, cmdline=_conpty_shell_cmdline(shell, command), cwd=os.getcwd())
     threading.Thread(target=_conpty_input, args=(pty,), daemon=True).start()
     # Poll nonblocking so a dead command cannot leave the ownership worker stuck
     # in a blocking read. ConPTY output is UTF-8 and uses the same byte cursor.

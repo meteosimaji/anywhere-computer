@@ -3,6 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b2 / Plugin 0.2.0-beta.2 — unpublished candidate (2026-09-26)
+
+- Keep Windows saved-state Subchat tools available when a legacy Chrome profile or
+  an account override is configured without a selected dedicated browser. Explain
+  the required setup and keep sending disabled.
+- Preserve quoted executable and script paths when starting Windows ConPTY
+  commands through `cmd.exe`, including portable installations in paths with spaces.
+
 ## 0.2.0b1 / Plugin 0.2.0-beta.1 — unpublished candidate (2026-09-26)
 
 - Add a selected, account-pinned Windows Chrome or Edge path for ordinary Chat

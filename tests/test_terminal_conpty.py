@@ -204,3 +204,35 @@ def test_conpty_worker_ack_follows_resize_and_reports_failure(monkeypatch):
     terminal_worker._conpty_input(console)
     assert console.calls == [(120, 45), (121, 45)]
     assert response.getvalue() == b"\0A" + struct.pack("!I", 1) + b"\0E" + struct.pack("!I", 2)
+
+
+def test_conpty_cmdline_preserves_quotes_for_spaced_paths():
+    command = subprocess.list2cmdline([
+        r"C:\Program Files\Anywhere Computer\runtime\python.exe",
+        "-u",
+        r"C:\Users\Example User\test script.py",
+    ])
+    assert terminal_worker._conpty_shell_cmdline("C:/Windows/System32/cmd.exe", command) == (
+        f' /s /c "{command}"'
+    )
+
+
+@windows_only
+async def test_conpty_launches_quoted_command_with_spaced_script_path(tmp_path):
+    script_dir = tmp_path / "spaced directory"
+    script_dir.mkdir()
+    script = script_dir / "console test.py"
+    script.write_text("print('SPACED_COMMAND_STARTED', flush=True)\n")
+    sessions = Sessions()
+    started = await sessions.start(StartSession(
+        command=f'"{sys.executable}" -u "{script}"',
+        cwd=str(tmp_path), shell=os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe"),
+        interactive=True,
+    ))
+    try:
+        ready = await _until(sessions, started["session_id"], "SPACED_COMMAND_STARTED")
+        assert "SPACED_COMMAND_STARTED" in ready["text"]
+        await asyncio.wait_for(sessions.get(started["session_id"]).reader, 10)
+        assert sessions.get(started["session_id"]).process.returncode == 0
+    finally:
+        await sessions.close()
