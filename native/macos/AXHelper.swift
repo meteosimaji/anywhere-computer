@@ -20,6 +20,9 @@ private let maxValueCharacters = 4096
 
 private struct HelperFailure: Error {
     let code: String
+    let stage: String?
+    let attribute: String?
+    let axStatus: Int?
 }
 
 private struct RequestDeadline {
@@ -93,13 +96,23 @@ private func valueDigest(_ value: CFTypeRef?) -> Data? {
 }
 
 // The action and its visible identity must be observed, then rechecked before dispatch.
-private func pressIdentity(_ element: AXUIElement) throws -> Data? {
+private func pressActionAvailable(_ status: AXError, readOnly: Bool) throws -> Bool {
+    if status == .attributeUnsupported || status == .noValue || status == .actionUnsupported
+        || (readOnly && status == .failure) {
+        return false
+    }
+    guard status == .success else {
+        throw helperError("ax_error", stage: "copy_actions", axStatus: status)
+    }
+    return true
+}
+
+private func pressIdentity(_ element: AXUIElement, readOnly: Bool = false) throws -> Data? {
     var raw: CFArray?
     let status = AXUIElementCopyActionNames(element, &raw)
-    if status == .attributeUnsupported || status == .noValue || status == .actionUnsupported {
+    if try !pressActionAvailable(status, readOnly: readOnly) {
         return nil
     }
-    guard status == .success else { throw helperError("ax_error") }
     guard let actions = raw as? [String], actions.contains(kAXPressAction as String) else {
         return nil
     }
@@ -156,8 +169,23 @@ private func uptime() -> TimeInterval {
     ProcessInfo.processInfo.systemUptime
 }
 
-private func helperError(_ code: String) -> HelperFailure {
-    HelperFailure(code: code)
+private func helperError(
+    _ code: String, stage: String? = nil, attribute: String? = nil,
+    axStatus: AXError? = nil
+) -> HelperFailure {
+    HelperFailure(code: code, stage: stage, attribute: attribute,
+                  axStatus: axStatus.map { Int($0.rawValue) })
+}
+
+private func diagnosticAttribute(_ name: CFString) -> String {
+    // Do not serialize application supplied attribute names.
+    let known: [String] = [
+        kAXWindowsAttribute, kAXChildrenAttribute, kAXRoleAttribute,
+        kAXTitleAttribute, kAXDescriptionAttribute, kAXHelpAttribute,
+        kAXIdentifierAttribute, kAXValueAttribute, kAXEnabledAttribute,
+    ]
+    let candidate = name as String
+    return known.contains(candidate) ? candidate : "other"
 }
 
 private func bounded(_ value: String, limit: Int) -> (String, Bool) {
@@ -239,7 +267,30 @@ private func copyOptionalAttribute(
     case .attributeUnsupported, .noValue:
         return nil
     default:
-        throw helperError("ax_error")
+        throw helperError("ax_error", stage: "copy_attribute",
+                          attribute: diagnosticAttribute(name), axStatus: status)
+    }
+}
+
+private func observedValue(_ element: AXUIElement) throws -> CFTypeRef? {
+    var value: CFTypeRef?
+    let status = AXUIElementCopyAttributeValue(
+        element, kAXValueAttribute as CFString, &value
+    )
+    return try observedValueResult(status, value)
+}
+
+private func observedValueResult(_ status: AXError, _ value: CFTypeRef?) throws -> CFTypeRef? {
+    switch status {
+    case .success:
+        return value
+    case .attributeUnsupported, .noValue, .failure:
+        // Finder can return a generic failure for AXValue on an otherwise
+        // usable child. Its value is optional for read-only observation.
+        return nil
+    default:
+        throw helperError("ax_error", stage: "copy_attribute",
+                          attribute: "AXValue", axStatus: status)
     }
 }
 
@@ -249,7 +300,8 @@ private func stringAttribute(
 ) throws -> String? {
     guard let value = try copyOptionalAttribute(element, name) else { return nil }
     guard let string = value as? String else {
-        throw helperError("ax_error")
+        throw helperError("ax_error", stage: "attribute_type",
+                          attribute: diagnosticAttribute(name))
     }
     return string
 }
@@ -260,7 +312,8 @@ private func boolAttribute(
 ) throws -> Bool? {
     guard let value = try copyOptionalAttribute(element, name) else { return nil }
     guard let number = value as? NSNumber, isBooleanNSNumber(number) else {
-        throw helperError("ax_error")
+        throw helperError("ax_error", stage: "attribute_type",
+                          attribute: diagnosticAttribute(name))
     }
     return number.boolValue
 }
@@ -278,7 +331,28 @@ private func valueIsSettable(_ element: AXUIElement) throws -> Bool {
     case .attributeUnsupported, .noValue:
         return false
     default:
-        throw helperError("ax_error")
+        throw helperError("ax_error", stage: "is_settable",
+                          attribute: "AXValue", axStatus: status)
+    }
+}
+
+private func observedValueIsSettable(_ element: AXUIElement) throws -> Bool {
+    var settable = DarwinBoolean(false)
+    let status = AXUIElementIsAttributeSettable(
+        element, kAXValueAttribute as CFString, &settable
+    )
+    return try observedValueSettableResult(status, settable.boolValue)
+}
+
+private func observedValueSettableResult(_ status: AXError, _ settable: Bool) throws -> Bool {
+    switch status {
+    case .success:
+        return settable
+    case .attributeUnsupported, .noValue, .failure:
+        return false
+    default:
+        throw helperError("ax_error", stage: "is_settable",
+                          attribute: "AXValue", axStatus: status)
     }
 }
 
@@ -300,7 +374,8 @@ private func enabledStateForSetValue(_ element: AXUIElement) throws -> SetValueE
         guard let rawValue,
               let number = rawValue as? NSNumber,
               isBooleanNSNumber(number) else {
-            throw helperError("ax_error")
+            throw helperError("ax_error", stage: "attribute_type",
+                              attribute: "AXEnabled")
         }
         return SetValueEnabledState(
             value: number.boolValue,
@@ -320,14 +395,16 @@ private func enabledStateForSetValue(_ element: AXUIElement) throws -> SetValueE
             axStatus: Int(status.rawValue)
         )
     default:
-        throw helperError("ax_error")
+        throw helperError("ax_error", stage: "copy_attribute",
+                          attribute: "AXEnabled", axStatus: status)
     }
 }
 
 private func elementPID(_ element: AXUIElement) throws -> pid_t {
     var pid: pid_t = 0
-    guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else {
-        throw helperError("ax_error")
+    let status = AXUIElementGetPid(element, &pid)
+    guard status == .success, pid > 0 else {
+        throw helperError("ax_error", stage: "get_pid", axStatus: status)
     }
     return pid
 }
@@ -345,9 +422,13 @@ private func elementArray(
     case .attributeUnsupported, .noValue:
         return ([], false)
     default:
-        throw helperError("ax_error")
+        throw helperError("ax_error", stage: "count_attribute",
+                          attribute: diagnosticAttribute(attribute), axStatus: countStatus)
     }
-    guard count >= 0 else { throw helperError("ax_error") }
+    guard count >= 0 else {
+        throw helperError("ax_error", stage: "count_attribute",
+                          attribute: diagnosticAttribute(attribute), axStatus: countStatus)
+    }
     if count == 0 { return ([], false) }
 
     let requested = min(Int(count), maxCount)
@@ -360,10 +441,12 @@ private func elementArray(
         &values
     )
     guard status == .success else {
-        throw helperError("ax_error")
+        throw helperError("ax_error", stage: "copy_attribute_values",
+                          attribute: diagnosticAttribute(attribute), axStatus: status)
     }
     guard let values, let result = values as? [AXUIElement] else {
-        throw helperError("ax_error")
+        throw helperError("ax_error", stage: "attribute_type",
+                          attribute: diagnosticAttribute(attribute))
     }
     return (result, Int(count) > maxCount)
 }
@@ -431,7 +514,9 @@ private final class AXHelper {
     }
 
     private func requireAXPermission() throws {
-        guard timeoutConfigured else { throw helperError("ax_error") }
+        guard timeoutConfigured else {
+            throw helperError("ax_error", stage: "set_timeout")
+        }
         guard AXIsProcessTrusted() else {
             throw helperError("accessibility_required")
         }
@@ -493,7 +578,7 @@ private final class AXHelper {
         for window in result.0 {
             try deadline.check()
             guard try elementPID(window) == pid else {
-                throw helperError("ax_error")
+                throw helperError("ax_error", stage: "verify_pid")
             }
         }
         return result.0
@@ -623,15 +708,15 @@ private final class AXHelper {
         try deadline.check()
         let label = try labelForElement(element, deadline: deadline)
         try deadline.check()
-        let observedValue = try copyOptionalAttribute(element, kAXValueAttribute as CFString)
-        let press = try pressIdentity(element)
+        let observedValue = try observedValue(element)
+        let press = try pressIdentity(element, readOnly: true)
         refs[ref] = ObservedElement(element: element, valueDigest: valueDigest(observedValue),
                                     pressIdentity: press)
         let value = jsonScalar(observedValue)
         try deadline.check()
         let enabled = try boolAttribute(element, kAXEnabledAttribute as CFString)
         try deadline.check()
-        let settable = try valueIsSettable(element)
+        let settable = try observedValueIsSettable(element)
         try deadline.check()
 
         var node: [String: Any] = [
@@ -662,7 +747,8 @@ private final class AXHelper {
             if status == .success && childCount > 0 {
                 state.truncated = true
             } else if status != .success && status != .attributeUnsupported && status != .noValue {
-                throw helperError("ax_error")
+                throw helperError("ax_error", stage: "count_attribute",
+                                  attribute: "AXChildren", axStatus: status)
             }
             return node
         }
@@ -722,7 +808,8 @@ private final class AXHelper {
                 if status == .success && childCount > 0 {
                     limitExceeded = true
                 } else if status != .success && status != .attributeUnsupported && status != .noValue {
-                    throw helperError("ax_error")
+                    throw helperError("ax_error", stage: "count_attribute",
+                                      attribute: "AXChildren", axStatus: status)
                 }
                 return nil
             }
@@ -895,7 +982,9 @@ private final class AXHelper {
             }
             try deadline.check()
             let status = AXUIElementPerformAction(currentElement, kAXPressAction as CFString)
-            guard status == .success else { throw helperError("ax_error") }
+            guard status == .success else {
+                throw helperError("ax_error", stage: "perform_action", axStatus: status)
+            }
             return ["process_id": Int(record.process.pid), "window_id": windowID,
                     "observation_id": observationID, "element_ref": elementRef,
                     "action": "AXPress", "action_accepted": true,
@@ -911,7 +1000,8 @@ private final class AXHelper {
             requested
         )
         guard status == .success else {
-            throw helperError("ax_error")
+            throw helperError("ax_error", stage: "set_attribute",
+                              attribute: "AXValue", axStatus: status)
         }
 
         let readback = try copyOptionalAttribute(currentElement, kAXValueAttribute as CFString)
@@ -1009,10 +1099,14 @@ private func emit(_ object: [String: Any]) {
     FileHandle.standardOutput.write(Data([0x0A]))
 }
 
-private func emitError(id: Any?, code: String) {
+private func emitError(id: Any?, code: String, failure: HelperFailure? = nil) {
+    var error: [String: Any] = ["code": code]
+    if let stage = failure?.stage { error["stage"] = stage }
+    if let attribute = failure?.attribute { error["attribute"] = attribute }
+    if let status = failure?.axStatus { error["ax_status"] = status }
     emit([
         "id": id ?? NSNull(),
-        "error": ["code": code],
+        "error": error,
     ])
 }
 
@@ -1042,7 +1136,7 @@ private func processLine(_ data: Data, helper: AXHelper) {
         let result = try helper.handle(object)
         emit(["id": responseID, "result": result])
     } catch let failure as HelperFailure {
-        emitError(id: responseID, code: failure.code)
+        emitError(id: responseID, code: failure.code, failure: failure)
     } catch {
         // Never serialize arbitrary exception text or target application data.
         emitError(id: responseID, code: "internal_error")
