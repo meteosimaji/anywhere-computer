@@ -25,6 +25,7 @@ from .subchat_chrome_profile import (
     chrome_user_data_root,
     temporary_chrome_profile,
 )
+from .subchat_cli import WINDOWS_DEDICATED_BROWSER_ARGS
 from .subchat_plugin import _selection_record, plugin_paths
 
 
@@ -157,8 +158,9 @@ async def inspect_dedicated_account(profile: Path, channel: str) -> str:
     async with async_playwright() as driver:
         try:
             context = await driver.chromium.launch_persistent_context(
-                str(profile), channel=channel, headless=True,
-                ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS))
+                str(profile), channel=channel, headless=False,
+                ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
+                args=list(WINDOWS_DEDICATED_BROWSER_ARGS))
         except PlaywrightError:
             raise SetupInputError(
                 "Dedicated browser could not open; close all windows using its profile"

@@ -48,9 +48,10 @@ normal Edge or Chrome at `https://chatgpt.com/` with the Plugin's dedicated
 profile. It does not use Playwright for interactive login or assume a browser
 installation path. Sign in in that window, close every window using this
 dedicated profile, then press Enter in the terminal and record the returned
-`account_id`. The command verifies the saved login headlessly with
-authenticated GET requests. It does not enable sending. To recheck an
-existing dedicated login without opening a visible window, use
+`account_id`. The command verifies the saved login with the installed headed
+browser placed outside the desktop and authenticated GET requests. It does not
+enable sending. To recheck an existing dedicated login without opening an
+on-screen window, use
 `anywhere-subchat-setup inspect-dedicated --browser-channel msedge` (or
 `chrome`). Close other processes using that dedicated profile first.
 
@@ -79,13 +80,16 @@ override cannot bypass the saved send consent. Check
 `subchat_catalog` and use exact available model, effort and HTTP selection
 values. The controller verifies the pinned account before generation and
 recovers the final answer from history using the original operation ID.
-Windows browser-prepared HTTPX mode launches the selected dedicated browser
-headlessly for page work, so it should not raise a frontmost window. This
-headless path has unit coverage but still needs a live Windows provider check.
-The setup login window is intentionally visible. Nonactivating background tabs
-are implemented only on macOS. An existing ordinary Edge login is not silently
-copied, and Windows live send/follow-up acceptance must be checked on the
-selected machine before claiming it works there.
+Windows setup inspection, read-only authentication, and browser-prepared HTTPX
+sending launch the selected installed browser headed at an offscreen position.
+The headless Edge path returned 403 for Chat home and authentication on a
+Windows ARM64 VM with a signed-in dedicated profile; the headed offscreen
+browser returned 200 for home, authentication, and catalog in a separate
+manual probe. Whether a launch briefly takes focus from another app remains
+unverified. The setup login window is intentionally visible. Nonactivating
+background tabs are implemented only on macOS. An existing ordinary Edge login
+is not silently copied, and Windows live send/follow-up acceptance must be
+checked on the selected machine before claiming it works there.
 
 An older manual `codex mcp` registration with the same server name can shadow
 the installed Plugin and keep pointing to a removed wheel. Check `codex mcp

@@ -45,6 +45,12 @@ if TYPE_CHECKING:
     from .subchat_http_session import ObservedHTTPSession
 
 
+# A headed installed browser is required for the dedicated Windows login.
+# Place its window outside the desktop while keeping the normal browser mode.
+WINDOWS_DEDICATED_BROWSER_ARGS = ('--window-position=-32000,-32000',
+                                  '--window-size=900,700')
+
+
 class Command(Contract):
     action: Literal['send', 'recover', 'status', 'cancel']
     operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
@@ -278,14 +284,15 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     assert profile is not None
                     return await resources.enter_async_context(background_chrome_context(
                         await runtime(), profile, browser_launch_args))
-                headless_browser = httpx_generation and sys.platform == 'win32'
+                windows_offscreen = httpx_generation and sys.platform == 'win32'
                 context = await (await runtime()).chromium.launch_persistent_context(
-                    str(profile), channel=browser_channel, headless=headless_browser,
+                    str(profile), channel=browser_channel, headless=False,
                     ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
-                    args=(['--start-minimized'] if minimized and not headless_browser else [])
+                    args=(list(WINDOWS_DEDICATED_BROWSER_ARGS) if windows_offscreen else
+                          ['--start-minimized'] if minimized else [])
                     + browser_launch_args)
                 resources.push_async_callback(context.close)
-                if minimized and not headless_browser:
+                if minimized and not windows_offscreen:
                     from .subchat_browser.catalog import minimize_window
 
                     page = context.pages[0] if context.pages else await context.new_page()
@@ -314,10 +321,13 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         launch_args.append(
                             f'--profile-directory={chrome_login_source_profile.name}')
                     assert profile_root is not None
+                    windows_offscreen = sys.platform == 'win32'
                     chrome_context = await (await runtime()).chromium.launch_persistent_context(
-                        str(profile_root), channel=browser_channel, headless=True,
+                        str(profile_root), channel=browser_channel,
+                        headless=not windows_offscreen,
                         ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS),
-                        args=launch_args)
+                        args=(list(WINDOWS_DEDICATED_BROWSER_ARGS)
+                              if windows_offscreen else []) + launch_args)
                     try:
                         return await chrome_http_session(
                             chrome_context, client, expected_account_id=account_id)
@@ -447,7 +457,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     )
                     instructions = (
                         'Ordinary Chat recovery and explicit deletion over HTTPX. A configured '
-                        'Chrome login profile is read headlessly at startup. '
+                        'The selected browser login profile is read at startup. '
                         + refresh_instructions +
                         'No browser fallback, independent login or generation is implemented. '
                         'Use subchat_catalog source=http, saved status/list and recover/wait '
@@ -486,7 +496,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                 if read_only_mcp:
                     instructions = (
                         'This Plugin Subchat session observes saved submissions and Chat HTTP '
-                        'history. Its dedicated Chrome profile is read headlessly at startup '
+                        'history. Its selected browser profile is read at startup '
                         'for login; HTTPX performs later reads. No generation or remote '
                         'mutation is exposed here. subchat_capabilities reports '
                         'generation_transport=unavailable. Use subchat_catalog source=http, '
@@ -534,7 +544,7 @@ def main() -> None:
     parser.add_argument('--http-only', action='store_true',
                         help='HTTPX transport; sends require an explicit generation handoff')
     parser.add_argument('--chrome-login-profile', type=Path,
-                        help='Use a logged-in dedicated Chrome profile headlessly to GET an '
+                        help='Use a logged-in dedicated browser profile to GET an '
                              'HTTP session at startup; no login UI or automatic renewal')
     parser.add_argument('--chrome-login-source-profile', type=Path,
                         help='macOS: snapshot an explicitly selected logged-in Chrome profile '

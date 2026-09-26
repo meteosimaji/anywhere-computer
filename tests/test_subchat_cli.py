@@ -55,7 +55,53 @@ async def test_windows_browser_transport_launches_selected_edge(tmp_path, monkey
     await subchat_cli.run(profile, tmp_path / 'httpx-state', browser_channel='msedge',
                           http_read=True, httpx_generation=True, minimized=True,
                           expected_account_id='account-a')
-    assert ('launch', str(profile), 'msedge', True, []) in events
+    assert ('launch', str(profile), 'msedge', False,
+            list(subchat_cli.WINDOWS_DEDICATED_BROWSER_ARGS)) in events
+    assert 'closed' in events
+
+
+async def test_windows_http_login_bootstrap_uses_headed_offscreen_edge(tmp_path, monkeypatch):
+    import playwright.async_api
+    from test_subchat_http_only import credentials
+
+    from anywhere_computer import subchat_chrome_login, subchat_cli
+
+    launches = []
+
+    class Context:
+        async def close(self):
+            launches.append('closed')
+
+    class Chromium:
+        async def launch_persistent_context(self, profile, **options):
+            launches.append((profile, options))
+            return Context()
+
+    @asynccontextmanager
+    async def runtime():
+        yield SimpleNamespace(chromium=Chromium())
+
+    async def auth(_context, _client, *, expected_account_id):
+        assert expected_account_id == 'fixture-account'
+        return credentials()
+
+    async def commands(_service, _source, _destination, *, owner):
+        assert owner is None
+
+    monkeypatch.setattr(subchat_cli.sys, 'platform', 'win32')
+    monkeypatch.setattr(playwright.async_api, 'async_playwright', runtime)
+    monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', auth)
+    monkeypatch.setattr(subchat_cli, 'process_lines', commands)
+    profile = tmp_path / 'edge-login'
+    await subchat_cli.run(None, tmp_path / 'state', http_only=True,
+                          chrome_login_profile=profile, browser_channel='msedge',
+                          expected_account_id='fixture-account')
+    assert launches == [
+        (str(profile), {'channel': 'msedge', 'headless': False,
+                        'ignore_default_args': ['--use-mock-keychain'],
+                        'args': list(subchat_cli.WINDOWS_DEDICATED_BROWSER_ARGS)}),
+        'closed',
+    ]
 
 
 async def test_json_commands_recover_without_repeating_send(tmp_path):

@@ -139,6 +139,42 @@ async def test_windows_prepare_uses_normal_edge_and_closes_before_account_check(
     ]
 
 
+async def test_windows_dedicated_inspection_uses_headed_offscreen_edge(
+    tmp_path, monkeypatch,
+):
+    from anywhere_computer import subchat_cli
+
+    monkeypatch.setattr(subchat_setup.sys, 'platform', 'win32')
+    launches = []
+
+    class Context:
+        async def close(self):
+            launches.append('closed')
+
+    class Chromium:
+        async def launch_persistent_context(self, profile, **options):
+            launches.append((profile, options))
+            return Context()
+
+    @asynccontextmanager
+    async def runtime():
+        yield SimpleNamespace(chromium=Chromium())
+
+    async def auth(_context, _client):
+        return SimpleNamespace(account_id='account-a')
+
+    monkeypatch.setattr(playwright.async_api, 'async_playwright', runtime)
+    monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', auth)
+    profile = tmp_path / 'edge-login'
+    assert await subchat_setup.inspect_dedicated_account(profile, 'msedge') == 'account-a'
+    assert launches == [
+        (str(profile), {'channel': 'msedge', 'headless': False,
+                        'ignore_default_args': ['--use-mock-keychain'],
+                        'args': list(subchat_cli.WINDOWS_DEDICATED_BROWSER_ARGS)}),
+        'closed',
+    ]
+
+
 def test_windows_setup_missing_edge_reports_failure_without_selection(
     tmp_path, monkeypatch,
 ):

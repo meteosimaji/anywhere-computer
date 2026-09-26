@@ -6,6 +6,7 @@ POSIX commands inherit this worker's session/group; Windows commands inherit its
 
 import ctypes
 import importlib
+import io
 import os
 import signal
 import struct
@@ -14,12 +15,16 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 
 class _ConPTY(Protocol):
     def write(self, text: str) -> int: ...
     def set_size(self, columns: int, rows: int) -> None: ...
+
+
+class _ByteReader(Protocol):
+    def read(self, size: int = -1) -> bytes | None: ...
 
 if sys.platform == "win32":
     class WindowsJob:
@@ -110,16 +115,28 @@ def group_others_alive() -> bool:
     return False
 
 
-def _conpty_input(pty: _ConPTY) -> None:
+def _read_exact(stream: _ByteReader, length: int) -> bytes:
+    data = bytearray()
+    while len(data) < length:
+        chunk = stream.read(length - len(data))
+        if not chunk:
+            break
+        data.extend(chunk)
+    return bytes(data)
+
+
+def _conpty_input(pty: _ConPTY, stream: _ByteReader | None = None) -> None:
     """Relay framed input and resize requests to the Windows console."""
-    stream = sys.stdin.buffer
-    while header := stream.read(5):
+    # A daemon blocked on BufferedReader.read can abort the interpreter at
+    # shutdown. FileIO.read releases the GIL without holding that buffer lock.
+    stream = stream if stream is not None else cast(io.BufferedReader, sys.stdin.buffer).raw
+    while header := _read_exact(stream, 5):
         if len(header) != 5:
             break
         kind, length = header[:1], int.from_bytes(header[1:], "big")
         if length > 400000:
             break
-        payload = stream.read(length)
+        payload = _read_exact(stream, length)
         if len(payload) != length:
             break
         try:
@@ -162,14 +179,27 @@ def main_conpty(shell: str, command: str, rows: int, columns: int) -> int:
     # Poll nonblocking so a dead command cannot leave the ownership worker stuck
     # in a blocking read. ConPTY output is UTF-8 and uses the same byte cursor.
     while True:
-        chunk = pty.read(blocking=False)
+        try:
+            chunk = pty.read(blocking=False)
+        except winpty.WinptyError:
+            # pywinpty can report closed ConPTY output as an error after the
+            # shell exits. Keep the Job owner until any descendants also exit.
+            if job.others_alive():
+                if pty.get_exitstatus() is None:
+                    raise
+                while job.others_alive():
+                    time.sleep(0.01)
+            break
         if chunk:
             sys.stdout.buffer.write(chunk.encode("utf-8"))
             sys.stdout.buffer.flush()
         if not job.others_alive():
             # Drain any output buffered during process teardown.
             for _ in range(10):
-                chunk = pty.read(blocking=False)
+                try:
+                    chunk = pty.read(blocking=False)
+                except winpty.WinptyError:
+                    break
                 if chunk:
                     sys.stdout.buffer.write(chunk.encode("utf-8"))
                     sys.stdout.buffer.flush()

@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b3 / Plugin 0.2.0-beta.3 — unpublished candidate (2026-09-26)
+
+- Treat Windows ConPTY closure after the shell exits as end of output while
+  retaining the Job until descendants exit. Keep active-shell read errors visible.
+- Read framed ConPTY input without a buffered stdin lock during worker shutdown.
+
 ## 0.2.0b2 / Plugin 0.2.0-beta.2 — unpublished candidate (2026-09-26)
 
 - Keep Windows saved-state Subchat tools available when a legacy Chrome profile or

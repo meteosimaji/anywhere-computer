@@ -198,12 +198,89 @@ def test_conpty_worker_ack_follows_resize_and_reports_failure(monkeypatch):
         + b"R" + struct.pack("!I", 8) + struct.pack("!IHH", 2, 45, 121)
     )
     response = io.BytesIO()
-    monkeypatch.setattr(terminal_worker.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(requests)))
     monkeypatch.setattr(terminal_worker.sys, "stderr", SimpleNamespace(buffer=response))
     console = Console()
-    terminal_worker._conpty_input(console)
+    terminal_worker._conpty_input(console, io.BytesIO(requests))
     assert console.calls == [(120, 45), (121, 45)]
     assert response.getvalue() == b"\0A" + struct.pack("!I", 1) + b"\0E" + struct.pack("!I", 2)
+
+
+def test_conpty_input_accepts_partial_raw_reads(monkeypatch):
+    class ShortRead(io.BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            return super().read(min(size, 1))
+
+    class Console:
+        def __init__(self) -> None:
+            self.text = ""
+
+        def write(self, text: str) -> int:
+            self.text += text
+            return len(text)
+
+    payload = "日本語".encode()
+    stream = ShortRead(b"I" + len(payload).to_bytes(4, "big") + payload)
+    console = Console()
+    monkeypatch.setattr(terminal_worker.sys, "stdin", SimpleNamespace(
+        buffer=SimpleNamespace(raw=stream),
+    ))
+    terminal_worker._conpty_input(console)
+    assert console.text == "日本語"
+
+
+@pytest.mark.parametrize("case", ["job_empty", "shell_exited", "shell_alive"])
+def test_conpty_read_error_only_means_eof_after_shell_exit(monkeypatch, case):
+    class WinptyError(Exception):
+        pass
+
+    class Console:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.reads = 0
+
+        def spawn(self, *_args, **_kwargs) -> None:
+            pass
+
+        def read(self, *, blocking: bool) -> str:
+            assert not blocking
+            self.reads += 1
+            if self.reads == 1:
+                return "OUTPUT"
+            raise WinptyError("closed output")
+
+        def get_exitstatus(self) -> int | None:
+            return None if case == "shell_alive" else 0
+
+    console = Console()
+    output = io.BytesIO()
+    remaining_checks = 0
+
+    def others_alive() -> bool:
+        nonlocal remaining_checks
+        if console.reads == 1:
+            return True
+        remaining_checks += 1
+        return case != "job_empty" and remaining_checks <= 2
+
+    monkeypatch.setattr(terminal_worker, "os", SimpleNamespace(name="nt", getcwd=lambda: "/tmp"))
+    monkeypatch.setattr(terminal_worker, "WindowsJob", lambda: SimpleNamespace(
+        others_alive=others_alive,
+    ))
+    monkeypatch.setattr(terminal_worker.importlib, "import_module", lambda _: SimpleNamespace(
+        PTY=lambda *_args, **_kwargs: console,
+        Backend=SimpleNamespace(ConPTY=object()), WinptyError=WinptyError,
+    ))
+    monkeypatch.setattr(terminal_worker.sys, "stdin", SimpleNamespace(
+        buffer=SimpleNamespace(raw=io.BytesIO()),
+    ))
+    monkeypatch.setattr(terminal_worker.sys, "stdout", SimpleNamespace(buffer=output))
+    if case == "shell_alive":
+        with pytest.raises(WinptyError, match="closed output"):
+            terminal_worker.main_conpty("C:/Windows/System32/cmd.exe", "echo output", 24, 80)
+    else:
+        assert terminal_worker.main_conpty(
+            "C:/Windows/System32/cmd.exe", "echo output", 24, 80,
+        ) == 0
+    assert output.getvalue() == b"OUTPUT"
 
 
 def test_conpty_cmdline_preserves_quotes_for_spaced_paths():
