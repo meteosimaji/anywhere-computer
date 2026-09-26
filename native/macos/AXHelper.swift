@@ -39,7 +39,29 @@ private struct RequestDeadline {
 private struct ProcessIdentity: Equatable {
     let bundleID: String
     let pid: pid_t
-    let launchTime: TimeInterval
+    let startSeconds: UInt64
+    let startMicroseconds: UInt64
+}
+
+private func processStart(_ pid: pid_t) throws -> (seconds: UInt64, microseconds: UInt64) {
+    var info = proc_bsdinfo()
+    let size = withUnsafeMutablePointer(to: &info) { pointer in
+        proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, pointer,
+                     Int32(MemoryLayout<proc_bsdinfo>.size))
+    }
+    guard size == MemoryLayout<proc_bsdinfo>.size, info.pbi_pid == pid,
+          info.pbi_start_tvsec > 0, info.pbi_start_tvusec < 1_000_000 else {
+        throw helperError("process_identity_unavailable")
+    }
+    return (info.pbi_start_tvsec, info.pbi_start_tvusec)
+}
+
+private func uniqueGUIProcess<T>(_ candidates: [T], isRegular: (T) -> Bool) throws -> T {
+    guard !candidates.isEmpty else { throw helperError("process_not_found") }
+    let regular = candidates.filter(isRegular)
+    let selected = regular.isEmpty ? candidates : regular
+    guard selected.count == 1 else { throw helperError("ambiguous_process") }
+    return selected[0]
 }
 
 private struct WindowRecord {
@@ -419,18 +441,27 @@ private final class AXHelper {
         let candidates = NSWorkspace.shared.runningApplications.filter {
             $0.bundleIdentifier == bundleID && !$0.isTerminated
         }
-        guard !candidates.isEmpty else { throw helperError("process_not_found") }
-        guard candidates.count == 1 else { throw helperError("ambiguous_process") }
-
-        let running = candidates[0]
-        guard !running.isTerminated, running.processIdentifier > 0,
-              let launchDate = running.launchDate else {
+        // A GUI app can share its bundle ID with background helper processes.
+        let running = try uniqueGUIProcess(candidates) { $0.activationPolicy == .regular }
+        guard !running.isTerminated, running.processIdentifier > 0 else {
             throw helperError("process_identity_unavailable")
+        }
+        let pid = running.processIdentifier
+        let start = try processStart(pid)
+        // Reject a PID that exited or was reused between workspace enumeration
+        // and the kernel start-time read, before retaining an AX element for it.
+        guard !running.isTerminated,
+              let current = NSRunningApplication(processIdentifier: pid),
+              !current.isTerminated, current.bundleIdentifier == bundleID,
+              current.activationPolicy == running.activationPolicy,
+              try processStart(pid) == start else {
+            throw helperError("process_identity_changed")
         }
         let identity = ProcessIdentity(
             bundleID: bundleID,
-            pid: running.processIdentifier,
-            launchTime: launchDate.timeIntervalSinceReferenceDate
+            pid: pid,
+            startSeconds: start.seconds,
+            startMicroseconds: start.microseconds
         )
         let application = AXUIElementCreateApplication(identity.pid)
         return (running, identity, application)

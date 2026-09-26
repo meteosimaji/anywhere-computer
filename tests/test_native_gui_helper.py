@@ -109,3 +109,64 @@ emit(["id": "value-identity", "result": [
 
     assert identity["result"] == dict.fromkeys(
         ["same", "changed", "typed", "empty", "unsupported"], True)
+
+
+def test_process_selection_and_start_identity_in_real_swift_source(tmp_path):
+    source = Path(__file__).resolve().parents[1] / "native/macos/AXHelper.swift"
+    entry = "\nrunJSONLines()\n"
+    text = source.read_text()
+    assert text.endswith(entry)
+    program = tmp_path / "ProcessIdentity.swift"
+    program.write_text(text.removesuffix(entry) + r'''
+func selectionError(_ candidates: [String], regular: Set<String>) -> String {
+    do {
+        _ = try uniqueGUIProcess(candidates) { regular.contains($0) }
+        return "none"
+    } catch let failure as HelperFailure {
+        return failure.code
+    } catch {
+        return "unexpected"
+    }
+}
+func missingStartError() -> String {
+    do {
+        _ = try processStart(pid_t.max)
+        return "none"
+    } catch let failure as HelperFailure {
+        return failure.code
+    } catch {
+        return "unexpected"
+    }
+}
+let first = try processStart(getpid())
+let second = try processStart(getpid())
+private let identity = ProcessIdentity(bundleID: "fixture", pid: getpid(),
+    startSeconds: first.seconds, startMicroseconds: first.microseconds)
+emit(["id": "identity", "result": [
+    "main_selected": try uniqueGUIProcess(["main", "agent1", "agent2"])
+        { $0 == "main" } == "main",
+    "single_accessory_selected": try uniqueGUIProcess(["agent"])
+        { _ in false } == "agent",
+    "no_process": selectionError([], regular: []) == "process_not_found",
+    "two_regular": selectionError(["main1", "main2"],
+        regular: ["main1", "main2"]) == "ambiguous_process",
+    "two_accessory": selectionError(["agent1", "agent2"],
+        regular: []) == "ambiguous_process",
+    "start_stable": first.seconds > 0 && first == second,
+    "missing_pid_rejected": missingStartError() == "process_identity_unavailable",
+    "different_pid": identity != ProcessIdentity(bundleID: "fixture", pid: getpid() + 1,
+        startSeconds: first.seconds, startMicroseconds: first.microseconds),
+    "different_second": identity != ProcessIdentity(bundleID: "fixture", pid: getpid(),
+        startSeconds: first.seconds + 1, startMicroseconds: first.microseconds),
+    "different_microsecond": identity != ProcessIdentity(bundleID: "fixture", pid: getpid(),
+        startSeconds: first.seconds, startMicroseconds: first.microseconds + 1),
+]])
+''')
+    executable = tmp_path / "process-identity"
+    subprocess.run(["swiftc", str(program), "-o", str(executable)],
+                   check=True, capture_output=True, timeout=90)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, timeout=5)
+    assert json.loads(result.stdout)["result"] == dict.fromkeys(
+        ["main_selected", "single_accessory_selected", "no_process", "two_regular",
+         "two_accessory", "start_stable", "missing_pid_rejected", "different_pid",
+         "different_second", "different_microsecond"], True)
