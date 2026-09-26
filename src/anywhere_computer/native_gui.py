@@ -36,6 +36,37 @@ NONFATAL_HELPER_ERRORS = frozenset({
     "tree_limit_exceeded", "value_changed", "value_not_comparable",
     "value_not_settable", "window_limit_exceeded", "window_unavailable",
 })
+AX_DIAGNOSTIC_STAGES = frozenset({
+    "attribute_type", "copy_actions", "copy_attribute", "copy_attribute_values",
+    "count_attribute", "get_pid", "is_settable", "perform_action",
+    "set_attribute", "set_timeout", "verify_pid",
+})
+AX_DIAGNOSTIC_ATTRIBUTES = frozenset({
+    "AXChildren", "AXDescription", "AXEnabled", "AXHelp", "AXIdentifier",
+    "AXRole", "AXTitle", "AXValue", "AXWindows", "other",
+})
+HELPER_REJECTION_PREFIX = "Native GUI helper rejected request: "
+
+
+def helper_error_code(message: str) -> str | None:
+    if not message.startswith(HELPER_REJECTION_PREFIX):
+        return None
+    code = message.removeprefix(HELPER_REJECTION_PREFIX).partition(" (")[0]
+    return code if code in HELPER_ERROR_CODES | {"invalid_response"} else None
+
+
+def _project_ax_diagnostic(error: dict[str, JsonValue]) -> str:
+    fields = []
+    stage = error.get("stage")
+    attribute = error.get("attribute")
+    status = error.get("ax_status")
+    if isinstance(stage, str) and stage in AX_DIAGNOSTIC_STAGES:
+        fields.append(f"stage={stage}")
+    if isinstance(attribute, str) and attribute in AX_DIAGNOSTIC_ATTRIBUTES:
+        fields.append(f"attribute={attribute}")
+    if type(status) is int and -26000 <= status <= 0:
+        fields.append(f"ax_status={status}")
+    return " (" + ", ".join(fields) + ")" if fields else ""
 
 
 class NativeApp(Contract):
@@ -162,10 +193,15 @@ class NativeGUI:
                             code == "press_target_changed" and request.get("method") == "press")):
                         raise NativeGUIInputRefused(
                             "Native GUI target changed since observation; input was not attempted")
+                    if keep_session and code == "value_not_comparable":
+                        raise NativeGUIInputRefused(
+                            "Native GUI value could not be compared; input was not attempted")
                     # Never expose arbitrary helper diagnostics or exception text.
-                    raise ValueError("Native GUI helper rejected request: " + (
-                        code if isinstance(code, str) and code in HELPER_ERROR_CODES
-                        else "invalid_response"))
+                    safe_code = (code if isinstance(code, str) and code in HELPER_ERROR_CODES
+                                 else "invalid_response")
+                    detail = (_project_ax_diagnostic(error)
+                              if safe_code == "ax_error" and isinstance(error, dict) else "")
+                    raise ValueError(HELPER_REJECTION_PREFIX + safe_code + detail)
                 return result
         except BaseException as error:
             if not keep_session:

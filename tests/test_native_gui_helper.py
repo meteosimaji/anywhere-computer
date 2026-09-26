@@ -170,3 +170,64 @@ emit(["id": "identity", "result": [
         ["main_selected", "single_accessory_selected", "no_process", "two_regular",
          "two_accessory", "start_stable", "missing_pid_rejected", "different_pid",
          "different_second", "different_microsecond"], True)
+
+
+def test_ax_failure_serialization_contains_only_sanitized_metadata(tmp_path):
+    source = Path(__file__).resolve().parents[1] / "native/macos/AXHelper.swift"
+    text = source.read_text()
+    entry = "\nrunJSONLines()\n"
+    assert text.endswith(entry)
+    program = tmp_path / "AXDiagnostic.swift"
+    program.write_text(text.removesuffix(entry) + r'''
+private let failure = helperError("ax_error", stage: "copy_attribute",
+                          attribute: diagnosticAttribute(kAXValueAttribute as CFString),
+                          axStatus: .cannotComplete)
+emitError(id: "safe", code: failure.code, failure: failure)
+emit(["id": "unknown", "result": [
+    "attribute": diagnosticAttribute("private window title" as CFString)]])
+var otherFailureStillFails = false
+do {
+    _ = try observedValueResult(.cannotComplete, nil)
+} catch let failure as HelperFailure {
+    otherFailureStillFails = failure.code == "ax_error"
+        && failure.attribute == "AXValue" && failure.axStatus == -25204
+}
+var mutationPressFailureStillFails = false
+do {
+    _ = try pressActionAvailable(.failure, readOnly: false)
+} catch let failure as HelperFailure {
+    mutationPressFailureStillFails = failure.code == "ax_error"
+        && failure.stage == "copy_actions" && failure.axStatus == -25200
+}
+emit(["id": "optional-value", "result": [
+    "failure_absent": try observedValueResult(.failure, nil).value == nil,
+    "failure_uncomparable": try observedValueResult(.failure, nil).comparable == false,
+    "no_value_absent": try observedValueResult(.noValue, nil).value == nil,
+    "no_value_comparable": try observedValueResult(.noValue, nil).comparable,
+    "success_preserved": (try observedValueResult(.success, "visible" as CFString).value)
+        .map { CFEqual($0, "visible" as CFString) } ?? false,
+    "other_failure_still_fails": otherFailureStillFails,
+    "failure_not_settable": try observedValueSettableResult(.failure, true) == false,
+    "success_settable": try observedValueSettableResult(.success, true),
+    "failure_not_pressable": try pressActionAvailable(.failure, readOnly: true) == false,
+    "mutation_press_failure_still_fails": mutationPressFailureStillFails,
+]])
+''')
+    executable = tmp_path / "ax-diagnostic"
+    subprocess.run(["swiftc", str(program), "-o", str(executable)],
+                   check=True, capture_output=True, timeout=90)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, timeout=5)
+    lines = [json.loads(line) for line in result.stdout.splitlines()]
+    assert lines == [
+        {"id": "safe", "error": {"code": "ax_error", "stage": "copy_attribute",
+                                 "attribute": "AXValue", "ax_status": -25204}},
+        {"id": "unknown", "result": {"attribute": "other"}},
+        {"id": "optional-value", "result": {
+            "failure_absent": True, "failure_uncomparable": True,
+            "no_value_absent": True, "no_value_comparable": True,
+            "success_preserved": True, "other_failure_still_fails": True,
+            "failure_not_settable": True, "success_settable": True,
+            "failure_not_pressable": True, "mutation_press_failure_still_fails": True,
+        }},
+    ]
+    assert b"private window title" not in result.stdout

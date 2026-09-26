@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a65` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.65` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0a67` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-alpha.67` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -164,7 +164,11 @@ existing HTTP Subchat profile selection. See [HTTP server setup](docs/HTTP-SERVE
 On macOS, a selected profile with an account ID pin and
 `"enable_background_send": true` in `subchat/login-selection.json` enables the
 background browser-prepared HTTPX send tools when the Plugin starts. Without
-this explicit selection, or on other platforms, the default remains read-only. Set
+an explicit selection, the default remains read-only. On Windows, an owner can
+prepare a dedicated Chrome or Microsoft Edge login and save a verified account,
+browser choice, and send consent with `anywhere-subchat-setup choose-dedicated`.
+See the [Subchat guide](docs/SUBCHAT-PROBE.md#windows-dedicated-chrome-or-edge-profile)
+for setup and current live-validation limits. Set
 `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=http-read-only` to keep a pinned macOS
 installation read-only.
 Set `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process to expose

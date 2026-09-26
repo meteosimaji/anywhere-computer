@@ -12,6 +12,54 @@ from anywhere_computer.subchat_browser.httpx_generation import (
 from anywhere_computer.subchat_state import SubchatSubmission
 
 
+async def test_pinned_account_mismatch_stops_before_browser_generation(
+    monkeypatch,
+):
+    from anywhere_computer import subchat_chrome_login
+    from anywhere_computer.subchat_browser import backend as backend_module
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatHTTPSelection
+
+    class Client:
+        async def aclose(self):
+            pass
+
+    class Page:
+        def is_closed(self):
+            return False
+
+        async def route(self, *_args):
+            pytest.fail('A mismatched account must not install a send route')
+
+    class Context:
+        browser = None
+
+        def on(self, _event, _callback):
+            pass
+
+    async def browser():
+        return Context()
+
+    async def verify(_context, _client, *, expected_account_id, page_factory):
+        assert expected_account_id == 'account-a'
+        raise SubchatAccountMismatch('Different Chat account')
+
+    backend = BrowserSubchatBackend(
+        browser, http_read=True, httpx_generation=True,
+        expected_account_id='account-a')
+    backend.pages['e' * 32] = Page()
+    monkeypatch.setattr(backend_module.httpx, 'AsyncClient', lambda **_kwargs: Client())
+    monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', verify)
+    submission = SubchatSubmission(
+        operation_id='e' * 32, prompt='fixture', model='fixture', effort='fixture',
+        state='sending',
+        http_selection=SubchatHTTPSelection(
+            version_id='fixture', preset_id=1, model_slug='fixture',
+            thinking_effort=None))
+    with pytest.raises(SubchatAccountMismatch, match='Different Chat account'):
+        await backend.send(submission)
+
+
 class RequestFixture:
     method = 'POST'
     url = 'https://chatgpt.com/backend-api/f/conversation'

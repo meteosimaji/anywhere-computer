@@ -23,6 +23,15 @@ for line in sys.stdin:
             continue
         result = {'windows': [{'window_id': 1}]}
     elif method == 'observe':
+        if mode in ('ax_diagnostic', 'private_ax_diagnostic'):
+            error = {'code': 'ax_error', 'stage': 'copy_attribute',
+                     'attribute': 'AXValue', 'ax_status': -25205}
+            if mode == 'private_ax_diagnostic':
+                error.update(stage='synthetic_secret_ABC123',
+                             attribute='synthetic_secret_ABC123',
+                             ax_status='synthetic_secret_ABC123')
+            print(json.dumps({'id': req['id'], 'error': error}), flush=True)
+            continue
         if mode == 'malformed_observe':
             print('{synthetic_secret_ABC123}', flush=True)
             continue
@@ -36,9 +45,9 @@ for line in sys.stdin:
             continue
         result = {'observation_id': 'fixture-observation', 'tree': {}}
     else:
-        if mode == 'element_unavailable':
+        if mode in ('element_unavailable', 'value_not_comparable'):
             print(json.dumps({'id': req['id'], 'error': {
-                'code': 'element_unavailable'}}), flush=True)
+                'code': mode}}), flush=True)
             continue
         if mode in ('changed', 'press_changed'):
             code = 'press_target_changed' if mode == 'press_changed' else 'value_changed'
@@ -103,6 +112,8 @@ async def test_owner_binding_and_cross_session_snapshot_invalidation(helper_proc
     ("set_value", "lost", "unknown"), ("press", "lost", "unknown"),
     ("set_value", "changed", "failed"), ("press", "changed", "failed"),
     ("press", "press_changed", "failed"),
+    ("set_value", "value_not_comparable", "failed"),
+    ("press", "value_not_comparable", "failed"),
 ])
 async def test_native_outcome_is_durable_and_not_replayed(
         tmp_path, helper_process, mode, expected, method):
@@ -194,6 +205,29 @@ async def test_nonfatal_helper_error_keeps_session_and_guides_reobservation(
             tool="gui_native_observe", arguments=target), peer="one")
         assert second.data["error_code"] == "window_unavailable"
         assert session_id in engine.native_gui.entries
+    finally:
+        await engine.close()
+
+
+@pytest.mark.parametrize("mode,expected", [
+    ("ax_diagnostic", "ax_error (stage=copy_attribute, attribute=AXValue, ax_status=-25205)"),
+    ("private_ax_diagnostic", "ax_error"),
+])
+async def test_ax_diagnostic_is_sanitized_and_keeps_error_classification(
+        tmp_path, helper_process, mode, expected):
+    helper_process[0][0] = mode
+    engine = Engine(tmp_path / "state")
+    try:
+        opened = await engine.execute(Request(operation_id="a" * 32,
+            tool="gui_native_windows", arguments={"app": "test"}), peer="one")
+        observed = await engine.execute(Request(operation_id="b" * 32,
+            tool="gui_native_observe", arguments={
+                "session_id": opened.data["session_id"], "app": "test", "window_id": 1,
+            }), peer="one")
+        assert observed.state == "failed"
+        assert observed.data["error_code"] == "ax_error"
+        assert observed.error == "Native GUI helper rejected request: " + expected
+        assert "synthetic_secret_ABC123" not in observed.model_dump_json()
     finally:
         await engine.close()
 

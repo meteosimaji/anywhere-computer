@@ -3,6 +3,23 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a67 / Plugin 0.2.0-alpha.67 — unpublished candidate (2026-09-26)
+
+- Keep Finder elements visible when an optional AXValue read fails, while
+  refusing input before dispatch with an explicit non-comparable value error.
+- Require saved Windows send consent even with transport overrides, and stop
+  reading an unselected dedicated login after revocation.
+- Clarify Windows first-login and missing-browser failures before beta testing.
+
+## 0.2.0a66 / Plugin 0.2.0-alpha.66 — unpublished candidate (2026-09-26)
+
+- Add an explicitly selected, account-pinned dedicated Chrome or Edge profile
+  for Windows Subchat browser-prepared HTTPX sends. Keep the Windows Plugin
+  read-only until the owner enables sending for that selection.
+- Launch the selected Windows browser headlessly for generation preparation;
+  preserve the existing macOS background path. Windows live generation remains
+  an acceptance gate before the beta release.
+
 ## 0.2.0a65 / Plugin 0.2.0-alpha.65 — unpublished candidate (2026-09-26)
 
 - Render Japanese DOCX text with system fonts in the isolated macOS preview.

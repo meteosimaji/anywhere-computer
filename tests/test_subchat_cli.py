@@ -1,4 +1,6 @@
 import json
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import pytest
 from test_subchat_lifecycle import BrowserFixture
@@ -7,6 +9,53 @@ from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
 from anywhere_computer.subchat_cli import Command, dispatch
 from anywhere_computer.subchat_state import SubchatSubmissions
+
+
+async def test_windows_browser_transport_launches_selected_edge(tmp_path, monkeypatch):
+    import playwright.async_api
+
+    from anywhere_computer import subchat_cli
+
+    events = []
+
+    class Context:
+        browser = None
+
+        def on(self, event, callback):
+            events.append(('listener', event))
+
+        async def close(self):
+            events.append('closed')
+
+    class Browser:
+        async def launch_persistent_context(self, profile, *, channel, headless,
+                                            ignore_default_args, args):
+            events.append(('launch', profile, channel, headless, args))
+            return Context()
+
+    @asynccontextmanager
+    async def runtime():
+        yield SimpleNamespace(chromium=Browser())
+
+    async def inspect(service, _source, _destination, *, owner):
+        await service.backend._browser()
+
+    monkeypatch.setattr(playwright.async_api, 'async_playwright', runtime)
+    monkeypatch.setattr(subchat_cli, 'process_lines', inspect)
+    profile = tmp_path / 'edge-login'
+    monkeypatch.setattr(subchat_cli.sys, 'platform', 'linux')
+    with pytest.raises(ValueError, match='Windows only'):
+        await subchat_cli.run(profile, tmp_path / 'state', browser_channel='msedge')
+    monkeypatch.setattr(subchat_cli.sys, 'platform', 'win32')
+    await subchat_cli.run(profile, tmp_path / 'state', browser_channel='msedge')
+    assert ('launch', str(profile), 'msedge', False, []) in events
+    assert 'closed' in events
+
+    events.clear()
+    await subchat_cli.run(profile, tmp_path / 'httpx-state', browser_channel='msedge',
+                          http_read=True, httpx_generation=True, minimized=True,
+                          expected_account_id='account-a')
+    assert ('launch', str(profile), 'msedge', True, []) in events
 
 
 async def test_json_commands_recover_without_repeating_send(tmp_path):

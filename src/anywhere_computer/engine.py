@@ -87,7 +87,6 @@ from .models import (
     WriteFile,
 )
 from .native_gui import (
-    HELPER_ERROR_CODES,
     NativeApp,
     NativeGUI,
     NativeGUIInputRefused,
@@ -96,6 +95,7 @@ from .native_gui import (
     NativePress,
     NativeSession,
     NativeSetValue,
+    helper_error_code,
     installed_helper,
 )
 from .plugin_sessions import PluginSessions
@@ -1628,14 +1628,9 @@ class Engine:
                     )
                 elif request.tool.startswith("gui_native_") and type(error) is ValueError and (
                     (native_code := _NATIVE_GUI_FAILURES.get(str(error))) is not None
-                    or (str(error).startswith("Native GUI helper rejected request: ")
-                        and str(error).removeprefix("Native GUI helper rejected request: ")
-                        in HELPER_ERROR_CODES | {"invalid_response"})
+                    or helper_error_code(str(error)) is not None
                 ):
-                    helper_code = (str(error).removeprefix(
-                        "Native GUI helper rejected request: ")
-                        if str(error).startswith("Native GUI helper rejected request: ")
-                        else None)
+                    helper_code = helper_error_code(str(error))
                     session_id = request.arguments.get("session_id")
                     session_live = (isinstance(session_id, str)
                                     and session_id in self.native_gui.entries)

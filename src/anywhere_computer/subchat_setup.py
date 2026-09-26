@@ -1,4 +1,4 @@
-"""Inspect, select, or stage a macOS Chrome login for Subchat."""
+"""Prepare a dedicated Windows browser or select a macOS Chrome login for Subchat."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 from contextlib import AsyncExitStack, ExitStack
@@ -138,6 +139,85 @@ async def inspect_account(source: Path) -> str:
         return session.account_id
 
 
+async def inspect_dedicated_account(profile: Path, channel: str) -> str:
+    """Read the account from a stopped, dedicated Windows browser profile."""
+    if sys.platform != "win32":
+        raise SetupInputError("Dedicated browser setup is supported on Windows only")
+    try:
+        from playwright.async_api import Error as PlaywrightError
+        from playwright.async_api import async_playwright
+    except ModuleNotFoundError as error:
+        if error.name != "playwright":
+            raise
+        raise SetupInputError("Install browser support with the browser extra") from None
+
+    from .subchat_browser import CHROME_PROFILE_IGNORED_DEFAULT_ARGS
+    from .subchat_chrome_login import chrome_http_session
+
+    async with async_playwright() as driver:
+        try:
+            context = await driver.chromium.launch_persistent_context(
+                str(profile), channel=channel, headless=True,
+                ignore_default_args=list(CHROME_PROFILE_IGNORED_DEFAULT_ARGS))
+        except PlaywrightError:
+            raise SetupInputError(
+                "Dedicated browser could not open; close all windows using its profile"
+            ) from None
+        try:
+            async with httpx.AsyncClient(trust_env=False, follow_redirects=False,
+                                         transport=httpx.AsyncHTTPTransport(retries=0)) as client:
+                session = await chrome_http_session(context, client)
+                return session.account_id
+        finally:
+            await context.close()
+
+
+async def prepare_dedicated_profile(profile: Path, channel: str) -> str:
+    """Use the installed normal browser for login, then verify its account."""
+    if sys.platform != "win32" or channel not in {"chrome", "msedge"}:
+        raise SetupInputError("Dedicated browser setup is supported on Windows only")
+    profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+    executable = "msedge.exe" if channel == "msedge" else "chrome.exe"
+    arguments = subprocess.list2cmdline(
+        [f"--user-data-dir={profile}", "https://chatgpt.com/"])
+    try:
+        await asyncio.to_thread(os.startfile, executable, "open", arguments=arguments,
+                                cwd=str(profile))
+    except OSError:
+        raise SetupInputError(
+            "Could not launch the installed Edge or Chrome browser") from None
+    await asyncio.to_thread(input,
+        "Sign in to ChatGPT, close all dedicated browser windows, then press Enter here: ")
+    return await inspect_dedicated_account(profile, channel)
+
+
+def save_dedicated_selection(state: Path, profile: Path, channel: str, account_id: str,
+                             *, enable_send: bool) -> None:
+    """Persist only the verified Windows browser choice and send consent."""
+    if sys.platform != "win32" or channel not in {"chrome", "msedge"}:
+        raise SetupInputError("Select a Windows Chrome or Edge browser")
+    if not account_id or len(account_id) > 256 or any(ord(char) < 33 or ord(char) > 126
+                                                    for char in account_id):
+        raise SetupInputError("Observed Chat account ID is invalid")
+    _private_directory(state.parent)
+    selection = state.parent / "login-selection.json"
+    if selection.is_symlink():
+        raise SetupInputError("Subchat login selection must not be a symlink")
+    content = json.dumps({"dedicated_browser_channel": channel,
+                          "dedicated_profile": str(profile.resolve()),
+                          "expected_account_id": account_id,
+                          "enable_background_send": enable_send}, separators=(",", ":"))
+    descriptor, temporary = tempfile.mkstemp(prefix=".login-selection-", dir=state.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, selection)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 def save_selection(state: Path, source: Path, account_id: str, *, enable_send: bool) -> None:
     """Replace only the local selection; never persist browser credentials."""
     if not account_id or len(account_id) > 256 or any(ord(char) < 33 or ord(char) > 126
@@ -226,7 +306,8 @@ def revoke_profile_id_selection(state: Path) -> None:
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("action", choices=("inspect", "select", "stage", "discover",
-                                           "choose", "revoke"))
+                                           "choose", "revoke", "prepare-dedicated",
+                                           "inspect-dedicated", "choose-dedicated"))
     parser.add_argument("profile", nargs="?",
                         help="Chrome profile ID for choose; path for legacy actions")
     parser.add_argument("--enable-background-send", action="store_true",
@@ -235,18 +316,51 @@ def main(argv: list[str] | None = None) -> None:
                         help="Account ID observed with inspect; required for select and stage")
     parser.add_argument("--http-state-dir", type=Path,
                         help="For stage, update an existing stopped HTTPS service")
+    parser.add_argument("--browser-channel", choices=("chrome", "msedge"),
+                        help="Windows dedicated browser: Chrome or Microsoft Edge")
     args = parser.parse_args(argv)
-    if args.action not in {"select", "choose"} and args.enable_background_send:
-        parser.error("--enable-background-send requires select or choose")
-    if args.action in {"select", "stage", "choose"} and not args.expect_account_id:
+    if args.action not in {"select", "choose", "choose-dedicated"} and args.enable_background_send:
+        parser.error("--enable-background-send requires a selection action")
+    if (args.action in {"select", "stage", "choose", "choose-dedicated"}
+            and not args.expect_account_id):
         parser.error(f"{args.action} requires --expect-account-id from a prior inspect")
     if args.action in {"inspect", "discover", "revoke"} and args.expect_account_id is not None:
         parser.error("--expect-account-id requires select, choose, or stage")
     if args.http_state_dir is not None and args.action != "stage":
         parser.error("--http-state-dir requires stage")
-    if (args.action in {"discover", "revoke"}) != (args.profile is None):
-        parser.error("discover and revoke take no profile; other actions require one")
+    dedicated = args.action in {"prepare-dedicated", "inspect-dedicated",
+                                "choose-dedicated"}
+    if dedicated != (args.browser_channel is not None):
+        parser.error("Dedicated Windows actions require --browser-channel")
+    if (args.action in {"discover", "revoke", "prepare-dedicated",
+                        "inspect-dedicated", "choose-dedicated"}) != (args.profile is None):
+        parser.error("This action takes no profile; other actions require one")
     try:
+        if dedicated:
+            try:
+                profile, state = plugin_paths()
+            except ValueError:
+                raise SetupInputError(
+                    "Subchat setup paths are invalid; use the default Windows local paths"
+                ) from None
+            account_id = asyncio.run(
+                prepare_dedicated_profile(profile, args.browser_channel)
+                if args.action == "prepare-dedicated" else
+                inspect_dedicated_account(profile, args.browser_channel))
+            if args.expect_account_id is not None and account_id != args.expect_account_id:
+                raise SetupInputError("Dedicated browser has a different Chat account")
+            if args.action == "choose-dedicated":
+                _private_directory(state.parent)
+                with ProcessLock(state.parent / "profile-stage.lock"):
+                    save_dedicated_selection(state, profile, args.browser_channel, account_id,
+                                             enable_send=args.enable_background_send)
+            print(json.dumps({"account_id": account_id, "browser_channel":
+                              args.browser_channel,
+                              "selected": args.action == "choose-dedicated",
+                              "send_enabled": args.action == "choose-dedicated"
+                              and args.enable_background_send,
+                              "restart_required": args.action == "choose-dedicated"}))
+            return
         if args.action == "discover":
             print(json.dumps({"profiles": asyncio.run(discover_profiles())}))
             return
