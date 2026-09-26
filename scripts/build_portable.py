@@ -98,10 +98,42 @@ def include_manager(app: Path, manager: Path, *, platform: str) -> None:
         raise ValueError("Native manager packaging supports macOS and Windows")
 
 
+def validate_renderer_bundle(source: Path) -> None:
+    """Check the supplied renderer tree before copying it into a portable ZIP."""
+    if not source.is_absolute() or source.is_symlink() or not source.is_dir():
+        raise ValueError("Renderer bundle must be an absolute, real directory")
+    required = (
+        "LibreOffice.app/Contents/MacOS/soffice", "bin/pdfinfo", "bin/pdftoppm",
+    )
+    for name in required:
+        program = source / name
+        if program.is_symlink() or not program.is_file() or not os.access(program, os.X_OK):
+            raise ValueError(f"Renderer bundle lacks executable {name}")
+    for name in ("LICENSES/LibreOffice.txt", "LICENSES/Poppler.txt", "SOURCES.json"):
+        notice = source / name
+        if notice.is_symlink() or not notice.is_file() or not notice.read_bytes().strip():
+            raise ValueError(f"Renderer bundle lacks {name}")
+    provenance = json.loads((source / "SOURCES.json").read_text(encoding="utf-8"))
+    for component in ("libreoffice", "poppler"):
+        details = provenance.get(component) if isinstance(provenance, dict) else None
+        if (not isinstance(details, dict)
+                or not all(isinstance(details.get(key), str) and details[key].strip()
+                           for key in ("version", "binary_source", "source_code"))):
+            raise ValueError(f"Renderer bundle lacks {component} provenance")
+    for path in source.rglob("*"):
+        if path.is_symlink():
+            if not path.resolve(strict=True).is_relative_to(source.resolve()):
+                raise ValueError("Renderer bundle symlink escapes its directory")
+            if path.is_dir():
+                raise ValueError("Renderer bundle directory symlinks are unsupported")
+        if not path.is_file() and not path.is_dir():
+            raise ValueError("Renderer bundle contains a special file")
+
+
 def build_portable(
     root: Path, runtime: Path, output: Path, *, allow_downloads: bool = False,
     manager: Path | None = None, audio_helper: Path | None = None,
-    gui_helper: Path | None = None,
+    gui_helper: Path | None = None, renderer_bundle: Path | None = None,
 ) -> Path:
     validate_runtime(runtime)
     helpers = {"audio": audio_helper, "gui": gui_helper}
@@ -113,6 +145,10 @@ def build_portable(
         if (not executable.is_absolute() or executable.is_symlink()
                 or not executable.is_file() or not os.access(executable, os.X_OK)):
             raise ValueError(f"{kind} helper must be an absolute executable file")
+    if renderer_bundle is not None:
+        if sys.platform != "darwin":
+            raise ValueError("Renderer bundle packaging currently supports macOS only")
+        validate_renderer_bundle(renderer_bundle)
     if output.exists():
         raise ValueError("Output already exists; choose a new archive path")
     uv = shutil.which("uv")
@@ -176,6 +212,8 @@ def build_portable(
             helper = native / f"anywhere-{kind}"
             shutil.copyfile(executable, helper)
             helper.chmod(0o755)
+        if renderer_bundle is not None:
+            shutil.copytree(renderer_bundle, app / "renderers" / "macos", symlinks=False)
         shutil.copyfile(root / "LICENSE", app / "LICENSE")
         (app / "README.txt").write_text(
             "Anywhere Computer portable\n"
@@ -187,6 +225,8 @@ def build_portable(
             "Run chatgpt-setup with an explicit --state-dir to configure ChatGPT.\n"
             "Public HTTPS and ChatGPT authorization are still required.\n"
             "Python and dependencies retain their own licenses under runtime/.\n"
+            + ("Renderer licenses and source locations are under renderers/macos/.\n"
+               if renderer_bundle is not None else "") +
             "Build provenance is recorded in manifest.json. No credentials are bundled.\n")
         runtime_info = json.loads(subprocess.check_output(
             [str(interpreter), "-B", "-I", "-c", "import json,sys,sysconfig;"
@@ -224,8 +264,11 @@ if __name__ == "__main__":
                         help="Include an explicitly built experimental macOS audio executable")
     parser.add_argument("--gui-helper", type=Path,
                         help="Include an explicitly built experimental macOS AX executable")
+    parser.add_argument("--renderer-bundle", type=Path,
+                        help="Include a reviewed macOS renderer tree with licenses and sources")
     arguments = parser.parse_args()
     print(build_portable(Path(__file__).resolve().parents[1], arguments.runtime,
                          arguments.output.absolute(), allow_downloads=arguments.allow_downloads,
                          manager=arguments.manager, audio_helper=arguments.audio_helper,
-                         gui_helper=arguments.gui_helper))
+                         gui_helper=arguments.gui_helper,
+                         renderer_bundle=arguments.renderer_bundle))

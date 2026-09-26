@@ -592,16 +592,19 @@ def main() -> None:
             print(json.dumps({'state': 'invalid_http_generation_handoff',
                               'automatic_retry': False}), file=sys.stderr)
             raise SystemExit(2) from None
+    from .subchat_chrome_profile import selected_chrome_source
+
     asyncio.run(run(args.browser_profile.resolve() if args.browser_profile is not None else None,
                     args.state_dir.resolve(), mcp=args.mcp, http_read=args.http_read,
                     minimized=args.minimized, http_only=args.http_only,
                     httpx_generation=args.httpx_generation,
-                    browser_source_profile=(args.browser_source_profile.resolve()
+                    browser_source_profile=(selected_chrome_source(args.browser_source_profile)
                                             if args.browser_source_profile is not None else None),
                     http_session=observed_session, http_generation=observed_generation,
                     chrome_login_profile=(args.chrome_login_profile.resolve()
                                           if args.chrome_login_profile is not None else None),
-                    chrome_login_source_profile=(args.chrome_login_source_profile.resolve()
+                    chrome_login_source_profile=(selected_chrome_source(
+                        args.chrome_login_source_profile)
                                                  if args.chrome_login_source_profile is not None
                                                  else None),
                     chrome_generation_stdin=bool(chrome_login

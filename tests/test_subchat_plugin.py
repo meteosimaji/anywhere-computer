@@ -1,16 +1,23 @@
 import io
 import json
+import os
 from pathlib import Path
 
 import pytest
 from test_subchat_lifecycle import BrowserFixture
 
-from anywhere_computer import subchat_plugin
+from anywhere_computer import subchat_chrome_profile, subchat_plugin
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import Subchats
 from anywhere_computer.subchat_mcp import READ_ONLY_TOOLS, session
 from anywhere_computer.subchat_state import SubchatSubmissions
+
+
+@pytest.fixture(autouse=True)
+def standard_test_chrome_store(tmp_path, monkeypatch):
+    monkeypatch.setattr(subchat_chrome_profile, 'chrome_user_data_root',
+                        lambda: tmp_path / 'Chrome')
 
 
 def test_plugin_paths_use_a_dedicated_default(tmp_path, monkeypatch):
@@ -59,6 +66,7 @@ def test_plugin_source_profile_is_explicit_and_browser_send_stays_dedicated(
 ):
     profile, state = tmp_path / 'login', tmp_path / 'ledger'
     source = tmp_path / 'Chrome/Default'
+    source.mkdir(parents=True)
     monkeypatch.setattr(subchat_plugin, 'plugin_paths', lambda: (profile, state))
     monkeypatch.setenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE', str(source))
     observed = {}
@@ -79,6 +87,7 @@ def test_plugin_source_profile_is_explicit_and_browser_send_stays_dedicated(
 def test_plugin_reads_persistent_local_chrome_selection(tmp_path, monkeypatch):
     profile, state = tmp_path / 'login', tmp_path / 'subchat/ledger'
     source = tmp_path / 'Chrome/Default'
+    source.mkdir(parents=True)
     state.parent.mkdir()
     (state.parent / 'login-selection.json').write_text(json.dumps({
         'chrome_source_profile': str(source),
@@ -113,11 +122,74 @@ def test_plugin_reads_persistent_local_chrome_selection(tmp_path, monkeypatch):
         subchat_plugin.main()
 
 
+def test_profile_id_selection_resolves_only_ordinary_chrome_store(tmp_path, monkeypatch):
+    if os.name == 'nt':
+        pytest.skip('Chrome profile ID selection is currently macOS-only')
+    root = tmp_path / 'Library/Application Support/Google/Chrome'
+    source = root / 'Profile 2'
+    source.mkdir(parents=True)
+    state = tmp_path / 'subchat/ledger'
+    state.parent.mkdir()
+    selection = state.parent / 'login-selection.json'
+    selection.write_text(json.dumps({
+        'chrome_profile_id': 'Profile 2', 'expected_account_id': 'account-b',
+        'enable_background_send': True,
+    }))
+    selection.chmod(0o600)
+    monkeypatch.setattr(subchat_chrome_profile, 'chrome_user_data_root', lambda: root)
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE', raising=False)
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', raising=False)
+    assert subchat_plugin.selected_chrome_login(state) == (source, 'account-b')
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE', str(tmp_path / 'other/Default'))
+    with pytest.raises(ValueError, match='cannot override a selected Chrome ID'):
+        subchat_plugin.selected_chrome_login(state)
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE')
+    selection.write_text(json.dumps({
+        'chrome_profile_id': '../Default', 'expected_account_id': 'account-b',
+    }))
+    with pytest.raises(ValueError, match='Select Chrome Default or Profile N'):
+        subchat_plugin.selected_chrome_login(state)
+    selection.write_text(json.dumps({
+        'chrome_profile_id': 'Profile 2',
+        'chrome_source_profile': str(source),
+    }))
+    with pytest.raises(ValueError, match='one Chrome profile'):
+        subchat_plugin.selected_chrome_login(state)
+    selection.write_text(json.dumps({
+        'chrome_profile_id': 'Profile 2', 'expected_account_id': 'account-b',
+    }))
+    if os.name != 'nt':
+        selection.chmod(0o644)
+        with pytest.raises(ValueError, match='not private'):
+            subchat_plugin.selected_chrome_login(state)
+
+
+def test_legacy_profile_path_must_be_standard_or_managed(tmp_path, monkeypatch):
+    monkeypatch.setattr(subchat_plugin.sys, 'platform', 'darwin')
+    state = tmp_path / 'subchat/ledger'
+    state.parent.mkdir()
+    selection = state.parent / 'login-selection.json'
+    outside = tmp_path / 'other/Default'
+    outside.mkdir(parents=True)
+    selection.write_text(json.dumps({
+        'chrome_source_profile': str(outside), 'expected_account_id': 'account-a',
+    }))
+    with pytest.raises(ValueError, match='outside the managed store'):
+        subchat_plugin.selected_chrome_login(state)
+    staged = state.parent / 'staged-chrome-profiles/snapshot-123/Default'
+    staged.mkdir(parents=True)
+    selection.write_text(json.dumps({
+        'chrome_source_profile': str(staged), 'expected_account_id': 'account-a',
+    }))
+    assert subchat_plugin.selected_chrome_login(state) == (staged, 'account-a')
+
+
 def test_pinned_macos_login_enables_background_httpx_send_by_default(
     tmp_path, monkeypatch,
 ):
     profile, state = tmp_path / 'login', tmp_path / 'subchat/ledger'
     source = tmp_path / 'Chrome/Default'
+    source.mkdir(parents=True)
     state.parent.mkdir()
     (state.parent / 'login-selection.json').write_text(json.dumps({
         'chrome_source_profile': str(source),
@@ -147,6 +219,7 @@ def test_pinned_macos_login_enables_background_httpx_send_by_default(
 def test_pin_without_explicit_send_selection_remains_read_only(tmp_path, monkeypatch):
     profile, state = tmp_path / 'login', tmp_path / 'subchat/ledger'
     source = tmp_path / 'Chrome/Default'
+    source.mkdir(parents=True)
     state.parent.mkdir()
     selection = state.parent / 'login-selection.json'
     selection.write_text(json.dumps({
@@ -171,14 +244,14 @@ def test_pin_without_explicit_send_selection_remains_read_only(tmp_path, monkeyp
 
 def test_plugin_selection_stat_error_is_sanitized(tmp_path, monkeypatch):
     selection = tmp_path / 'login-selection.json'
-    original_stat = Path.stat
+    original_stat = Path.lstat
 
     def denied_stat(path, *args, **kwargs):
         if path == selection:
             raise PermissionError('private selection path')
         return original_stat(path, *args, **kwargs)
 
-    monkeypatch.setattr(Path, 'stat', denied_stat)
+    monkeypatch.setattr(Path, 'lstat', denied_stat)
     with pytest.raises(ValueError, match='Invalid Subchat login selection') as error:
         subchat_plugin.selected_chrome_login(tmp_path / 'ledger')
     assert 'private selection path' not in str(error.value)

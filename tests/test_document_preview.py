@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import io
 import json
 import os
 import shutil
@@ -13,7 +14,8 @@ import zipfile
 import psutil
 import pytest
 
-from anywhere_computer.document_preview import _run, _sandbox_policy, preview_document
+from anywhere_computer.document_preview import _run, _safe_ooxml, _sandbox_policy, preview_document
+from anywhere_computer.document_writer import FormulaCell, create_workbook
 from anywhere_computer.engine import Engine
 from anywhere_computer.files import sha256
 from anywhere_computer.mcp_server import MCPSession
@@ -55,6 +57,34 @@ def args(path, page=1):
     return PreviewDocument(path=str(path), expected_sha256=sha256(path.read_bytes()), page=page)
 
 
+def pptx(tmp_path):
+    """Create a small real presentation without storing a binary test artifact."""
+    source = tmp_path / "slide.fodp"
+    source.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>'
+        '<office:document '
+        'xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" '
+        'xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" '
+        'xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" '
+        'xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" '
+        'office:version="1.3" '
+        'office:mimetype="application/vnd.oasis.opendocument.presentation">'
+        '<office:body><office:presentation><draw:page draw:name="page1">'
+        '<draw:frame svg:x="1cm" svg:y="1cm" svg:width="20cm" svg:height="5cm">'
+        '<draw:text-box><text:p>Slide preview check</text:p></draw:text-box>'
+        '</draw:frame></draw:page></office:presentation></office:body>'
+        '</office:document>', encoding="utf-8")
+    result = subprocess.run(
+        [shutil.which("soffice"),
+         f"-env:UserInstallation={(tmp_path / 'fixture-profile').as_uri()}",
+         "--headless", "--convert-to", "pptx", "--outdir", str(tmp_path), str(source)],
+        capture_output=True, timeout=30, check=False)
+    assert result.returncode == 0, result.stderr
+    path = source.with_suffix(".pptx")
+    assert path.is_file()
+    return path
+
+
 def test_formatted_multipage_docx_renders_distinct_pages_without_changing_source(tmp_path):
     if any(shutil.which(name) is None for name in
            ("soffice", "pdfinfo", "pdftoppm", "sandbox-exec")):
@@ -69,6 +99,25 @@ def test_formatted_multipage_docx_renders_distinct_pages_without_changing_source
     png_one = base64.b64decode(first["data_base64"])
     png_two = base64.b64decode(second["data_base64"])
     assert png_one.startswith(b"\x89PNG\r\n\x1a\n") and png_two != png_one
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize("format_name", ["xlsx", "pptx"])
+def test_spreadsheet_and_presentation_render_without_changing_source(tmp_path, format_name):
+    if any(shutil.which(name) is None for name in
+           ("soffice", "pdfinfo", "pdftoppm", "sandbox-exec")):
+        pytest.skip("Local sandboxed document renderer is unavailable")
+    if format_name == "xlsx":
+        path = tmp_path / "book.xlsx"
+        path.write_bytes(create_workbook([["Formatted", 42], ["二行目", "value"]], "Data"))
+    else:
+        path = pptx(tmp_path)
+    before = path.read_bytes()
+    result = preview_document(args(path))
+    assert result["format"] == format_name
+    assert result["rendered"] is True
+    assert result["pages"] >= 1
+    assert base64.b64decode(result["data_base64"]).startswith(b"\x89PNG\r\n\x1a\n")
     assert path.read_bytes() == before
 
 
@@ -110,7 +159,7 @@ async def test_unavailable_renderer_has_safe_error_code_at_tool_boundary(tmp_pat
     import anywhere_computer.document_preview as preview
 
     path = docx(tmp_path / "plain.docx")
-    monkeypatch.setattr(preview.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(preview, "find_renderer", lambda _name: None)
     engine = Engine(tmp_path / "engine")
     try:
         reply = await engine.execute(Request(
@@ -132,13 +181,36 @@ def test_preview_requires_current_hash_and_rejects_external_links(tmp_path):
         preview_document(args(path))
 
 
+def test_workbook_with_external_data_connection_is_rejected_before_rendering(tmp_path):
+    path = tmp_path / "external.xlsx"
+    path.write_bytes(create_workbook([["safe"]], "Data"))
+    with zipfile.ZipFile(path, "a") as archive:
+        archive.writestr("xl/connections.xml",
+                         '<connections><connection name="remote"/></connections>')
+    with pytest.raises(ValueError, match="active or embedded content"):
+        preview_document(args(path))
+
+
+def test_workbook_preview_strips_formulas_only_from_temporary_render_copy(tmp_path):
+    path = tmp_path / "formula.xlsx"
+    original = create_workbook([[FormulaCell(formula='=WEBSERVICE("https://example.invalid")')]],
+                               "Data")
+    path.write_bytes(original)
+    sanitized = _safe_ooxml(original, ".xlsx")
+    with zipfile.ZipFile(io.BytesIO(original)) as source:
+        assert b"WEBSERVICE" in source.read("xl/worksheets/sheet1.xml")
+    with zipfile.ZipFile(io.BytesIO(sanitized)) as render_copy:
+        assert b"WEBSERVICE" not in render_copy.read("xl/worksheets/sheet1.xml")
+    assert path.read_bytes() == original
+
+
 def test_missing_renderer_is_explicit(tmp_path, monkeypatch):
     if sys.platform != "darwin":
         pytest.skip("DOCX rendering currently requires the macOS network sandbox")
     import anywhere_computer.document_preview as preview
 
     path = docx(tmp_path / "plain.docx")
-    monkeypatch.setattr(preview.shutil, "which", lambda name: None)
+    monkeypatch.setattr(preview, "find_renderer", lambda name: None)
     with pytest.raises(ValueError, match="preview unavailable: soffice"):
         preview_document(args(path))
 

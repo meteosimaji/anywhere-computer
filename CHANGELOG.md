@@ -3,6 +3,18 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0a62 / Plugin 0.2.0-alpha.62 — unpublished candidate (2026-09-26)
+
+- Render bounded DOCX, XLSX and PPTX page previews on macOS. Strip spreadsheet
+  formulas and defined names from the private render copy while preserving the
+  original file and its hash.
+- Add explicit macOS Chrome profile ID discovery, account-pinned selection and
+  revocation for Subchat. Constrain profile sources to the current user's Chrome
+  store or a managed snapshot, and require owner authentication for initial HTTP
+  tool selection.
+- Add an optional portable renderer bundle input with license and provenance
+  checks. Standard portable builds do not yet include the renderer.
+
 ## 0.2.0a61 / Plugin 0.2.0-alpha.61 — unpublished candidate (2026-09-26)
 
 - Keep an owned Browser tab's last explicit navigation outcome visible through

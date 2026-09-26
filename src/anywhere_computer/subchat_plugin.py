@@ -5,10 +5,12 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import stat
 import sys
 from pathlib import Path
 
 from .state import state_directory
+from .subchat_chrome_profile import chrome_profile_by_id, selected_chrome_source
 from .subchat_cli import run
 
 
@@ -42,15 +44,26 @@ def selected_chrome_login(state: Path) -> tuple[Path | None, str | None]:
     """Read an explicit profile and account pin without inferring either one."""
     record = _selection_record(state)
     configured = os.environ.get("ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE")
+    profile_id = record.get("chrome_profile_id")
+    if configured is not None and profile_id is not None:
+        raise ValueError("Environment profile path cannot override a selected Chrome ID")
     source_value = configured if configured is not None else record.get("chrome_source_profile")
     source = None
-    if source_value is not None:
+    if configured is None and profile_id is not None:
+        if not isinstance(profile_id, str):
+            raise ValueError("Subchat Chrome profile ID is invalid")
+        source = chrome_profile_by_id(profile_id)
+    elif source_value is not None:
         if not isinstance(source_value, str):
             raise ValueError("Subchat Chrome source profile must be a path")
         source = Path(source_value).expanduser()
         if not source.is_absolute():
             raise ValueError("Subchat Chrome source profile must be an absolute path")
-        source = source.resolve()
+        if sys.platform == "darwin":
+            source = selected_chrome_source(
+                source, stage_root=state.parent / "staged-chrome-profiles")
+        else:
+            source = source.resolve()
     if source is not None and (source == state or source in state.parents
                                or state in source.parents):
         raise ValueError("Subchat Chrome source profile and state must be separate")
@@ -69,27 +82,38 @@ def _selection_record(state: Path) -> dict[str, object]:
     selection = state.parent / "login-selection.json"
     record: dict[str, object] = {}
     try:
-        selection_size = selection.stat().st_size
+        metadata = selection.lstat()
     except FileNotFoundError:
-        selection_size = None
+        metadata = None
     except OSError as error:
         raise ValueError("Invalid Subchat login selection") from error
-    if selection_size is not None:
-        if selection_size > 4096:
+    if metadata is not None:
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError("Invalid Subchat login selection")
+        if metadata.st_size > 4096:
             raise ValueError("Subchat login selection exceeds the size limit")
         try:
             record = json.loads(selection.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as error:
             raise ValueError("Invalid Subchat login selection") from error
         if (not isinstance(record, dict)
-                or not set(record).issubset({"chrome_source_profile", "expected_account_id",
-                                             "enable_background_send"})
-                or "chrome_source_profile" not in record
-                or not isinstance(record["chrome_source_profile"], str)
-                or not record["chrome_source_profile"]
+                or not set(record).issubset({"chrome_source_profile", "chrome_profile_id",
+                                             "expected_account_id", "enable_background_send"})
+                or ("chrome_source_profile" in record) == ("chrome_profile_id" in record)
+                or ("chrome_source_profile" in record and
+                    (not isinstance(record["chrome_source_profile"], str)
+                     or not record["chrome_source_profile"]))
+                or ("chrome_profile_id" in record and
+                    (not isinstance(record["chrome_profile_id"], str)
+                     or not record["chrome_profile_id"]))
                 or ("enable_background_send" in record
                     and type(record["enable_background_send"]) is not bool)):
-            raise ValueError("Subchat login selection requires chrome_source_profile")
+            raise ValueError("Subchat login selection requires one Chrome profile")
+        if "chrome_profile_id" in record:
+            getuid = getattr(os, "getuid", None)
+            if (metadata.st_mode & 0o077
+                    or (getuid is not None and metadata.st_uid != getuid())):
+                raise ValueError("Subchat profile selection is not private")
     return record
 
 

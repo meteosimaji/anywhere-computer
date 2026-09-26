@@ -222,14 +222,12 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     if(["docx","xlsx","pptx"].includes(suffix)) {
       state.current={kind:"document",path,offset:0,hash:null,previewPage:1};show("preview");$("preview-title").textContent="文書の内容";
       await nextDocument();
-      if(suffix==="docx") {
-        if(!state.tools.has("documents_preview")) {
-          message("書式プレビューはこの接続で利用できません。抽出した文字情報を表示しています。");
-        } else {
-          try {await nextPreview();} catch(error) {
-            if(error?.code!=="preview_unavailable") throw error;
-            message("書式プレビューはこの端末で利用できません。抽出した文字情報を表示しています。");
-          }
+      if(!state.tools.has("documents_preview")) {
+        message("書式プレビューはこの接続で利用できません。抽出した文字情報を表示しています。");
+      } else {
+        try {await nextPreview();} catch(error) {
+          if(error?.code!=="preview_unavailable") throw error;
+          message("書式プレビューはこの端末で利用できません。抽出した文字情報を表示しています。");
         }
       }
       return;
@@ -288,7 +286,7 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
   }
   async function nextPreview() {
     const file=state.current;
-    if(file?.kind!=="document" || !file.path.toLowerCase().endsWith(".docx") || !file.hash) return;
+    if(file?.kind!=="document" || !/\.(docx|xlsx|pptx)$/i.test(file.path) || !file.hash) return;
     const page=await call("documents_preview",{path:file.path,expected_sha256:file.hash,page:file.previewPage});
     if(page.sha256!==file.hash || page.page!==file.previewPage || !Number.isInteger(page.pages) || page.pages<page.page || page.pages>20 || page.mime_type!=="image/png" || typeof page.data_base64!=="string" || page.data_base64.length>4*1024*1024) throw new Error("書式プレビューの結果が不正です。");
     const bytes=Uint8Array.from(atob(page.data_base64),char=>char.charCodeAt(0));

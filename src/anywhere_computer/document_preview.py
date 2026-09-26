@@ -1,10 +1,10 @@
-"""Bounded, hash-bound DOCX page rendering through isolated local tools."""
+"""Bounded, hash-bound OOXML page rendering through isolated local tools."""
 
 import base64
+import io
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -17,10 +17,16 @@ from pydantic import JsonValue
 from .documents import WORD, OfficePackage
 from .files import absolute_path, read_bytes, sha256
 from .models import PreviewDocument
+from .renderer_location import find_renderer
 
 MAX_PDF_BYTES = 16 * 1024 * 1024
 MAX_PNG_BYTES = 2 * 1024 * 1024
 MAX_PAGES = 20
+OFFICE_FORMATS = {
+    ".docx": ("word/document.xml", "writer_pdf_Export"),
+    ".xlsx": ("xl/workbook.xml", "calc_pdf_Export"),
+    ".pptx": ("ppt/presentation.xml", "impress_pdf_Export"),
+}
 
 
 class DocumentPreviewUnavailable(ValueError):
@@ -33,22 +39,27 @@ def _sandbox_policy(root: Path) -> str:
 
 
 def _renderer(name: str) -> str:
-    path = shutil.which(name)
+    path = find_renderer(name)
     if path is None:
         raise DocumentPreviewUnavailable(
-            f"Document preview unavailable: {name} is not installed")
+            f"Document preview unavailable: {name} is unavailable")
     return path
 
 
-def _safe_docx(content: bytes) -> None:
+def _safe_ooxml(content: bytes, extension: str) -> bytes:
     package = OfficePackage(content)
     try:
-        if package.main_part() != "word/document.xml":
-            raise ValueError("Document preview requires a standard DOCX main part")
+        if package.main_part() != OFFICE_FORMATS[extension][0]:
+            raise ValueError("Document preview requires a standard OOXML main part")
+        replacement: dict[str, bytes] = {}
         for item in package.archive.infolist():
             name = item.filename.lower()
+            if (item.filename.startswith("/") or "\\" in item.filename
+                    or ".." in item.filename.split("/")):
+                raise ValueError("Document preview rejects unsafe package paths")
             if (name.endswith((".bin", ".svg")) or "/embeddings/" in name
-                    or "/activex/" in name):
+                    or "/activex/" in name or name.startswith("xl/externallinks/")
+                    or name.startswith("xl/querytables/") or name == "xl/connections.xml"):
                 raise ValueError("Document preview rejects active or embedded content")
             if item.filename.endswith(".rels"):
                 root = package.xml(item.filename)
@@ -60,8 +71,28 @@ def _safe_docx(content: bytes) -> None:
                 if any(node.tag in (WORD + "instrText", WORD + "fldSimple")
                        for node in root.iter()):
                     raise ValueError("Document preview rejects fields that may load external data")
+            if extension == ".xlsx" and name.startswith("xl/") and name.endswith(".xml"):
+                root = package.xml(item.filename)
+                changed = False
+                for parent in root.iter():
+                    for child in list(parent):
+                        local_name = child.tag.rsplit("}", 1)[-1].lower()
+                        if (local_name == "f" or "formula" in local_name
+                                or local_name == "definedname"):
+                            parent.remove(child)
+                            changed = True
+                if changed:
+                    replacement[item.filename] = ET.tostring(root, encoding="utf-8")
+        if not replacement:
+            return content
+        rendered = io.BytesIO()
+        with zipfile.ZipFile(rendered, "w") as archive:
+            for item in package.archive.infolist():
+                archive.writestr(item, replacement.get(item.filename,
+                                                       package.archive.read(item)))
+        return rendered.getvalue()
     except (KeyError, zipfile.BadZipFile, ET.ParseError) as error:
-        raise ValueError("Document preview requires a valid DOCX package") from error
+        raise ValueError("Document preview requires a valid OOXML package") from error
     finally:
         package.archive.close()
 
@@ -103,13 +134,14 @@ def _run(command: list[str], *, timeout: int, env: dict[str, str],
 
 def preview_document(args: PreviewDocument) -> dict[str, JsonValue]:
     path = absolute_path(args.path)
-    if path.suffix.lower() != ".docx":
-        raise ValueError("Rendered preview currently supports DOCX only")
+    extension = path.suffix.lower()
+    if extension not in OFFICE_FORMATS:
+        raise ValueError("Rendered preview supports DOCX, XLSX and PPTX")
     content = read_bytes(path)
     digest = sha256(content)
     if digest != args.expected_sha256:
         raise ValueError("Document changed; read it again")
-    _safe_docx(content)
+    render_content = _safe_ooxml(content, extension)
     if sys.platform != "darwin":
         raise DocumentPreviewUnavailable(
             "Document preview currently requires the macOS network sandbox")
@@ -117,8 +149,8 @@ def preview_document(args: PreviewDocument) -> dict[str, JsonValue]:
     sandbox = _renderer("sandbox-exec")
     with tempfile.TemporaryDirectory(prefix="anywhere-doc-preview-") as root_name:
         root = Path(root_name)
-        source = root / "source.docx"
-        source.write_bytes(content)
+        source = root / ("source" + extension)
+        source.write_bytes(render_content)
         output = root / "output"
         output.mkdir(mode=0o700)
         profile = root / "profile"
@@ -128,7 +160,7 @@ def preview_document(args: PreviewDocument) -> dict[str, JsonValue]:
         env = {**os.environ, "HOME": str(root), "TMPDIR": str(root),
                "SAL_DISABLE_OPENCL": "1"}
         _run([sandbox, "-f", str(policy), office, f"-env:UserInstallation={profile.as_uri()}",
-              "--headless", "--convert-to", "pdf:writer_pdf_Export", "--outdir",
+              "--headless", "--convert-to", "pdf:" + OFFICE_FORMATS[extension][1], "--outdir",
               str(output), str(source)], timeout=35, env=env,
              max_file_bytes=MAX_PDF_BYTES)
         pdf = output / "source.pdf"
@@ -160,6 +192,6 @@ def preview_document(args: PreviewDocument) -> dict[str, JsonValue]:
         raise ValueError("Document preview renderer returned an invalid image")
     if sha256(read_bytes(path)) != digest:
         raise ValueError("Document changed during preview; read it again")
-    return {"path": str(path), "sha256": digest, "format": "docx", "rendered": True,
+    return {"path": str(path), "sha256": digest, "format": extension[1:], "rendered": True,
             "page": args.page, "pages": pages, "mime_type": "image/png",
             "data_base64": base64.b64encode(data).decode("ascii")}

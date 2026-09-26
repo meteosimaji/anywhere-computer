@@ -57,12 +57,15 @@ length are bounded. Truncated text is marked. XML DTD/entity declarations are
 rejected and only UTF-8 OOXML parts are currently accepted. Named pipes are
 rejected before a read can wait indefinitely.
 
-`documents_preview` renders one DOCX page to a PNG using an installed local
-LibreOffice (`soffice`), `pdfinfo`, `pdftoppm`, and macOS `sandbox-exec`. Supply
+`documents_preview` renders one DOCX, XLSX or PPTX page to a PNG using LibreOffice
+(`soffice`), `pdfinfo`, `pdftoppm`, and macOS `sandbox-exec`. A portable macOS build
+can include the first three programs under `renderers/macos`; otherwise they must
+be installed locally. A partial bundled renderer is reported unavailable instead
+of mixing bundled programs with host programs. Supply
 the absolute `path`, the exact `expected_sha256` from `documents_read`, and a
 one-based `page` (default 1). Results include the same hash, total page count,
 `rendered: true`, `mime_type: image/png`, and base64 PNG data. The workspace UI
-uses this for DOCX page previews and leaves extracted text below the image.
+uses this for page previews of all three formats and leaves extracted text below the image.
 If any renderer component is absent, the tool reports an explicit unavailable
 error. It does not silently substitute text extraction for a rendered image.
 
@@ -71,13 +74,19 @@ and PDF inspection subprocess runs without network access and cannot write outsi
 that temporary directory. These processes retain local read access for fonts and
 renderer libraries, so this is not a full filesystem sandbox. The original hash
 is checked again before returning. External
-OOXML relationships, fields, active content, and embedded objects are rejected.
+OOXML relationships, Word fields, active content, embedded objects, and Excel
+external data connection parts are rejected.
+For XLSX, formulas and defined names are removed from the private rendering copy
+before LibreOffice opens it. Cached cell values may appear; cells without cached
+values can appear blank. The original workbook and its hash are unchanged.
 Inputs retain the 16 MiB read limit; output is capped at 20 pages, 16 MiB PDF,
 and 2 MiB PNG per page. Conversion and rasterization have time and file-size
 limits, timed-out child process groups are stopped, and at most two previews
 render concurrently per engine. The
 preview is a local LibreOffice interpretation, not a Microsoft Office fidelity
-guarantee. XLSX and PPTX rendering and a packaged renderer remain future work.
+guarantee. Spreadsheets can paginate according to saved print settings; slides
+render in presentation order. The standard portable build does not currently
+include a renderer; see [the packaging requirements](PORTABLE.md).
 
 Limits: 16 MiB input, 64 MiB declared expanded ZIP size, 4096 ZIP entries,
 4 MiB per XML part, approximately 512 kB per result page, 32768 characters per
