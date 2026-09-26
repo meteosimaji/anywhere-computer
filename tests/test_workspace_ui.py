@@ -1,3 +1,4 @@
+import re
 import shutil
 import subprocess
 import uuid
@@ -87,6 +88,28 @@ async def test_resource_access_tracks_tool_grant_and_rejects_arbitrary_paths(ui_
     assert (await rpc(session, 'resources/list'))['result']['resources'] == []
     assert (await rpc(session, 'resources/read', uri=uri))['error']
     assert (await rpc(session, 'tools/call', name='workspace_open', arguments={}))['error']
+
+
+def _luminance(color):
+    if len(color) == 4:
+        color = "#" + "".join(digit * 2 for digit in color[1:])
+    channels = [int(color[index:index + 2], 16) / 255 for index in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def test_workspace_muted_text_meets_contrast_on_every_surface():
+    html = (Path(__file__).resolve().parents[1]
+            / "src/anywhere_computer/web/workspace.html").read_text(encoding="utf-8")
+    hex_color = r"#(?:[0-9a-f]{6}|[0-9a-f]{3})"
+    themes = re.findall(rf"--paper:({hex_color});--card:({hex_color});--ink:{hex_color};"
+                        rf"--muted:({hex_color});--line:{hex_color};--accent:{hex_color};"
+                        rf"--soft:({hex_color})", html)
+    assert len(themes) == 3  # light, dark media query, explicit dark theme
+    for paper, card, muted, soft in themes:
+        for surface in (paper, card, soft):
+            high, low = sorted((_luminance(muted), _luminance(surface)), reverse=True)
+            assert (high + 0.05) / (low + 0.05) >= 4.5, (muted, surface)
 
 
 def test_workspace_mutation_recovery_in_javascript():

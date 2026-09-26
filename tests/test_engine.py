@@ -38,6 +38,21 @@ def test_python_command_preserves_multiline_source_and_shell_characters():
     assert output.decode("utf-8").replace("\r\n", "\n") == text + "\n"
 
 
+def test_plugin_discovery_advertises_semantic_subchat_choice(tmp_path):
+    engine = Engine(tmp_path / "state")
+    try:
+        tool, = [entry for entry in engine.catalog()
+                 if entry["name"] == "codex_plugin_tools"]
+        description = tool["description"]
+        assert "separate ordinary ChatGPT Chat" in description
+        assert "anywhere-subchat" in description
+        assert "choose by intent" in description
+        assert "literal substring filter" in description
+        assert "Discovery does not grant permission to send" in description
+    finally:
+        asyncio.run(engine.close())
+
+
 def test_status_separates_capability_evidence_without_claiming_acceptance(tmp_path):
     engine = Engine(tmp_path / "state")
     try:

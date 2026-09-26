@@ -22,19 +22,18 @@ def browser(authority, tmp_path, monkeypatch):
 
 
 async def begin(browser, **overrides):
-    query = urlencode(
-        dict(
-            response_type="code",
-            client_id="client",
-            redirect_uri=REDIRECT,
-            resource=RESOURCE,
-            scope="files_read",
-            state="client-state",
-            code_challenge=pkce_s256(VERIFIER),
-            code_challenge_method="S256",
-            **overrides,
-        )
+    parameters = dict(
+        response_type="code",
+        client_id="client",
+        redirect_uri=REDIRECT,
+        resource=RESOURCE,
+        scope="files_read",
+        state="client-state",
+        code_challenge=pkce_s256(VERIFIER),
+        code_challenge_method="S256",
     )
+    parameters.update(overrides)
+    query = urlencode(parameters)
     status, body, headers = await browser.authorize("GET", {}, b"", query)
     assert status == 200
     assert headers["Referrer-Policy"] == "same-origin"
@@ -80,7 +79,7 @@ async def test_consent_explains_owner_password_and_keeps_tools_reviewable(browse
     assert "at least 8 characters" in page
     assert "<details open><summary>Requested tools (1)</summary>" in page
     assert "<li><code>files_read</code></li>" in page
-    assert page.index("This connection can read data") < page.index(
+    assert page.index("This connection can use the requested tools") < page.index(
         "Requested tools (1)"
     )
     assert "anywhere http-revoke" in page
@@ -109,7 +108,7 @@ async def test_consent_warns_when_client_omits_available_subchat_tools(tmp_path,
         status, page, response_headers = await consent.authorize("GET", {}, b"", query)
         assert status == 200
         assert b"Some Subchat tools available on this device were not requested" in page
-        assert b"Approving this page will not grant them" in page
+        assert b"Approving this page will not grant those direct tools" in page
         assert b"<li><code>subchat_send</code></li>" not in page
         fields = dict(re.findall(r"name=(request_id|csrf) value='([^']+)'", page.decode()))
         status, _, approved = await decide(consent, fields, {
@@ -131,6 +130,67 @@ async def test_consent_warns_when_client_omits_available_subchat_tools(tmp_path,
         status, complete_page, _ = await consent.authorize("GET", {}, b"", complete_query)
         assert status == 200
         assert b"Some Subchat tools available on this device" not in complete_page
+    finally:
+        store.close()
+
+
+async def test_consent_explains_indirect_plugin_route_separately_from_direct_subchat(
+    tmp_path, monkeypatch,
+):
+    from anywhere_computer.authorization import AuthorizationStore
+
+    tools = frozenset({"files_read", "codex_plugin_call", "mcp_session_open", "mcp_call",
+                       "subchat_send"})
+    store = AuthorizationStore(tmp_path / "auth", resource=RESOURCE, known_tools=tools)
+    store.register_client("client", frozenset({REDIRECT}))
+    store.enroll_device("owner", "device", tools)
+    credentials = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
+    monkeypatch.setattr(credentials, "verify", lambda password: password == "synthetic-password")
+    consent = BrowserAuthorization(store, credentials, device="device")
+    try:
+        fields, _ = await begin(consent, scope="files_read codex_plugin_call mcp_call")
+        record = consent.pending[fields["request_id"]]
+        page = consent._page(fields["request_id"], record, fields["csrf"]).decode()
+        assert "Approving this page will not grant those direct tools" in page
+        assert "Plugin and direct MCP tools can invoke" in page
+        assert "Direct <code>subchat_*</code> scopes do not restrict" in page
+        assert "<li><code>subchat_send</code></li>" not in page
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("tools, expected, absent", [
+    ({"documents_write", "browser_fill", "devices_call", "subchat_message", "codex_plugin_call"},
+     ("change files", "interact with websites", "operate registered computers",
+      "call other connected services", "send Chat messages"),
+     ("run commands as this device user",)),
+    ({"mcp_session_open", "settings_update", "processes_stop", "subchat_delete"},
+     ("run commands as this device user", "change shared engine settings", "stop processes",
+      "hide Chat conversations", "Plugin and direct MCP tools can invoke"),
+     ("send Chat messages", "control apps")),
+    ({"terminal_output", "gui_native_observe"}, (),
+     ("run commands as this device user", "control apps")),
+])
+async def test_consent_summarizes_actual_write_and_delegation_tools(
+    tmp_path, monkeypatch, tools, expected, absent,
+):
+    from anywhere_computer.authorization import AuthorizationStore
+
+    tools = frozenset(tools)
+    store = AuthorizationStore(tmp_path / "auth", resource=RESOURCE, known_tools=tools)
+    store.register_client("client", frozenset({REDIRECT}))
+    store.enroll_device("owner", "device", tools)
+    credentials = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
+    monkeypatch.setattr(credentials, "verify", lambda password: password == "synthetic-password")
+    consent = BrowserAuthorization(store, credentials, device="device")
+    try:
+        fields, _ = await begin(consent, scope=" ".join(sorted(tools)))
+        record = consent.pending[fields["request_id"]]
+        page = consent._page(fields["request_id"], record, fields["csrf"]).decode()
+        for ability in expected:
+            assert ability in page
+        for ability in absent:
+            assert ability not in page
     finally:
         store.close()
 

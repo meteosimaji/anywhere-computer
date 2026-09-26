@@ -1,8 +1,9 @@
 """Explicit, offline addition of HTTP tools without replacing credentials.
 
-Only grants that already cover the complete old tool set are expanded. Restricted,
-revoked and expired grants stay unchanged. A crash between the database commit and
-config publication fails closed; repeat the same command to finish publication.
+Only grants that already cover the complete old tool set are expanded for ordinary
+tools. Subchat and delegation tools require fresh consent. Restricted, revoked and
+expired grants stay unchanged. A crash between the database commit and config
+publication fails closed; repeat the same command to finish publication.
 """
 
 import json
@@ -17,6 +18,11 @@ from .engine import Engine
 from .http_service import _check_enrollment, load_http_config
 from .locking import ProcessLock
 from .subchat_gateway import SUBCHAT_GATEWAY_TOOLS, SubchatGatewayConfig
+
+
+def _requires_new_consent(tools: frozenset[str]) -> bool:
+    return any(tool.startswith(("subchat_", "mcp_", "codex_plugin_", "devices_"))
+               for tool in tools)
 
 
 async def add_http_tools(directory: Path, tools: frozenset[str], *,
@@ -37,6 +43,7 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
                                              "subchat": selection})
         # Validate the expanded model, including the scope-count bound.
         expanded = type(config).model_validate_json(expanded.model_dump_json())
+        new_consent_required = _requires_new_consent(expanded.scopes - config.scopes)
         database = directory / "http-server/authorization/authorization.sqlite3"
         if database.is_symlink() or not database.is_file():
             raise ValueError("HTTP authorization database is missing")
@@ -75,7 +82,7 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
                 ).fetchall()
                 encoded = json.dumps(sorted(expanded.scopes))
                 for grant_id, raw in candidates:
-                    if (not adding_subchat
+                    if (not new_consent_required
                             and frozenset(json.loads(raw)) == config.scopes
                             and config.scopes != expanded.scopes):
                         store.db.execute(
@@ -100,7 +107,7 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
             return {
                 "added_tools": sorted(expanded.scopes - config.scopes),
                 "expanded_full_access_grants": changed,
-                "new_consent_required": adding_subchat,
+                "new_consent_required": new_consent_required,
                 "credentials_replaced": False,
                 "restart_required": True,
             }

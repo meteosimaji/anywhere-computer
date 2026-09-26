@@ -4,10 +4,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Anywhere Computer</title>
 <style>
-:root{color-scheme:light;--paper:#f5f5f7;--card:#fff;--ink:#1d1d1f;--muted:#77777d;--line:#dedee3;--accent:#0071e3;--soft:#e9e9ed;--danger:#b42318;--connected:#28794c;--shadow:0 8px 28px #00000009;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
+:root{color-scheme:light;--paper:#f5f5f7;--card:#fff;--ink:#1d1d1f;--muted:#636366;--line:#dedee3;--accent:#0071e3;--soft:#e9e9ed;--danger:#b42318;--connected:#28794c;--shadow:0 8px 28px #00000009;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--paper);color:var(--ink);-webkit-font-smoothing:antialiased}
 *{box-sizing:border-box}body{margin:0}button,input,select,textarea{font:inherit;color:inherit}button{cursor:pointer;background:transparent;border:0;border-radius:100px;padding:9px 17px;transition:background .18s,box-shadow .18s,transform .18s}button:hover:not(:disabled){background:var(--soft)}button:disabled{opacity:.38;cursor:default}button.primary{background:var(--accent);color:#fff}button.primary:hover:not(:disabled){background:var(--accent);filter:brightness(1.08)}input,select{border:1px solid var(--line);border-radius:12px;padding:12px;background:var(--card);min-width:0}button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:3px solid #0071e399;outline-offset:4px}[hidden]{display:none!important}
 header{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:18px 36px;border-bottom:1px solid var(--line);background:var(--card)}.brand{font-size:17px;font-weight:650;letter-spacing:-.6px;white-space:nowrap}.brand span{font-weight:400;color:var(--muted)}nav{display:flex;align-items:center;gap:4px}nav button{font-size:12px;padding:7px 13px;color:var(--muted)}nav button[aria-pressed=true]{background:var(--paper);color:var(--ink)}
-.hero{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:46px 36px 30px}.hero h1{font-size:clamp(28px,4.5vw,44px);font-weight:650;line-height:1.22;letter-spacing:-1.7px;margin:0;max-width:650px}.hero h1 span{color:var(--muted)}.hero .keep{white-space:nowrap}.hero-side{text-align:right;flex-shrink:0;padding-top:6px}.pill{font-size:11px;white-space:nowrap;color:var(--muted);display:inline-flex;align-items:center;gap:6px}.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.pill[data-state=ready]{color:var(--connected)}#device-label{display:block;margin-top:8px;font-size:11px;color:var(--muted)}#device{display:block;max-width:170px;font-size:12px;margin-top:4px;padding:7px}#devices{font-size:11px;color:var(--accent);padding:5px 0}
+.hero{display:flex;align-items:flex-start;justify-content:space-between;gap:24px;padding:46px 36px 30px}.hero h1{font-size:clamp(28px,4.5vw,44px);font-weight:650;line-height:1.22;letter-spacing:-1.7px;margin:0;max-width:650px}.hero h1 span{color:var(--muted)}#workspace-heading:focus-visible{outline:3px solid #0071e399;outline-offset:6px}.hero .keep{white-space:nowrap}.hero-side{text-align:right;flex-shrink:0;padding-top:6px}.pill{font-size:11px;white-space:nowrap;color:var(--muted);display:inline-flex;align-items:center;gap:6px}.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}.pill[data-state=ready]{color:var(--connected)}#device-label{display:block;margin-top:8px;font-size:11px;color:var(--muted)}#device{display:block;max-width:170px;font-size:12px;margin-top:4px;padding:7px}#devices{font-size:11px;color:var(--accent);padding:5px 0}
 .bar{display:flex;align-items:center;gap:8px;margin:0 36px 32px;padding:7px;background:var(--card);border-radius:18px;box-shadow:0 2px 12px #00000004}.bar input{flex:1;width:100%;border:0;padding:10px 6px;background:transparent;font-size:13px;text-overflow:ellipsis}.bar input:focus-visible{outline-offset:0}.bar #back{font-size:13px;padding:10px 13px;color:var(--muted)}.bar .primary{font-size:13px;padding:10px 22px}
 .surface{padding:0 36px 32px;min-height:250px;max-height:780px;overflow:auto;scrollbar-width:thin}h2{font-size:25px;letter-spacing:-.8px;line-height:1.25;font-weight:650;margin:0}h2 span{color:var(--muted)}.section-heading{display:flex;align-items:baseline;justify-content:space-between;gap:18px;margin-bottom:22px}.caption{font-size:12px;color:var(--muted);overflow-wrap:anywhere}.spacer{flex:1}
 .file-list{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:18px}.file-list li{min-width:0}.file-list button{position:relative;display:flex;flex-direction:column;align-items:flex-start;text-align:left;width:100%;min-height:270px;padding:24px;border-radius:22px;background:var(--card);box-shadow:var(--shadow);overflow:hidden}.file-list button:hover:not(:disabled){background:var(--card);transform:translateY(-3px);box-shadow:0 12px 30px #00000013}.kind{font-size:10px;letter-spacing:.8px;color:var(--muted);text-transform:uppercase;margin-bottom:7px}.file-name{font-size:19px;font-weight:650;line-height:1.25;letter-spacing:-.6px;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;padding-right:4px}.file-open{position:absolute;right:18px;bottom:17px;display:grid;place-items:center;width:27px;height:27px;border-radius:50%;background:var(--paper);color:var(--muted);font-size:21px;font-weight:300}
@@ -24,7 +24,7 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
 @media(prefers-reduced-motion:reduce){*{transition:none!important}.file-list button:hover:not(:disabled){transform:none}}
 </style>
 <header><div class="brand">Anywhere <span>Computer</span></div><nav aria-label="作業画面"><button id="files-tab" aria-pressed="true">ファイル</button><button id="settings-tab" aria-pressed="false">設定</button><button id="setup-tab" aria-pressed="false" hidden>接続</button></nav></header>
-<div class="hero"><h1 id="workspace-heading">ワークスペース。<br><span>いつもの作業を、<span class="keep">ここから。</span></span></h1><div class="hero-side"><span id="connection" class="pill">接続確認中</span><label id="device-label" hidden>端末<select id="device" aria-label="操作する端末"><option value="local">この接続先</option></select></label><button id="devices" hidden>端末一覧を更新</button></div></div>
+<div class="hero"><h1 id="workspace-heading" tabindex="-1">ワークスペース。<br><span>いつもの作業を、<span class="keep">ここから。</span></span></h1><div class="hero-side"><span id="connection" class="pill">接続確認中</span><label id="device-label" hidden>端末<select id="device" aria-label="操作する端末"><option value="local">この接続先</option></select></label><button id="devices" hidden>端末一覧を更新</button></div></div>
 <div id="path-form" class="bar" role="group" aria-label="パスを開く"><button id="back" type="button" disabled>戻る</button><input id="path" aria-label="絶対パス" placeholder="ファイルやフォルダーのパスを入力" autocomplete="off" spellcheck="false"><button class="primary" id="open" type="button" disabled>開く</button></div>
 <main class="surface">
 <section id="welcome" class="empty"><div><h2>ファイルを開いて、<br>作業を始めましょう。</h2><p>上の欄にファイルやフォルダーのパスを入力してください。内容を確認してから、そのまま編集できます。</p></div><span class="file-visual" data-kind="folder" aria-hidden="true"></span></section>
@@ -38,14 +38,14 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
 <div class="setting wide"><div class="section-heading"><h2 id="setup-title">接続の準備。</h2><button id="setup-reload">状態を確認</button></div><p id="setup-status" role="status" aria-live="polite">現在の設定を確認します。</p>
 <label for="setup-resource">接続先のURL</label><p>用意した公開URLを入力してください。</p><input id="setup-resource" type="url" placeholder="https://computer.example.com/mcp" autocomplete="off" spellcheck="false" maxlength="2048">
 <label for="setup-kind" class="setup-label">使うアプリ</label><select id="setup-kind"><option value="chatgpt">ChatGPT</option><option value="native">その他の MCP クライアント</option></select>
-<label for="setup-mode" class="setup-label">許可する操作</label><select id="setup-mode"><option value="read-only">見る・調べる</option><option value="files">ファイルを編集する</option><option value="all">すべての操作（コマンド実行を含む）</option></select>
+<label for="setup-mode" class="setup-label">許可する操作</label><select id="setup-mode"><option value="custom" disabled hidden>保存済みの操作（詳細を確認）</option><option value="read-only">見る・調べる</option><option value="files">ファイルを編集する</option><option value="all">すべての操作（コマンド実行・ほかのPlugin・登録端末の操作を含む）</option></select>
 <details id="setup-options"><summary>詳細設定</summary><div class="setup-options"><label for="setup-owner">所有者名</label><input id="setup-owner" value="owner" maxlength="128" autocomplete="off"><label id="setup-client-label" for="setup-client">接続アプリ名</label><input id="setup-client" value="anywhere-native" maxlength="128" autocomplete="off"><label for="setup-port">このコンピューターの待受ポート</label><input id="setup-port" type="number" value="8768" min="1" max="65535"></div></details>
 <div class="setup-actions"><button id="setup-plan" class="primary">内容を確認</button></div></div>
 <div id="setup-review" class="setting wide" hidden><h2 id="setup-review-title">この内容で保存します。</h2><dl id="setup-summary"></dl><details><summary>接続設定の詳細</summary><dl id="setup-technical"></dl></details><details><summary>許可する操作の一覧</summary><ul id="setup-scopes"></ul></details><p class="setup-explanation">保存するのは接続の設定です。認証とサービスの起動は、このあと別途必要です。</p><button id="setup-confirm" class="primary">この内容を保存</button></div>
 </div></section>
 </main>
 <footer><p id="notice" role="status" aria-live="polite">ホストとの接続を待っています。</p><div id="recovery" hidden><p>操作結果が未確認です。再送せず、結果を照会してください。</p><p id="operation"></p><button id="resolve">結果を照会</button></div></footer>
-<dialog id="discard"><h2>編集中の内容があります</h2><p>移動すると、保存していない編集内容は失われます。</p><div class="dialog-actions"><button id="keep">編集を続ける</button><button id="discard-go">破棄して移動</button></div></dialog>
+<dialog id="discard" aria-labelledby="discard-title" aria-describedby="discard-description"><h2 id="discard-title">編集中の内容があります</h2><p id="discard-description">移動すると、保存していない編集内容は失われます。</p><div class="dialog-actions"><button id="keep">編集を続ける</button><button id="discard-go">破棄して移動</button></div></dialog>
 <script>
 "use strict";
 (() => {
@@ -53,7 +53,7 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
   const pending = new Map();
   const MAX_TEXT = 1024 * 1024, MAX_IMAGE = 5 * 1024 * 1024;
   const operationMeta = "io.github.meteosimaji.anywhere-computer/operation_id";
-  const state = {ready:false, busy:false, target:"local", rootTools:new Set(), tools:new Set(), current:null, dirty:false, history:[], limit:200, mutation:null, objectUrl:null, pendingNavigation:null, hostOrigin:null, setup:null, setupUncertain:false};
+  const state = {ready:false, busy:false, target:"local", rootTools:new Set(), tools:new Set(), current:null, dirty:false, history:[], limit:200, mutation:null, objectUrl:null, pendingNavigation:null, hostOrigin:null, setup:null, setupUncertain:false, setupMode:null};
   const ids = ["welcome","folder","text-panel","preview","settings","setup"];
   const id32 = () => crypto.randomUUID().replaceAll("-", "");
   const normalize = text => text.replace(/\r\n?/g, "\n");
@@ -107,6 +107,13 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     if(setup){const ending=document.createElement("span");ending.className="keep";ending.textContent="この一台へ。";sub.append(ending);}
     if(!settings&&!setup){const ending=document.createElement("span");ending.className="keep";ending.textContent="ここから。";sub.append(ending);}
     heading.replaceChildren(lead,line,sub);
+  }
+  function focusHeading() {
+    // Preserve focus in a visible field, but not one hidden by the screen switch.
+    const active=document.activeElement;
+    if(active && active!==document.body &&
+       !active.closest?.("nav") && !active.closest?.("[hidden]")) return;
+    $("workspace-heading").focus();
   }
   function changed() {state.dirty=!!state.current && $("editor").value!==normalize(state.current.text || "");controls();}
   function navigate(action) {
@@ -330,10 +337,27 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
     const config=progress.configuration;
     if(config) {
       $("setup-kind").value=config.client==="anywhere-chatgpt" && config.redirects.length===1 && config.redirects[0]==="https://chatgpt.com/connector_platform_oauth_redirect"?"chatgpt":"native";
-      $("setup-mode").value=config.scopes.includes("terminal_start")?"all":config.scopes.includes("files_write")?"files":"read-only";
+      const scopesKey=JSON.stringify([...config.scopes].sort());
+      $("setup-mode").value=state.setupMode?.scopesKey===scopesKey?state.setupMode.mode:"custom";
       $("setup-resource").value=config.resource;$("setup-owner").value=config.owner;$("setup-client").value=config.client;$("setup-port").value=config.port;
-      for(const [label,value] of [["接続先",config.resource],["所有者",config.owner],["接続アプリ",config.client],["待受ポート",String(config.port)],["端末ID",config.device],["認証後の戻り先",config.redirects.join("\n")]]) {
-        const term=document.createElement("dt"),description=document.createElement("dd");term.textContent=label;description.textContent=value;$(label==="接続先"?"setup-summary":"setup-technical").append(term,description);
+      const granted=new Set(config.scopes);
+      const hasAny=names=>names.some(name=>granted.has(name));
+      const highlights=[
+        [hasAny(["files_write","files_write_binary","files_edit","files_move","files_restore","directories_create","documents_write","documents_edit_paragraph","upload_commit"]),"ファイル・文書の変更"],
+        [hasAny(["terminal_start","terminal_input","mcp_session_open"]),"コマンド実行"],
+        [hasAny(["gui_click","gui_type","gui_key","gui_native_press","gui_native_set_value"]),"アプリの操作"],
+        [hasAny(["browser_navigate","browser_click","browser_fill"]),"Webページの操作"],
+        [granted.has("codex_plugin_call"),"ほかのPluginの呼出し"],
+        [granted.has("mcp_call"),"MCPサービスの呼出し"],
+        [granted.has("devices_call"),"登録端末の操作"],
+        [hasAny(["subchat_send","subchat_message"]),"Chatへの送信"],
+        [granted.has("subchat_delete"),"会話の非表示"],
+        [granted.has("settings_update"),"共有設定の変更"],
+        [hasAny(["processes_stop","terminal_stop","mcp_session_close"]),"プロセスの停止"],
+      ].filter(([present])=>present).map(([,label])=>label);
+      const accessSummary=`${config.scopes.length}件${highlights.length?`（${highlights.join("・")}を含む）`:""}。操作一覧で個別に確認できます。`;
+      for(const [label,value] of [["接続先",config.resource],["許可する操作",accessSummary],["所有者",config.owner],["接続アプリ",config.client],["待受ポート",String(config.port)],["端末ID",config.device],["認証後の戻り先",config.redirects.join("\n")]]) {
+        const term=document.createElement("dt"),description=document.createElement("dd");term.textContent=label;description.textContent=value;$(["接続先","許可する操作"].includes(label)?"setup-summary":"setup-technical").append(term,description);
       }
       for(const scope of config.scopes){const entry=document.createElement("li");entry.textContent=scope;$("setup-scopes").append(entry);}
     }
@@ -349,7 +373,9 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
       const response=await rpc("tools/call",{name,arguments:args,_meta:{[operationMeta]:operationId}});
       const reply=response?.structuredContent;
       if(reply?.operation_id!==operationId || reply.state!=="completed" || !validSetupProgress(reply.data)) throw new Error("接続設定の結果を確認できません。状態を確認してください。");
-      state.setupUncertain=false;renderSetup(reply.data);return reply.data;
+      state.setupUncertain=false;
+      if(name==="connection_setup_plan" && reply.data.phase==="review") state.setupMode={mode:args.mode,scopesKey:JSON.stringify([...reply.data.configuration.scopes].sort())};
+      renderSetup(reply.data);return reply.data;
     } catch(error) {
       $("setup-status").textContent="応答を確認できません。状態を確認してから続けてください。";$("setup-status").dataset.error="true";
       controls();throw error;
@@ -357,11 +383,12 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
   }
   async function setupView() {
     if(state.target!=="local" || !state.rootTools.has("connection_setup_status")) throw new Error("ローカル接続から開いてください。");
-    clearFile();show("setup");await setupCall("connection_setup_status");message("このコンピューターの接続設定です。");
+    clearFile();show("setup");focusHeading();await setupCall("connection_setup_status");message("このコンピューターの接続設定です。");
   }
   async function planSetup() {
     const raw=$("setup-port").value,port=Number(raw);
     if(!raw || !Number.isInteger(port) || port<1 || port>65535) throw new Error("待受ポートは1〜65535の整数で入力してください。");
+    if($("setup-mode").value==="custom") throw new Error("操作を変更する場合は、許可する操作を選び直してください。");
     const clientKind=$("setup-kind").value;
     const draft={resource:$("setup-resource").value.trim(),client_kind:clientKind,mode:$("setup-mode").value,owner:$("setup-owner").value,port};
     if(clientKind==="native") draft.client=$("setup-client").value;
@@ -445,8 +472,8 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
   $("setup-reload").onclick=()=>job(()=>setupCall("connection_setup_status"));
   $("setup-plan").onclick=()=>job(planSetup);$("setup-confirm").onclick=()=>job(confirmSetup);
   for(const id of ["setup-resource","setup-kind","setup-mode","setup-owner","setup-client","setup-port"]) $(id).oninput=()=>{if(state.setup?.phase==="review"){state.setup={phase:"new",plan_id:null,configuration:null};$("setup-review").hidden=true;}controls();};
-  $("settings-tab").onclick=()=>navigate(()=>job(settingsView));
-  $("files-tab").onclick=()=>navigate(()=>{clearFile();show("welcome");message("絶対パスを指定してください。");controls();});
+  $("settings-tab").onclick=()=>navigate(()=>job(async()=>{try {await settingsView();} finally {focusHeading();}}));
+  $("files-tab").onclick=()=>navigate(()=>{clearFile();show("welcome");message("絶対パスを指定してください。");controls();focusHeading();});
   $("set-shell").onclick=()=>job(()=>applySetting("default_shell","default-shell"));
   $("set-read").onclick=()=>job(()=>applySetting("file_read_line_limit","read-limit",true));
   $("set-write").onclick=()=>job(()=>applySetting("file_write_line_limit","write-limit",true));

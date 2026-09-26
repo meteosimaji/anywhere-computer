@@ -517,15 +517,20 @@ class Engine:
             )
 
         self.register(
-            "codex_plugin_tools", "Use when the user wants to use an installed Codex MCP "
-            "plugin from this chat. Start with summary=true and optional query; inspect with exact "
-            "server and optional tool to obtain schemas and catalog_sha256. Shows runtime/auth "
+            "codex_plugin_tools", "Discover installed Codex MCP tools for the user's task. "
+            "A request to ask a separate ordinary ChatGPT Chat can call for the "
+            "anywhere-subchat server even when the user does not name it; choose by intent. "
+            "Start with summary=true and optional query; query is a literal substring filter, "
+            "so inspect the unfiltered catalog or exact server if it finds no match. "
+            "Inspect with exact server and optional tool to obtain schemas and "
+            "catalog_sha256. Shows runtime/auth "
             "state separately from verified execution and Computer Use context compatibility. "
             "Exact server/tool inspection returns the full description. "
             "Use an absolute workspace cwd. "
             "Starts installed MCP servers in a temporary Codex context without model inference. "
             "Optional session_id reuses your explicitly opened context. "
-            "Does not call a plugin tool, resume an existing chat or expose credentials.",
+            "Discovery does not grant permission to send, call a plugin tool, resume an "
+            "existing chat or expose credentials.",
             CodexPluginPage, codex_plugin_tools, open_world=True,
         )
         self.register(

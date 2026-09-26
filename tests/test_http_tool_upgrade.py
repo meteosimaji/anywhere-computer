@@ -39,7 +39,7 @@ def test_http_subchat_profile_id_requires_owner_verification(tmp_path, monkeypat
 
 
 @pytest.mark.parametrize("added_tools", [
-    frozenset({"mcp_tools"}), frozenset({"devices_list", "devices_tools", "devices_call"}),
+    frozenset({"computer_status"}), frozenset({"directories_list"}),
 ])
 async def test_upgrade_preserves_token_and_adds_direct_tools_over_real_http(
     tmp_path, unused_tcp_port, added_tools,
@@ -107,18 +107,45 @@ async def test_upgrade_does_not_expand_restricted_revoked_or_expired_grants(
         before = store.db.execute("SELECT id,tools,expires,revoked FROM grants").fetchall()
     finally:
         store.close()
-    assert (await add_http_tools(tmp_path, frozenset({"mcp_tools"})))[
+    assert (await add_http_tools(tmp_path, frozenset({"computer_status"})))[
         "expanded_full_access_grants"
     ] == 0
     store = AuthorizationStore(
         tmp_path / "http-server/authorization",
         resource=RESOURCE,
-        known_tools=config.scopes | {"mcp_tools"},
+        known_tools=config.scopes | {"computer_status"},
     )
     try:
         assert store.db.execute("SELECT id,tools,expires,revoked FROM grants").fetchall() == before
     finally:
         store.close()
+
+
+@pytest.mark.parametrize("added_tools", [
+    frozenset({"mcp_session_open", "mcp_call"}),
+    frozenset({"codex_plugin_tools", "codex_plugin_call"}),
+    frozenset({"devices_list", "devices_tools", "devices_call"}),
+])
+async def test_delegation_upgrade_requires_new_consent_without_expanding_existing_grant(
+    tmp_path, unused_tcp_port, added_tools,
+):
+    config = await setup(tmp_path, unused_tcp_port)
+    owner = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
+    owner.initialize("synthetic owner password")
+    async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{config.port}") as http:
+        async with http_service(tmp_path, credentials=owner):
+            token = await authenticate(http)
+        result = await add_http_tools(tmp_path, added_tools)
+        assert result["new_consent_required"] is True
+        assert result["expanded_full_access_grants"] == 0
+        async with http_service(tmp_path, credentials=owner):
+            headers = await initialize(http, token)
+            response = await http.post(
+                "/mcp", headers=headers,
+                json={"jsonrpc": "2.0", "id": 10, "method": "tools/list"},
+            )
+            assert {item["name"] for item in response.json()["result"]["tools"]} == config.scopes
+    assert load_http_config(tmp_path).scopes == config.scopes | added_tools
 
 
 async def test_subchat_upgrade_requires_selection_and_new_consent(tmp_path, unused_tcp_port):

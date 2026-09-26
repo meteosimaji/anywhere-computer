@@ -10,7 +10,7 @@ import asyncio
 import json
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -164,17 +164,40 @@ async def observe_http_catalog(page: Page) -> Response:
     return response
 
 
+ChatSurface = Literal['chat', 'other', 'unknown']
+
+
+async def observed_chat_surface(page: Page) -> ChatSurface:
+    """Trust an explicit picker state; keep legacy conversations without one distinct."""
+    chat_radios = page.locator('[role="radio"][data-tpp-toggle-value="chatgpt"]')
+    work_radios = page.locator('[role="radio"][data-tpp-toggle-value="work"]')
+    chat_count, work_count = await chat_radios.count(), await work_radios.count()
+    if chat_count or work_count:
+        if chat_count != 1 or work_count > 1:
+            return 'other'
+        chat_on = (await chat_radios.get_attribute('data-state') == 'on'
+                   and await chat_radios.get_attribute('aria-checked') == 'true')
+        work_on = (work_count == 1 and (
+            await work_radios.get_attribute('data-state') == 'on'
+            or await work_radios.get_attribute('aria-checked') == 'true'))
+        return 'chat' if chat_on and not work_on else 'other'
+    chat = page.get_by_role("button", name="Chat", exact=True)
+    work = page.get_by_role("button", name="Work", exact=True)
+    chat_count, work_count = await chat.count(), await work.count()
+    if not chat_count and not work_count:
+        return 'unknown'
+    if chat_count != 1 or work_count > 1:
+        return 'other'
+    if work_count and await work.get_attribute('aria-pressed') == 'true':
+        return 'other'
+    return 'chat' if await chat.get_attribute('aria-pressed') == 'true' else 'other'
+
+
 async def empty_chat(page: Page) -> bool:
     if page.url.rstrip("/") != "https://chatgpt.com":
         return False
-    chat = page.get_by_role("button", name="Chat", exact=True)
     editors = page.locator(EDITOR)
-    radio = page.locator('[role="radio"][data-tpp-toggle-value="chatgpt"][data-state="on"]'
-                         '[aria-checked="true"]')
-    radios = page.locator('[role="radio"][data-tpp-toggle-value="chatgpt"]')
-    ordinary = (await radio.count() == 1 if await radios.count() else
-                await chat.count() == 1 and await chat.get_attribute("aria-pressed") == "true")
-    return (ordinary
+    return ((await observed_chat_surface(page)) == 'chat'
             and await editors.count() == 1 and not (await editors.inner_text()).strip())
 
 

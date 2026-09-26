@@ -58,6 +58,44 @@ async def test_current_composer_and_chat_radio_gate_catalog():
             await browser.close()
 
 
+@pytest.mark.parametrize(('toggle', 'expected'), [
+    ('<button role="radio" data-tpp-toggle-value="chatgpt" data-state="on" '
+     'aria-checked="true">Chat</button><button aria-pressed="false">Chat</button>', True),
+    ('<button role="radio" data-tpp-toggle-value="chatgpt" data-state="off" '
+     'aria-checked="false">Chat</button><button aria-pressed="true">Chat</button>', False),
+    ('<button role="radio" data-tpp-toggle-value="chatgpt" data-state="on" '
+     'aria-checked="false">Chat</button><button aria-pressed="true">Chat</button>', False),
+    ('<button role="radio" data-tpp-toggle-value="chatgpt" data-state="on" '
+     'aria-checked="true">Chat</button>' * 2, False),
+    ('<button aria-pressed="true">Chat</button>', True),
+    ('<button aria-pressed="false">Chat</button>', False),
+    ('<button>Work</button>', False),
+])
+async def test_shared_chat_selection_rejects_work_and_ambiguous_ui(toggle, expected):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser import catalog
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmission
+
+    html = (toggle + '<form data-chatgpt-composer><div data-composer-markdown '
+            'role="textbox" contenteditable="true"></div></form><script>window.sends=0</script>')
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            page = await browser.new_page()
+            await page.route('https://chatgpt.com/', lambda route: route.fulfill(
+                status=200, content_type='text/html', body=html))
+            await page.goto('https://chatgpt.com/')
+            backend = BrowserSubchatBackend(page.context)
+            submission = SubchatSubmission(operation_id='a' * 32, prompt='test',
+                                            model='model', effort='effort')
+            assert await catalog.empty_chat(page) is expected
+            assert await backend._ready(page, submission) is expected
+            assert await page.evaluate('window.sends') == 0
+        finally:
+            await browser.close()
+
+
 @pytest.mark.asyncio
 async def test_model_menu_visibility_and_identity(monkeypatch) -> None:
     playwright = pytest.importorskip("playwright.async_api")
