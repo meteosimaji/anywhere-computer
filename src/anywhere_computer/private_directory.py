@@ -79,8 +79,8 @@ def _validate_existing_windows_directory(path: Path, user_sid: str) -> None:
                     ("bytes_in_use", wintypes.DWORD),
                     ("bytes_free", wintypes.DWORD)]
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
-    security = ctypes.WinDLL("advapi32", use_last_error=True)  # type: ignore[attr-defined]
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined, unused-ignore]
+    security = ctypes.WinDLL("advapi32", use_last_error=True)  # type: ignore[attr-defined, unused-ignore]
     kernel.LocalFree.argtypes = [wintypes.HLOCAL]
     kernel.LocalFree.restype = wintypes.HLOCAL
     security.GetNamedSecurityInfoW.argtypes = [
@@ -108,7 +108,7 @@ def _validate_existing_windows_directory(path: Path, user_sid: str) -> None:
 
     def check(result: object) -> None:
         if not result:
-            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined, unused-ignore]
 
     def sid_string(sid: wintypes.LPVOID) -> str:
         rendered = wintypes.LPWSTR()
@@ -128,7 +128,7 @@ def _validate_existing_windows_directory(path: Path, user_sid: str) -> None:
                                             ctypes.byref(dacl), None,
                                             ctypes.byref(descriptor))
     if result:
-        raise PermissionError(_EXISTING_ACL_MESSAGE + str(path)) from ctypes.WinError(  # type: ignore[attr-defined]
+        raise PermissionError(_EXISTING_ACL_MESSAGE + str(path)) from ctypes.WinError(  # type: ignore[attr-defined, unused-ignore]
             result)
     try:
         control = wintypes.WORD()
@@ -165,8 +165,8 @@ def _windows_current_user_sid() -> str:
     import ctypes
     from ctypes import wintypes
 
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
-    security = ctypes.WinDLL("advapi32", use_last_error=True)  # type: ignore[attr-defined]
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined, unused-ignore]
+    security = ctypes.WinDLL("advapi32", use_last_error=True)  # type: ignore[attr-defined, unused-ignore]
     kernel.GetCurrentProcess.argtypes = []
     kernel.GetCurrentProcess.restype = wintypes.HANDLE
     kernel.CloseHandle.argtypes = [wintypes.HANDLE]
@@ -186,7 +186,7 @@ def _windows_current_user_sid() -> str:
 
     def check(success: object) -> None:
         if not success:
-            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined, unused-ignore]
 
     token = wintypes.HANDLE()
     check(security.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008,
@@ -224,31 +224,21 @@ def _windows_create_private_directory(path: Path) -> None:
             ("inherit", wintypes.BOOL),
         ]
 
-    win_dll = ctypes.WinDLL  # type: ignore[attr-defined]
-    win_error = ctypes.WinError  # type: ignore[attr-defined]
-    get_last_error = ctypes.get_last_error  # type: ignore[attr-defined]
+    win_dll = ctypes.WinDLL  # type: ignore[attr-defined, unused-ignore]
+    win_error = ctypes.WinError  # type: ignore[attr-defined, unused-ignore]
+    get_last_error = ctypes.get_last_error  # type: ignore[attr-defined, unused-ignore]
     kernel = win_dll("kernel32", use_last_error=True)
     security = win_dll("advapi32", use_last_error=True)
-    declarations = [
-        (kernel.LocalFree, [wintypes.HLOCAL], wintypes.HLOCAL),
-        (
-            kernel.CreateDirectoryW,
-            [wintypes.LPCWSTR, ctypes.POINTER(SecurityAttributes)],
-            wintypes.BOOL,
-        ),
-        (
-            security.ConvertStringSecurityDescriptorToSecurityDescriptorW,
-            [
-                wintypes.LPCWSTR,
-                wintypes.DWORD,
-                ctypes.POINTER(wintypes.LPVOID),
-                ctypes.POINTER(wintypes.DWORD),
-            ],
-            wintypes.BOOL,
-        ),
+    kernel.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel.LocalFree.restype = wintypes.HLOCAL
+    kernel.CreateDirectoryW.argtypes = [wintypes.LPCWSTR,
+                                        ctypes.POINTER(SecurityAttributes)]
+    kernel.CreateDirectoryW.restype = wintypes.BOOL
+    security.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, ctypes.POINTER(wintypes.LPVOID),
+        ctypes.POINTER(wintypes.DWORD),
     ]
-    for function, arguments, result in declarations:
-        function.argtypes, function.restype = arguments, result
+    security.ConvertStringSecurityDescriptorToSecurityDescriptorW.restype = wintypes.BOOL
 
     def check(success: object) -> None:
         if not success:
@@ -301,8 +291,8 @@ def migrate_default_windows_state(*, apply: bool = False, root: Path | None = No
         return len(entries)
 
     user_sid = _windows_current_user_sid()
-    kernel = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
-    security = ctypes.WinDLL("advapi32", use_last_error=True)  # type: ignore[attr-defined]
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined, unused-ignore]
+    security = ctypes.WinDLL("advapi32", use_last_error=True)  # type: ignore[attr-defined, unused-ignore]
     kernel.LocalFree.argtypes = [wintypes.HLOCAL]
     kernel.LocalFree.restype = wintypes.HLOCAL
     security.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
@@ -329,7 +319,7 @@ def migrate_default_windows_state(*, apply: bool = False, root: Path | None = No
     if not security.ConvertStringSecurityDescriptorToSecurityDescriptorW(
         _directory_sddl(user_sid), 1, ctypes.byref(descriptor), None
     ):
-        raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
+        raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined, unused-ignore]
     try:
         owner = wintypes.LPVOID()
         dacl = wintypes.LPVOID()
@@ -340,7 +330,7 @@ def migrate_default_windows_state(*, apply: bool = False, root: Path | None = No
         ) or not security.GetSecurityDescriptorDacl(
             descriptor, ctypes.byref(present), ctypes.byref(dacl), ctypes.byref(defaulted)
         ) or not present:
-            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined]
+            raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined, unused-ignore]
         # Children first; each successful descriptor is already final. A failed
         # or interrupted run can be repeated after the operator resolves it.
         for entry in reversed(entries):
@@ -349,7 +339,7 @@ def migrate_default_windows_state(*, apply: bool = False, root: Path | None = No
                 str(entry), 1, 0x80000005, owner, None, dacl, None
             )  # SE_FILE_OBJECT, OWNER | DACL | PROTECTED_DACL
             if result:
-                raise PermissionError(f"ACL migration stopped at {entry}") from ctypes.WinError(  # type: ignore[attr-defined]
+                raise PermissionError(f"ACL migration stopped at {entry}") from ctypes.WinError(  # type: ignore[attr-defined, unused-ignore]
                     result)
         _validate_existing_windows_directory(root, user_sid)
     finally:
