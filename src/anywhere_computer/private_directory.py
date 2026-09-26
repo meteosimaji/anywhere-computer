@@ -69,6 +69,69 @@ def _migration_entries(root: Path) -> list[Path]:
     return entries
 
 
+def _require_stopped_windows_state(root: Path) -> None:
+    """Refuse a repair while a process advertises this state directory."""
+    import psutil
+
+    target = os.path.normcase(os.path.normpath(str(root)))
+    for process in psutil.process_iter(["pid", "name", "cmdline"]):
+        if process.info["pid"] == os.getpid():
+            continue
+        name = (process.info["name"] or "").lower()
+        if not any(part in name for part in ("python", "anywhere", "chrome", "chromium",
+                                             "msedge")):
+            continue
+        try:
+            command = process.info["cmdline"]
+        except (psutil.NoSuchProcess, psutil.ZombieProcess):
+            continue
+        except psutil.AccessDenied as error:
+            raise RuntimeError(f"Cannot verify stopped state process {process.pid}") from error
+        if command is None:
+            raise RuntimeError(f"Cannot verify stopped state process {process.pid}")
+        for index, argument in enumerate(command):
+            candidate = argument.split("=", 1)[-1] if "=" in argument else argument
+            if argument in ("--state-dir", "--user-data-dir") and index + 1 < len(command):
+                candidate = command[index + 1]
+            candidate = os.path.normcase(os.path.normpath(candidate.strip('"')))
+            if candidate == target or candidate.startswith(target + os.sep):
+                raise RuntimeError(f"Stop process {process.pid} before migrating {root}")
+
+
+def _preflight_windows_migration_acls(entries: list[Path]) -> None:
+    """Require a readable owner and non-null DACL for every entry before writes."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined, unused-ignore]
+    security = ctypes.WinDLL("advapi32", use_last_error=True)  # type: ignore[attr-defined, unused-ignore]
+    kernel.LocalFree.argtypes = [wintypes.HLOCAL]
+    kernel.LocalFree.restype = wintypes.HLOCAL
+    security.GetNamedSecurityInfoW.argtypes = [
+        wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD,
+        ctypes.POINTER(wintypes.LPVOID), wintypes.LPVOID,
+        ctypes.POINTER(wintypes.LPVOID), wintypes.LPVOID,
+        ctypes.POINTER(wintypes.LPVOID),
+    ]
+    security.GetNamedSecurityInfoW.restype = wintypes.DWORD
+    for entry in entries:
+        owner = wintypes.LPVOID()
+        dacl = wintypes.LPVOID()
+        descriptor = wintypes.LPVOID()
+        result = security.GetNamedSecurityInfoW(
+            str(entry), 1, 0x00000005, ctypes.byref(owner), None,
+            ctypes.byref(dacl), None, ctypes.byref(descriptor),
+        )
+        if result:
+            error = ctypes.WinError(result)  # type: ignore[attr-defined, unused-ignore]
+            raise PermissionError(f"Cannot inspect ACL before migration: {entry}") from error
+        try:
+            if not owner or not dacl:
+                raise PermissionError(f"Unsafe owner or null DACL before migration: {entry}")
+        finally:
+            kernel.LocalFree(descriptor)
+
+
 def _validate_existing_windows_directory(path: Path, user_sid: str) -> None:
     """Inspect an existing ACL without changing the directory or its children."""
     import ctypes
@@ -287,6 +350,7 @@ def migrate_default_windows_state(*, apply: bool = False, root: Path | None = No
             raise OSError("LOCALAPPDATA is required for the default Windows state")
         root = Path(local_appdata) / "Anywhere Computer" / "Anywhere Computer"
     entries = _migration_entries(root)
+    _preflight_windows_migration_acls(entries)
     if not apply:
         return len(entries)
 
@@ -372,15 +436,33 @@ def migrate_installed_windows_state(*, apply: bool = False) -> list[tuple[Path, 
     return counts
 
 
+def migrate_custom_windows_state(root: Path, *, apply: bool = False) -> int:
+    """Preflight and explicitly repair one caller-selected, stopped state root."""
+    if not root.is_absolute():
+        raise ValueError("--state-dir must be an absolute path")
+    if os.name != "nt":
+        raise OSError("Windows state ACL migration requires Windows")
+    # Keep the lexical path: resolving it would hide a reparse-point ancestor.
+    _migration_entries(root)
+    _require_stopped_windows_state(root)
+    return migrate_default_windows_state(root=root, apply=apply)
+
+
 def main() -> None:
     import argparse
 
     parser = argparse.ArgumentParser(
-        description="Preflight or repair default Windows alpha state ACLs")
+        description="Preflight or repair stopped Windows alpha state ACLs")
+    parser.add_argument("--state-dir", type=Path,
+                        help="Absolute path of one existing custom state root")
     parser.add_argument("--apply-stopped", action="store_true",
                         help="Apply after stopping Anywhere Computer and the dedicated browser")
     arguments = parser.parse_args()
-    counts = migrate_installed_windows_state(apply=arguments.apply_stopped)
+    if arguments.state_dir is None:
+        counts = migrate_installed_windows_state(apply=arguments.apply_stopped)
+    else:
+        root = arguments.state_dir
+        counts = [(root, migrate_custom_windows_state(root, apply=arguments.apply_stopped))]
     for target, count in counts:
         verb = "Migrated" if arguments.apply_stopped else "Preflighted"
         print(f"{verb} {count} state entries in {target}")

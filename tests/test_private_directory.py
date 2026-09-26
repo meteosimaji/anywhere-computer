@@ -1,5 +1,8 @@
 import os
 import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -95,6 +98,63 @@ def test_installed_migration_preflights_both_roots_before_any_apply(tmp_path, mo
         private_directory.migrate_installed_windows_state(apply=True)
     assert applied == []
     assert (engine / "keep.txt").read_text() == "keep"
+
+
+def test_custom_migration_requires_absolute_path():
+    with pytest.raises(ValueError, match="absolute"):
+        private_directory.migrate_custom_windows_state(Path("relative-state"))
+
+
+def test_migration_cli_selects_only_explicit_custom_root(tmp_path, monkeypatch, capsys):
+    root = tmp_path / "custom-state"
+    calls = []
+
+    def custom(selected, *, apply=False):
+        calls.append((selected, apply))
+        return 3
+
+    monkeypatch.setattr(private_directory, "migrate_custom_windows_state", custom)
+    monkeypatch.setattr(private_directory, "migrate_installed_windows_state",
+                        lambda **_kwargs: pytest.fail("default roots must not be migrated"))
+    monkeypatch.setattr(sys, "argv", ["private_directory", "--state-dir", str(root),
+                                     "--apply-stopped"])
+    private_directory.main()
+    assert calls == [(root, True)]
+    assert f"Migrated 3 state entries in {root}" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(("name", "command"), [
+    ("python.exe", ["python", "-m", "anywhere_computer.cli", "--state-dir"]),
+    ("msedge.exe", ["msedge", "--user-data-dir"]),
+])
+def test_custom_migration_rejects_running_state_process(tmp_path, monkeypatch, name, command):
+    import psutil
+
+    root = tmp_path / "custom-state"
+    root.mkdir()
+    process = SimpleNamespace(pid=os.getpid() + 100,
+                              info={"pid": os.getpid() + 100, "name": name,
+                                    "cmdline": [*command, str(root)]})
+    monkeypatch.setattr(psutil, "process_iter", lambda _attrs: iter([process]))
+    with pytest.raises(RuntimeError, match="Stop process"):
+        private_directory._require_stopped_windows_state(root)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows ACL integration")
+def test_windows_custom_state_migration_preserves_data_and_is_idempotent(tmp_path):
+    root = tmp_path / "custom-state"
+    root.mkdir()
+    marker = root / "keep.txt"
+    marker.write_text("preserved", encoding="utf-8")
+    before = subprocess.check_output(["icacls", str(root)])
+    assert private_directory.migrate_custom_windows_state(root) == 2
+    assert subprocess.check_output(["icacls", str(root)]) == before
+    assert private_directory.migrate_custom_windows_state(root, apply=True) == 2
+    after = subprocess.check_output(["icacls", str(root)])
+    assert private_directory.migrate_custom_windows_state(root, apply=True) == 2
+    assert subprocess.check_output(["icacls", str(root)]) == after
+    private_directory.create_private_directory(root)
+    assert marker.read_text(encoding="utf-8") == "preserved"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows ACL integration")
