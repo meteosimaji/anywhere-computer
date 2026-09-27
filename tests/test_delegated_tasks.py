@@ -68,7 +68,7 @@ async def test_shared_delegated_files_use_selected_engine_limits(tmp_path):
     allowed = tmp_path / "allowed"
     allowed.mkdir()
     source = allowed / "source.txt"
-    source.write_text("one\ntwo\n", encoding="utf-8")
+    source.write_bytes(b"one\ntwo\n")
     child_id = uuid.uuid4().hex
     delegation.issue(DelegatedTaskGrant(
         owner="owner", child_id=child_id, parent_grant_id=parent_id,
