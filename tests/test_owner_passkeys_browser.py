@@ -74,8 +74,7 @@ async def test_virtual_authenticator_registers_and_approves_consent(tmp_path):
                 await page.goto(origin + "/owner-passkey?" + urlencode({"ticket": ticket}))
                 assert await page.evaluate("window.isSecureContext")
                 await page.locator("#register-passkey").click()
-                await page.wait_for_load_state()
-                assert "Passkey registered." in await page.locator("body").inner_text()
+                await page.get_by_text("Passkey registered.").wait_for(timeout=20000)
                 assert len(consent.passkeys.list()) == 1
                 assert not consent.passkeys.ticket_valid(ticket)
 
@@ -118,8 +117,7 @@ async def test_virtual_authenticator_registers_and_approves_consent(tmp_path):
                   }
                   document.body.append(form); form.submit();
                 }""", approvals[1][2].decode())
-                await page.wait_for_load_state()
-                assert "Start again from your client" in await page.locator("body").inner_text()
+                await page.get_by_text("Start again from your client").wait_for(timeout=20000)
                 assert approvals[-1][0] == 403
                 assert store.db.execute("SELECT count(*) FROM grants").fetchone()[0] == 1
             finally:

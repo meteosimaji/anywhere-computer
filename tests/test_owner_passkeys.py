@@ -68,7 +68,7 @@ def test_parallel_assertions_cannot_reuse_one_counter(setup):
         try:
             passkeys.verify_and_update_counter(record.credential_id,
                                                verify_same_assertion)
-        except ValueError:
+        except (ValueError, TimeoutError):
             outcomes.append("rejected")
 
     first = threading.Thread(target=run_first)
@@ -82,6 +82,9 @@ def test_parallel_assertions_cannot_reuse_one_counter(setup):
     assert not first.is_alive() and not second.is_alive()
     assert sorted(outcomes) == ["accepted", "rejected"]
     assert passkeys.find(record.credential_id).sign_count == 1
+    with pytest.raises(ValueError, match="counter replay"):
+        passkeys.verify_and_update_counter(record.credential_id,
+                                           verify_same_assertion)
 
 
 def test_passkey_password_checks_hold_reset_lock(setup, monkeypatch):
