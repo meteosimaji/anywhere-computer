@@ -7,6 +7,7 @@ import secrets
 import stat
 import sys
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 from .mcp_server import serve_stdio
@@ -14,9 +15,11 @@ from .peer_mailbox import Peer, PeerMailbox
 from .peer_mcp import session
 from .private_file import (
     create_windows_private_file,
+    link_windows_private_file,
     require_windows_credential_path,
     validate_windows_private_file,
 )
+from .upload_win32 import pin_directory
 
 
 def _credential(path: Path, directory: Path | None = None) -> str:
@@ -46,39 +49,47 @@ def _publish_credential(path: Path, directory: Path | None = None) -> str:
         require_windows_credential_path(directory, path)
     token = secrets.token_urlsafe(32)
     staged: Path | None = None
-    try:
-        if sys.platform == "win32":
-            staged = path.parent / (".peer-" + secrets.token_hex(16))
-            descriptor = create_windows_private_file(staged)
-            output_context = os.fdopen(descriptor, "w", encoding="ascii")
-        else:
-            output_context = tempfile.NamedTemporaryFile(
-                mode="w", encoding="ascii", dir=path.parent, prefix=".peer-", delete=False,
-            )
-            staged = Path(output_context.name)
-        with output_context as output:
-            if sys.platform == "win32":
-                validate_windows_private_file(staged)
-            else:
-                os.chmod(staged, 0o600)
-            output.write(token + "\n")
-            output.flush()
-            os.fsync(output.fileno())
+    guard = pin_directory(path.parent) if sys.platform == "win32" else nullcontext()
+    with guard:
         try:
-            os.link(staged, path)
-        except FileExistsError:
-            token = _credential(path, directory)
-        else:
-            if os.name != "nt":
-                directory_fd = os.open(path.parent, os.O_RDONLY)
+            if sys.platform == "win32":
+                staged = path.parent / (".peer-" + secrets.token_hex(16))
+                descriptor = create_windows_private_file(staged)
+                output_context = os.fdopen(descriptor, "w", encoding="ascii")
+            else:
+                output_context = tempfile.NamedTemporaryFile(
+                    mode="w", encoding="ascii", dir=path.parent, prefix=".peer-",
+                    delete=False,
+                )
+                staged = Path(output_context.name)
+            with output_context as output:
+                if sys.platform == "win32":
+                    validate_windows_private_file(staged)
+                else:
+                    os.chmod(staged, 0o600)
+                output.write(token + "\n")
+                output.flush()
+                os.fsync(output.fileno())
+                if sys.platform == "win32":
+                    try:
+                        link_windows_private_file(output.fileno(), path)
+                    except FileExistsError:
+                        token = _credential(path, directory)
+            if sys.platform != "win32":
                 try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
-        return token
-    finally:
-        if staged is not None:
-            staged.unlink(missing_ok=True)
+                    os.link(staged, path)
+                except FileExistsError:
+                    token = _credential(path, directory)
+                else:
+                    directory_fd = os.open(path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+            return token
+        finally:
+            if staged is not None:
+                staged.unlink(missing_ok=True)
 
 
 async def _serve(directory: Path, credential_file: Path, *,

@@ -13,6 +13,7 @@ from .private_directory import (
     _windows_current_user_sid,
     create_private_directory,
 )
+from .upload_win32 import PinnedRegular, file_identity_fd
 
 
 def require_windows_credential_path(state_dir: Path, path: Path) -> None:
@@ -68,7 +69,7 @@ def create_windows_private_file(path: Path) -> int:
         raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined, unused-ignore]
     try:
         attributes = SecurityAttributes(ctypes.sizeof(SecurityAttributes), descriptor, 0)
-        handle = kernel.CreateFileW(str(path), 0x40000000, 0x1 | 0x2 | 0x4,
+        handle = kernel.CreateFileW(str(path), 0x40000000 | 0x00010000, 0x1 | 0x2 | 0x4,
                                     ctypes.byref(attributes), 1, 0x80, None)
         if handle == ctypes.c_void_p(-1).value or handle is None:
             raise ctypes.WinError(ctypes.get_last_error())  # type: ignore[attr-defined, unused-ignore]
@@ -83,6 +84,16 @@ def create_windows_private_file(path: Path) -> int:
                 kernel.CloseHandle(handle)
     finally:
         kernel.LocalFree(descriptor)
+
+
+def link_windows_private_file(descriptor: int, target: Path) -> None:
+    """Publish the open file itself, never resolving a mutable staging name."""
+    if os.name != "nt":
+        raise OSError("Windows handle publication requires Windows")
+
+    import msvcrt
+    handle = msvcrt.__dict__["get_osfhandle"](descriptor)
+    PinnedRegular(handle, file_identity_fd(descriptor)).link(target)
 
 
 def validate_windows_private_file(path: Path) -> None:

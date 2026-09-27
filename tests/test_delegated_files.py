@@ -84,19 +84,54 @@ def test_windows_delegated_rejects_noncanonical_targets(tmp_path, suffix):
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-specific pinned parent")
 def test_windows_delegated_parent_cannot_be_renamed_during_create(tmp_path, monkeypatch):
+    from anywhere_computer.upload_win32 import PinnedRegular
+
     root = tmp_path / "root"
     root.mkdir()
-    original_link = os.link
+    original_link = PinnedRegular.link
 
     def link_during_rename(source, target):
         with pytest.raises(OSError):
             root.rename(tmp_path / "moved")
         return original_link(source, target)
 
-    monkeypatch.setattr(os, "link", link_during_rename)
+    monkeypatch.setattr(PinnedRegular, "link", link_during_rename)
     write(WriteFile(path=str(root / "new.txt"), text="new"),
           (str(root),), tmp_path / "backups")
     assert (root / "new.txt").read_text() == "new"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-specific handle publication")
+def test_windows_hard_link_uses_pinned_file_after_staging_name_is_reused(tmp_path):
+    from anywhere_computer.upload_win32 import pin_regular_handle_nofollow
+
+    source = tmp_path / "source.txt"
+    target = tmp_path / "target.txt"
+    source.write_text("original", encoding="utf-8")
+    with pin_regular_handle_nofollow(source) as pinned:
+        source.unlink()
+        source.write_text("attacker", encoding="utf-8")
+        try:
+            pinned.link(target)
+        except OSError:
+            assert not target.exists()
+    if target.exists():
+        assert target.read_text(encoding="utf-8") == "original"
+    assert source.read_text(encoding="utf-8") == "attacker"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows-specific handle publication")
+def test_windows_hard_link_never_replaces_existing_target(tmp_path):
+    from anywhere_computer.upload_win32 import pin_regular_handle_nofollow
+
+    source = tmp_path / "source.txt"
+    target = tmp_path / "target.txt"
+    source.write_text("original", encoding="utf-8")
+    target.write_text("preserve", encoding="utf-8")
+    with pin_regular_handle_nofollow(source) as pinned:
+        with pytest.raises(FileExistsError):
+            pinned.link(target)
+    assert target.read_text(encoding="utf-8") == "preserve"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX dir_fd confinement")

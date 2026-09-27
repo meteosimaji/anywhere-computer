@@ -66,6 +66,29 @@ def test_windows_peer_rejects_broad_credential_acl(tmp_path):
         peer_cli._credential(credential, state)
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows handle publication")
+def test_windows_peer_publication_never_links_replaced_staging_name(tmp_path, monkeypatch):
+    state = tmp_path / "mailbox"
+    credential = state / "credentials" / "peer-token"
+    original_link = peer_cli.link_windows_private_file
+
+    def replace_staged_name(descriptor, target):
+        staged, = target.parent.glob(".peer-*")
+        staged.unlink()
+        staged.write_text("wrong-token\n", encoding="ascii")
+        original_link(descriptor, target)
+
+    monkeypatch.setattr(peer_cli, "link_windows_private_file", replace_staged_name)
+    try:
+        token = peer_cli._publish_credential(credential, state)
+    except OSError:
+        # A deleted open handle may be rejected by NTFS; publication must stop.
+        assert not credential.exists()
+    else:
+        assert credential.read_text(encoding="ascii").strip() == token
+        assert token != "wrong-token"
+
+
 def _provision(state, credential, peer, *, account="account"):
     completed = subprocess.run(
         [sys.executable, "-m", "anywhere_computer.peer_cli", "--state-dir", str(state),

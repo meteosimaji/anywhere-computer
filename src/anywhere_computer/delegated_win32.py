@@ -17,7 +17,12 @@ from pydantic import JsonValue
 
 from .files import MAX_READ_BYTES, sha256
 from .models import WriteFile
-from .upload_win32 import open_regular_nofollow, pin_directory, pin_regular_nofollow
+from .upload_win32 import (
+    file_identity_fd,
+    open_regular_nofollow,
+    pin_directory,
+    pin_regular_handle_nofollow,
+)
 
 _DRIVE = re.compile(r"^[A-Za-z]:$")
 _DEVICE_NAMES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
@@ -84,15 +89,11 @@ def create_file(args: WriteFile, roots: tuple[str, ...]) -> dict[str, JsonValue]
                 destination.write(content)
                 destination.flush()
                 os.fsync(destination.fileno())
-                written = os.fstat(destination.fileno())
-                with pin_regular_nofollow(temporary) as source_identity:
-                    pinned = os.stat(temporary, follow_symlinks=False)
-                    if (written.st_dev, written.st_ino) != (pinned.st_dev, pinned.st_ino):
+                written_identity = file_identity_fd(destination.fileno())
+                with pin_regular_handle_nofollow(temporary) as source:
+                    if written_identity != source.identity:
                         raise ValueError("Delegated staging file changed")
-                    os.link(temporary, target)
-                    with pin_regular_nofollow(target) as target_identity:
-                        if target_identity != source_identity:
-                            raise ValueError("Delegated target identity changed")
+                    source.link(target)
         finally:
             try:
                 temporary.unlink()

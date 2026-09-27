@@ -1,9 +1,4 @@
-"""Pinned Windows directory ancestry for exclusive upload publication.
-
-Each handle omits FILE_SHARE_DELETE. Windows requires DELETE access to rename
-or remove a directory, so retaining every ancestor handle keeps a canonical
-path stable while a path-based hard link is created.
-"""
+"""Pinned Windows handles for confined, handle-based hard-link publication."""
 
 from __future__ import annotations
 
@@ -24,6 +19,17 @@ class _AttributeTagInfo(ctypes.Structure):
     _fields_ = [("attributes", wintypes.DWORD), ("reparse_tag", wintypes.DWORD)]
 
 
+class _FileLinkInfo(ctypes.Structure):
+    _fields_ = [("replace_if_exists", ctypes.c_ubyte),
+                ("root_directory", wintypes.HANDLE),
+                ("file_name_length", wintypes.ULONG),
+                ("file_name", wintypes.WCHAR * 1)]
+
+
+class _IoStatusBlock(ctypes.Structure):
+    _fields_ = [("status", wintypes.LONG), ("information", ctypes.c_size_t)]
+
+
 def _kernel() -> ctypes.CDLL:
     if os.name != "nt":
         raise OSError("Windows directory handles are unavailable")
@@ -42,8 +48,10 @@ def _kernel() -> ctypes.CDLL:
 
 
 @contextmanager
-def pin_directory(path: Path) -> Iterator[tuple[str, str]]:
-    """Reject reparse ancestors and hold every component against rename."""
+def pin_directory_handle(
+    path: Path, *, create: bool = False,
+) -> Iterator[tuple[tuple[str, str], int]]:
+    """Reject reparse ancestors; retain the exact target directory handle."""
     if os.name != "nt" or not path.is_absolute():
         raise ValueError("A canonical Windows directory path is required")
     kernel = _kernel()
@@ -51,8 +59,9 @@ def pin_directory(path: Path) -> Iterator[tuple[str, str]]:
     invalid = ctypes.c_void_p(-1).value
     try:
         for component in reversed((path, *path.parents)):
+            access = 0x80 | 0x20 | (0x2 if create and component == path else 0)
             handle = kernel.CreateFileW(
-                str(component), 0x80, 0x1 | 0x2, None, 3,
+                str(component), access, 0x1 | 0x2, None, 3,
                 0x02000000 | 0x00200000, None,
             )
             if handle == invalid or handle is None:
@@ -69,10 +78,17 @@ def pin_directory(path: Path) -> Iterator[tuple[str, str]]:
         if not kernel.GetFileInformationByHandleEx(
                 handles[-1], 18, ctypes.byref(identity), ctypes.sizeof(identity)):
             raise ValueError("Upload directory identity is unavailable")
-        yield f"v:{identity.volume:016x}", "f:" + bytes(identity.file_id).hex()
+        yield ((f"v:{identity.volume:016x}", "f:" + bytes(identity.file_id).hex()),
+               handles[-1])
     finally:
         for handle in reversed(handles):
             kernel.CloseHandle(handle)
+
+
+@contextmanager
+def pin_directory(path: Path) -> Iterator[tuple[str, str]]:
+    with pin_directory_handle(path) as (identity, _handle):
+        yield identity
 
 
 def open_regular_nofollow(path: Path) -> int:
@@ -104,9 +120,71 @@ def open_regular_nofollow(path: Path) -> int:
             kernel.CloseHandle(handle)
 
 
+def _identity_for_handle(kernel: ctypes.CDLL, handle: int) -> tuple[str, str]:
+    identity = _FileIdInfo()
+    if not kernel.GetFileInformationByHandleEx(
+            handle, 18, ctypes.byref(identity), ctypes.sizeof(identity)):
+        raise ValueError("File identity is unavailable")
+    return f"v:{identity.volume:016x}", "f:" + bytes(identity.file_id).hex()
+
+
+def file_identity_fd(descriptor: int) -> tuple[str, str]:
+    """Get the identity of an already-open CRT file descriptor."""
+    if os.name != "nt":
+        raise OSError("Windows file handles are unavailable")
+    import msvcrt
+
+    handle = cast(int, msvcrt.__dict__["get_osfhandle"](descriptor))
+    return _identity_for_handle(_kernel(), handle)
+
+
+class PinnedRegular:
+    def __init__(self, handle: int, identity: tuple[str, str]) -> None:
+        self.handle = handle
+        self.identity = identity
+
+    def link(self, target: Path) -> None:
+        """Create a no-overwrite link to this file object, never re-open its path."""
+        if (os.name != "nt" or not target.is_absolute() or target.name in {"", ".", ".."}
+                or ":" in target.name or target.name.endswith((".", " "))):
+            raise ValueError("A canonical Windows link destination is required")
+        name = target.name.encode("utf-16-le")
+        if not name or len(name) > 65534:
+            raise ValueError("Invalid hard-link destination name")
+        with pin_directory_handle(target.parent, create=True) as (_identity, directory_handle):
+            buffer_size = max(ctypes.sizeof(_FileLinkInfo), _FileLinkInfo.file_name.offset
+                              + len(name))
+            buffer = ctypes.create_string_buffer(buffer_size)
+            info = ctypes.cast(buffer, ctypes.POINTER(_FileLinkInfo)).contents
+            info.replace_if_exists = 0
+            info.root_directory = directory_handle
+            info.file_name_length = len(name)
+            ctypes.memmove(ctypes.addressof(buffer) + _FileLinkInfo.file_name.offset,
+                           name, len(name))
+            factory = cast(Callable[..., ctypes.CDLL], ctypes.__dict__["WinDLL"])
+            ntdll = factory("ntdll", use_last_error=True)
+            ntdll.NtSetInformationFile.argtypes = [wintypes.HANDLE,
+                                                   ctypes.POINTER(_IoStatusBlock),
+                                                   wintypes.LPVOID, wintypes.ULONG,
+                                                   ctypes.c_int]
+            ntdll.NtSetInformationFile.restype = wintypes.LONG
+            ntdll.RtlNtStatusToDosError.argtypes = [wintypes.LONG]
+            ntdll.RtlNtStatusToDosError.restype = wintypes.ULONG
+            iosb = _IoStatusBlock()
+            status = ntdll.NtSetInformationFile(self.handle, ctypes.byref(iosb), buffer,
+                                                buffer_size, 11)
+            if status != 0:
+                code = ntdll.RtlNtStatusToDosError(status)
+                if code in {80, 183}:
+                    raise FileExistsError(code, "Hard-link destination already exists",
+                                          str(target))
+                raise OSError(code, f"Handle-based hard link failed (NTSTATUS {status:#x})",
+                              str(target))
+
+
 @contextmanager
-def pin_regular_nofollow(path: Path) -> Iterator[tuple[str, str]]:
-    """Hold a regular file's name and identity, not exclusive content access."""
+def pin_regular_handle_nofollow(path: Path) -> Iterator[PinnedRegular]:
+    """Hold a non-reparse regular file object for handle-based publication."""
     if os.name != "nt":
         raise OSError("Windows file handles are unavailable")
     kernel = _kernel()
@@ -118,14 +196,18 @@ def pin_regular_nofollow(path: Path) -> Iterator[tuple[str, str]]:
                       "Upload staging file could not be pinned")
     try:
         tag = _AttributeTagInfo()
-        identity = _FileIdInfo()
-        if (not kernel.GetFileInformationByHandleEx(
-                handle, 9, ctypes.byref(tag), ctypes.sizeof(tag))
-                or not kernel.GetFileInformationByHandleEx(
-                    handle, 18, ctypes.byref(identity), ctypes.sizeof(identity))):
-            raise ValueError("Upload file identity is unavailable")
+        if not kernel.GetFileInformationByHandleEx(
+                handle, 9, ctypes.byref(tag), ctypes.sizeof(tag)):
+            raise ValueError("Upload file attributes are unavailable")
         if tag.attributes & (0x400 | 0x10):
             raise ValueError("Upload staging file is not a regular file")
-        yield f"v:{identity.volume:016x}", "f:" + bytes(identity.file_id).hex()
+        yield PinnedRegular(handle, _identity_for_handle(kernel, handle))
     finally:
         kernel.CloseHandle(handle)
+
+
+@contextmanager
+def pin_regular_nofollow(path: Path) -> Iterator[tuple[str, str]]:
+    """Compatibility wrapper for identity-only callers."""
+    with pin_regular_handle_nofollow(path) as pinned:
+        yield pinned.identity

@@ -10,6 +10,7 @@ import pytest
 
 from anywhere_computer.engine import Engine
 from anywhere_computer.models import BeginUpload, Request, ResolveUpload, TransferId, UploadChunk
+from anywhere_computer.upload_win32 import PinnedRegular
 from anywhere_computer.uploads import UploadOutcomeUnknown, Uploads
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="Windows-specific upload boundary")
@@ -93,7 +94,7 @@ def test_windows_parent_cannot_be_renamed_during_link(tmp_path, monkeypatch):
     target = parent / "result.bin"
     uploads.begin(BeginUpload(transfer_id=identity, path=str(target),
                               total_bytes=0, sha256=hashlib.sha256(b"").hexdigest()))
-    original = os.link
+    original = PinnedRegular.link
     rename_blocked = False
 
     def guarded_link(source, destination):
@@ -106,13 +107,13 @@ def test_windows_parent_cannot_be_renamed_during_link(tmp_path, monkeypatch):
             raise AssertionError("Pinned parent was renamed during publication")
         original(source, destination)
 
-    monkeypatch.setattr("anywhere_computer.uploads.os.link", guarded_link)
+    monkeypatch.setattr(PinnedRegular, "link", guarded_link)
     result = uploads.commit(TransferId(transfer_id=identity))
     assert rename_blocked and result["publication_verified"] is True
     assert target.read_bytes() == b""
 
 
-def test_windows_staging_entry_cannot_be_replaced_during_link(tmp_path, monkeypatch):
+def test_windows_staging_name_reuse_never_publishes_replacement(tmp_path, monkeypatch):
     locks = tmp_path / "locks"
     locks.mkdir()
     uploads = Uploads(tmp_path / "state", file_locks=locks)
@@ -122,34 +123,32 @@ def test_windows_staging_entry_cannot_be_replaced_during_link(tmp_path, monkeypa
                               total_bytes=3, sha256=hashlib.sha256(b"abc").hexdigest()))
     uploads.chunk(UploadChunk(transfer_id=identity, offset=0,
                               data_base64=base64.b64encode(b"abc").decode()))
-    original = os.link
-    replacement_blocked = False
-    link_error = None
+    original = PinnedRegular.link
+    replacement_attempted = False
 
     def guarded_link(source, destination):
-        nonlocal replacement_blocked, link_error
+        nonlocal replacement_attempted
+        staged = next(target.parent.glob(".anywhere-upload-*"))
         try:
-            os.unlink(source)
+            staged.unlink()
         except OSError:
-            replacement_blocked = True
+            pass
         else:
-            raise AssertionError("Pinned staging entry was removed before publication")
-        try:
-            original(source, destination)
-        except OSError as error:
-            link_error = error
-            raise
+            staged.write_bytes(b"bad")
+            replacement_attempted = True
+        original(source, destination)
 
-    monkeypatch.setattr("anywhere_computer.uploads.os.link", guarded_link)
+    monkeypatch.setattr(PinnedRegular, "link", guarded_link)
     try:
         result = uploads.commit(TransferId(transfer_id=identity))
     except UploadOutcomeUnknown:
-        assert replacement_blocked, "Pinned staging entry was removable during publication"
-        if link_error is not None:
-            raise AssertionError(f"Pinned staging hard link failed: {link_error}") from link_error
-        raise
-    assert replacement_blocked and result["publication_verified"] is True
-    assert target.read_bytes() == b"abc"
+        assert not target.exists() or target.read_bytes() == b"abc"
+        assert uploads.status(TransferId(transfer_id=identity))["publication_verified"] is False
+    else:
+        assert result["publication_verified"] is True
+        assert target.read_bytes() == b"abc"
+    if replacement_attempted:
+        assert not target.exists() or target.read_bytes() == b"abc"
 
 
 def test_windows_link_collision_never_claims_publication(tmp_path, monkeypatch):
@@ -164,9 +163,10 @@ def test_windows_link_collision_never_claims_publication(tmp_path, monkeypatch):
     def collision(source, destination):
         with open(destination, "xb"):
             pass
-        raise FileExistsError("destination appeared")
+        original(source, destination)
 
-    monkeypatch.setattr("anywhere_computer.uploads.os.link", collision)
+    original = PinnedRegular.link
+    monkeypatch.setattr(PinnedRegular, "link", collision)
     with pytest.raises(UploadOutcomeUnknown):
         uploads.commit(TransferId(transfer_id=identity))
     assert uploads.status(TransferId(transfer_id=identity))["publication_verified"] is False
@@ -189,7 +189,7 @@ def test_windows_wrong_source_link_is_detected_by_file_identity(tmp_path, monkey
     def wrong_source(source, destination):
         original(other, destination)
 
-    monkeypatch.setattr("anywhere_computer.uploads.os.link", wrong_source)
+    monkeypatch.setattr(PinnedRegular, "link", wrong_source)
     with pytest.raises(UploadOutcomeUnknown):
         uploads.commit(TransferId(transfer_id=identity))
     assert target.read_bytes() == b"abc"

@@ -19,6 +19,7 @@ from .files import absolute_path, sha256
 from .locking import ProcessLock
 from .models import BeginUpload, ResolveUpload, TransferId, UploadChunk
 from .state import prepare_directory
+from .upload_win32 import PinnedRegular, file_identity_fd, pin_regular_handle_nofollow
 
 UPLOAD_TOOLS = frozenset(
     {
@@ -305,7 +306,7 @@ class Uploads:
                 publishing = False
                 created = False
                 source_guard = ExitStack()
-                source_identity: tuple[str, str] | None = None
+                source_handle: PinnedRegular | None = None
                 try:
                     digest = hashlib.sha256()
                     received = 0
@@ -334,12 +335,12 @@ class Uploads:
                         destination.flush()
                         os.fsync(destination.fileno())
                         if parent_fd is None:
-                            from .upload_win32 import pin_regular_nofollow
-
-                            # Acquire no-delete protection while the writer still
-                            # holds the verified file. Keep it through the link.
-                            source_identity = source_guard.enter_context(
-                                pin_regular_nofollow(Path(name)))
+                            # Bind publication to the verified file object. Windows
+                            # can remove a path even while another handle is open.
+                            source_handle = source_guard.enter_context(
+                                pin_regular_handle_nofollow(Path(name)))
+                            if file_identity_fd(destination.fileno()) != source_handle.identity:
+                                raise ValueError("Upload staging file changed")
                     with db:
                         db.execute(
                             "UPDATE uploads SET state='publishing' WHERE id=?", (args.transfer_id,)
@@ -350,10 +351,10 @@ class Uploads:
                     if not self._parent_path_matches(row, parent_fd):
                         raise ValueError("Upload parent directory changed")
                     if parent_fd is None:
-                        os.link(name, target)
-                        assert source_identity is not None
-                        with pin_regular_nofollow(target) as linked_identity:
-                            if linked_identity != source_identity:
+                        assert source_handle is not None
+                        source_handle.link(target)
+                        with pin_regular_handle_nofollow(target) as linked:
+                            if linked.identity != source_handle.identity:
                                 raise ValueError("Published file identity changed")
                     else:
                         os.link(Path(name).name, target.name,
