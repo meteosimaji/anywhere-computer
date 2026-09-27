@@ -92,9 +92,13 @@ def test_portable_runtime_excludes_installers_and_headers_but_keeps_licenses(tmp
     stdlib = runtime / "lib/python3.12"
     site = stdlib / "site-packages"
     removed = (runtime / "include/Python.h", stdlib / "ensurepip/__init__.py",
-               site / "pip/__init__.py", site / "pip-26.0.dist-info/METADATA")
+               site / "pip/__init__.py", site / "pip-26.0.dist-info/METADATA",
+               runtime / "bin/pip", runtime / "bin/pip3.12",
+               runtime / "Scripts/pip.exe")
     retained = (stdlib / "LICENSE.txt", site / "playwright/__init__.py",
-                site / "pip-tools-7.0.dist-info/METADATA")
+                site / "pip-tools-7.0.dist-info/METADATA",
+                runtime / "bin/python3", runtime / "bin/pipeline",
+                runtime / "Scripts/pip-tools.exe")
     for path in (*removed, *retained):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("fixture")

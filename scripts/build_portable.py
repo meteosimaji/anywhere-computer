@@ -80,6 +80,13 @@ def discard_build_tools(runtime: Path, stdlib: Path, site: Path) -> None:
                  *site.glob("pip-[0-9]*.dist-info")):
         if path.is_dir():
             shutil.rmtree(path)
+    for directory in (runtime / "bin", runtime / "Scripts"):
+        if directory.is_dir():
+            for path in directory.iterdir():
+                if path.is_file() and re.fullmatch(
+                    r"pip(?:\d+(?:\.\d+)?)?(?:\.exe)?", path.name, re.IGNORECASE
+                ):
+                    path.unlink()
 
 
 def manager_bundle_versions(release_version: str) -> tuple[str, str]:
