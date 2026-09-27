@@ -1,11 +1,13 @@
 # 会話からの端末指定
 
-ローカルの `anywhere mcp` はエンジンのツールに加え、端末指定用の次の3ツールを公開する。
+ローカルの `anywhere mcp` はエンジンのツールに加え、端末指定用の次の4ツールを公開する。
 
 1. `devices_list {}` で登録済み端末を確認する。`local` はこのコネクターのコンピューター。
    保存された状態は過去の観測であり、この一覧取得では接続しない。
-2. `devices_tools {"device_id":"…"}` で指定端末へ接続し、現在許可されているツールとschemaを取得する。
-3. `devices_call {"device_id":"…","tool":"computer_status","arguments":{}}` で実行する。
+2. `devices_probe {"device_id":"…"}` で登録済み遠隔端末の接続と認可を今確認する。
+   結果の `checked_at` と `state` は今回の観測であり、モデルがツールを実行できる保証ではない。
+3. `devices_tools {"device_id":"…"}` で指定端末へ接続し、現在許可されているツールとschemaを取得する。
+4. `devices_call {"device_id":"…","tool":"computer_status","arguments":{}}` で実行する。
    応答の `data.device_id` が宛先、`data.result` が対象ツールの結果。外側のoperation_id/stateを保持する。
 
 通常の `files_read` などのツールは引き続きローカルを対象とする。暗黙の選択変更はない。
@@ -13,9 +15,9 @@
 SSH端末は既存のOpenSSH aliasと厳格なホスト鍵検査、HTTP端末は保存済みprofileとnative vaultを使う。
 登録・ブラウザ承認は既存のCLIで行い、会話中の呼出しが無断で認証画面を開くことはない。
 
-alpha9ではローカルstdioに加え、HTTP入口もこの3ツールを公開する。HTTPでは対応する
+ローカルstdioに加え、HTTP入口もこれらのツールを公開する。HTTPでは対応する
 明示的なtool grantが必要。新規設定のallには含まれるが、read-only/filesには追加しない。
-既存の全件接続は`http-add-tools --scope devices_list --scope devices_tools --scope devices_call`
+既存の全件接続は`http-add-tools --scope devices_list --scope devices_probe --scope devices_tools --scope devices_call`
 で更新し、クライアントのカタログも更新する。制限付き・失効した認可は拡張しない。
 共通エンジン構成ではshared_agent_directoryの登録を共有し、それ以外ではHTTPのstate-dirを使う。
 `devices_` / `connection_setup_` / `__`で始まる内部・転送用ツールは転送先一覧から除外し、実行も拒否する。

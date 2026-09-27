@@ -21,6 +21,8 @@ from .workspace_ui import UI_ACTIONS, supports_ui, with_ui_metadata, workspace_r
 Catalog = Callable[[], Awaitable[list[JsonValue]]]
 Execute = Callable[[Request], Awaitable[Reply]]
 PROTOCOL_VERSION = "2025-11-25"
+LOG_LEVELS = ('debug', 'info', 'notice', 'warning', 'error', 'critical',
+              'alert', 'emergency')
 OPERATION_CAPABILITY = "io.github.meteosimaji.anywhere-computer"
 OPERATION_META = OPERATION_CAPABILITY + "/operation_id"
 REQUEST_ID_ARGUMENT = "request_id"
@@ -126,6 +128,7 @@ class MCPSession:
         self.initialized = False
         self.ready = False
         self.ui_enabled = False
+        self.logging_level = 'info'
 
     async def handle(self, packet: JsonValue) -> dict[str, JsonValue] | None:
         if not isinstance(packet, dict):
@@ -174,8 +177,19 @@ class MCPSession:
             if self.ui_enabled:
                 capabilities = cast(dict[str, JsonValue], result["capabilities"])
                 capabilities["resources"] = {"subscribe": False, "listChanged": False}
+            if isinstance(getattr(self, 'notifications', None), asyncio.Queue):
+                capabilities = cast(dict[str, JsonValue], result['capabilities'])
+                capabilities['logging'] = {}
         elif not self.ready:
             return rpc_error(identity, -32600, "Initialize the session first")
+        elif method == 'logging/setLevel':
+            if not isinstance(getattr(self, 'notifications', None), asyncio.Queue):
+                return rpc_error(identity, -32601, 'Method not found')
+            level = params.get('level')
+            if level not in LOG_LEVELS:
+                return rpc_error(identity, -32602, 'Invalid logging level')
+            self.logging_level = level
+            result = {}
         elif method == "tools/list":
             if params.get("cursor") is not None:
                 return rpc_error(identity, -32602, "No continuation cursor exists")
@@ -262,6 +276,25 @@ class MCPSession:
 async def serve_stdio(session: MCPSession, source: BinaryIO, destination: BinaryIO) -> None:
     write_lock = asyncio.Lock()
     tasks: set[asyncio.Task[None]] = set()
+    notifications = getattr(session, 'notifications', None)
+
+    async def pump_notifications(queue: asyncio.Queue[dict[str, JsonValue]]) -> None:
+        while True:
+            notice = await queue.get()
+            # The negotiated 2025-11-25 stdio connection accepts server logging
+            # notifications after initialization. Preserve the durable source event
+            # if the client closes before this transient notice can be written.
+            while not session.ready:
+                await asyncio.sleep(.05)
+            params = notice.get('params')
+            level = params.get('level') if isinstance(params, dict) else None
+            if (not isinstance(level, str) or level not in LOG_LEVELS
+                    or LOG_LEVELS.index(level) < LOG_LEVELS.index(session.logging_level)):
+                continue
+            encoded = json.dumps(notice, ensure_ascii=False, allow_nan=False).encode() + b'\n'
+            async with write_lock:
+                await asyncio.to_thread(destination.write, encoded)
+                await asyncio.to_thread(destination.flush)
 
     async def respond(line: bytes) -> None:
         response: dict[str, JsonValue] | None
@@ -285,6 +318,8 @@ async def serve_stdio(session: MCPSession, source: BinaryIO, destination: Binary
                 await asyncio.to_thread(destination.write, encoded)
                 await asyncio.to_thread(destination.flush)
 
+    notification_task = (asyncio.create_task(pump_notifications(notifications))
+                         if isinstance(notifications, asyncio.Queue) else None)
     try:
         while line := await asyncio.to_thread(source.readline, WIRE_LIMIT + 1):
             if len(line) > WIRE_LIMIT or not line.endswith(b"\n"):
@@ -297,6 +332,9 @@ async def serve_stdio(session: MCPSession, source: BinaryIO, destination: Binary
         if tasks:
             await asyncio.gather(*tasks)
     finally:
+        if notification_task is not None:
+            notification_task.cancel()
+            await asyncio.gather(notification_task, return_exceptions=True)
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)

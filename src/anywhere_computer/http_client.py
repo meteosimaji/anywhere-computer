@@ -15,7 +15,7 @@ import threading
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import cast
+from typing import Protocol, cast
 from urllib.parse import urlsplit
 
 from pydantic import JsonValue
@@ -43,6 +43,37 @@ class HTTPResponse:
 
 
 HTTPWire = Callable[[str, str, dict[str, JsonValue] | None, dict[str, str]], HTTPResponse]
+
+
+class AccessTokenSource(Protocol):
+    resource: str
+
+    def access_token(self, *, rejected_token: str | None = None) -> str: ...
+
+
+class ChildBearerTokens:
+    """A target-issued child credential with no OAuth refresh or broad fallback."""
+
+    __slots__ = ('resource', '_bearer')
+
+    def __init__(self, resource: str, bearer: str) -> None:
+        validate_authorization_url(resource)
+        parsed = urlsplit(resource)
+        if parsed.path != '/mcp' or parsed.query:
+            raise ValueError('Child bearer requires a canonical HTTPS MCP resource')
+        if (not isinstance(bearer, str) or not 1 <= len(bearer) <= 256
+                or any(not 33 <= ord(char) <= 126 for char in bearer)):
+            raise ValueError('Invalid child bearer')
+        self.resource = resource
+        self._bearer = bearer
+
+    def __repr__(self) -> str:
+        return 'ChildBearerTokens(<redacted>)'
+
+    def access_token(self, *, rejected_token: str | None = None) -> str:
+        if rejected_token is not None:
+            raise ClientAuthorizationRequired('Target child credential was rejected')
+        return self._bearer
 
 
 def _json_packet(raw: bytes) -> dict[str, JsonValue]:
@@ -154,7 +185,7 @@ class _HTTPRejected(ConnectionError):
 
 
 class HTTPBackend:
-    def __init__(self, tokens: ClientTokens, *, wire: HTTPWire = https_mcp_request) -> None:
+    def __init__(self, tokens: AccessTokenSource, *, wire: HTTPWire = https_mcp_request) -> None:
         self.tokens = tokens
         self.wire = wire
         self.session_id: str | None = None

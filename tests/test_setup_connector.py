@@ -112,7 +112,7 @@ async def test_engine_router_setup_catalog_and_workspace_metadata(tmp_path):
             "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {},
         })
         tools = result["result"]["tools"]
-        assert len(tools) == 84
+        assert len(tools) == 85
         assert {tool["name"] for tool in tools} >= set({
             "connection_setup_status", "connection_setup_plan", "connection_setup_confirm",
         })

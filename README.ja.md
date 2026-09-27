@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b10` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.10` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b25` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.25` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -54,6 +54,10 @@ Codex Pluginの導入にはCodexから使える`uv`が必要です。このチ�
 [英語READMEの導入コマンド](README.md#get-started)でローカルmarketplaceを登録し、
 `anywhere-computer`を導入します。再接続後、独立した`anywhere-computer`と
 `anywhere-subchat`のMCPサーバーを確認し、`subchat_capabilities`で実際の版とモードを確認します。
+Claude CodeでPluginを更新するときはmarketplaceを更新してから`claude plugin update`を実行し、
+新しいセッションで有効版を確認します。同じ版番号の開発用wheelを作り直してもClaude Codeは
+`up_to_date`と判定し、古いwheelを使い続けることがあります。正式更新では版番号を上げ、
+導入先のwheelハッシュを配布物と照合してください。
 
 ## subchatに独立した調査を委任する
 
@@ -114,6 +118,9 @@ Chromeです。起動できない場合は送信前の`browser_startup_unavailab
 権限0600の別ファイルで持ち、同じ所有者・アカウント・プロジェクトに限定します。
 送信先が接続している必要があります。配送と受領を記録しますが、モデルのターンを
 開始したり、ChatGPT・Codex・Claudeの会話本文へ自動挿入したりはしません。
+活動中のCodexやClaude Codeのターンは`peer_wait`を一度呼ぶと、最大10秒間待って
+未読の本文をツール結果として受け取れます。受領済みへの変更や、待機していない
+モデルの自動起動は行いません。
 
 通常ChatへのHTTPアクセスは、本人に認められたアカウントと利用範囲でのみ使ってください。
 モデル蒸留を目的とする大量取得や第三者へのアクセス販売などの不正利用は禁止です。

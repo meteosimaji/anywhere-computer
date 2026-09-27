@@ -64,6 +64,10 @@ anywhere http-add-tools --scope subchat_capabilities --scope subchat_catalog \
 既存 grant の Subchat 権限は自動拡張されません。`mcp_*`、`codex_plugin_*`、
 `devices_*` の追加も既存 grant を拡張せず、新しい同意を必要とします。
 各ツールには個別の scope が必要です。
+保存済みプロンプトの先頭 160 文字を `subchat_list` の
+`include_prompt_preview=true` で取得する場合は、追加の
+`subchat_prompt_preview` scope を指定し、新しい OAuth 同意を受けてください。
+既存の `subchat_list` 許可だけではプレビューを返しません。
 ChatGPT の開発用 Plugin では、既存接続の「更新する」や「再接続」だけでは、
 Plugin 作成時に保存された既定スコープが増えない場合があります。認可画面の
 「Requested tools」に上記8個の `subchat_*` が含まれることを確認してください。

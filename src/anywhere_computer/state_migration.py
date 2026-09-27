@@ -16,7 +16,7 @@ from .uploads import Uploads
 DATABASES = {
     'operations.sqlite3': ('operation_results', 'operations', 'runtime_settings',
                            'subchat_queue_watch_leases'),
-    'uploads/uploads.sqlite3': ('uploads', 'chunks'),
+    'uploads/uploads.sqlite3': ('uploads', 'chunks', 'upload_parents'),
     'downloads/downloads.sqlite3': ('downloads', 'chunks'),
 }
 

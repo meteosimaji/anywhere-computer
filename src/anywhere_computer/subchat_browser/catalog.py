@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
+import binascii
 import json
 import re
 from pathlib import Path
@@ -86,12 +88,16 @@ def project_http_catalog(payload: bytes) -> dict[str, object]:
                 raise ValueError('Preset references an unknown model')
             if model.is_work_mode_model:
                 continue
+            selection = SubchatHTTPSelection(
+                version_id=version.id, preset_id=preset.id,
+                model_slug=preset.model_slug,
+                thinking_effort=preset.thinking_effort)
             choices.append({**preset.model_dump(), 'model_title': model.title,
                             'available': version.enabled and preset.preset_type == 'available',
-                            'http_selection': SubchatHTTPSelection(
-                                version_id=version.id, preset_id=preset.id,
-                                model_slug=preset.model_slug,
-                                thinking_effort=preset.thinking_effort).model_dump()})
+                            'availability_basis': 'authenticated_http_catalog',
+                            'generation_sendability': 'unknown',
+                            'http_selection': selection.model_dump(),
+                            'choice_id': encode_choice_id(selection, model.title, preset.title)})
         versions.append({'id': version.id, 'label': version.display_text,
                          'enabled': version.enabled, 'choices': choices})
     return {'state': 'http_catalog_observed', 'versions': versions, 'submitted': False,
@@ -99,9 +105,38 @@ def project_http_catalog(payload: bytes) -> dict[str, object]:
             'send_requires_ui_labels': True}
 
 
+def encode_choice_id(selection: SubchatHTTPSelection, model: str, effort: str) -> str:
+    """One transport choice, including its exact human labels; this is not a grant."""
+    raw = json.dumps([selection.model_dump(), model, effort], ensure_ascii=False,
+                     separators=(',', ':'), sort_keys=True).encode('utf-8')
+    return 'ac1.' + base64.urlsafe_b64encode(raw).rstrip(b'=').decode('ascii')
+
+
+def decode_choice_id(choice_id: str) -> tuple[SubchatHTTPSelection, str, str]:
+    if not choice_id.startswith('ac1.') or len(choice_id) > 8192:
+        raise ValueError('Invalid Subchat catalog choice ID')
+    encoded = choice_id[4:]
+    if not encoded or re.fullmatch(r'[A-Za-z0-9_-]+', encoded) is None:
+        raise ValueError('Invalid Subchat catalog choice ID')
+    try:
+        raw = base64.urlsafe_b64decode(encoded + '=' * (-len(encoded) % 4))
+        values = json.loads(raw)
+        if not isinstance(values, list) or len(values) != 3:
+            raise ValueError('Invalid Subchat catalog choice ID')
+        selection = SubchatHTTPSelection.model_validate(values[0])
+        model, effort = values[1:]
+        if (not isinstance(model, str) or not 1 <= len(model) <= 256
+                or not isinstance(effort, str) or not 1 <= len(effort) <= 256
+                or encode_choice_id(selection, model, effort) != choice_id):
+            raise ValueError('Invalid Subchat catalog choice ID')
+        return selection, model, effort
+    except (ValueError, TypeError, binascii.Error) as error:
+        raise ValueError('Invalid Subchat catalog choice ID') from error
+
+
 def require_http_selection(catalog: dict[str, object], selected: SubchatHTTPSelection,
-                           *, model: str | None = None, effort: str | None = None) -> None:
-    """Require the observed choice and, for a send, its model and effort titles."""
+                           *, model: str | None = None, effort: str | None = None) -> str:
+    """Validate the wire choice and return its preferred observed picker label."""
     versions = catalog.get('versions')
     if catalog.get('state') != 'http_catalog_observed' or not isinstance(versions, list):
         raise ValueError('HTTP model catalog is unavailable')
@@ -139,6 +174,91 @@ def require_http_selection(catalog: dict[str, object], selected: SubchatHTTPSele
         raise SubchatSelectionError('model', 'mismatch')
     if effort is not None and choice.get('title') != effort:
         raise SubchatSelectionError('effort', 'mismatch')
+    # The picker row represents the catalog version, not the wire model. A
+    # model can move between versions without keeping its former picker label.
+    # The intercepted generation request is checked against the exact wire
+    # selection before dispatch, so a stale or incorrect mapping fails closed.
+    picker_label = version_matches[0].get('label')
+    if not isinstance(picker_label, str) or not picker_label:
+        raise ValueError('HTTP model picker label is unavailable')
+    return picker_label
+
+
+def resolve_picker_label(observed: list[object], *, version_label: str,
+                         version_id: str, model_title: str) -> str:
+    """Resolve a current UI row without assuming the wire model is 'latest'."""
+    enabled: list[str] = []
+    for row in observed:
+        if not isinstance(row, dict) or row.get('disabled') is not False:
+            continue
+        label = row.get('label')
+        if not isinstance(label, str) or not label:
+            raise ValueError('Model menu labels are invalid')
+        enabled.append(label)
+    for candidate in (version_label, model_title):
+        if enabled.count(candidate) == 1:
+            return candidate
+    if version_id != 'latest':
+        # Localized row names can wrap the version number (for example the
+        # catalog's 5.6 and the UI's GPT-5.6 Sol). Require one unambiguous row.
+        token = re.compile(r'(?<![0-9.])' + re.escape(version_id) + r'(?![0-9.])')
+        matches = [label for label in enabled if token.search(label)]
+        # A numeric version may have separate Sol and Pro picker rows. A
+        # generic version match must not route a Pro choice through Sol, or
+        # guess which row is Pro when both generic and role-specific rows exist.
+        if re.search(r'\bPro\b', model_title, flags=re.IGNORECASE):
+            pro_matches = [label for label in matches
+                           if re.search(r'\bPro\b', label, flags=re.IGNORECASE)]
+            if pro_matches:
+                matches = pro_matches
+            elif any(re.search(r'\b(?:Sol|Thinking|Instant)\b', label,
+                               flags=re.IGNORECASE) for label in matches):
+                matches = []
+        if len(matches) == 1:
+            return matches[0]
+    raise ValueError('Requested model is not available in the observed menu')
+
+
+def compare_http_and_ui_catalog(http: dict[str, object],
+                                ui: dict[str, object]) -> dict[str, object]:
+    """Mark UI row evidence without treating it as generation success."""
+    versions = http.get('versions')
+    if http.get('state') != 'http_catalog_observed' or not isinstance(versions, list):
+        raise ValueError('HTTP model catalog is unavailable')
+    observed_rows = ui.get('models')
+    ui_observed = (ui.get('state') in {'catalog_observed', 'catalog_partial'}
+                   and isinstance(observed_rows, list))
+    result_versions: list[dict[str, object]] = []
+    for version in versions:
+        if not isinstance(version, dict) or not isinstance(version.get('choices'), list):
+            raise ValueError('HTTP model catalog shape changed')
+        result_choices: list[dict[str, object]] = []
+        for choice in version['choices']:
+            if not isinstance(choice, dict):
+                raise ValueError('HTTP model catalog shape changed')
+            picker_label: str | None = None
+            status = 'unknown'
+            if ui_observed and isinstance(observed_rows, list):
+                label = version.get('label')
+                version_id = version.get('id')
+                title = choice.get('model_title')
+                if (not isinstance(label, str) or not isinstance(version_id, str)
+                        or not isinstance(title, str)):
+                    raise ValueError('HTTP model catalog shape changed')
+                try:
+                    picker_label = resolve_picker_label(
+                        observed_rows, version_label=label, version_id=version_id,
+                        model_title=title)
+                except ValueError:
+                    status = 'not_confirmed'
+                else:
+                    status = 'selectable_row_observed'
+            result_choices.append({**choice, 'ui_picker_status': status,
+                                   'ui_picker_label': picker_label})
+        result_versions.append({**version, 'choices': result_choices})
+    return {**http, 'versions': result_versions, 'ui_catalog_state': ui.get('state'),
+            'ui_picker_observation': 'observed' if ui_observed else 'unknown',
+            'generation_http_verified': False, 'submitted': False}
 
 
 async def observe_http_catalog(page: Page) -> Response:

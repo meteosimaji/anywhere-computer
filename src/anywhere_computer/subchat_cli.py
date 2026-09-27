@@ -80,6 +80,7 @@ class QueueCommand(OperationId):
     action: Literal['queue']
     target_operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
     prompt: str = Field(min_length=1, max_length=100_000)
+    resources: SubchatResources | None = None
 
 
 class DeleteCommand(DeleteRequest):
@@ -101,11 +102,14 @@ async def dispatch(service: Subchats,
             raise ValueError('HTTP catalog is unavailable')
         return json.dumps(await observe(), ensure_ascii=False)
     if isinstance(command, ListCommand):
-        return service.store.list(SubchatList(limit=command.limit, before=command.before),
-                                  owner=owner).model_dump_json()
+        return service.store.list(SubchatList(
+            limit=command.limit, before=command.before,
+            include_prompt_preview=command.include_prompt_preview),
+            owner=owner).model_dump_json()
     if isinstance(command, QueueCommand):
         return service.queue(command.operation_id, command.target_operation_id,
-                             command.prompt, owner=owner).model_dump_json()
+                             command.prompt, owner=owner,
+                             resources=command.resources).model_dump_json()
     if isinstance(command, DeleteCommand):
         return (await delete_saved(service, DeleteRequest.model_validate(command.model_dump(
             exclude={'action'})), owner=owner)).model_dump_json()
@@ -433,7 +437,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     record_conversation=record_conversation if http_read else None,
                     record_rejection=record_rejection if http_read else None,
                     httpx_generation=httpx_generation,
-                    background_pages=httpx_generation and sys.platform == 'darwin',
+                    background_pages=httpx_generation,
                     store=store,
                     owner=ledger_owner,
                     expected_account_id=expected_account_id if httpx_generation else None)
@@ -502,7 +506,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'subchat_download_file retrieves one exact saved final-answer sandbox '
                         'link as bounded base64 bytes without writing a local file. It does '
                         'not upload to another Chat or Library. '
-                        'subchat_download_image reads one image bound to a saved submitted or '
+                        'subchat_download_image reads a selected image bound to a saved '
+                        'submitted or '
                         'completed turn; image availability is not a final answer. '
                         'Recover only the original operation ID; an unconfirmed or pending '
                         'state never permits resending. Login failure requires operator action.')

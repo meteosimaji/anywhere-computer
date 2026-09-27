@@ -8,7 +8,7 @@
         "--python",
         "3.12",
         "--from",
-        "${CLAUDE_PLUGIN_ROOT}/bundled/anywhere_computer-0.2.0b10-py3-none-any.whl",
+        "${CLAUDE_PLUGIN_ROOT}/bundled/anywhere_computer-0.2.0b25-py3-none-any.whl",
         "--with-requirements",
         "${CLAUDE_PLUGIN_ROOT}/bundled/dependencies.txt",
         "anywhere",
@@ -23,10 +23,24 @@
         "--python",
         "3.12",
         "--from",
-        "${CLAUDE_PLUGIN_ROOT}/bundled/anywhere_computer-0.2.0b10-py3-none-any.whl",
+        "${CLAUDE_PLUGIN_ROOT}/bundled/anywhere_computer-0.2.0b25-py3-none-any.whl",
         "--with-requirements",
         "${CLAUDE_PLUGIN_ROOT}/bundled/dependencies.txt",
         "anywhere-subchat-plugin"
+      ]
+    },
+    "anywhere-subchat-library": {
+      "command": "uv",
+      "args": [
+        "tool",
+        "run",
+        "--python",
+        "3.12",
+        "--from",
+        "${CLAUDE_PLUGIN_ROOT}/bundled/anywhere_computer-0.2.0b25-py3-none-any.whl",
+        "--with-requirements",
+        "${CLAUDE_PLUGIN_ROOT}/bundled/dependencies.txt",
+        "anywhere-subchat-library-mcp"
       ]
     }
   }

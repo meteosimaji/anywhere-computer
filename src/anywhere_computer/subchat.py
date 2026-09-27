@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
@@ -13,8 +14,10 @@ from .models import Contract
 from .subchat_content import SubchatResources
 from .subchat_state import (
     SubchatAccountMismatch,
+    SubchatAutoQueueDisarmed,
     SubchatConcurrentSend,
     SubchatHTTPSelection,
+    SubchatQueueRevisionConflict,
     SubchatReportedSettings,
     SubchatSelectionError,
     SubchatSubmission,
@@ -67,6 +70,17 @@ class SubchatPendingObservation(Contract):
     observed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+class SubchatPreview(Contract):
+    """Call-scoped, provisional provider text; never a saved final answer."""
+
+    operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    answer_message_id: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=512)
+    provisional: Literal[True] = True
+    truncated: bool
+    observed_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class SubchatObservedSubmission(SubchatSubmission):
     """Recovery response only: do not save ephemeral observations in the submission ledger."""
 
@@ -110,6 +124,10 @@ class SubchatInterrupted(ValueError):
     """The provider recorded interruption; partial output is not a completed answer."""
 
 
+class SubchatOutputLimit(SubchatInterrupted):
+    """The provider ended a turn at its output limit without a complete answer."""
+
+
 class SubchatOutcomeUnknown(RuntimeError):
     """The send stage was entered; the caller must recover rather than resubmit."""
 
@@ -134,7 +152,8 @@ class SubchatUnsupported(ValueError):
     """An explicit unavailable capability; no fallback or automatic retry is allowed."""
 
     def __init__(self, code: Literal['http_generation_unavailable', 'http_session_required',
-                                    'http_delete_unavailable', 'ui_unavailable']) -> None:
+                                    'http_delete_unavailable', 'http_history_required',
+                                    'ui_unavailable']) -> None:
         self.code = code
         super().__init__(code)
 
@@ -166,7 +185,8 @@ class Subchats:
         return await self._dispatch(submission, owner=owner)
 
     def queue(self, operation_id: str, target_operation_id: str, prompt: str,
-              *, owner: str | None) -> SubchatSubmission:
+              *, owner: str | None,
+              resources: SubchatResources | None = None) -> SubchatSubmission:
         target = self.store.get(target_operation_id, owner=owner)
         validate = getattr(self.backend, 'validate_send_selection', None)
         if validate is not None:
@@ -174,14 +194,23 @@ class Subchats:
         return self.store.prepare(operation_id, prompt, target.model, target.effort, owner=owner,
                                   conversation_id=target.conversation_id,
                                   work_context=target.work_context,
+                                  resources=resources,
                                   after_operation_id=target_operation_id,
                                   http_selection=target.http_selection)
 
     async def _dispatch(self, submission: SubchatSubmission,
-                        *, owner: str | None) -> SubchatSubmission:
+                        *, owner: str | None,
+                        require_auto_queue_armed: bool = False,
+                        auto_queue_authorized: Callable[[], bool] | None = None
+                        ) -> SubchatSubmission:
+        # Read the revision first. If a concurrent editor commits after this
+        # read, begin_send rejects the prepared snapshot rather than reserving
+        # resources that were never checked by backend.prepare.
+        snapshot_revision = self.store.queue_revision(submission.operation_id, owner=owner)
         submission = self.store.get(submission.operation_id, owner=owner)
         if submission.state not in {'prepared', 'queued'}:
             return submission
+        queue_revision = snapshot_revision if submission.state == 'queued' else None
         try:
             prepared = await self.backend.prepare(submission)
             identity_kind = getattr(self.backend, 'baseline_identity_kind', None)
@@ -194,18 +223,25 @@ class Subchats:
         except Exception as error:
             raise SubchatPreparationFailed(str(error)) from error
         try:
+            if auto_queue_authorized is not None and not auto_queue_authorized():
+                raise SubchatAccessError(403)
             if isinstance(prepared, SubchatPreparedSend):
                 submission = self.store.begin_send(
                     submission.operation_id, owner=owner,
                     baseline_message_ids=prepared.baseline_message_ids,
                     baseline_identity_kind=baseline_identity_kind,
                     user_message_id=prepared.user_message_id,
-                    provider_account_id=prepared.provider_account_id)
+                    provider_account_id=prepared.provider_account_id,
+                    require_auto_queue_armed=require_auto_queue_armed,
+                    expected_queue_revision=queue_revision)
             else:
                 submission = self.store.begin_send(submission.operation_id, owner=owner,
                                                    baseline_message_ids=prepared,
-                                                   baseline_identity_kind=baseline_identity_kind)
-        except SubchatConcurrentSend:
+                                                   baseline_identity_kind=baseline_identity_kind,
+                                                   require_auto_queue_armed=require_auto_queue_armed,
+                                                   expected_queue_revision=queue_revision)
+        except (SubchatAccessError, SubchatConcurrentSend, SubchatAutoQueueDisarmed,
+                SubchatQueueRevisionConflict):
             discard = getattr(self.backend, 'discard_prepared', None)
             if discard is not None:
                 try:
@@ -214,6 +250,21 @@ class Subchats:
                     logger.warning('Concurrent Subchat page cleanup failed error_type=%s',
                                    type(error).__name__)
             raise
+        except ValueError:
+            # An HTTPS cancellation may commit through another SQLite connection
+            # while browser preparation is awaiting. The send reservation then
+            # refuses the cancelled row, but the prepared page still needs cleanup.
+            current = self.store.get(submission.operation_id, owner=owner)
+            if current.state != 'cancelled':
+                raise
+            discard = getattr(self.backend, 'discard_prepared', None)
+            if discard is not None:
+                try:
+                    await discard(submission)
+                except Exception as error:
+                    logger.warning('Cancelled Subchat page cleanup failed error_type=%s',
+                                   type(error).__name__)
+            return current
         try:
             receipt = await self.backend.send(submission)
             if receipt is None:
@@ -229,9 +280,14 @@ class Subchats:
         # Browser sends and claimed HTTP generation retain an uncertain outcome
         # after cancellation; unclaimed HTTP preflight is terminalized by backend.send.
 
-    async def recover(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
+    async def recover(self, operation_id: str, *, owner: str | None,
+                      require_auto_queue_armed: bool = False,
+                      auto_queue_authorized: Callable[[], bool] | None = None
+                      ) -> SubchatSubmission:
         submission = self.store.get(operation_id, owner=owner)
         if submission.state == 'interrupted':
+            if submission.interruption_reason == 'output_limit':
+                raise SubchatOutputLimit('Provider output limit is saved; do not resend')
             raise SubchatInterrupted('Provider interruption is saved; do not resend')
         if submission.state == 'queued':
             assert submission.after_operation_id is not None
@@ -241,7 +297,10 @@ class Subchats:
                     return SubchatObservedSubmission(**submission.model_dump(),
                                                      observation=target.observation)
                 return submission
-            return await self._dispatch(submission, owner=owner)
+            return await self._dispatch(
+                submission, owner=owner,
+                require_auto_queue_armed=require_auto_queue_armed,
+                auto_queue_authorized=auto_queue_authorized)
         if submission.state in {'prepared', 'completed', 'cancelled', 'preflight_failed'}:
             return submission
         if submission.state == 'sending':
@@ -251,8 +310,10 @@ class Subchats:
             submission = self._accept(submission, receipt, owner)
         try:
             answer = await self.backend.read_answer(submission)
-        except SubchatInterrupted:
-            self.store.interrupt(operation_id, owner=owner)
+        except SubchatInterrupted as error:
+            self.store.interrupt(operation_id, owner=owner,
+                                 reason=('output_limit' if isinstance(error, SubchatOutputLimit)
+                                         else 'provider_interrupted'))
             raise
         if isinstance(answer, SubchatPendingObservation):
             if answer.operation_id != submission.operation_id:

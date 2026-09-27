@@ -21,6 +21,7 @@ from anywhere_computer.subchat import (
     SubchatBrowserClosed,
     SubchatPendingObservation,
     SubchatPreparationFailed,
+    SubchatPreview,
     SubchatReceipt,
     SubchatStaleTarget,
     SubchatUnsupported,
@@ -44,6 +45,7 @@ from .catalog import (
     observed_chat_surface,
     picker_ready,
     require_http_selection,
+    resolve_picker_label,
 )
 from .efforts import matches_effort, move_effort, snapshot
 from .http_reader import ChatHTTPReader
@@ -278,8 +280,8 @@ class BrowserSubchatBackend:
             return result
 
     async def download_image(self, operation_id: str, *,
-                             max_bytes: int) -> ImageDownload:
-        """Read one image bound to this adapter's durable Chat operation."""
+                             max_bytes: int, image_index: int | None = None) -> ImageDownload:
+        """Read a selected image bound to this adapter's durable Chat operation."""
         from ..subchat_chrome_login import chrome_http_session
         from ..subchat_http_image import download_verified_image
 
@@ -300,10 +302,12 @@ class BrowserSubchatBackend:
                 history = await self._http_reader._history_payload(
                     await self._read_context(), saved)
             return await download_verified_image(
-                saved, history, session=auth, client=client, max_bytes=max_bytes)
+                saved, history, session=auth, client=client, max_bytes=max_bytes,
+                image_index=image_index)
 
     async def download_sandbox_file(self, operation_id: str,
-                                    sandbox_link: str, *, max_bytes: int = MAX_FILE_BYTES
+                                    sandbox_link: str, *, max_bytes: int = MAX_FILE_BYTES,
+                                    offset: int = 0
                                     ) -> SandboxDownload:
         """Download a saved final-answer link with a freshly verified Chrome account."""
         from ..subchat_chrome_login import chrome_http_session
@@ -335,7 +339,7 @@ class BrowserSubchatBackend:
                 raise ValueError('A verified final answer is required for file download')
             return await download_verified_sandbox_file(
                 saved, answer, sandbox_link, session=auth, client=client,
-                max_bytes=max_bytes)
+                max_bytes=max_bytes, offset=offset)
 
     async def verify_delete_target(self, submission: SubchatSubmission) -> None:
         async with asyncio.timeout(20):
@@ -550,10 +554,12 @@ class BrowserSubchatBackend:
 
     async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
         self.validate_send_selection(submission.http_selection)
+        picker_label = submission.model
         if self.http_read:
             assert submission.http_selection is not None
-            require_http_selection(await self.http_catalog(), submission.http_selection,
-                                   model=submission.model, effort=submission.effort)
+            picker_label = require_http_selection(
+                await self.http_catalog(), submission.http_selection,
+                model=submission.model, effort=submission.effort)
         if submission.resources is not None and not self.http_read:
             raise ValueError('Resource sends require HTTP history verification')
         url = self._url(submission)
@@ -571,7 +577,8 @@ class BrowserSubchatBackend:
         previous_kind = self._prepared_baseline_kinds.pop(submission.operation_id, None)
         self.pages[submission.operation_id] = page
         try:
-            baseline = await self._prepare_page(page, submission, url, reused=bool(candidates))
+            baseline = await self._prepare_page(page, submission, url, reused=bool(candidates),
+                                                picker_label=picker_label)
             self._preparation_touched_pages.discard(page)
             return baseline
         except BaseException:
@@ -593,7 +600,7 @@ class BrowserSubchatBackend:
             raise
 
     async def _prepare_page(self, page: Page, submission: SubchatSubmission,
-                            url: str, *, reused: bool) -> tuple[str, ...]:
+                            url: str, *, reused: bool, picker_label: str) -> tuple[str, ...]:
         page.set_default_timeout(15_000)
         if not reused:
             response = await page.goto(url, wait_until='domcontentloaded')
@@ -610,10 +617,18 @@ class BrowserSubchatBackend:
         if not isinstance(models, list):
             raise ValueError('Model list is unavailable')
         choices = [model for model in models if isinstance(model, dict)
-                   and model.get('label') == submission.model and model.get('disabled') is False]
+                   and model.get('label') == picker_label and model.get('disabled') is False]
+        if submission.http_selection is not None:
+            picker_label = resolve_picker_label(
+                models, version_label=picker_label,
+                version_id=submission.http_selection.version_id,
+                model_title=submission.model)
+            choices = [model for model in models if isinstance(model, dict)
+                       and model.get('label') == picker_label
+                       and model.get('disabled') is False]
         if len(choices) != 1:
             raise ValueError('Requested model is not available in the observed menu')
-        await self._click(page.get_by_role('menuitemradio', name=submission.model, exact=True))
+        await self._click(page.get_by_role('menuitemradio', name=picker_label, exact=True))
         await page.locator(CONTROL).wait_for(state='visible')
         # Use verified arrow steps; custom sliders need not implement Home.
         async def read_effort() -> dict[str, object]:
@@ -637,7 +652,7 @@ class BrowserSubchatBackend:
         if (not isinstance(selected_models, list)
                 or [model.get('label') for model in selected_models
                     if isinstance(model, dict) and model.get('selected') is True]
-                != [submission.model]):
+                != [picker_label]):
             raise ValueError('Selected model changed')
         await self._press(page.get_by_role('menu'), 'Escape')
         await self._wait_for_composer(page, submission)
@@ -1015,6 +1030,16 @@ class BrowserSubchatBackend:
             return None
         return SubchatReceipt(conversation_id=match[1],
                               user_message_id=observed['user_message_id'], prompt=submission.prompt)
+
+    async def preview(self, submission: SubchatSubmission) -> SubchatPreview | None:
+        if not self.http_read:
+            raise SubchatUnsupported('http_history_required')
+        if (submission.conversation_id is None or submission.user_message_id is None
+                or CHAT.fullmatch('https://chatgpt.com/c/'
+                                  + submission.conversation_id) is None):
+            return None
+        async with asyncio.timeout(20):
+            return await self._http_reader.preview(await self._read_context(), submission)
 
     async def read_answer(self, submission: SubchatSubmission
                           ) -> SubchatAnswer | SubchatPendingObservation | None:

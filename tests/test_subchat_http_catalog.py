@@ -5,7 +5,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from anywhere_computer.subchat_browser.catalog import project_http_catalog
+from anywhere_computer.subchat_browser.catalog import (
+    compare_http_and_ui_catalog,
+    decode_choice_id,
+    project_http_catalog,
+)
 
 
 @pytest.mark.parametrize('phase', ['browser', 'page'])
@@ -60,9 +64,182 @@ def test_dynamic_catalog_excludes_work_and_preserves_unavailable_choices():
     assert choice['selected_display_version'] == 'Future generation'
     assert choice['available'] is True
     assert result['submitted'] is False and result['send_requires_ui_labels'] is True
+    selected, model, effort = decode_choice_id(choice['choice_id'])
+    assert selected.model_dump() == choice['http_selection']
+    assert (model, effort) == ('Future Chat', 'Future effort')
     payload['versions'][0]['enabled'] = False
     assert not project_http_catalog(json.dumps(payload).encode())['versions'][0]['choices'][0][
         'available']
+
+
+def test_latest_pro_uses_catalog_version_picker_label_not_wire_model_title():
+    from anywhere_computer.subchat_browser.catalog import require_http_selection
+    from anywhere_computer.subchat_state import SubchatHTTPSelection
+
+    payload = catalog()
+    payload['models'][0]['slug'] = 'gpt-6-pro'
+    payload['models'][0]['title'] = 'GPT-6 Pro'
+    payload['versions'][0]['id'] = 'latest'
+    payload['versions'][0]['display_text'] = '最新'
+    payload['versions'][0]['intelligence_presets'][0].update({
+        'id': 3, 'title': 'Pro', 'model_slug': 'gpt-6-pro', 'thinking_effort': None,
+    })
+    observed = project_http_catalog(json.dumps(payload).encode())
+    choice = observed['versions'][0]['choices'][0]
+    assert choice['available'] is True
+    assert choice['availability_basis'] == 'authenticated_http_catalog'
+    assert choice['generation_sendability'] == 'unknown'
+    selection = SubchatHTTPSelection.model_validate(choice['http_selection'])
+    assert require_http_selection(observed, selection, model='GPT-6 Pro',
+                                  effort='Pro') == '最新'
+
+
+def test_catalog_comparison_keeps_ui_pickability_separate_from_generation():
+    payload = catalog()
+    projected = project_http_catalog(json.dumps(payload).encode())
+    version = projected['versions'][0]
+    ui = {'state': 'catalog_partial', 'models': [
+        {'label': version['label'], 'disabled': False},
+    ]}
+    matched = compare_http_and_ui_catalog(projected, ui)
+    choice = matched['versions'][0]['choices'][0]
+    assert choice['ui_picker_status'] == 'selectable_row_observed'
+    assert choice['ui_picker_label'] == version['label']
+    assert choice['generation_sendability'] == 'unknown'
+    assert matched['generation_http_verified'] is False
+    missing = compare_http_and_ui_catalog(projected, {'state': 'catalog_partial',
+        'models': [{'label': version['label'], 'disabled': True}]})
+    assert missing['versions'][0]['choices'][0]['ui_picker_status'] == 'not_confirmed'
+    unavailable = compare_http_and_ui_catalog(projected,
+                                               {'state': 'catalog_unavailable'})
+    assert unavailable['versions'][0]['choices'][0]['ui_picker_status'] == 'unknown'
+
+
+def test_pro_choice_cannot_use_same_version_sol_picker_row():
+    from anywhere_computer.subchat_browser.catalog import resolve_picker_label
+
+    rows = [{'label': 'GPT-5.6 Sol', 'disabled': False}]
+    with pytest.raises(ValueError, match='not available'):
+        resolve_picker_label(rows, version_label='5.6', version_id='5.6',
+                             model_title='GPT-5.6 Pro')
+    assert resolve_picker_label(rows, version_label='5.6', version_id='5.6',
+                                model_title='GPT-5.6 Sol') == 'GPT-5.6 Sol'
+    rows.append({'label': 'GPT-5.6 Pro', 'disabled': False})
+    assert resolve_picker_label(rows, version_label='5.6', version_id='5.6',
+                                model_title='GPT-5.6 Pro') == 'GPT-5.6 Pro'
+
+
+async def test_subchat_catalog_compare_reads_both_without_sending(tmp_path):
+    from anywhere_computer.models import Request
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_mcp import session
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    async def forbidden():
+        pytest.fail('Comparison must use the explicit catalog observations')
+
+    payload = catalog()
+    http = project_http_catalog(json.dumps(payload).encode())
+    version_label = http['versions'][0]['label']
+    calls: list[str] = []
+
+    async def observed_http():
+        calls.append('http')
+        return http
+
+    async def observed_ui(model):
+        assert model is None
+        calls.append('ui')
+        return {'state': 'catalog_partial', 'models': [
+            {'label': version_label, 'disabled': False}], 'submitted': False}
+
+    ledger = Ledger(tmp_path)
+    try:
+        backend = BrowserSubchatBackend(forbidden, http_read=True)
+        backend.http_catalog = observed_http
+        backend.catalog = observed_ui
+        controller = session(Subchats(SubchatSubmissions(ledger.connection), backend),
+                             observe_catalog=observed_ui,
+                             observe_http_catalog=observed_http)
+        try:
+            reply = await controller.execute(Request(
+                operation_id='a' * 32, tool='subchat_catalog',
+                arguments={'source': 'compare'}))
+            assert reply.state == 'completed', reply
+            assert calls == ['http', 'ui']
+            assert reply.data['versions'][0]['choices'][0]['ui_picker_status'] == (
+                'selectable_row_observed')
+            assert reply.data['generation_http_verified'] is False
+        finally:
+            await controller.close()
+    finally:
+        ledger.close()
+
+
+def test_pro_moved_to_explicit_version_uses_current_version_label():
+    from anywhere_computer.subchat_browser.catalog import require_http_selection
+    from anywhere_computer.subchat_state import SubchatHTTPSelection
+
+    payload = catalog()
+    payload['models'][0].update(slug='gpt-6-pro', title='GPT-6 Pro')
+    payload['versions'][0].update(id='6', display_text='GPT-6')
+    payload['versions'][0]['intelligence_presets'][0].update(
+        id=19, title='Pro', model_slug='gpt-6-pro', thinking_effort=None)
+    observed = project_http_catalog(json.dumps(payload).encode())
+    selected = SubchatHTTPSelection.model_validate(
+        observed['versions'][0]['choices'][0]['http_selection'])
+    assert require_http_selection(observed, selected, model='GPT-6 Pro',
+                                  effort='Pro') == 'GPT-6'
+
+
+def test_stale_latest_choice_is_rejected_after_pro_moves():
+    from anywhere_computer.subchat_browser.catalog import require_http_selection
+    from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSelectionError
+
+    payload = catalog()
+    payload['models'][0].update(slug='gpt-6-pro', title='GPT-6 Pro')
+    payload['versions'][0].update(id='latest', display_text='最新')
+    payload['versions'][0]['intelligence_presets'][0].update(
+        id=3, title='Pro', model_slug='gpt-6-pro', thinking_effort=None)
+    stale = SubchatHTTPSelection.model_validate(project_http_catalog(
+        json.dumps(payload).encode())['versions'][0]['choices'][0]['http_selection'])
+    payload['versions'][0]['intelligence_presets'][0].update(
+        model_slug='gpt-7-pro')
+    payload['models'].append({'slug': 'gpt-7-pro', 'title': 'GPT-7 Pro',
+                              'is_work_mode_model': False})
+    payload['versions'].append({**payload['versions'][0], 'id': '6',
+                                'display_text': 'GPT-6',
+                                'intelligence_presets': [{**payload['versions'][0][
+                                    'intelligence_presets'][0], 'model_slug': 'gpt-6-pro'}]})
+    fresh = project_http_catalog(json.dumps(payload).encode())
+    with pytest.raises(SubchatSelectionError) as error:
+        require_http_selection(fresh, stale, model='GPT-6 Pro', effort='Pro')
+    assert (error.value.field, error.value.reason) == ('model_slug', 'mismatch')
+
+
+def test_picker_resolves_localized_version_row_and_rejects_ambiguity():
+    from anywhere_computer.subchat_browser.catalog import resolve_picker_label
+
+    rows = [{'label': name, 'disabled': False} for name in
+            ('最新', 'GPT-5.6 Sol', 'GPT-5.5', 'GPT-6')]
+    assert resolve_picker_label(rows, version_label='最新', version_id='latest',
+                                model_title='GPT-6 Pro') == '最新'
+    with pytest.raises(ValueError, match='not available'):
+        resolve_picker_label(rows, version_label='5.6', version_id='5.6',
+                             model_title='GPT-5.6 Pro')
+    assert resolve_picker_label(rows, version_label='6', version_id='6',
+                                model_title='GPT-6 Pro') == 'GPT-6'
+    with pytest.raises(ValueError, match='not available'):
+        resolve_picker_label(rows + [{'label': 'GPT-6 Thinking', 'disabled': False}],
+                             version_label='6', version_id='6', model_title='GPT-6 Pro')
+
+
+@pytest.mark.parametrize('choice_id', ['ac1.', 'ac1.bad!', 'ac1.W10', 'other', 'ac1.' + 'x' * 8192])
+def test_invalid_choice_id_rejected_without_guessing(choice_id):
+    with pytest.raises(ValueError, match='choice ID'):
+        decode_choice_id(choice_id)
 
 
 @pytest.mark.parametrize('change', ['duplicate_model', 'duplicate_version', 'duplicate_preset',

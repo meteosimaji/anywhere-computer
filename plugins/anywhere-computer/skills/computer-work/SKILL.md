@@ -229,9 +229,11 @@ not prove command failure or permit resending input. For commands within a shell
 use an explicit completion marker containing that command's captured exit status,
 or inspect the intended postcondition. New output alone is not completion evidence.
 
-The local connector and authorized alpha9 HTTP gateway provide devices_list,
-devices_tools and devices_call. Check the current catalog, then list registered
-devices, then obtain the selected device's authorized tool schemas with devices_tools.
+The local connector and authorized HTTP gateway provide devices_list,
+devices_probe, devices_tools and devices_call. Check the current catalog, then list
+registered devices. Use devices_probe for a fresh status observation on one
+registered remote device before relying on cached availability, then obtain its
+current authorized tool schemas with devices_tools.
 Pass its explicit device_id, tool and arguments to devices_call. The reserved local ID
 addresses this connector's local agent; ordinary tools still operate locally. A cached
 ready observation is not a fresh connection check. Never infer the target from a device name.

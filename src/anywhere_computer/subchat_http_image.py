@@ -41,6 +41,8 @@ class ImageDownload:
     height: int
     content: bytes
     submission_state: str
+    image_index: int
+    image_count: int
 
 
 def _image_dimensions(content: bytes, mime_type: str) -> tuple[int, int]:
@@ -140,8 +142,9 @@ def _image_dimensions(content: bytes, mime_type: str) -> tuple[int, int]:
 
 async def download_verified_image(saved: SubchatSubmission, history_payload: bytes, *,
                                   session: ObservedHTTPSession, client: httpx.AsyncClient,
-                                  max_bytes: int = MAX_IMAGE_BYTES) -> ImageDownload:
-    """Resolve only the one image in the saved input's finished tool result."""
+                                  max_bytes: int = MAX_IMAGE_BYTES,
+                                  image_index: int | None = None) -> ImageDownload:
+    """Resolve an explicitly selected image from the saved input's finished turn."""
     if type(max_bytes) is not int or not 1 <= max_bytes <= MAX_IMAGE_BYTES:
         raise ValueError('Invalid image byte limit')
     if (saved.state not in {'submitted', 'completed'} or saved.provider_account_id is None
@@ -184,9 +187,15 @@ async def download_verified_image(saved: SubchatSubmission, history_payload: byt
                      if message.id == observation.answer_message_id)
     images = (*bound_tool_images(history, user, before=final),
               *(bound_final_images(final) if final is not None else ()))
-    if len(images) != 1:
-        raise ValueError('Exactly one bound image is required')
-    image = images[0]
+    if not images:
+        raise ValueError('No bound image is available')
+    if image_index is None:
+        if len(images) != 1:
+            raise ValueError('Select an image_index for a turn with multiple images')
+        image_index = 0
+    if type(image_index) is not int or not 0 <= image_index < len(images):
+        raise ValueError('Image index is out of range')
+    image = images[image_index]
     mime = image.mime_type
     size = image.size_bytes
     width = image.width
@@ -243,4 +252,5 @@ async def download_verified_image(saved: SubchatSubmission, history_payload: byt
     actual_width, actual_height = _image_dimensions(bytes(content), mime)
     if (actual_width, actual_height) != (width, height):
         raise ValueError('Chat image dimensions do not match history')
-    return ImageDownload(mime, size, width, height, bytes(content), saved.state)
+    return ImageDownload(mime, size, width, height, bytes(content), saved.state,
+                         image_index, len(images))

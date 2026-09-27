@@ -7,14 +7,27 @@ import secrets
 import stat
 import sys
 import tempfile
+from contextlib import nullcontext
 from pathlib import Path
 
 from .mcp_server import serve_stdio
 from .peer_mailbox import Peer, PeerMailbox
 from .peer_mcp import session
+from .private_file import (
+    create_windows_private_file,
+    link_windows_private_file,
+    require_windows_credential_path,
+    validate_windows_private_file,
+)
+from .upload_win32 import pin_directory
 
 
-def _credential(path: Path) -> str:
+def _credential(path: Path, directory: Path | None = None) -> str:
+    if sys.platform == "win32":
+        if directory is None:
+            raise ValueError("Windows peer credentials require a state directory")
+        require_windows_credential_path(directory, path)
+        validate_windows_private_file(path)
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode):
         raise ValueError("Peer credential must be a regular file")
@@ -29,38 +42,61 @@ def _credential(path: Path) -> str:
     return value
 
 
-def _publish_credential(path: Path) -> str:
+def _publish_credential(path: Path, directory: Path | None = None) -> str:
+    if sys.platform == "win32":
+        if directory is None:
+            raise ValueError("Windows peer credentials require a state directory")
+        require_windows_credential_path(directory, path)
     token = secrets.token_urlsafe(32)
     staged: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="ascii", dir=path.parent, prefix=".peer-", delete=False,
-        ) as output:
-            staged = Path(output.name)
-            os.chmod(staged, 0o600)
-            output.write(token + "\n")
-            output.flush()
-            os.fsync(output.fileno())
+    guard = pin_directory(path.parent) if sys.platform == "win32" else nullcontext()
+    with guard:
         try:
-            os.link(staged, path)
-        except FileExistsError:
-            token = _credential(path)
-        else:
-            if os.name != "nt":
-                directory_fd = os.open(path.parent, os.O_RDONLY)
+            if sys.platform == "win32":
+                staged = path.parent / (".peer-" + secrets.token_hex(16))
+                descriptor = create_windows_private_file(staged)
+                output_context = os.fdopen(descriptor, "w", encoding="ascii")
+            else:
+                output_context = tempfile.NamedTemporaryFile(
+                    mode="w", encoding="ascii", dir=path.parent, prefix=".peer-",
+                    delete=False,
+                )
+                staged = Path(output_context.name)
+            with output_context as output:
+                if sys.platform == "win32":
+                    validate_windows_private_file(staged)
+                else:
+                    os.chmod(staged, 0o600)
+                output.write(token + "\n")
+                output.flush()
+                os.fsync(output.fileno())
+                if sys.platform == "win32":
+                    try:
+                        link_windows_private_file(output.fileno(), path)
+                    except FileExistsError:
+                        token = _credential(path, directory)
+            if sys.platform != "win32":
                 try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
-        return token
-    finally:
-        if staged is not None:
-            staged.unlink(missing_ok=True)
+                    os.link(staged, path)
+                except FileExistsError:
+                    token = _credential(path, directory)
+                else:
+                    directory_fd = os.open(path.parent, os.O_RDONLY)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
+            return token
+        finally:
+            if staged is not None:
+                staged.unlink(missing_ok=True)
 
 
-async def _serve(directory: Path, credential_file: Path) -> None:
-    token = _credential(credential_file)
+async def _serve(directory: Path, credential_file: Path, *,
+                 session_id: str | None = None, thread_id: str | None = None) -> None:
+    token = _credential(credential_file, directory)
     with PeerMailbox(directory) as mailbox:
+        mailbox.bind(session_id=session_id, thread_id=thread_id)
         server = session(mailbox, token)
         mailbox.heartbeat(token)
 
@@ -70,11 +106,26 @@ async def _serve(directory: Path, credential_file: Path) -> None:
                 mailbox.heartbeat(token)
 
         task = asyncio.create_task(renew())
+        serving = asyncio.create_task(serve_stdio(server, sys.stdin.buffer,
+                                                  sys.stdout.buffer))
         try:
-            await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
+            done, _ = await asyncio.wait({task, serving}, return_when=asyncio.FIRST_COMPLETED)
+            if task in done:
+                # A failed lease renewal must not leave a running server that
+                # appears to accept messages while its presence has expired.
+                # The stdio reader uses a blocking thread; cancelling its
+                # coroutine does not interrupt a silent connected pipe.
+                failure = task.exception()
+                if failure is not None:
+                    print("Peer presence renewal failed; stopping server", file=sys.stderr,
+                          flush=True)
+                    os._exit(1)
+            if serving in done:
+                serving.result()
         finally:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            serving.cancel()
+            await asyncio.gather(task, serving, return_exceptions=True)
             mailbox.disconnect(token)
 
 
@@ -88,12 +139,15 @@ def main() -> None:
     enroll.add_argument("--credential-file", type=Path, required=True)
     serve = commands.add_parser("serve", help="Serve peer tools over MCP stdio")
     serve.add_argument("--credential-file", type=Path, required=True)
+    serve.add_argument("--session-id", help="Host session label claimed by this MCP process")
+    serve.add_argument("--thread-id", help="Host thread label claimed by this MCP process")
     args = parser.parse_args()
     directory: Path = args.state_dir
     if not directory.is_absolute():
         parser.error("--state-dir must be absolute")
     if args.command == "serve":
-        asyncio.run(_serve(directory, args.credential_file))
+        asyncio.run(_serve(directory, args.credential_file,
+                           session_id=args.session_id, thread_id=args.thread_id))
         return
     path: Path = args.credential_file
     if not path.is_absolute():
@@ -102,7 +156,7 @@ def main() -> None:
     # Stage complete bytes on the same filesystem and publish with an exclusive
     # hard link. A crash before publication leaves no partial final credential;
     # a crash after publication can be reconciled by rerunning enrollment.
-    token = _publish_credential(path)
+    token = _publish_credential(path, directory)
     with PeerMailbox(directory) as mailbox:
         mailbox.enroll(peer, credential=token)
     print(path)

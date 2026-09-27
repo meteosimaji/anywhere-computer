@@ -30,11 +30,12 @@ def test_observed_gpt56_instant_browser_model_alias(version_id, model):
             generation_input(json.dumps({**body, **changed}), submission)
 
 
-def test_observed_latest_pro_browser_effort_alias():
+@pytest.mark.parametrize(('version_id', 'preset_id'), [('latest', 3), ('6', 19)])
+def test_observed_pro_browser_effort_alias(version_id, preset_id):
     submission = SubchatSubmission(
         operation_id='b' * 32, prompt='test', model='GPT-6 Pro', effort='Pro',
         http_selection=SubchatHTTPSelection(
-            version_id='latest', preset_id=3, model_slug='gpt-6-pro',
+            version_id=version_id, preset_id=preset_id, model_slug='gpt-6-pro',
             thinking_effort=None),
     )
     body = {'action': 'next', 'model': 'gpt-6-pro', 'thinking_effort': 'standard',

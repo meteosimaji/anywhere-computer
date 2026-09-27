@@ -19,6 +19,7 @@ from .subchat import (
     SubchatAnswer,
     SubchatPendingObservation,
     SubchatPreparedSend,
+    SubchatPreview,
     SubchatReceipt,
     SubchatUnsupported,
 )
@@ -355,6 +356,11 @@ class HTTPOnlySubchatBackend:
                     return await reader.receipt(None, submission)
 
             receipt = await self._authenticated_read(read)
+        except (SubchatAccessError, SubchatAccountMismatch):
+            if self._generation is not None and self._store is not None:
+                self._store.record_http_event(submission.operation_id, 'history_failed',
+                                              owner=self._owner)
+            raise
         except Exception:
             if self._generation is not None and self._store is not None:
                 self._store.record_http_event(submission.operation_id, 'history_failed',
@@ -377,6 +383,11 @@ class HTTPOnlySubchatBackend:
                     return await reader.history(None, submission)
 
             answer = await self._authenticated_read(read)
+        except (SubchatAccessError, SubchatAccountMismatch):
+            if self._generation is not None and self._store is not None:
+                self._store.record_http_event(submission.operation_id, 'history_failed',
+                                              owner=self._owner)
+            raise
         except Exception:
             if self._generation is not None and self._store is not None:
                 self._store.record_http_event(submission.operation_id, 'history_failed',
@@ -387,6 +398,16 @@ class HTTPOnlySubchatBackend:
             self._store.record_http_event(submission.operation_id, 'history_unknown',
                                           owner=self._owner)
         return answer
+
+    async def preview(self, submission: SubchatSubmission) -> SubchatPreview | None:
+        if not self._has_identity(submission):
+            return None
+
+        async def read() -> SubchatPreview | None:
+            async with asyncio.timeout(20):
+                return await self._http_reader.preview(None, submission)
+
+        return await self._authenticated_read(read)
 
     async def verify_delete_target(self, submission: SubchatSubmission) -> None:
         if not self._has_identity(submission):
@@ -399,7 +420,8 @@ class HTTPOnlySubchatBackend:
             return await self._http_reader.patch_delete(None, submission)
 
     async def download_sandbox_file(self, operation_id: str,
-                                    sandbox_link: str, *, max_bytes: int = MAX_FILE_BYTES
+                                    sandbox_link: str, *, max_bytes: int = MAX_FILE_BYTES,
+                                    offset: int = 0
                                     ) -> SandboxDownload:
         """Download one file from a saved, history-verified final answer."""
         from .subchat_http_download import download_verified_sandbox_file
@@ -426,13 +448,14 @@ class HTTPOnlySubchatBackend:
                 saved, answer, sandbox_link,
                 session=(session.model_copy(update={'cookie': None})
                          if session.cookie is not None and not self._chrome_login else session),
-                client=await request_factory(), max_bytes=max_bytes)
+                client=await request_factory(), max_bytes=max_bytes, offset=offset)
 
         return await self._authenticated_read(read)
 
-    async def download_image(self, operation_id: str, *, max_bytes: int
+    async def download_image(self, operation_id: str, *, max_bytes: int,
+                             image_index: int | None = None
                              ) -> ImageDownload:
-        """Read one history-bound image tool result, including before final text."""
+        """Read a selected history-bound image, including before final text."""
         from .subchat_http_image import download_verified_image
 
         if self._store is None or self._session is None:
@@ -456,6 +479,7 @@ class HTTPOnlySubchatBackend:
                 saved, history_payload,
                 session=(session.model_copy(update={'cookie': None})
                          if session.cookie is not None and not self._chrome_login else session),
-                client=await request_factory(), max_bytes=max_bytes)
+                client=await request_factory(), max_bytes=max_bytes,
+                image_index=image_index)
 
         return await self._authenticated_read(read)

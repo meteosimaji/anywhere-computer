@@ -322,8 +322,7 @@ async def test_cancel_during_preparation_prevents_dispatch_and_survives_restart(
             store.cancel(message, owner='other')
         assert store.cancel(message, owner='peer').state == 'cancelled'
         release.set()
-        with pytest.raises(ValueError, match='without resending'):
-            await task
+        assert (await task).state == 'cancelled'
         assert provider.sends == []
     finally:
         release.set()

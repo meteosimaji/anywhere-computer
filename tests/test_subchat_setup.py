@@ -14,7 +14,12 @@ import playwright.async_api
 import pytest
 from test_subchat_chrome_profile import profile_fixture
 
-from anywhere_computer import subchat_chrome_login, subchat_chrome_profile, subchat_setup
+from anywhere_computer import (
+    subchat_chrome_login,
+    subchat_chrome_profile,
+    subchat_plugin,
+    subchat_setup,
+)
 from anywhere_computer.http_service import HTTPServiceConfig, load_http_config
 from anywhere_computer.locking import ProcessLock
 from anywhere_computer.private_directory import create_private_directory
@@ -62,6 +67,89 @@ def test_inspect_then_select_pins_only_verified_account_without_send(tmp_path, m
     subchat_setup.main(["select", str(source), "--expect-account-id", "account-a",
                         "--enable-background-send"])
     assert json.loads(selection.read_text())["enable_background_send"] is True
+
+
+@pytest.mark.skipif(sys.platform != "darwin",
+                    reason="Existing Chrome login selection is macOS-only")
+def test_doctor_checks_selected_account_without_sending(tmp_path, monkeypatch, capsys):
+    source = tmp_path / 'Chrome' / 'Default'
+    source.mkdir(parents=True)
+    state = tmp_path / 'subchat' / 'ledger'
+    state.parent.mkdir(parents=True)
+    monkeypatch.setattr(subchat_setup, 'plugin_paths', lambda: (tmp_path / 'login', state))
+    monkeypatch.setattr(subchat_setup.sys, 'platform', 'darwin')
+    observed = []
+
+    async def inspect(selected):
+        observed.append(selected)
+        return 'account-a'
+
+    monkeypatch.setattr(subchat_setup, 'inspect_account', inspect)
+    subchat_setup.main(['doctor'])
+    missing = json.loads(capsys.readouterr().out)
+    assert missing['selection'] == 'missing'
+    assert missing['tool_groups'] == ['saved_state']
+    selection = state.parent / 'login-selection.json'
+    selection.write_text(json.dumps({'chrome_profile_id': 'Default',
+                                     'expected_account_id': 'account-a',
+                                     'enable_background_send': True}))
+    selection.chmod(0o600)
+    subchat_setup.main(['doctor'])
+    ready = json.loads(capsys.readouterr().out)
+    assert ready == {'selection': 'configured', 'account': 'matched',
+                     'authenticated_read': True, 'background_send': True,
+                     'tool_groups': ['saved_state', 'authenticated_read', 'background_send'],
+                     'tool_catalog': 'not_observed'}
+    assert observed == [source]
+
+    monkeypatch.setenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT', 'http-read-only')
+    subchat_setup.main(['doctor'])
+    read_only = json.loads(capsys.readouterr().out)
+    assert read_only['account'] == 'matched'
+    assert read_only['background_send'] is False
+    assert read_only['tool_groups'] == ['saved_state', 'authenticated_read']
+    monkeypatch.delenv('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT')
+
+    async def other_account(_selected):
+        return 'account-b'
+
+    monkeypatch.setattr(subchat_setup, 'inspect_account', other_account)
+    subchat_setup.main(['doctor'])
+    mismatch = json.loads(capsys.readouterr().out)
+    assert mismatch['account'] == 'mismatch'
+    assert mismatch['background_send'] is False
+    assert mismatch['tool_groups'] == ['saved_state']
+
+
+def test_doctor_checks_dedicated_profile_binding(tmp_path, monkeypatch, capsys):
+    profile = tmp_path / 'edge-login'
+    state = tmp_path / 'ledger'
+    state.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(subchat_setup.sys, 'platform', 'win32')
+    monkeypatch.setattr(subchat_setup, 'plugin_paths', lambda: (profile, state))
+    monkeypatch.setattr(subchat_setup, 'selected_browser_channel', lambda _state: 'msedge')
+    selection = state.parent / 'login-selection.json'
+    selection.write_text(json.dumps({
+        'dedicated_browser_channel': 'msedge',
+        'dedicated_profile': str(tmp_path / 'other-profile'),
+        'expected_account_id': 'account-a', 'enable_background_send': True}))
+    with pytest.raises(SystemExit, match='Dedicated profile differs'):
+        subchat_setup.main(['doctor'])
+
+    selection.write_text(json.dumps({
+        'dedicated_browser_channel': 'msedge',
+        'dedicated_profile': str(profile),
+        'expected_account_id': 'account-a', 'enable_background_send': True}))
+    observed = []
+
+    async def inspect(selected, channel):
+        observed.append((selected, channel))
+        return 'account-a'
+
+    monkeypatch.setattr(subchat_setup, 'inspect_dedicated_account', inspect)
+    subchat_setup.main(['doctor'])
+    assert json.loads(capsys.readouterr().out)['background_send'] is True
+    assert observed == [(profile, 'msedge')]
 
 
 def test_windows_dedicated_setup_reports_account_without_enabling_send(
@@ -292,6 +380,51 @@ def test_discover_choose_and_revoke_profile_id(tmp_path, monkeypatch, capsys):
     with pytest.raises(SystemExit, match="different Chat account"):
         subchat_setup.main(["choose", "Profile 2", "--expect-account-id", "account-a"])
     assert not (state.parent / "login-selection.json").exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="Named Chrome login selection is macOS-only")
+def test_named_profiles_require_confirmed_account_and_preserve_active_selection(
+    tmp_path, monkeypatch, capsys,
+):
+    root = tmp_path / "Chrome"
+    for name in ("Default", "Profile 2"):
+        (root / name).mkdir(parents=True)
+    state = tmp_path / "subchat" / "ledger"
+    monkeypatch.setattr(subchat_setup.sys, "platform", "darwin")
+    monkeypatch.setattr(subchat_chrome_profile, "chrome_user_data_root", lambda: root)
+    monkeypatch.setattr(subchat_setup, "chrome_user_data_root", lambda: root)
+    monkeypatch.setattr(subchat_setup, "plugin_paths", lambda: (tmp_path / "login", state))
+    accounts = {"Default": "account-a", "Profile 2": "account-b"}
+
+    async def inspect(source):
+        return accounts[source.name]
+
+    monkeypatch.setattr(subchat_setup, "inspect_account", inspect)
+    subchat_setup.main(["choose", "Default", "--expect-account-id", "account-a"])
+    subchat_setup.main(["save-named", "--name", "first"])
+    subchat_setup.main(["choose", "Profile 2", "--expect-account-id", "account-b",
+                        "--enable-background-send"])
+    subchat_setup.main(["save-named", "--name", "second"])
+    active = (state.parent / "login-selection.json").read_bytes()
+    with pytest.raises(SystemExit, match="differs from confirmation"):
+        subchat_setup.main(["use-named", "--name", "first",
+                            "--expect-account-id", "account-b"])
+    assert (state.parent / "login-selection.json").read_bytes() == active
+    accounts["Default"] = "account-c"
+    with pytest.raises(SystemExit, match="different Chat account"):
+        subchat_setup.main(["use-named", "--name", "first",
+                            "--expect-account-id", "account-a"])
+    assert (state.parent / "login-selection.json").read_bytes() == active
+    accounts["Default"] = "account-a"
+    subchat_setup.main(["use-named", "--name", "first",
+                        "--expect-account-id", "account-a"])
+    assert json.loads(capsys.readouterr().out.splitlines()[-1])["restart_required"] is True
+    assert subchat_plugin._selection_record(state)["expected_account_id"] == "account-a"
+    assert subchat_plugin._selection_record(state)["enable_background_send"] is False
+    named = state.parent / "named-login-selections.json"
+    assert stat.S_IMODE(named.stat().st_mode) == 0o600
+    subchat_setup.main(["list-named"])
+    assert len(json.loads(capsys.readouterr().out)["profiles"]) == 2
     with pytest.raises(SystemExit, match="Select Chrome Default or Profile N"):
         subchat_setup.main(["choose", str(root / "Default"),
                             "--expect-account-id", "account-a"])

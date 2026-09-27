@@ -3,15 +3,53 @@ import json
 import sqlite3
 
 import pytest
+from pydantic import ValidationError
 
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat_state import (
     SubchatAccountMismatch,
     SubchatConcurrentSend,
     SubchatList,
+    SubchatOperationNotFound,
+    SubchatQueueRevisionConflict,
     SubchatRequestConflict,
     SubchatSubmissions,
 )
+
+
+def test_queued_model_revision_blocks_stale_prepare_and_post_send_change(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    parent, child = '1' * 32, '2' * 32
+    try:
+        store.prepare(parent, 'parent', 'old', 'effort', owner='peer',
+                      conversation_id='conversation')
+        store.begin_send(parent, owner='peer', user_message_id='user',
+                         provider_account_id='account')
+        store.submitted(parent, 'conversation', 'user', owner='peer')
+        store.complete(parent, 'answer', 'done', owner='peer')
+        store.prepare(child, 'child', 'old', 'effort', owner='peer',
+                      conversation_id='conversation', after_operation_id=parent)
+        assert store.queue_revision(child, owner='peer') == 0
+        with pytest.raises(SubchatOperationNotFound):
+            store.change_queued_model(child, owner='other', expected_revision=0,
+                                      model='new', effort='effort', http_selection=None)
+        updated, revision = store.change_queued_model(
+            child, owner='peer', expected_revision=0, model='new',
+            effort='more', http_selection=None)
+        assert (updated.model, updated.effort, revision) == ('new', 'more', 1)
+        assert store.prepare(child, 'child', 'old', 'effort', owner='peer',
+                             conversation_id='conversation',
+                             after_operation_id=parent).model == 'new'
+        with pytest.raises(SubchatQueueRevisionConflict):
+            store.begin_send(child, owner='peer', expected_queue_revision=0)
+        assert store.get(child, owner='peer').state == 'queued'
+        store.begin_send(child, owner='peer', expected_queue_revision=1)
+        with pytest.raises(ValueError, match='Only a queued'):
+            store.change_queued_model(child, owner='peer', expected_revision=1,
+                                      model='other', effort='effort', http_selection=None)
+    finally:
+        ledger.close()
 
 
 def test_explicit_send_intent_survives_restart_and_rejects_changed_input(tmp_path):
@@ -43,6 +81,37 @@ def test_explicit_send_intent_survives_restart_and_rejects_changed_input(tmp_pat
         assert len(store.list(SubchatList(), owner='peer').submissions) == 1
     finally:
         ledger.close()
+
+
+def test_list_creation_time_and_opt_in_prompt_preview_preserve_owner_boundary(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        operation = '8' * 32
+        prompt = '秘密の依頼' + 'あ' * 200
+        store.prepare(operation, prompt, 'model', 'effort', owner='peer')
+        store.prepare('9' * 32, 'other owner', 'model', 'effort', owner='other')
+        default = store.list(SubchatList(), owner='peer')
+        assert [item.operation_id for item in default.submissions] == [operation]
+        assert default.submissions[0].created_at is not None
+        assert default.submissions[0].prompt_preview is None
+        explicit = store.list(SubchatList(include_prompt_preview=True), owner='peer')
+        assert explicit.submissions[0].prompt_preview == prompt[:160]
+        first_time = explicit.submissions[0].created_at
+        store.prepare(operation, prompt, 'model', 'effort', owner='peer')
+        assert store.list(SubchatList(), owner='peer').submissions[0].created_at == first_time
+        ledger.connection.execute('DELETE FROM subchat_created_at WHERE operation_id=?',
+                                  (operation,))
+        legacy = store.list(SubchatList(), owner='peer').submissions[0]
+        assert legacy.created_at is None
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('coerced_true', ['yes', 'true', '1', 1])
+def test_prompt_preview_requires_explicit_json_boolean(coerced_true):
+    with pytest.raises(ValidationError):
+        SubchatList.model_validate({'include_prompt_preview': coerced_true})
 
 
 def test_restart_retains_uncertain_send_and_completed_reply(tmp_path):
@@ -220,6 +289,31 @@ def test_concurrent_send_does_not_disclose_another_owner_operation(tmp_path):
         assert blocked.value.blocking_operation_id is None
     finally:
         ledger.close()
+
+
+def test_unknown_conversation_remains_blocked_after_restart_but_new_chat_can_start(tmp_path):
+    original = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(original.connection)
+        store.prepare('a' * 32, 'uncertain', 'model', 'effort', owner='owner',
+                      conversation_id='original-chat')
+        store.begin_send('a' * 32, owner='owner')
+    finally:
+        original.close()
+    reopened = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(reopened.connection)
+        store.prepare('b' * 32, 'next in original', 'model', 'effort', owner='owner',
+                      conversation_id='original-chat')
+        with pytest.raises(SubchatConcurrentSend) as blocked:
+            store.begin_send('b' * 32, owner='owner')
+        assert blocked.value.blocking_operation_id == 'a' * 32
+        assert store.get('a' * 32, owner='owner').state == 'sending'
+        store.prepare('c' * 32, 'continue in a new Chat', 'model', 'effort', owner='owner')
+        assert store.begin_send('c' * 32, owner='owner').state == 'sending'
+        assert store.get('a' * 32, owner='owner').state == 'sending'
+    finally:
+        reopened.close()
 
 
 def test_submission_owner_arguments_and_stage_are_enforced(tmp_path):

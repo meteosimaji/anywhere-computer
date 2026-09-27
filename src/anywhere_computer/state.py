@@ -125,13 +125,7 @@ class Ledger:
         self.connection.execute(f"PRAGMA user_version={LEDGER_SCHEMA_VERSION}")
 
     def claim(self, request: Request) -> Reply | None:
-        serialized = json.dumps(
-            {"tool": request.tool, "arguments": request.arguments},
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
-        )
-        digest = hashlib.sha256(serialized.encode()).hexdigest()
+        digest = self.request_digest(request)
         existing = self.connection.execute(
             "SELECT digest FROM operations WHERE id=?", (request.operation_id,)
         ).fetchone()
@@ -153,6 +147,24 @@ class Ledger:
                 ),
             )
         return None
+
+    @staticmethod
+    def request_digest(request: Request) -> str:
+        serialized = json.dumps(
+            {"tool": request.tool, "arguments": request.arguments},
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+        return hashlib.sha256(serialized.encode()).hexdigest()
+
+    def digest_for(self, operation_id: str) -> str:
+        row = self.connection.execute(
+            "SELECT digest FROM operations WHERE id=?", (operation_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Unknown operation ID")
+        return str(row[0])
 
     def _store(self, reply: Reply) -> None:
         body = json.dumps(reply.data, ensure_ascii=False, sort_keys=True,

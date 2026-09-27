@@ -8,8 +8,13 @@ from anywhere_computer.subchat import (
     SubchatAccessError,
     SubchatBrowserClosed,
     SubchatInterrupted,
+    SubchatOutputLimit,
 )
-from anywhere_computer.subchat_browser.history import project_history, project_observation
+from anywhere_computer.subchat_browser.history import (
+    project_history,
+    project_observation,
+    project_preview,
+)
 from anywhere_computer.subchat_state import SubchatAccountMismatch, SubchatSubmission
 
 
@@ -28,6 +33,135 @@ def sample():
          'status': 'finished_successfully', 'channel': 'final', 'end_turn': True},
     ]}
     return submission, payload
+
+
+def test_provisional_preview_requires_one_bound_in_progress_text():
+    submission, payload = sample()
+    answer = payload['messages'][1]
+    answer['status'] = 'in_progress'
+    answer['end_turn'] = None
+    answer['metadata'].pop('is_complete')
+    answer['metadata'].pop('finish_details')
+    answer['content']['parts'] = ['draft ' * 100]
+    encoded = json.dumps(payload).encode()
+    preview = project_preview(encoded, submission)
+    assert preview is not None
+    assert preview.provisional is True and preview.truncated is True
+    assert len(preview.text) == 512
+    assert project_history(encoded, submission) is None
+    first_window = preview.text
+    answer['content']['parts'] = ['draft ' * 100, 'more ' * 100]
+    later = project_preview(json.dumps(payload).encode(), submission)
+    assert later is not None and later.text != first_window
+
+    answer['metadata']['working_turn_id'] = 'different'
+    assert project_preview(json.dumps(payload).encode(), submission) is None
+    answer['metadata']['working_turn_id'] = 'work'
+    payload['messages'].append({**answer, 'id': 'other-answer'})
+    assert project_preview(json.dumps(payload).encode(), submission) is None
+
+
+def test_async_in_progress_preview_uses_final_answer_turn_binding():
+    submission, payload = sample()
+    answer = payload['messages'][1]
+    answer['metadata'].update({'request_id': 'later', 'async_source': 'provider',
+                               'message_type': 'next'})
+    answer['metadata'].pop('is_complete')
+    answer['metadata'].pop('finish_details')
+    answer['status'] = 'in_progress'
+    answer['end_turn'] = None
+    preview = project_preview(json.dumps(payload).encode(), submission)
+    assert preview is not None and preview.text == '日本語 result'
+    answer['metadata']['working_turn_id'] = 'other'
+    assert project_preview(json.dumps(payload).encode(), submission) is None
+    answer['metadata']['working_turn_id'] = 'work'
+    payload['messages'].append(answer.copy())
+    payload['messages'][-1]['id'] = 'other-answer'
+    assert project_preview(json.dumps(payload).encode(), submission) is None
+
+
+async def test_preview_tool_reads_only_submitted_owner_operation(tmp_path):
+    from anywhere_computer.models import Request
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import SubchatPreview, SubchatReceipt, Subchats
+    from anywhere_computer.subchat_mcp import session
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    class Backend:
+        def __init__(self):
+            self.preview_reads = 0
+            self.finish_on_preview = False
+
+        async def prepare(self, submission):
+            return ()
+
+        async def send(self, submission):
+            return SubchatReceipt(conversation_id='chat',
+                                  user_message_id=submission.operation_id,
+                                  prompt=submission.prompt)
+
+        async def preview(self, submission):
+            self.preview_reads += 1
+            if self.finish_on_preview:
+                store.complete(submission.operation_id, submission.operation_id + '-answer',
+                               'final', owner='alice')
+                return None
+            return SubchatPreview(operation_id=submission.operation_id,
+                                  answer_message_id='answer', text='draft', truncated=False)
+
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        backend = Backend()
+        service = Subchats(store, backend)
+        operation_id = 'a' * 32
+        await service.send(operation_id, 'prompt', 'model', 'effort', owner='alice')
+        controller = session(service, owner='alice')
+        try:
+            reply = await controller.execute(Request(operation_id='b' * 32,
+                tool='subchat_preview', arguments={'operation_id': operation_id}))
+            assert reply.state == 'completed'
+            assert reply.data['preview']['provisional'] is True
+            assert backend.preview_reads == 1
+            assert store.get(operation_id, owner='alice').state == 'submitted'
+            denied = await controller.execute(Request(operation_id='c' * 32,
+                tool='subchat_preview', arguments={'operation_id': 'd' * 32}))
+            assert denied.state == 'failed'
+            assert backend.preview_reads == 1
+            store.complete(operation_id, 'answer', 'final', owner='alice')
+            finished = await controller.execute(Request(operation_id='e' * 32,
+                tool='subchat_preview', arguments={'operation_id': operation_id}))
+            assert finished.state == 'completed'
+            assert finished.data['preview'] is None
+            assert backend.preview_reads == 1
+            next_operation = 'f' * 32
+            await service.send(next_operation, 'next', 'model', 'effort', owner='alice')
+            backend.finish_on_preview = True
+            raced = await controller.execute(Request(operation_id='1' * 32,
+                tool='subchat_preview', arguments={'operation_id': next_operation}))
+            assert raced.state == 'completed', raced
+            assert raced.data['reason'] == 'not_in_progress'
+            assert raced.data['preview'] is None
+        finally:
+            await controller.close()
+        backend.http_read = False
+        unavailable = session(service, owner='alice', read_only=True)
+        try:
+            await unavailable.handle({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize',
+                                      'params': {'protocolVersion': '2025-11-25',
+                                                 'capabilities': {},
+                                                 'clientInfo': {'name': 'test', 'version': '1'}}})
+            await unavailable.handle({'jsonrpc': '2.0',
+                                      'method': 'notifications/initialized'})
+            listed = await unavailable.handle({'jsonrpc': '2.0', 'id': 2,
+                                               'method': 'tools/list', 'params': {}})
+            assert listed is not None
+            assert 'subchat_preview' not in {
+                tool['name'] for tool in listed['result']['tools']}
+        finally:
+            await unavailable.close()
+    finally:
+        ledger.close()
 
 
 IMAGE_PART = {'content_type': 'image_asset_pointer',
@@ -266,13 +400,16 @@ async def test_backend_observes_history_without_send_or_original_tab_reload(inte
             await browser.close()
 
 
-async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path):
+@pytest.mark.parametrize('finish_type', ['interrupted', 'max_tokens'])
+async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path, finish_type):
+    from anywhere_computer.models import Request
     from anywhere_computer.state import Ledger
     from anywhere_computer.subchat import Subchats
+    from anywhere_computer.subchat_mcp import session
     from anywhere_computer.subchat_state import SubchatList, SubchatSubmissions
 
     submission, payload = sample()
-    payload['messages'][1]['metadata']['finish_details'] = {'type': 'interrupted'}
+    payload['messages'][1]['metadata']['finish_details'] = {'type': finish_type}
 
     class Reader:
         async def read_answer(self, saved):
@@ -294,6 +431,8 @@ async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path):
         with pytest.raises(SubchatInterrupted):
             await service.recover('b' * 32, owner=None)
         assert store.get(submission.operation_id, owner=None).state == 'interrupted'
+        assert store.get(submission.operation_id, owner=None).interruption_reason == (
+            'output_limit' if finish_type == 'max_tokens' else 'provider_interrupted')
         assert store.get('b' * 32, owner=None).state == 'queued'
     finally:
         ledger.close()
@@ -312,12 +451,24 @@ async def test_interrupted_history_does_not_complete_or_release_queue(tmp_path):
         assert store.list(SubchatList(), owner=None).submissions[-1].state == 'interrupted'
         with pytest.raises(SubchatInterrupted):
             await service.recover(submission.operation_id, owner=None)
+        if finish_type == 'max_tokens':
+            with pytest.raises(SubchatOutputLimit):
+                await service.recover(submission.operation_id, owner=None)
         with pytest.raises(SubchatInterrupted):
             await service.recover('b' * 32, owner=None)
         duplicate = await service.send(submission.operation_id, submission.prompt,
                                        submission.model, submission.effort, owner=None)
         assert duplicate == saved
         assert store.get('b' * 32, owner=None).state == 'queued'
+        controller = session(service)
+        try:
+            reply = await controller.execute(Request(operation_id='c' * 32,
+                tool='subchat_recover', arguments={'operation_id': submission.operation_id}))
+            assert reply.data['error_code'] == (
+                'reply_output_limit' if finish_type == 'max_tokens'
+                else 'reply_interrupted')
+        finally:
+            await controller.close()
     finally:
         ledger.close()
 
@@ -936,6 +1087,8 @@ async def test_bound_account_mismatch_does_not_request_conversation(monkeypatch,
         observations.clear()
     with pytest.raises(ValueError, match='different Chat account'):
         await reader.history(context, saved)
+    with pytest.raises(ValueError, match='different Chat account'):
+        await reader.preview(context, saved)
     assert observations == (['catalog'] if bootstrap else [])
 
 
@@ -1002,6 +1155,8 @@ async def test_fresh_reader_verifies_saved_account_when_get_header_is_absent(
             'https://chatgpt.com/backend-api/conversations/' + saved.conversation_id]
         assert (await reader.history(context, saved)).text == '日本語 result'
         assert len(history_requests) == 2
+        assert await reader.preview(context, saved) is None
+        assert len(history_requests) == 3
         assert auth_accounts == ['account-a']
 
 

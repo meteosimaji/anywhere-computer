@@ -123,10 +123,12 @@ def test_old_upload_schema_inventory_does_not_migrate(tmp_path):
     ))
     with sqlite3.connect(uploads.database) as db:
         db.execute("ALTER TABLE uploads DROP COLUMN temporary")
+        db.execute("ALTER TABLE uploads DROP COLUMN requested_path")
         db.execute("PRAGMA user_version=1")
     result = list_transfers(tmp_path, area="local", kind="upload")
     assert result["transfers"][0]["storage_id"] == identity
     assert result["transfers"][0]["staging_path"] is None
+    assert result["transfers"][0]["requested_path"] is None
     with sqlite3.connect(uploads.database) as db:
         assert db.execute("PRAGMA user_version").fetchone()[0] == 1
         assert "temporary" not in {row[1] for row in db.execute("PRAGMA table_info(uploads)")}

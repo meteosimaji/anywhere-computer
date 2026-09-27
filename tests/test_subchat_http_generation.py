@@ -10,12 +10,18 @@ import httpx
 import pytest
 from pydantic import SecretStr
 from test_subchat_http_catalog import catalog
+from test_subchat_http_history import sample
 from test_subchat_http_only import CATALOG_URL, SECRET, credentials, session_payload
 from test_subchat_http_only_cli import command, environment
 
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat import SubchatOutcomeUnknown, SubchatPreflightFailed, Subchats
+from anywhere_computer.subchat import (
+    SubchatAccessError,
+    SubchatOutcomeUnknown,
+    SubchatPreflightFailed,
+    Subchats,
+)
 from anywhere_computer.subchat_browser.catalog import project_http_catalog
 from anywhere_computer.subchat_cli import Command, dispatch
 from anywhere_computer.subchat_http import HTTPOnlySubchatBackend
@@ -81,6 +87,40 @@ def handoff():
     data = handoff_data()
     return ObservedHTTPGeneration.from_data(data, authorization=SECRET,
                                             account_id='fixture-account')
+
+
+@pytest.mark.parametrize('observer', ['find_submission', 'read_answer'])
+@pytest.mark.parametrize('failure', [SubchatAccessError(401),
+                                     SubchatAccountMismatch('account changed')])
+async def test_generation_history_preserves_authentication_failure(observer, failure):
+    from anywhere_computer.subchat_http_session import ObservedHTTPSession
+
+    class Events:
+        def __init__(self):
+            self.stages = []
+
+        def record_http_event(self, operation_id, stage, *, owner):
+            self.stages.append((operation_id, stage, owner))
+
+    async def no_request():
+        raise AssertionError('History failure must not start another request')
+
+    session = ObservedHTTPSession.model_validate(session_payload())
+    events = Events()
+    backend = HTTPOnlySubchatBackend(no_request, session, generation=handoff(),
+                                     store=events)
+
+    async def rejected(*_args):
+        raise failure
+
+    if observer == 'find_submission':
+        backend._http_reader.receipt = rejected
+    else:
+        backend._http_reader.history = rejected
+    submission, _ = sample()
+    with pytest.raises(type(failure)):
+        await getattr(backend, observer)(submission)
+    assert events.stages == [(submission.operation_id, 'history_failed', None)]
 
 
 @pytest.mark.parametrize('account,token,status', [

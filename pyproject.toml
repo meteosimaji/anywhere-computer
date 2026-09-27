@@ -14,6 +14,7 @@ dependencies = [
     "keyring>=25,<26",
     "httpx==0.28.1",
     "pywinpty==3.0.5 ; sys_platform == 'win32'",
+    "webauthn==2.8.0",
 ]
 
 [project.scripts]
@@ -21,6 +22,8 @@ anywhere = "anywhere_computer.cli:main"
 anywhere-subchat = "anywhere_computer.subchat_cli:main"
 anywhere-subchat-plugin = "anywhere_computer.subchat_plugin:main"
 anywhere-subchat-setup = "anywhere_computer.subchat_setup:main"
+anywhere-subchat-upload = "anywhere_computer.subchat_library_upload:main"
+anywhere-subchat-library-mcp = "anywhere_computer.subchat_library_mcp:main"
 anywhere-peer = "anywhere_computer.peer_cli:main"
 
 [project.optional-dependencies]

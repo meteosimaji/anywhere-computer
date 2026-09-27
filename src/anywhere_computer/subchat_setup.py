@@ -7,12 +7,13 @@ import asyncio
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 from contextlib import AsyncExitStack, ExitStack
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 import httpx
 
@@ -30,7 +31,12 @@ from .subchat_chrome_profile import (
 )
 from .subchat_cli import WINDOWS_DEDICATED_BROWSER_ARGS
 from .subchat_http_session import ObservedHTTPSession
-from .subchat_plugin import _selection_record, plugin_paths
+from .subchat_plugin import (
+    _selection_record,
+    plugin_paths,
+    selected_browser_channel,
+    selected_chrome_login,
+)
 
 if TYPE_CHECKING:
     from playwright.async_api import Page
@@ -121,6 +127,12 @@ class SetupInputError(ValueError):
     """A fixed, local validation message safe to show to the operator."""
 
 
+class NamedSelection(TypedDict):
+    chrome_profile_id: str
+    expected_account_id: str
+    enable_background_send: bool
+
+
 def _source_profile(value: Path, state: Path) -> Path:
     if not value.is_absolute():
         raise SetupInputError("Select an absolute Chrome profile path")
@@ -154,6 +166,18 @@ def _private_directory(path: Path) -> None:
         path.chmod(0o700)
 
 
+def _write_private_text(destination: Path, content: str, *, prefix: str) -> None:
+    descriptor, temporary = tempfile.mkstemp(prefix=prefix, dir=destination.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 async def stage_profile(source: Path, stage_root: Path, account_id: str) -> Path:
     """Publish an account-verified, filtered snapshot under app-owned state."""
     if stage_root == source or stage_root in source.parents or source in stage_root.parents:
@@ -185,15 +209,8 @@ def _save_http_selection(directory: Path, source: Path, account_id: str) -> None
     destination = directory / "http-server/config.json"
     if destination.is_symlink():
         raise SetupInputError("HTTP configuration must not be a symbolic link")
-    descriptor, temporary = tempfile.mkstemp(prefix=".config-profile-", dir=destination.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(updated.model_dump_json(indent=2) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, destination)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    _write_private_text(destination, updated.model_dump_json(indent=2) + "\n",
+                        prefix=".config-profile-")
 
 
 def _remove_previous_managed_snapshot(previous: Path, stage_root: Path) -> None:
@@ -298,74 +315,46 @@ def save_dedicated_selection(state: Path, profile: Path, channel: str, account_i
         browser_spec(channel, sys.platform)
     except ValueError as error:
         raise SetupInputError("Select a supported Windows Chromium browser") from error
-    if not account_id or len(account_id) > 256 or any(ord(char) < 33 or ord(char) > 126
-                                                    for char in account_id):
-        raise SetupInputError("Observed Chat account ID is invalid")
+    _validate_account_id(account_id)
     _private_directory(state.parent)
-    selection = state.parent / "login-selection.json"
-    if selection.is_symlink():
-        raise SetupInputError("Subchat login selection must not be a symlink")
-    content = json.dumps({"dedicated_browser_channel": channel,
-                          "dedicated_profile": str(profile.resolve()),
-                          "expected_account_id": account_id,
-                          "enable_background_send": enable_send}, separators=(",", ":"))
-    descriptor, temporary = tempfile.mkstemp(prefix=".login-selection-", dir=state.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(content + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, selection)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    _save_login_selection(state, {"dedicated_browser_channel": channel,
+                                  "dedicated_profile": str(profile.resolve())},
+                          account_id, enable_send)
 
 
 def save_selection(state: Path, source: Path, account_id: str, *, enable_send: bool) -> None:
     """Replace only the local selection; never persist browser credentials."""
-    if not account_id or len(account_id) > 256 or any(ord(char) < 33 or ord(char) > 126
-                                                    for char in account_id):
-        raise SetupInputError("Observed Chat account ID is invalid")
+    _validate_account_id(account_id)
     create_private_directory(state.parent)
-    selection = state.parent / "login-selection.json"
-    if selection.is_symlink():
-        raise SetupInputError("Subchat login selection must not be a symlink")
-    content = json.dumps({"chrome_source_profile": str(source),
-                          "expected_account_id": account_id,
-                          "enable_background_send": enable_send}, separators=(",", ":"))
-    descriptor, temporary = tempfile.mkstemp(prefix=".login-selection-", dir=state.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(content + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, selection)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    _save_login_selection(state, {"chrome_source_profile": str(source)},
+                          account_id, enable_send)
 
 
 def save_profile_id_selection(state: Path, profile_id: str, account_id: str,
                               *, enable_send: bool) -> None:
     """Save an owner-selected Chrome ID, never an arbitrary source path."""
     chrome_profile_by_id(profile_id)
+    _validate_account_id(account_id)
+    _private_directory(state.parent)
+    _save_login_selection(state, {"chrome_profile_id": profile_id},
+                          account_id, enable_send)
+
+
+def _validate_account_id(account_id: str) -> None:
     if not account_id or len(account_id) > 256 or any(ord(char) < 33 or ord(char) > 126
                                                     for char in account_id):
         raise SetupInputError("Observed Chat account ID is invalid")
-    _private_directory(state.parent)
+
+
+def _save_login_selection(state: Path, choice: dict[str, str], account_id: str,
+                          enable_send: bool) -> None:
     selection = state.parent / "login-selection.json"
     if selection.is_symlink():
         raise SetupInputError("Subchat login selection must not be a symlink")
-    content = json.dumps({"chrome_profile_id": profile_id,
+    content = json.dumps({**choice,
                           "expected_account_id": account_id,
                           "enable_background_send": enable_send}, separators=(",", ":"))
-    descriptor, temporary = tempfile.mkstemp(prefix=".login-selection-", dir=state.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(content + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, selection)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    _write_private_text(selection, content + "\n", prefix=".login-selection-")
 
 
 async def discover_profiles() -> list[dict[str, str]]:
@@ -405,11 +394,111 @@ def revoke_profile_id_selection(state: Path) -> None:
     selection.unlink(missing_ok=True)
 
 
+def _named_selections(state: Path) -> dict[str, NamedSelection]:
+    path = state.parent / "named-login-selections.json"
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return {}
+    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o077
+            or metadata.st_size > 65536 or
+            (hasattr(os, "getuid") and metadata.st_uid != os.getuid())):
+        raise SetupInputError("Named Subchat selections are not private")
+    try:
+        records = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError):
+        raise SetupInputError("Named Subchat selections are invalid") from None
+    if (not isinstance(records, dict) or len(records) > 20
+            or any(not isinstance(name, str) or not name.isascii()
+                   or not name or len(name) > 64
+                   or any(char not in "abcdefghijklmnopqrstuvwxyz"
+                          "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+                          for char in name)
+                   or not isinstance(record, dict)
+                   or set(record) != {"chrome_profile_id", "expected_account_id",
+                                          "enable_background_send"}
+                   or not isinstance(record["chrome_profile_id"], str)
+                   or not isinstance(record["expected_account_id"], str)
+                   or not record["expected_account_id"]
+                   or len(record["expected_account_id"]) > 256
+                   or record["expected_account_id"].strip()
+                   != record["expected_account_id"]
+                   or any(ord(char) < 32 for char in record["expected_account_id"])
+                   or type(record["enable_background_send"]) is not bool
+                   for name, record in records.items())):
+        raise SetupInputError("Named Subchat selections are invalid")
+    return records
+
+
+def _save_named_selections(state: Path, records: dict[str, NamedSelection]) -> None:
+    path = state.parent / "named-login-selections.json"
+    _write_private_text(path, json.dumps(records, separators=(",", ":")) + "\n",
+                        prefix=".named-login-selections-")
+
+
+async def diagnose_plugin_setup() -> dict[str, object]:
+    """Inspect selected login and send readiness without creating a Chat turn."""
+    profile, state = plugin_paths()
+    record = _selection_record(state)
+    if not record:
+        return {'selection': 'missing', 'account': 'unverified',
+                'authenticated_read': False, 'background_send': False,
+                'tool_groups': ['saved_state'], 'tool_catalog': 'not_observed'}
+    pinned = record.get('expected_account_id')
+    if not isinstance(pinned, str) or not pinned:
+        return {'selection': 'configured', 'account': 'pin_missing',
+                'authenticated_read': False, 'background_send': False,
+                'tool_groups': ['saved_state'], 'tool_catalog': 'not_observed'}
+    selected_browser_channel(state)
+    if record.get('dedicated_browser_channel') is not None:
+        if sys.platform != 'win32':
+            raise SetupInputError('Dedicated browser selection requires Windows')
+        selected_profile = record.get('dedicated_profile')
+        if not isinstance(selected_profile, str) or Path(selected_profile).resolve() != profile:
+            raise SetupInputError('Dedicated profile differs from the Plugin configuration')
+        channel = record['dedicated_browser_channel']
+        assert isinstance(channel, str)
+        observed = await inspect_dedicated_account(profile, channel)
+    else:
+        if sys.platform != 'darwin':
+            return {'selection': 'configured', 'account': 'unsupported_platform',
+                    'authenticated_read': False, 'background_send': False,
+                    'tool_groups': ['saved_state'], 'tool_catalog': 'not_observed'}
+        source, selected_account = selected_chrome_login(state)
+        if source is None or selected_account != pinned:
+            return {'selection': 'configured', 'account': 'selection_conflict',
+                    'authenticated_read': False, 'background_send': False,
+                    'tool_groups': ['saved_state'], 'tool_catalog': 'not_observed'}
+        observed = await inspect_account(source)
+    matches = observed == pinned
+    transport = os.environ.get('ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT')
+    if transport is None:
+        send_configured = record.get('enable_background_send') is True
+    elif transport == 'http-read-only':
+        send_configured = False
+    elif transport == 'browser-prepared-httpx':
+        send_configured = record.get('enable_background_send') is True
+    elif transport == 'browser-send' and sys.platform == 'darwin':
+        send_configured = True
+    else:
+        raise SetupInputError('Plugin transport conflicts with the selected profile')
+    return {'selection': 'configured',
+            'account': 'matched' if matches else 'mismatch',
+            'authenticated_read': matches,
+            'background_send': matches and send_configured,
+            'tool_groups': (['saved_state', 'authenticated_read'] +
+                            (['background_send'] if send_configured
+                             else []) if matches else ['saved_state']),
+            # Tool registration depends on the next running plugin session.
+            'tool_catalog': 'not_observed'}
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("inspect", "select", "stage", "discover",
+    parser.add_argument("action", choices=("inspect", "select", "stage", "discover", "doctor",
                                            "choose", "revoke", "prepare-dedicated",
-                                           "inspect-dedicated", "choose-dedicated"))
+                                           "inspect-dedicated", "choose-dedicated",
+                                           "save-named", "list-named", "use-named"))
     parser.add_argument("profile", nargs="?",
                         help="Chrome profile ID for choose; path for legacy actions")
     parser.add_argument("--enable-background-send", action="store_true",
@@ -420,7 +509,91 @@ def main(argv: list[str] | None = None) -> None:
                         help="For stage, update an existing stopped HTTPS service")
     parser.add_argument("--browser-channel", choices=browser_choices("win32"),
                         help="Windows dedicated browser: Chrome or Microsoft Edge")
+    parser.add_argument("--name", help="Named account profile to save or activate")
     args = parser.parse_args(argv)
+    if args.action == 'doctor':
+        if (args.profile is not None or args.name is not None
+                or args.expect_account_id is not None or args.browser_channel is not None
+                or args.enable_background_send or args.http_state_dir is not None):
+            parser.error('doctor takes no selection options')
+        try:
+            print(json.dumps(asyncio.run(diagnose_plugin_setup())))
+        except SubchatAccessError as error:
+            print(json.dumps({'selection': 'configured',
+                              'account': 'login_required' if error.status == 401
+                              else 'access_denied', 'authenticated_read': False,
+                              'background_send': False, 'tool_groups': ['saved_state'],
+                              'tool_catalog': 'not_observed'}))
+        except (SetupInputError, ValueError) as error:
+            raise SystemExit(str(error)) from None
+        except Exception as error:
+            raise SystemExit(f'Subchat setup diagnosis failed: {type(error).__name__}') from None
+        return
+    if (args.action in {"save-named", "use-named"}) != (args.name is not None):
+        parser.error("save-named and use-named require --name")
+    if args.name is not None and (not args.name.isascii() or not args.name
+            or len(args.name) > 64 or any(char not in
+            "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+            for char in args.name)):
+        parser.error("--name must contain 1-64 ASCII letters, digits, _ or -")
+    if args.action in {"save-named", "use-named", "list-named"}:
+        if args.profile is not None or args.browser_channel is not None:
+            parser.error("Named actions take no browser profile or channel")
+        if args.action != "use-named" and args.expect_account_id is not None:
+            parser.error("Only use-named accepts --expect-account-id")
+        if args.action == "use-named" and not args.expect_account_id:
+            parser.error("use-named requires --expect-account-id")
+        if args.enable_background_send or args.http_state_dir is not None:
+            parser.error("Named actions use the saved send setting")
+        assert args.action == "list-named" or isinstance(args.name, str)
+        try:
+            _, state = plugin_paths()
+            _private_directory(state.parent)
+            with ProcessLock(state.parent / "profile-stage.lock"):
+                records = _named_selections(state)
+                if args.action == "list-named":
+                    print(json.dumps({"profiles": [
+                        {"name": name, "account_id": record["expected_account_id"]}
+                        for name, record in sorted(records.items())]}))
+                    return
+                if args.action == "save-named":
+                    name = str(args.name)
+                    record = _selection_record(state)
+                    if "chrome_profile_id" not in record:
+                        raise SetupInputError("Choose a macOS Chrome profile before saving a name")
+                    profile_id = record["chrome_profile_id"]
+                    account_id = record.get("expected_account_id")
+                    if not isinstance(profile_id, str) or not isinstance(account_id, str):
+                        raise SetupInputError("Selected Chrome profile has no account ID")
+                    if name not in records and len(records) >= 20:
+                        raise SetupInputError("Too many named Subchat profiles")
+                    records[name] = {"chrome_profile_id": profile_id,
+                                          "expected_account_id": account_id,
+                                          "enable_background_send":
+                                          record.get("enable_background_send") is True}
+                    _save_named_selections(state, records)
+                    print(json.dumps({"name": args.name, "account_id":
+                                      record["expected_account_id"], "saved": True}))
+                    return
+                use_name = str(args.name)
+                named_record = records.get(use_name)
+                if named_record is None:
+                    raise SetupInputError("Unknown named Subchat profile")
+                if named_record["expected_account_id"] != args.expect_account_id:
+                    raise SetupInputError("Named Subchat account ID differs from confirmation")
+                source = chrome_profile_by_id(named_record["chrome_profile_id"])
+                observed = asyncio.run(inspect_account(source))
+                if observed != args.expect_account_id:
+                    raise SetupInputError("Selected Chrome profile has a different Chat account")
+                save_profile_id_selection(state, named_record["chrome_profile_id"], observed,
+                    enable_send=named_record["enable_background_send"])
+                print(json.dumps({"name": args.name, "account_id": observed,
+                                  "selected": True, "restart_required": True}))
+                return
+        except SetupInputError as error:
+            raise SystemExit(str(error)) from None
+        except Exception as error:
+            raise SystemExit(f"Named Subchat selection failed: {type(error).__name__}") from None
     if args.action not in {"select", "choose", "choose-dedicated"} and args.enable_background_send:
         parser.error("--enable-background-send requires a selection action")
     if (args.action in {"select", "stage", "choose", "choose-dedicated"}

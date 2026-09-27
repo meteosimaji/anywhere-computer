@@ -398,7 +398,7 @@ async def test_read_only_mcp_exposes_one_verified_file_without_local_storage(tmp
             assert oversized.state == 'failed'
             assert oversized.data == {'error_code': 'file_too_large', 'max_bytes': 2,
                                       'automatic_retry': False}
-            assert len(requests) == 2
+            assert len(requests) == 3  # Server ignored Range; no content was accepted.
 
             invalid = await server.execute(Request(operation_id='4' * 32,
                 tool='subchat_download_file', arguments={
@@ -406,5 +406,120 @@ async def test_read_only_mcp_exposes_one_verified_file_without_local_storage(tmp
                     'max_bytes': 512 * 1024 + 1}))
             assert invalid.data is not None
             assert invalid.data['error_code'] == 'invalid_parameter'
+    finally:
+        ledger.close()
+
+
+async def test_large_file_reads_verified_ranges_without_local_storage(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, payload = completed(store)
+        content = b'a' * 600_000
+        ranges = []
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            if request.url.path.endswith('/interpreter/download'):
+                return streamed_json({
+                    'download_url': CONTENT_URL, 'file_name': 'report.csv',
+                    'file_size_bytes': len(content), 'mime_type': 'text/csv',
+                    'status': 'ready'})
+            header = request.headers['range']
+            ranges.append(header)
+            start, end = (int(part) for part in header.removeprefix('bytes=').split('-'))
+            end = min(end, len(content) - 1)
+            return httpx.Response(206, stream=FixtureStream(content[start:end + 1]),
+                                  headers={'content-range':
+                                           f'bytes {start}-{end}/{len(content)}'})
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            server = mcp_session(Subchats(store, backend), read_only=True)
+            before = set(tmp_path.iterdir())
+            parts = []
+            offset = 0
+            while True:
+                reply = await server.execute(Request(
+                    operation_id=f'{offset + 1:032x}', tool='subchat_download_file',
+                    arguments={'operation_id': submission.operation_id,
+                               'sandbox_link': LINK, 'offset': offset}))
+                assert reply.state == 'completed'
+                assert reply.data['offset'] == offset
+                assert reply.data['file_size_bytes'] == len(content)
+                part = base64.b64decode(reply.data['content_base64'])
+                assert len(part) <= 512 * 1024
+                parts.append(part)
+                offset += len(part)
+                if reply.data['eof']:
+                    break
+            assert b''.join(parts) == content
+            assert ranges == ['bytes=0-524287', 'bytes=524288-1048575']
+            assert set(tmp_path.iterdir()) == before
+    finally:
+        ledger.close()
+
+
+async def test_range_ignoring_server_rejected_before_reading_body(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, payload = completed(store)
+        reads = 0
+
+        class UnexpectedBody(httpx.AsyncByteStream):
+            async def __aiter__(self):
+                nonlocal reads
+                reads += 1
+                yield b'x' * 600_000
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            if request.url.path.endswith('/interpreter/download'):
+                return streamed_json({
+                    'download_url': CONTENT_URL, 'file_name': 'report.csv',
+                    'file_size_bytes': 600_000, 'mime_type': 'text/csv',
+                    'status': 'ready'})
+            return httpx.Response(200, stream=UnexpectedBody())
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+            async def factory():
+                return client
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            with pytest.raises(ValueError, match='requested range'):
+                await backend.download_sandbox_file(submission.operation_id, LINK,
+                                                    max_bytes=512 * 1024, offset=1)
+            assert reads == 0
+    finally:
+        ledger.close()
+
+
+async def test_null_display_metadata_uses_verified_path_and_generic_mime(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, payload = completed(store)
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            if request.url.path.endswith('/interpreter/download'):
+                return streamed_json({
+                    'download_url': CONTENT_URL, 'file_name': None,
+                    'file_size_bytes': 3, 'mime_type': None, 'status': 'ready'})
+            return streamed_content(b'abc')
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+            async def factory():
+                return client
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            result = await backend.download_sandbox_file(submission.operation_id, LINK)
+            assert (result.file_name, result.mime_type, result.content) == (
+                'report.csv', 'application/octet-stream', b'abc')
     finally:
         ledger.close()

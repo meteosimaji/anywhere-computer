@@ -11,7 +11,10 @@ from anywhere_computer.authorization import AuthorizationStore, pkce_s256
 from anywhere_computer.http_service import http_service, load_http_config
 from anywhere_computer.http_tool_upgrade import add_http_tools
 from anywhere_computer.owner_credentials import OwnerCredentials
-from anywhere_computer.subchat_gateway import SubchatGatewayConfig
+from anywhere_computer.subchat_gateway import (
+    SUBCHAT_PROMPT_PREVIEW_SCOPE,
+    SubchatGatewayConfig,
+)
 
 
 def test_http_subchat_profile_id_requires_owner_verification(tmp_path, monkeypatch):
@@ -124,7 +127,7 @@ async def test_upgrade_does_not_expand_restricted_revoked_or_expired_grants(
 @pytest.mark.parametrize("added_tools", [
     frozenset({"mcp_session_open", "mcp_call"}),
     frozenset({"codex_plugin_tools", "codex_plugin_call"}),
-    frozenset({"devices_list", "devices_tools", "devices_call"}),
+    frozenset({"devices_list", "devices_probe", "devices_tools", "devices_call"}),
 ])
 async def test_delegation_upgrade_requires_new_consent_without_expanding_existing_grant(
     tmp_path, unused_tcp_port, added_tools,
@@ -180,9 +183,13 @@ async def test_subchat_upgrade_requires_selection_and_new_consent(tmp_path, unus
     updated = load_http_config(tmp_path)
     assert updated.subchat == selected
     assert {"subchat_send", "subchat_status"} <= updated.scopes
+    preview = await add_http_tools(tmp_path, frozenset({SUBCHAT_PROMPT_PREVIEW_SCOPE}))
+    assert preview["new_consent_required"] is True
+    assert preview["expanded_full_access_grants"] == 0
+    assert SUBCHAT_PROMPT_PREVIEW_SCOPE in load_http_config(tmp_path).scopes
     store = AuthorizationStore(
         tmp_path / "http-server/authorization", resource=RESOURCE,
-        known_tools=updated.scopes,
+        known_tools=load_http_config(tmp_path).scopes,
     )
     try:
         saved_grant = store.db.execute(

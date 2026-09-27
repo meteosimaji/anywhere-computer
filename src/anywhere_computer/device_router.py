@@ -1,5 +1,6 @@
 """Explicit saved-device routing for local connectors and scoped HTTP gateways."""
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -17,7 +18,7 @@ from .mcp_server import REQUEST_ID_ARGUMENT, REQUEST_ID_SCHEMA, Catalog, Execute
 from .models import Contract, Empty, Reply, Request
 from .ssh_client import SSHBackend
 
-ROUTER_TOOLS = frozenset({"devices_list", "devices_tools", "devices_call"})
+ROUTER_TOOLS = frozenset({"devices_list", "devices_probe", "devices_tools", "devices_call"})
 NESTED_REQUEST_ID_ERROR = (
     "Set request_id on the outer devices_call only; remove it from arguments. "
     "Recover using that outer ID with operations_get."
@@ -77,6 +78,14 @@ class DeviceRouter:
             client=str(device["client_id"]), profile=str(device["profile"]),
         ))
 
+    def _probe_ssh(self, identity: str) -> DeviceData:
+        # SSH status is blocking; use a separate SQLite connection in its worker.
+        store = DeviceStore(self.store.directory)
+        try:
+            return store.probe(identity)
+        finally:
+            store.close()
+
     def _bind(self, request: Request, device: DeviceData | None) -> None:
         digest = hashlib.sha256(json.dumps(
             {"tool": request.tool, "arguments": request.arguments, "route": (
@@ -129,6 +138,9 @@ class DeviceRouter:
             ("devices_list", "List locally registered devices and cached observations. "
              "No connection check is performed; local refers to this connector's computer.",
              Empty, True),
+            ("devices_probe", "Check one registered remote device now using its saved "
+             "SSH or HTTP authorization. Return the fresh observation and check time. "
+             "This does not run a user tool on that device.", DeviceTarget, True),
             ("devices_tools", "Fetch the current authorized tool schemas from an explicit "
              "device_id. Use name for one exact schema, query to search names and full "
              "descriptions, "
@@ -171,6 +183,8 @@ class DeviceRouter:
                 return Reply(operation_id=request.operation_id, state="completed",
                              data={"devices": devices})
             args = (DeviceCall.model_validate(request.arguments) if request.tool == "devices_call"
+                    else DeviceTarget.model_validate(request.arguments)
+                    if request.tool == "devices_probe"
                     else DeviceTools.model_validate(request.arguments))
             target = args.device_id
             if isinstance(args, DeviceCall) and REQUEST_ID_ARGUMENT in args.arguments:
@@ -186,6 +200,15 @@ class DeviceRouter:
             # Read the saved endpoint for each call; removal or re-registration cannot reuse an ID.
             device = self.store.get(args.device_id) if args.device_id != "local" else None
             self._bind(request, device)
+            if request.tool == "devices_probe":
+                if device is None:
+                    raise ValueError("Only registered remote devices can be probed")
+                observation = (await self.store.probe_http(args.device_id)
+                               if device["transport"] == "http" else
+                               await asyncio.to_thread(self._probe_ssh, args.device_id))
+                return Reply(operation_id=request.operation_id, state="completed",
+                             data={"device": cast(JsonValue, observation)})
+            assert isinstance(args, (DeviceCall, DeviceTools))
             if device is not None:
                 backend = self.backend_factory(device)
             tools = self._remote_tools(

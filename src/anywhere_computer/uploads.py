@@ -9,7 +9,7 @@ import sqlite3
 import stat
 import unicodedata
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import cast
 
@@ -19,6 +19,7 @@ from .files import absolute_path, sha256
 from .locking import ProcessLock
 from .models import BeginUpload, ResolveUpload, TransferId, UploadChunk
 from .state import prepare_directory
+from .upload_win32 import PinnedRegular, file_identity_fd, pin_regular_handle_nofollow
 
 UPLOAD_TOOLS = frozenset(
     {
@@ -30,6 +31,10 @@ UPLOAD_TOOLS = frozenset(
         "upload_resolve",
     }
 )
+_SAFE_DIRFD_SUPPORTED = (os.name == "nt" or
+                         all(function in os.supports_dir_fd for function in
+                                 (os.open, os.stat, os.link, os.unlink))
+                         and hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW"))
 
 
 class UploadOutcomeUnknown(RuntimeError):
@@ -37,6 +42,14 @@ class UploadOutcomeUnknown(RuntimeError):
 
 
 class Uploads:
+    @staticmethod
+    def _require_safe_publication() -> None:
+        if not _SAFE_DIRFD_SUPPORTED:
+            raise ValueError(
+                "Upload publication is unsupported on this platform until safe "
+                "directory-relative operations are available"
+            )
+
     def __init__(self, directory: Path, *, file_locks: Path) -> None:
         self.directory = directory.resolve() / "uploads"
         prepare_directory(self.directory)
@@ -47,23 +60,29 @@ class Uploads:
             with db:
                 db.execute("BEGIN IMMEDIATE")
                 version = db.execute("PRAGMA user_version").fetchone()[0]
-                if version not in {0, 1, 2}:
+                if version not in {0, 1, 2, 3}:
                     raise ValueError("Unsupported upload registry version")
                 db.execute(
                     "CREATE TABLE IF NOT EXISTS uploads(id TEXT PRIMARY KEY,path TEXT NOT NULL,"
                     "total INTEGER NOT NULL,digest TEXT NOT NULL,"
                     "received INTEGER NOT NULL DEFAULT 0,"
-                    "state TEXT NOT NULL DEFAULT 'receiving',temporary TEXT)"
+                    "state TEXT NOT NULL DEFAULT 'receiving',temporary TEXT,"
+                    "requested_path TEXT)"
                 )
                 db.execute(
                     "CREATE TABLE IF NOT EXISTS chunks(id TEXT NOT NULL REFERENCES uploads(id),"
                     "offset INTEGER NOT NULL,data BLOB NOT NULL,PRIMARY KEY(id,offset))"
                 )
-                if version < 2 and "temporary" not in {
-                    row[1] for row in db.execute("PRAGMA table_info(uploads)")
-                }:
+                db.execute(
+                    "CREATE TABLE IF NOT EXISTS upload_parents(id TEXT PRIMARY KEY,"
+                    "device INTEGER NOT NULL,inode INTEGER NOT NULL)"
+                )
+                columns = {row[1] for row in db.execute("PRAGMA table_info(uploads)")}
+                if "temporary" not in columns:
                     db.execute("ALTER TABLE uploads ADD COLUMN temporary TEXT")
-                db.execute("PRAGMA user_version=2")
+                if "requested_path" not in columns:
+                    db.execute("ALTER TABLE uploads ADD COLUMN requested_path TEXT")
+                db.execute("PRAGMA user_version=3")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -88,11 +107,67 @@ class Uploads:
         return cast(sqlite3.Row, row)
 
     @staticmethod
+    @contextmanager
+    def _parent_fd(db: sqlite3.Connection, row: sqlite3.Row) -> Iterator[int | None]:
+        """Pin the exact directory observed at begin, without following its final symlink."""
+        identity = db.execute(
+            "SELECT device,inode FROM upload_parents WHERE id=?", (row["id"],)
+        ).fetchone()
+        if identity is None:
+            raise ValueError("Original upload parent identity is unavailable")
+        if os.name == "nt":
+            from .upload_win32 import pin_directory
+
+            with pin_directory(Path(row["path"]).parent) as current:
+                if current != tuple(identity):
+                    raise ValueError("Upload parent directory changed")
+                yield None
+            return
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(Path(row["path"]).parent, flags)
+        except OSError as error:
+            raise ValueError("Upload parent directory changed") from error
+        try:
+            metadata = os.fstat(descriptor)
+            if (not stat.S_ISDIR(metadata.st_mode)
+                    or (metadata.st_dev, metadata.st_ino) != tuple(identity)):
+                raise ValueError("Upload parent directory changed")
+            if not Uploads._parent_path_matches(row, descriptor):
+                raise ValueError("Upload parent directory changed")
+            yield descriptor
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _parent_path_matches(row: sqlite3.Row, descriptor: int | None) -> bool:
+        if descriptor is None:
+            # Win32 retains no-delete handles on the complete canonical ancestry.
+            return True
+        try:
+            path_metadata = os.stat(Path(row["path"]).parent, follow_symlinks=False)
+            pinned_metadata = os.fstat(descriptor)
+        except OSError:
+            return False
+        return (stat.S_ISDIR(path_metadata.st_mode)
+                and (path_metadata.st_dev, path_metadata.st_ino) ==
+                (pinned_metadata.st_dev, pinned_metadata.st_ino))
+
+    @staticmethod
+    def _entry_exists(name: str, parent_fd: int) -> bool:
+        try:
+            os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        return True
+
+    @staticmethod
     def _describe(row: sqlite3.Row) -> dict[str, JsonValue]:
         # IDs are supplied by the caller. Do not expose transport-internal IDs in
         # results, including results later recovered through operations_get.
         return {
             "path": str(row["path"]),
+            "requested_path": row["requested_path"],
             "total_bytes": int(row["total"]),
             "received_bytes": int(row["received"]),
             "sha256": str(row["digest"]),
@@ -103,10 +178,19 @@ class Uploads:
         }
 
     def begin(self, args: BeginUpload) -> dict[str, JsonValue]:
+        self._require_safe_publication()
         path = absolute_path(args.path)
         if path.is_symlink():
             raise ValueError("Upload destination must not be a symbolic link")
         target = str(path.resolve())
+        if os.name == "nt":
+            from .upload_win32 import pin_directory
+
+            with pin_directory(Path(target).parent) as identity:
+                parent_identity: tuple[int | str, int | str] = identity
+        else:
+            parent_metadata = Path(target).parent.stat()
+            parent_identity = parent_metadata.st_dev, parent_metadata.st_ino
         with self._lock(args.transfer_id), self._connect() as db, db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("SELECT * FROM uploads WHERE id=?", (args.transfer_id,)).fetchone()
@@ -115,7 +199,8 @@ class Uploads:
                     target,
                     args.total_bytes,
                     args.sha256,
-                ):
+                ) or (row["requested_path"] is not None
+                      and row["requested_path"] != args.path):
                     raise ValueError(
                         "Upload ID already belongs to different content or destination"
                     )
@@ -139,9 +224,11 @@ class Uploads:
                     "Upload staging capacity reached; finish or abort existing uploads"
                 )
             db.execute(
-                "INSERT INTO uploads(id,path,total,digest) VALUES(?,?,?,?)",
-                (args.transfer_id, target, args.total_bytes, args.sha256),
+                "INSERT INTO uploads(id,path,total,digest,requested_path) VALUES(?,?,?,?,?)",
+                (args.transfer_id, target, args.total_bytes, args.sha256, args.path),
             )
+            db.execute("INSERT INTO upload_parents VALUES(?,?,?)", (
+                args.transfer_id, *parent_identity))
             return self._describe(self._row(db, args.transfer_id))
 
     def status(self, args: TransferId) -> dict[str, JsonValue]:
@@ -190,6 +277,7 @@ class Uploads:
             return self._describe(self._row(db, args.transfer_id))
 
     def commit(self, args: TransferId) -> dict[str, JsonValue]:
+        self._require_safe_publication()
         with self._lock(args.transfer_id), self._connect() as db:
             row = self._row(db, args.transfer_id)
             if row["state"] == "complete":
@@ -199,8 +287,10 @@ class Uploads:
             if row["received"] != row["total"]:
                 raise ValueError("Upload is incomplete")
             target = Path(row["path"])
-            with ProcessLock(self.file_locks / sha256(str(target.resolve()).encode()), timeout=5):
-                if target.exists() or target.is_symlink():
+            with (ProcessLock(self.file_locks / sha256(str(target).encode()), timeout=5),
+                  self._parent_fd(db, row) as parent_fd):
+                if os.path.lexists(target) if parent_fd is None else self._entry_exists(
+                        target.name, parent_fd):
                     raise FileExistsError(
                         "Upload publication never overwrites an existing destination"
                     )
@@ -215,13 +305,16 @@ class Uploads:
                     )
                 publishing = False
                 created = False
+                source_guard = ExitStack()
+                source_handle: PinnedRegular | None = None
                 try:
                     digest = hashlib.sha256()
                     received = 0
                     descriptor = os.open(
-                        name,
+                        name if parent_fd is None else Path(name).name,
                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
                         0o600,
+                        **({} if parent_fd is None else {"dir_fd": parent_fd}),
                     )
                     created = True
                     with os.fdopen(descriptor, "wb") as destination:
@@ -241,6 +334,13 @@ class Uploads:
                             raise ValueError("Upload content hash or length did not match")
                         destination.flush()
                         os.fsync(destination.fileno())
+                        if parent_fd is None:
+                            # Bind publication to the verified file object. Windows
+                            # can remove a path even while another handle is open.
+                            source_handle = source_guard.enter_context(
+                                pin_regular_handle_nofollow(Path(name)))
+                            if file_identity_fd(destination.fileno()) != source_handle.identity:
+                                raise ValueError("Upload staging file changed")
                     with db:
                         db.execute(
                             "UPDATE uploads SET state='publishing' WHERE id=?", (args.transfer_id,)
@@ -248,7 +348,19 @@ class Uploads:
                     # The durable intent precedes the external effect. Any interruption
                     # from here leaves unknown, never an automatically repeatable publish.
                     publishing = True
-                    os.link(name, target)
+                    if not self._parent_path_matches(row, parent_fd):
+                        raise ValueError("Upload parent directory changed")
+                    if parent_fd is None:
+                        assert source_handle is not None
+                        source_handle.link(target)
+                        with pin_regular_handle_nofollow(target) as linked:
+                            if linked.identity != source_handle.identity:
+                                raise ValueError("Published file identity changed")
+                    else:
+                        os.link(Path(name).name, target.name,
+                                src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                    if not self._parent_path_matches(row, parent_fd):
+                        raise ValueError("Upload parent directory changed after publication")
                     with db:
                         db.execute(
                             "UPDATE uploads SET state='complete' WHERE id=?", (args.transfer_id,)
@@ -261,9 +373,15 @@ class Uploads:
                         ) from None
                     raise
                 finally:
+                    source_guard.close()
                     if created:
                         try:
-                            Path(name).unlink(missing_ok=True)
+                            if parent_fd is None:
+                                Path(name).unlink(missing_ok=True)
+                            else:
+                                os.unlink(Path(name).name, dir_fd=parent_fd)
+                        except FileNotFoundError:
+                            pass
                         except OSError:
                             pass  # Status retains the recorded path for explicit cleanup.
                 return self._describe(self._row(db, args.transfer_id))
@@ -275,28 +393,42 @@ class Uploads:
             if row["state"] != "publishing":
                 raise ValueError("Only an uncertain publication can be resolved")
             target = Path(row["path"])
-            with ProcessLock(self.file_locks / sha256(str(target.resolve()).encode()), timeout=5):
-                if args.action == "confirm_published":
-                    if target.is_symlink():
-                        raise ValueError("Published destination must not be a symbolic link")
-                    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
-                    with os.fdopen(os.open(target, flags), "rb") as source:
-                        metadata = os.fstat(source.fileno())
-                        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != row["total"]:
-                            raise ValueError("Destination does not match the declared upload")
-                        digest = hashlib.sha256()
-                        count = 0
-                        while data := source.read(262144):
-                            count += len(data)
-                            if count > row["total"]:
-                                raise ValueError("Destination changed during verification")
-                            digest.update(data)
-                        if count != row["total"] or digest.hexdigest() != row["digest"]:
-                            raise ValueError("Destination hash does not match the upload")
-                    state = "complete"
+            if args.action == "discard_staging":
+                with ProcessLock(self.file_locks / sha256(str(target).encode()), timeout=5), db:
+                    db.execute("UPDATE uploads SET state='discarded' WHERE id=?",
+                               (args.transfer_id,))
+                    db.execute("DELETE FROM chunks WHERE id=?", (args.transfer_id,))
+                return self._describe(self._row(db, args.transfer_id))
+            self._require_safe_publication()
+            with (ProcessLock(self.file_locks / sha256(str(target).encode()), timeout=5),
+                  self._parent_fd(db, row) as parent_fd):
+                if not self._parent_path_matches(row, parent_fd):
+                    raise ValueError("Upload parent directory changed")
+                flags = (os.O_RDONLY | getattr(os, "O_BINARY", 0)
+                         | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0))
+                if parent_fd is None:
+                    from .upload_win32 import open_regular_nofollow
+
+                    descriptor = open_regular_nofollow(target)
                 else:
-                    state = "discarded"
+                    descriptor = os.open(target.name, flags, dir_fd=parent_fd)
+                with os.fdopen(descriptor, "rb") as source:
+                    metadata = os.fstat(source.fileno())
+                    if not stat.S_ISREG(metadata.st_mode) or metadata.st_size != row["total"]:
+                        raise ValueError("Destination does not match the declared upload")
+                    digest = hashlib.sha256()
+                    count = 0
+                    while data := source.read(262144):
+                        count += len(data)
+                        if count > row["total"]:
+                            raise ValueError("Destination changed during verification")
+                        digest.update(data)
+                    if count != row["total"] or digest.hexdigest() != row["digest"]:
+                        raise ValueError("Destination hash does not match the upload")
+                if not self._parent_path_matches(row, parent_fd):
+                    raise ValueError("Upload parent directory changed during verification")
                 with db:
-                    db.execute("UPDATE uploads SET state=? WHERE id=?", (state, args.transfer_id))
+                    db.execute("UPDATE uploads SET state='complete' WHERE id=?",
+                               (args.transfer_id,))
                     db.execute("DELETE FROM chunks WHERE id=?", (args.transfer_id,))
                 return self._describe(self._row(db, args.transfer_id))

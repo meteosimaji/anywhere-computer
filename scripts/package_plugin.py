@@ -31,6 +31,18 @@ def require_immutable_wheel(target: Path, built: Path, *, allow_dirty: bool) -> 
         raise ValueError("Bundled wheel for this version changed; bump the version first")
 
 
+def configure_runtime_args(arguments: list[str], wheel: str, *, dirty: bool) -> None:
+    """Do not let an identically named development wheel reuse uv's old install."""
+    while "--reinstall-package" in arguments:
+        index = arguments.index("--reinstall-package")
+        del arguments[index:index + 2]
+    while "--no-cache" in arguments:
+        arguments.remove("--no-cache")
+    arguments[arguments.index("--from") + 1] = wheel
+    if dirty:
+        arguments.insert(arguments.index("--from"), "--no-cache")
+
+
 def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
     if re.fullmatch(r"[a-f0-9]{40}", commit) is None:
@@ -75,17 +87,18 @@ def package_plugin(root: Path, *, allow_dirty: bool = False) -> Path:
     )
     config_path = plugin / ".mcp.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
-    for server_name in ("anywhere-computer", "anywhere-subchat"):
+    for server_name in ("anywhere-computer", "anywhere-subchat",
+                        "anywhere-subchat-library"):
         arguments = config["mcpServers"][server_name]["args"]
-        arguments[arguments.index("--from") + 1] = "./bundled/" + wheel.name
+        configure_runtime_args(arguments, "./bundled/" + wheel.name, dirty=dirty)
     config_path.write_text(json.dumps(config, indent=2) + "\n", encoding="utf-8")
     claude_config_path = plugin / ".claude-mcp.json"
     claude_config = json.loads(claude_config_path.read_text(encoding="utf-8"))
-    for server_name in ("anywhere-computer", "anywhere-subchat"):
+    for server_name in ("anywhere-computer", "anywhere-subchat",
+                        "anywhere-subchat-library"):
         arguments = claude_config["mcpServers"][server_name]["args"]
-        arguments[arguments.index("--from") + 1] = (
-            "${CLAUDE_PLUGIN_ROOT}/bundled/" + wheel.name
-        )
+        configure_runtime_args(
+            arguments, "${CLAUDE_PLUGIN_ROOT}/bundled/" + wheel.name, dirty=dirty)
     claude_config_path.write_text(json.dumps(claude_config, indent=2) + "\n", encoding="utf-8")
     subprocess.run(
         [

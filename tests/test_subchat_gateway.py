@@ -1,16 +1,22 @@
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
+import httpx
 import pytest
+from test_http_service import initialize
 
-from anywhere_computer.authorization import GrantIdentity
+from anywhere_computer.authorization import AuthorizationStore, GrantIdentity, pkce_s256
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
+from anywhere_computer.engine import Engine
+from anywhere_computer.http_mcp import HTTPMCP
 from anywhere_computer.http_service import HTTPServiceConfig
 from anywhere_computer.models import Reply, Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
 from anywhere_computer.subchat_gateway import (
     SUBCHAT_GATEWAY_TOOLS,
+    SUBCHAT_PROMPT_PREVIEW_SCOPE,
     LazySubchatGateway,
     SubchatGateway,
     SubchatGatewayConfig,
@@ -21,6 +27,60 @@ from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatSubmissions
 
 RESOURCE = "https://computer.example/mcp"
+
+
+@pytest.mark.asyncio
+async def test_gateway_activity_is_owner_scoped_and_never_opens_chrome(monkeypatch, tmp_path):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    opens = 0
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        nonlocal opens
+        opens += 1
+        raise AssertionError("activity must not start Chrome")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    config = SubchatGatewayConfig(
+        profile=str(tmp_path / "Default"), ledger=str(tmp_path / "ledger"),
+        account_id="account", consent="ordinary-chat-browser-control-approved")
+    gateway = LazySubchatGateway(config, owner="owner")
+    allowed = frozenset({"subchat_activity"})
+    request = Request(operation_id="a" * 32, tool="subchat_activity", arguments={})
+    try:
+        assert [item["name"] for item in await gateway.catalog("one", allowed)] == [
+            "subchat_activity"]
+        idle = await gateway.execute("one", request, allowed)
+        assert idle.state == "completed" and idle.data == {
+            "state": "idle", "active_count": 0, "active_sends": 0,
+            "active_recoveries": 0, "active_queue_watches": 0,
+            "active_auto_queues": 0, "live_generation": False}
+        denied = await gateway.execute("one", request, frozenset())
+        assert denied.state == "failed"
+        invalid = await gateway.execute("one", request.model_copy(
+            update={"arguments": {"unexpected": True}}), allowed)
+        assert invalid.state == "failed"
+
+        class Core:
+            async def execute(self, observed):
+                assert observed.tool == "subchat_activity"
+                return Reply(operation_id=observed.operation_id, state="completed",
+                             data={"state": "active", "active_count": 1,
+                                   "active_sends": 1, "active_recoveries": 0,
+                                   "active_queue_watches": 0, "active_auto_queues": 0,
+                                   "live_generation": False})
+
+        controller = SubchatGateway(lambda _owner: Core(), owner="owner")
+        controller.cores["one"] = Core()
+        gateway._gateway = controller
+        assert (await gateway.execute("one", request, allowed)).data["active_sends"] == 1
+        assert (await gateway.execute("two", request, allowed)).data["active_sends"] == 0
+        assert opens == 0
+    finally:
+        gateway._gateway = None
+        await gateway.close()
 
 
 @pytest.mark.asyncio
@@ -559,7 +619,7 @@ async def test_gateway_grant_catalog_and_disconnected_worker():
     catalog_tool = next(tool for tool in catalog if tool["name"] == "subchat_catalog")
     assert catalog_tool["inputSchema"]["properties"]["source"]["const"] == "http"
     assert catalog_tool["annotations"]["readOnlyHint"] is True
-    assert len(created) == 1
+    assert len(created) == 0
     request = Request(operation_id="a" * 32, tool="subchat_send", arguments={"prompt": "hello"})
     disconnected = asyncio.create_task(gateway.execute("grant-a", request, granted))
     await asyncio.sleep(0)
@@ -583,6 +643,14 @@ async def test_gateway_grant_catalog_and_disconnected_worker():
     observed = await gateway.execute("grant-a", Request(operation_id="d" * 32,
         tool="subchat_catalog", arguments={}), granted)
     assert observed.state == "completed" and calls[-1][1].arguments == {"source": "http"}
+    preview_request = Request(operation_id="e" * 32, tool="subchat_list",
+                              arguments={"include_prompt_preview": True})
+    count = len(calls)
+    refused = await gateway.execute("grant-a", preview_request, granted | {"subchat_list"})
+    assert refused.state == "failed" and len(calls) == count
+    approved = await gateway.execute(
+        "grant-a", preview_request, granted | {"subchat_list", SUBCHAT_PROMPT_PREVIEW_SCOPE})
+    assert approved.state == "completed" and len(calls) == count + 1
     await gateway.close()
     assert all(core.closed for core in created)
 
@@ -623,6 +691,219 @@ async def test_static_discovery_matches_real_gateway_catalog_without_chrome(tmp_
         await gateway.close()
     finally:
         ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_https_queue_events_are_scope_and_owner_bound_without_browser(tmp_path):
+    ledger_path = tmp_path / "ledger"
+    ledger = Ledger(ledger_path)
+    try:
+        SubchatSubmissions(ledger.connection)
+        with ledger.connection:
+            ledger.connection.executemany(
+                "INSERT INTO subchat_auto_queue_events "
+                "(operation_id,owner,event,updated_at) VALUES (?,?,?,?)",
+                [("a" * 32, "grant-a", "completed", 1.0),
+                 ("b" * 32, "grant-b", "completed", 2.0),
+                 ("c" * 32, "grant-a", "observation_failed", 3.0)],
+            )
+        selected = SubchatGatewayConfig(
+            profile=str(tmp_path / "selected" / "Default"),
+            ledger=str(ledger_path), account_id="account",
+            consent="ordinary-chat-browser-control-approved")
+        gateway = LazySubchatGateway(selected, owner="owner")
+        try:
+            request = Request(operation_id="d" * 32, tool="subchat_queue_events",
+                              arguments={"after_id": 0, "limit": 1})
+            denied = await gateway.execute("grant-a", request, frozenset())
+            assert denied.state == "failed"
+            granted = frozenset({"subchat_queue_events"})
+            assert [tool["name"] for tool in await gateway.catalog("grant-a", granted)] == [
+                "subchat_queue_events"]
+            first = await gateway.execute("grant-a", request, granted)
+            assert first.state == "completed"
+            assert [event["operation_id"] for event in first.data["events"]] == ["a" * 32]
+            assert first.data["has_more"] is True
+            second = await gateway.execute("grant-a", request.model_copy(update={
+                "operation_id": "e" * 32,
+                "arguments": {"after_id": first.data["next_cursor"], "limit": 1},
+            }), granted)
+            assert [event["operation_id"] for event in second.data["events"]] == ["c" * 32]
+            assert second.data["has_more"] is False
+            other = await gateway.execute("grant-b", request, granted)
+            assert [event["operation_id"] for event in other.data["events"]] == ["b" * 32]
+            filtered = await gateway.execute("grant-a", request.model_copy(update={
+                "operation_id": "f" * 32,
+                "arguments": {"after_id": 0, "operation_id": "c" * 32},
+            }), granted)
+            assert [event["operation_id"] for event in filtered.data["events"]] == [
+                "c" * 32]
+            invisible = await gateway.execute("grant-b", request.model_copy(update={
+                "operation_id": "1" * 32,
+                "arguments": {"after_id": 0, "operation_id": "c" * 32},
+            }), granted)
+            assert invisible.data["events"] == []
+            assert gateway._gateway is None
+        finally:
+            await gateway.close()
+    finally:
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_activity_over_real_http_mcp_requires_its_oauth_scope(tmp_path, monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    @asynccontextmanager
+    async def forbidden_gateway(config, *, owner):
+        raise AssertionError("An activity read must not launch Chrome")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", forbidden_gateway)
+    engine = Engine(tmp_path / "engine")
+    authority = AuthorizationStore(
+        tmp_path / "auth", resource=RESOURCE,
+        known_tools=frozenset(engine.tools) | SUBCHAT_GATEWAY_TOOLS,
+    )
+    redirect = "https://client.example/callback"
+    authority.register_client("client", frozenset({redirect}))
+    authority.enroll_device("owner", "device", frozenset({
+        "subchat_activity", "computer_status",
+    }))
+
+    def grant(tool):
+        verifier = "v" * 43
+        code = authority.approve(
+            owner="owner", device="device", client="client", redirect=redirect,
+            resource=RESOURCE, tools=frozenset({tool}), challenge=pkce_s256(verifier),
+        )
+        return authority.exchange_code(
+            code=code, verifier=verifier, client="client", redirect=redirect,
+            resource=RESOURCE,
+        ).value
+
+    activity_token = grant("subchat_activity")
+    other_token = grant("computer_status")
+    gateway = LazySubchatGateway(SubchatGatewayConfig(
+        profile=str(tmp_path / "selected" / "Default"),
+        ledger=str(tmp_path / "ledger"), account_id="account",
+        consent="ordinary-chat-browser-control-approved"), owner="owner")
+    backend = AuthorizedDeviceMCP(
+        authority, engine, owner="owner", device="device", client="client",
+        subchat_gateway=gateway,
+    )
+    adapter = HTTPMCP(backend.authenticate, backend.session)
+    port = await adapter.start()
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}",
+                                     trust_env=False) as http:
+            headers = await initialize(http, activity_token)
+            listed = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+            })
+            assert {tool["name"] for tool in listed.json()["result"]["tools"]} == {
+                "subchat_activity"}
+            response = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "subchat_activity", "arguments": {}},
+            })
+            assert response.status_code == 200
+            data = response.json()["result"]["structuredContent"]["data"]
+            assert data["state"] == "idle" and data["active_count"] == 0
+            assert gateway._gateway is None
+
+            other_headers = await initialize(http, other_token)
+            other_listed = await http.post("/mcp", headers=other_headers, json={
+                "jsonrpc": "2.0", "id": 3, "method": "tools/list",
+            })
+            assert "subchat_activity" not in {
+                tool["name"] for tool in other_listed.json()["result"]["tools"]}
+    finally:
+        await adapter.close()
+        await gateway.close()
+        authority.close()
+        await engine.close()
+
+
+@pytest.mark.asyncio
+async def test_queue_events_over_real_http_mcp_use_separate_oauth_scope(tmp_path):
+    engine = Engine(tmp_path / "engine")
+    authority = AuthorizationStore(
+        tmp_path / "auth", resource=RESOURCE,
+        known_tools=frozenset(engine.tools) | SUBCHAT_GATEWAY_TOOLS,
+    )
+    redirect = "https://client.example/callback"
+    authority.register_client("client", frozenset({redirect}))
+    authority.enroll_device("owner", "device", frozenset({
+        "subchat_queue_events", "computer_status",
+    }))
+
+    def grant(tools):
+        verifier = "v" * 43
+        code = authority.approve(
+            owner="owner", device="device", client="client", redirect=redirect,
+            resource=RESOURCE, tools=frozenset(tools), challenge=pkce_s256(verifier),
+        )
+        token = authority.exchange_code(
+            code=code, verifier=verifier, client="client", redirect=redirect,
+            resource=RESOURCE,
+        ).value
+        identity = authority.verify(token, resource=RESOURCE)
+        assert identity is not None
+        return token, identity
+
+    event_token, identity = grant({"subchat_queue_events"})
+    other_token, _ = grant({"computer_status"})
+    ledger_path = tmp_path / "ledger"
+    ledger = Ledger(ledger_path)
+    SubchatSubmissions(ledger.connection)
+    owner = subchat_ledger_owner(identity, "account")
+    with ledger.connection:
+        ledger.connection.executemany(
+            "INSERT INTO subchat_auto_queue_events "
+            "(operation_id,owner,event,updated_at) VALUES (?,?,?,?)",
+            [("a" * 32, owner, "completed", 1.0),
+             ("b" * 32, subchat_ledger_owner(identity, "other-account"),
+              "completed", 2.0)],
+        )
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "selected" / "Default"), ledger=str(ledger_path),
+        account_id="account", consent="ordinary-chat-browser-control-approved")
+    gateway = LazySubchatGateway(selected, owner="owner")
+    backend = AuthorizedDeviceMCP(
+        authority, engine, owner="owner", device="device", client="client",
+        subchat_gateway=gateway,
+    )
+    adapter = HTTPMCP(backend.authenticate, backend.session)
+    port = await adapter.start()
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}",
+                                     trust_env=False) as http:
+            headers = await initialize(http, event_token)
+            catalog = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+            })
+            assert catalog.status_code == 200
+            assert {tool["name"] for tool in catalog.json()["result"]["tools"]} == {
+                "subchat_queue_events"}
+            result = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "subchat_queue_events", "arguments": {"after_id": 0}},
+            })
+            assert result.status_code == 200
+            data = result.json()["result"]["structuredContent"]["data"]
+            assert [item["operation_id"] for item in data["events"]] == ["a" * 32]
+            other_headers = await initialize(http, other_token)
+            other_catalog = await http.post("/mcp", headers=other_headers, json={
+                "jsonrpc": "2.0", "id": 3, "method": "tools/list",
+            })
+            assert "subchat_queue_events" not in {
+                tool["name"] for tool in other_catalog.json()["result"]["tools"]}
+    finally:
+        await adapter.close()
+        await gateway.close()
+        ledger.close()
+        authority.close()
 
 
 @pytest.mark.asyncio
@@ -745,6 +1026,22 @@ async def test_https_subchat_list_recovers_owned_ids_without_chrome(tmp_path, mo
         assert first.state == "completed"
         assert [item["operation_id"] for item in first.data["submissions"]] == [second_id]
         assert isinstance(first.data["next_before"], int)
+        preview = await view.execute(Request(
+            operation_id="f" * 32, tool="subchat_list",
+            arguments={"include_prompt_preview": True},
+        ))
+        assert preview.state == "failed" and preview.data == {"dispatched": False}
+        grants["new-grant"] = replace(
+            grants["new-grant"],
+            tools=frozenset({"subchat_list", SUBCHAT_PROMPT_PREVIEW_SCOPE}),
+        )
+        approved = await view.execute(Request(
+            operation_id="9" * 32, tool="subchat_list",
+            arguments={"include_prompt_preview": True, "limit": 1},
+        ))
+        assert approved.state == "completed"
+        assert approved.data["submissions"][0]["prompt_preview"] == "second"
+        assert [tool["name"] for tool in await view.catalog()] == ["subchat_list"]
         second = await view.execute(Request(operation_id="b" * 32, tool="subchat_list",
                                             arguments={"limit": 1,
                                                        "before": first.data["next_before"]}))
@@ -762,6 +1059,224 @@ async def test_https_subchat_list_recovers_owned_ids_without_chrome(tmp_path, mo
     finally:
         await gateway.close()
         ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_https_cancel_is_local_owner_and_account_scoped(tmp_path, monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    @asynccontextmanager
+    async def forbidden_gateway(config, *, owner):
+        raise AssertionError("Cancellation opened Chrome")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", forbidden_gateway)
+    ledger = Ledger(tmp_path / "ledger")
+    store = SubchatSubmissions(ledger.connection)
+    own_id, other_id, sent_id = "1" * 32, "2" * 32, "3" * 32
+    store.prepare(own_id, "own", "model", "effort", owner="own")
+    store.prepare(other_id, "other", "model", "effort", owner="other")
+    store.prepare(sent_id, "sent", "model", "effort", owner="own")
+    store.begin_send(sent_id, owner="own", user_message_id="user-sent",
+                     provider_account_id="account")
+    config = SubchatGatewayConfig(
+        profile=str(tmp_path / "Default"), ledger=str(tmp_path / "ledger"),
+        account_id="account", consent="ordinary-chat-browser-control-approved")
+    gateway = LazySubchatGateway(config, owner="owner")
+    try:
+        grant = frozenset({"subchat_cancel"})
+        assert [item["name"] for item in await gateway.catalog("own", grant)] == [
+            "subchat_cancel"]
+        denied = await gateway.execute("own", Request(
+            operation_id="a" * 32, tool="subchat_cancel",
+            arguments={"operation_id": own_id}), frozenset())
+        assert denied.state == "failed"
+        hidden = await gateway.execute("own", Request(
+            operation_id="b" * 32, tool="subchat_cancel",
+            arguments={"operation_id": other_id}), grant)
+        assert hidden.data["error_code"] == "unknown_operation"
+        cancelled = await gateway.execute("own", Request(
+            operation_id="c" * 32, tool="subchat_cancel",
+            arguments={"operation_id": own_id}), grant)
+        assert cancelled.state == "completed"
+        assert cancelled.data["state"] == "cancelled"
+        refused = await gateway.execute("own", Request(
+            operation_id="d" * 32, tool="subchat_cancel",
+            arguments={"operation_id": sent_id}), grant)
+        assert refused.state == "failed"
+        assert store.get(sent_id, owner="own").state == "sending"
+    finally:
+        await gateway.close()
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_https_cancel_during_preparation_discards_owned_page(tmp_path, monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+    from anywhere_computer import subchat_mcp
+
+    monkeypatch.setattr(subchat_mcp, "SEND_ACK_TIMEOUT", .01)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Backend:
+        sends = 0
+        discards = 0
+
+        async def prepare(self, submission):
+            entered.set()
+            await release.wait()
+            return ()
+
+        async def discard_prepared(self, submission):
+            self.discards += 1
+
+        async def send(self, submission):
+            self.sends += 1
+            raise AssertionError("Cancelled submission was sent")
+
+    ledger = Ledger(tmp_path / "ledger")
+    store = SubchatSubmissions(ledger.connection)
+    browser = Backend()
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "profile"), ledger=str(tmp_path / "ledger"),
+        account_id="account", consent="ordinary-chat-browser-control-approved")
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        assert config is selected and owner == "owner"
+        gateway = SubchatGateway(lambda grant: session(
+            Subchats(store, browser), owner=grant), owner=owner)
+        try:
+            yield gateway
+        finally:
+            await gateway.close()
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    gateway = LazySubchatGateway(selected, owner="owner")
+    operation = "e" * 32
+    scopes = frozenset({"subchat_send", "subchat_cancel", "subchat_status"})
+    try:
+        pending = await gateway.execute("grant", Request(
+            operation_id=operation, tool="subchat_send",
+            arguments={"prompt": "work", "model": "model", "effort": "effort"}), scopes)
+        assert pending.state == "running"
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        cancelled = await gateway.execute("grant", Request(
+            operation_id="f" * 32, tool="subchat_cancel",
+            arguments={"operation_id": operation}), scopes)
+        assert cancelled.state == "completed"
+        assert cancelled.data["state"] == "cancelled"
+        release.set()
+        core = gateway._gateway.cores["grant"]
+        sending = core.sends.get(operation)
+        if sending is not None:
+            await asyncio.wait_for(asyncio.shield(sending), timeout=5)
+        assert browser.discards == 1 and browser.sends == 0
+        assert store.get(operation, owner="grant").state == "cancelled"
+    finally:
+        release.set()
+        await gateway.close()
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_prepared_input_over_http_mcp_discards_page(tmp_path, monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+    from anywhere_computer import subchat_mcp
+
+    monkeypatch.setattr(subchat_mcp, "SEND_ACK_TIMEOUT", .01)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Browser:
+        sends = 0
+        discards = 0
+
+        async def prepare(self, submission):
+            entered.set()
+            await release.wait()
+            return ()
+
+        async def discard_prepared(self, submission):
+            self.discards += 1
+
+        async def send(self, submission):
+            self.sends += 1
+            raise AssertionError("Cancelled submission was sent")
+
+    engine = Engine(tmp_path / "engine")
+    authority = AuthorizationStore(tmp_path / "auth", resource=RESOURCE,
+                                   known_tools=frozenset(engine.tools) | SUBCHAT_GATEWAY_TOOLS)
+    redirect = "https://client.example/callback"
+    authority.register_client("client", frozenset({redirect}))
+    scopes = frozenset({"subchat_send", "subchat_cancel", "subchat_status"})
+    authority.enroll_device("owner", "device", scopes)
+    code = authority.approve(owner="owner", device="device", client="client",
+                             redirect=redirect, resource=RESOURCE, tools=scopes,
+                             challenge=pkce_s256("v" * 43))
+    token = authority.exchange_code(code=code, verifier="v" * 43, client="client",
+                                    redirect=redirect, resource=RESOURCE).value
+    grant = authority.verify(token, resource=RESOURCE)
+    assert grant is not None
+    ledger = Ledger(tmp_path / "ledger")
+    store = SubchatSubmissions(ledger.connection)
+    browser = Browser()
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "profile"), ledger=str(tmp_path / "ledger"),
+        account_id="account", consent="ordinary-chat-browser-control-approved")
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        gateway_core = SubchatGateway(lambda selected_owner: session(
+            Subchats(store, browser), owner=selected_owner), owner=owner)
+        try:
+            yield gateway_core
+        finally:
+            await gateway_core.close()
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    gateway = LazySubchatGateway(selected, owner="owner")
+    backend = AuthorizedDeviceMCP(authority, engine, owner="owner", device="device",
+                                  client="client", subchat_gateway=gateway)
+    adapter = HTTPMCP(backend.authenticate, backend.session)
+    port = await adapter.start()
+    operation = "7" * 32
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}",
+                                     trust_env=False) as http:
+            headers = await initialize(http, token)
+
+            async def call(name, arguments, packet_id):
+                response = await http.post("/mcp", headers=headers, json={
+                    "jsonrpc": "2.0", "id": packet_id, "method": "tools/call",
+                    "params": {"name": name, "arguments": arguments},
+                })
+                assert response.status_code == 200
+                return response.json()["result"]["structuredContent"]
+
+            pending = await call("subchat_send", {
+                "request_id": operation, "prompt": "work",
+                "model": "model", "effort": "effort"}, 1)
+            assert pending["state"] == "running"
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            cancelled = await call("subchat_cancel", {"operation_id": operation}, 2)
+            assert cancelled["state"] == "completed"
+            assert cancelled["data"]["state"] == "cancelled"
+            release.set()
+            owner_key = subchat_ledger_owner(grant, "account")
+            core = gateway._gateway.cores[owner_key]
+            sending = core.sends.get(operation)
+            if sending is not None:
+                await asyncio.wait_for(asyncio.shield(sending), timeout=5)
+            assert browser.discards == 1 and browser.sends == 0
+            assert store.get(operation, owner=owner_key).state == "cancelled"
+    finally:
+        release.set()
+        await adapter.close()
+        await backend.close()
+        await gateway.close()
+        ledger.close()
+        authority.close()
+        await engine.close()
 
 
 @pytest.mark.asyncio
@@ -824,7 +1339,7 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
         grant_id: GrantIdentity(grant_id=grant_id, owner="owner", device="device",
                                 client=client, resource=RESOURCE,
                                 tools=frozenset({"subchat_status", "subchat_recover",
-                                                "subchat_message"}))
+                                                "subchat_message", "subchat_queue_events"}))
         for grant_id, client in (("old-grant", "client"), ("new-grant", "client"),
                                  ("other-client", "other"))
     }
@@ -863,6 +1378,12 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
                      provider_account_id="account")
     store.submitted(legacy_id, "legacy-conversation", "legacy-message",
                     owner="old-grant")
+    with ledger.connection:
+        ledger.connection.execute(
+            "INSERT INTO subchat_auto_queue_events "
+            "(operation_id,owner,event,updated_at) VALUES (?,?,?,?)",
+            (legacy_id, "old-grant", "completed", 1.0),
+        )
     bound_root_id = "5" * 32
     store.prepare(bound_root_id, "root", "model", "effort", owner="old-grant")
     store.begin_send(bound_root_id, owner="old-grant", user_message_id="root-message",
@@ -903,6 +1424,7 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
         ("subchat_wait", "7" * 32, {"operation_id": legacy_id}),
         ("subchat_recover", "8" * 32, {"operation_id": legacy_id}),
         ("subchat_status", "9" * 32, {"operation_id": legacy_id}),
+        ("subchat_queue_auto", "a" * 32, {"operation_id": legacy_id}),
     ):
         assert gateway.owner_for_request(Request(
             operation_id=operation, tool=tool, arguments=arguments),
@@ -979,6 +1501,24 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
             operation_id="4" * 32, tool="subchat_status",
             arguments={"operation_id": legacy_id}))
         assert legacy_from_new.data["state"] == "submitted"
+        ordinary_events = await backend.session("new-grant").execute(Request(
+            operation_id="2" * 32, tool="subchat_queue_events",
+            arguments={"after_id": 0}))
+        assert ordinary_events.data["events"] == []
+        recovered_events = await backend.session("new-grant").execute(Request(
+            operation_id="3" * 32, tool="subchat_queue_events",
+            arguments={"after_id": 0, "operation_id": legacy_id}))
+        assert recovered_events.state == "completed"
+        assert [event["event"] for event in recovered_events.data["events"]] == [
+            "completed"]
+        cross_client_events = await backend.session("other-client").execute(Request(
+            operation_id="5" * 32, tool="subchat_queue_events",
+            arguments={"after_id": 0, "operation_id": legacy_id}))
+        assert cross_client_events.data["events"] == []
+        wrong_account_events = await backend.session("new-grant").execute(Request(
+            operation_id="6" * 32, tool="subchat_queue_events",
+            arguments={"after_id": 0, "operation_id": wrong_account_id}))
+        assert wrong_account_events.data["events"] == []
         recovered_from_new = await backend.session("new-grant").execute(Request(
             operation_id="a" * 32, tool="subchat_recover",
             arguments={"operation_id": legacy_id}))

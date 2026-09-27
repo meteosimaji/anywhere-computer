@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b10` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.10` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b25` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.25` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -105,6 +105,11 @@ computer to remain on; Claude cloud sessions and Claude Chat/Cowork need a
 separately configured public HTTPS MCP endpoint. Installing this Plugin does not
 make local files available to those cloud clients. Subchat sending remains subject
 to the transport and login limitations below.
+For an in-place Claude update, refresh the marketplace and run `claude plugin
+update anywhere-computer@anywhere-computer-local --scope user`, then start a new
+Claude Code session. Claude Code can report `up_to_date` when a development
+wheel changes but keeps the same Plugin version. Publish a new immutable
+version for an actual update and verify the installed wheel hash.
 
 For ChatGPT, choose its HTTPS route in `setup`. You still need a public HTTPS MCP
 URL, authentication and registration in ChatGPT. Installing the Codex Plugin does
@@ -128,7 +133,9 @@ A subchat is an ordinary ChatGPT Chat used for a delegated task, separate from a
 ChatGPT Work task. The experimental adapter supports explicit model selection,
 submission tracking and correlated result recovery. The parent assigns scope,
 compares evidence and verifies proposed changes before integrating them.
-Children do not exchange intermediate results with each other. Sending several
+Ordinary Chat Subchats do not directly exchange intermediate results. Local
+Codex and Claude Code peers can use the separate mailbox described below;
+mailbox delivery does not prove a model read or acted on a message. Sending several
 children can help when the tasks are independent; overlapping research adds
 creation and recovery time. Use a single Chat for one closely related inquiry.
 
@@ -228,6 +235,16 @@ own mode-0600 credential file and bind it to the same intended owner, account
 and project. The recipient must be connected to receive a new message. This
 mailbox records delivery and acknowledgement; it does not start a model turn
 or insert text into a ChatGPT, Codex or Claude conversation.
+The [peer messaging design](docs/PEER-MESSAGING.md) describes runtime support,
+security boundaries and the comparison with agmsg.
+Supply a fresh 32-character lowercase hexadecimal `request_id` for every
+`peer_send`, and retain it until the result is known. An omitted ID is rejected
+before storage. Repeat an identical call with the same ID only to resolve an
+uncertain response. `peer_ack` confirms receipt by the local client, not that a
+model read the text or completed the requested work.
+An active Codex or Claude Code turn can call `peer_wait` once to wait up to ten
+seconds for unread text in that tool result. It does not acknowledge the text
+or wake an idle model turn.
 
 Use personal Chat HTTP access only within the permission and account scope granted
 to you. Misuse, including extracting Chat output at scale for model distillation

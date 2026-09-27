@@ -97,7 +97,8 @@ class OwnerCredentials:
         self._validate_password(replacement)
         if not current or len(current.encode("utf-8")) > 1024:
             raise ValueError("Current owner password is incorrect")
-        with ProcessLock(self.lock_path, timeout=30):
+        with ProcessLock(self.directory / "owner-reset.lock", timeout=30), \
+                ProcessLock(self.lock_path, timeout=30):
             previous = self._record()
             if not hmac.compare_digest(self._derive(current, previous.salt), previous.digest):
                 raise ValueError("Current owner password is incorrect")

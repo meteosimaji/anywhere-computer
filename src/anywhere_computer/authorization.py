@@ -120,7 +120,7 @@ class AuthorizationStore:
             with self.db:
                 self.db.execute("BEGIN IMMEDIATE")
                 version = self.db.execute("PRAGMA user_version").fetchone()[0]
-                if version not in {0, 1, 2, 3}:
+                if version not in {0, 1, 2, 3, 4}:
                     raise ValueError("Unsupported authorization store version")
                 self.db.execute("CREATE TABLE IF NOT EXISTS settings (resource TEXT PRIMARY KEY)")
                 resources = self.db.execute("SELECT resource FROM settings").fetchall()
@@ -134,7 +134,8 @@ class AuthorizationStore:
                 self.db.execute(
                     "CREATE TABLE IF NOT EXISTS authorized_devices ("
                     "id TEXT PRIMARY KEY, owner TEXT NOT NULL, tools TEXT NOT NULL, "
-                    "active INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0)"
+                    "active INTEGER NOT NULL, generation INTEGER NOT NULL DEFAULT 0, "
+                    "reset_pending INTEGER NOT NULL DEFAULT 0)"
                 )
                 if version < 3 and "generation" not in {
                     row[1] for row in self.db.execute("PRAGMA table_info(authorized_devices)")
@@ -142,6 +143,13 @@ class AuthorizationStore:
                     self.db.execute(
                         "ALTER TABLE authorized_devices ADD COLUMN generation INTEGER NOT NULL "
                         "DEFAULT 0"
+                    )
+                if version < 4 and "reset_pending" not in {
+                    row[1] for row in self.db.execute("PRAGMA table_info(authorized_devices)")
+                }:
+                    self.db.execute(
+                        "ALTER TABLE authorized_devices ADD COLUMN reset_pending INTEGER NOT "
+                        "NULL DEFAULT 0"
                     )
                 self.db.execute(
                     "CREATE TABLE IF NOT EXISTS grants (id TEXT PRIMARY KEY, owner TEXT NOT NULL, "
@@ -164,7 +172,7 @@ class AuthorizationStore:
                     "grant_id TEXT NOT NULL REFERENCES grants(id), expires REAL NOT NULL, "
                     "consumed INTEGER NOT NULL DEFAULT 0)"
                 )
-                self.db.execute("PRAGMA user_version=3")
+                self.db.execute("PRAGMA user_version=4")
         except Exception:
             self.db.close()
             raise
@@ -480,6 +488,35 @@ class AuthorizationStore:
                 raise AuthorizationError("access_denied")
             self.db.execute("UPDATE grants SET revoked=1 WHERE device=?", (device,))
 
+    def begin_owner_reset(self, *, owner: str, device: str) -> None:
+        """Persist a fail-closed reset gate together with grant revocation."""
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            changed = self.db.execute(
+                "UPDATE authorized_devices SET active=0,reset_pending=1,"
+                "generation=generation+1 WHERE id=? AND owner=?", (device, owner))
+            if changed.rowcount != 1:
+                raise AuthorizationError("access_denied")
+            self.db.execute("UPDATE grants SET revoked=1 WHERE device=?", (device,))
+
+    def complete_owner_reset(self, *, owner: str, device: str) -> None:
+        """Release the gate only after native passkey deletion was confirmed."""
+        with self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            changed = self.db.execute(
+                "UPDATE authorized_devices SET reset_pending=0 "
+                "WHERE id=? AND owner=? AND active=0 AND reset_pending=1", (device, owner))
+            if changed.rowcount != 1:
+                raise AuthorizationError("access_denied")
+
+    def owner_reset_pending(self, *, owner: str, device: str) -> bool:
+        row = self.db.execute(
+            "SELECT reset_pending FROM authorized_devices WHERE id=? AND owner=?",
+            (device, owner)).fetchone()
+        if row is None:
+            raise AuthorizationError("access_denied")
+        return bool(row[0])
+
     def device_enabled(self, *, owner: str, device: str) -> bool:
         row = self.db.execute(
             "SELECT active FROM authorized_devices WHERE id=? AND owner=?", (device, owner)
@@ -496,6 +533,8 @@ class AuthorizationStore:
         """
         with self.db:
             self.db.execute("BEGIN IMMEDIATE")
+            if self.owner_reset_pending(owner=owner, device=device):
+                raise ValueError("Owner reset is incomplete; finish passkey cleanup first")
             if self.device_enabled(owner=owner, device=device):
                 return False
             # Older registries disabled devices without marking grants revoked.

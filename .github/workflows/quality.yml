@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 permissions:
   contents: read
 jobs:
@@ -77,6 +77,21 @@ jobs:
           path: dist/managed-portable.zip
           if-no-files-found: error
           retention-days: 7
+  windows-feature-smoke:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.10.8"
+      - run: uv sync --locked --managed-python --python 3.12
+      - name: Check Windows issue boundaries before the full matrix completes
+        run: >-
+          uv run pytest -q tests/test_delegated_files.py tests/test_delegated_tasks.py
+          tests/test_peer_mcp.py tests/test_ssh_client.py tests/test_subchat_device_save.py
+          tests/test_subchat_queue_auto.py tests/test_subchat_setup.py
+          tests/test_subchat_upload_state.py tests/test_uploads_windows.py
+          tests/test_engine_selection.py
   shared-runtime:
     permissions:
       contents: read
@@ -110,10 +125,16 @@ jobs:
           tests/test_file_search_terminal_workflow.py
       - name: Check shared-agent recovery before parallel workers
         run: uv run pytest -v tests/test_shared_agent_reconnect.py --junitxml="${{ runner.temp }}/pytest-reconnect.xml"
-      - name: Run full suite with bounded Windows parallelism
+      - name: Run remaining suite with four workers
         run: >-
           uv run pytest -ra --ignore=tests/test_startup_native.py --durations=20
-          ${{ runner.os == 'Windows' && '-n 2 --dist loadfile --max-worker-restart=0' || '' }}
+          --ignore=tests/test_shared_agent_reconnect.py
+          --ignore=tests/test_terminal_children.py
+          --ignore=tests/test_terminal_pty.py
+          --ignore=tests/test_terminal_conpty.py
+          --ignore=tests/test_file_search_terminal_workflow.py
+          --deselect=tests/test_workspace_ui.py::test_workspace_mutation_recovery_in_javascript
+          -n 4 --dist loadfile --max-worker-restart=0
           --junitxml="${{ runner.temp }}/pytest-results.xml"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -230,3 +251,101 @@ jobs:
           --source-digest ${{ github.sha }}
           --source-ref refs/heads/main
           --deny-self-hosted-runners
+  publish-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [management-preview, windows-feature-smoke, shared-runtime,
+            attest-portable, attest-managed-portable]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Select a new clean version or an unfinished draft
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          tag="$(python3 scripts/assemble_release_assets.py --version)"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          draft="$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+          if [[ "$draft" == false ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          existing_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" \
+            --jq '.object.sha' 2>/dev/null || true)"
+          if [[ -n "$existing_ref" && "$existing_ref" != "$GITHUB_SHA" ]]; then
+            echo "Release tag already points at another commit" >&2
+            exit 1
+          fi
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "draft=$draft" >> "$GITHUB_OUTPUT"
+      - name: Download verified portable archives
+        if: steps.release.outputs.publish == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: portable-*
+          path: release-input
+      - name: Download verified managed archives
+        if: steps.release.outputs.publish == 'true'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: managed-portable-*
+          path: release-input
+      - name: Assemble versioned assets and verify provenance
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          test "$(python3 scripts/assemble_release_assets.py \
+            --incoming release-input --output release-assets)" == "${{ steps.release.outputs.tag }}"
+          for asset in release-assets/*.zip; do
+            gh attestation verify "$asset" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/quality.yml" \
+              --source-digest "$GITHUB_SHA" --source-ref refs/heads/main \
+              --deny-self-hosted-runners
+          done
+      - name: Upload and publish the complete release
+        if: steps.release.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          EXISTING_DRAFT: ${{ steps.release.outputs.draft }}
+        shell: bash
+        run: |
+          prerelease=false
+          if [[ "$RELEASE_TAG" =~ (a|b|rc)[0-9]+$ ]]; then
+            prerelease=true
+          fi
+          if [[ "$EXISTING_DRAFT" == true ]]; then
+            gh release upload "$RELEASE_TAG" release-assets/* --clobber
+          else
+            gh release create "$RELEASE_TAG" release-assets/* \
+              --target "$GITHUB_SHA" --draft --prerelease="$prerelease" \
+              --title "Anywhere Computer ${RELEASE_TAG#v}" \
+              --notes "Build from $GITHUB_SHA. Quality run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Live service and hardware acceptance are separate." \
+              --generate-notes
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > release.json
+          python3 - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+
+          release = json.loads(Path('release.json').read_text())
+          expected = {}
+          for path in Path('release-assets').iterdir():
+              with path.open('rb') as stream:
+                  expected[path.name] = ('sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest(),
+                                         path.stat().st_size)
+          actual = {asset['name']: (asset['digest'], asset['size'])
+                    for asset in release['assets']}
+          if release['draft'] is not True or actual != expected:
+              raise SystemExit('Draft release assets do not match the verified CI files')
+          PY
+          gh release edit "$RELEASE_TAG" --draft=false --prerelease="$prerelease"
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" == false

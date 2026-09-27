@@ -72,13 +72,14 @@ def list_transfers(
             db.row_factory = sqlite3.Row
             db.execute("PRAGMA query_only=ON")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in ({1, 2} if kind == "upload" else {1}):
+            if version not in ({1, 2, 3} if kind == "upload" else {1}):
                 raise ValueError("Unsupported transfer registry version")
             projection = "*"
-            if kind == "upload" and version == 1:
+            if kind == "upload":
                 columns = {row[1] for row in db.execute("PRAGMA table_info(uploads)")}
-                if "temporary" not in columns:
-                    projection = "*,NULL AS temporary"
+                for name in ("temporary", "requested_path"):
+                    if name not in columns:
+                        projection += f",NULL AS {name}"
             # Table names are selected exclusively by the validated literal above.
             rows = db.execute(
                 f"SELECT {projection} FROM {kind}s WHERE id>? ORDER BY id LIMIT ?",
