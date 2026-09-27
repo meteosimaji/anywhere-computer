@@ -20,10 +20,12 @@ from .authorization import GrantIdentity
 from .models import Contract, OperationId, Reply, Request
 from .subchat_mcp import (
     HTTPQueueModelChange,
+    QueueAuto,
     QueueEvents,
     QueueResourcesChange,
     ReadOnlyHTTPCatalog,
     SubchatSession,
+    _mutation_digest,
     capability_report,
     direct_gateway_catalog,
     public_submission_data,
@@ -33,6 +35,7 @@ from .subchat_state import (
     SubchatList,
     SubchatOperationNotFound,
     SubchatPage,
+    SubchatRequestConflict,
     SubchatSubmissions,
 )
 
@@ -121,7 +124,9 @@ class SubchatGateway:
 
         # A received request is scheduled independently of the HTTP connection.
         # A repeated ID with different content must never dispatch another input.
-        digest = json.dumps(request.arguments, sort_keys=True, separators=(",", ":"))
+        digest = json.dumps((request.arguments,
+                             authorization_grant_id if request.tool == 'subchat_queue_auto'
+                             else None), sort_keys=True, separators=(",", ":"))
         key = (grant_id, request.operation_id)
         existing = self.pending.get(key)
         if existing is not None:
@@ -431,14 +436,18 @@ class LazySubchatGateway:
                                  error="The selected Chat account does not match the "
                                        "saved operation.",
                                  data={"error_code": "account_mismatch"})
-        if request.tool in {"subchat_queue_model_change",
+        if request.tool in {"subchat_queue_auto", "subchat_queue_model_change",
                             "subchat_queue_resources_change"}:
             try:
-                (HTTPQueueModelChange if request.tool == "subchat_queue_model_change"
+                (QueueAuto if request.tool == "subchat_queue_auto" else
+                 HTTPQueueModelChange if request.tool == "subchat_queue_model_change"
                  else QueueResourcesChange).model_validate(request.arguments)
             except ValueError:
                 return Reply(operation_id=request.operation_id, state="failed",
-                             error="Valid resources and expected_revision are required for "
+                             error="A valid queued operation and lease are required for "
+                                   "automatic delivery." if request.tool ==
+                                   "subchat_queue_auto" else
+                                   "Valid resources and expected_revision are required for "
                                    "a queued resource change." if request.tool ==
                                    "subchat_queue_resources_change" else
                                    "An exact choice_id and expected_revision are required for "
@@ -539,7 +548,8 @@ class LazySubchatGateway:
             target = OperationId.model_validate(request.arguments)
             if request.tool == "subchat_cancel":
                 data = await asyncio.to_thread(self._cancel_unsent, grant_id,
-                                               target.operation_id)
+                                               target.operation_id, request.operation_id,
+                                               _mutation_digest(request))
                 return Reply(operation_id=request.operation_id, state="completed", data=data)
             queue_watch = None
             gateway = self._gateway
@@ -570,6 +580,10 @@ class LazySubchatGateway:
                          error="The selected Chat account does not match the saved operation. "
                                "Use the original account to inspect this operation.",
                          data={"error_code": "account_mismatch", "automatic_retry": False})
+        except SubchatRequestConflict:
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="This request ID belongs to a different Subchat mutation.",
+                         data={"error_code": "request_conflict", "dispatched": False})
         except ValidationError as error:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Subchat input has invalid fields. Correct them before sending.",
@@ -621,7 +635,8 @@ class LazySubchatGateway:
                     "next_cursor": events[-1]["id"] if events else request.after_id,
                     "has_more": more}
 
-    def _cancel_unsent(self, grant_id: str, operation_id: str) -> dict[str, JsonValue]:
+    def _cancel_unsent(self, grant_id: str, operation_id: str,
+                       request_id: str, digest: str) -> dict[str, JsonValue]:
         """Cancel only a selected-account input that has not begun dispatch."""
         from .state import Ledger
 
@@ -636,7 +651,8 @@ class LazySubchatGateway:
             if (saved.provider_account_id is not None
                     and saved.provider_account_id != self.config.account_id):
                 raise SubchatAccountMismatch("Saved operation belongs to another account")
-            return public_submission_data(store.cancel(operation_id, owner=grant_id))
+            return public_submission_data(store.cancel(
+                operation_id, owner=grant_id, request_id=request_id, digest=digest))
         finally:
             ledger.close()
 

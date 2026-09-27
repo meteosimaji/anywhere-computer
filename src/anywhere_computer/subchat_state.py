@@ -248,6 +248,9 @@ class SubchatSubmissions:
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_queue_revisions ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, '
                                'revision INTEGER NOT NULL)')
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_mutation_receipts ('
+                               'request_id TEXT PRIMARY KEY, owner TEXT, tool TEXT NOT NULL, '
+                               'digest TEXT NOT NULL, result TEXT NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_send_intents ('
                                'owner TEXT, intent_key TEXT NOT NULL, '
                                'operation_id TEXT NOT NULL UNIQUE, '
@@ -622,10 +625,20 @@ class SubchatSubmissions:
     def _replace(self, old: SubchatSubmission, new: SubchatSubmission,
                  owner: str | None, *, http_event: str | None = None,
                  require_auto_queue_armed: bool = False,
-                 expected_queue_revision: int | None = None) -> SubchatSubmission:
+                 expected_queue_revision: int | None = None,
+                 mutation_request_id: str | None = None,
+                 mutation_digest: str | None = None) -> SubchatSubmission:
         with self.connection:
             # Serialize identity validation and mutation across ledger connections.
             self.connection.execute('BEGIN IMMEDIATE')
+            if mutation_request_id is not None:
+                if mutation_digest is None:
+                    raise ValueError('Mutation digest is required')
+                receipt = self.mutation_receipt(
+                    mutation_request_id, owner=owner, tool='subchat_cancel',
+                    digest=mutation_digest)
+                if receipt is not None:
+                    return SubchatSubmission.model_validate(receipt['submission'])
             if (expected_queue_revision is not None and
                     self.queue_revision(old.operation_id, owner=owner)
                     != expected_queue_revision):
@@ -712,16 +725,40 @@ class SubchatSubmissions:
                     'SELECT 1 FROM subchat_http_dispatch_claims WHERE operation_id=?',
                     (new.operation_id,)).fetchone() is not None):
                 self._insert_http_event(new.operation_id, http_event, None)
+            self._save_mutation_receipt(
+                mutation_request_id, owner=owner, tool='subchat_cancel',
+                digest=mutation_digest, result={'submission': new.model_dump(mode='json')})
         return new
 
-    def cancel(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
+    def cancel(self, operation_id: str, *, owner: str | None,
+               request_id: str | None = None, digest: str | None = None) -> SubchatSubmission:
         """Cancel only a not-yet-reserved submission, never stop a provider turn."""
+        if request_id is not None:
+            if digest is None:
+                raise ValueError('Mutation digest is required')
+            receipt = self.mutation_receipt(
+                request_id, owner=owner, tool='subchat_cancel', digest=digest)
+            if receipt is not None:
+                return SubchatSubmission.model_validate(receipt['submission'])
         old = self.get(operation_id, owner=owner)
         if old.state == 'cancelled':
+            if request_id is not None:
+                assert digest is not None
+                with self.connection:
+                    self.connection.execute('BEGIN IMMEDIATE')
+                    receipt = self.mutation_receipt(
+                        request_id, owner=owner, tool='subchat_cancel', digest=digest)
+                    if receipt is not None:
+                        return SubchatSubmission.model_validate(receipt['submission'])
+                    self._save_mutation_receipt(
+                        request_id, owner=owner, tool='subchat_cancel', digest=digest,
+                        result={'submission': old.model_dump(mode='json')})
             return old
         if old.state not in {'queued', 'prepared'}:
             raise ValueError('Submission may already be dispatched; cancellation is unavailable')
-        return self._replace(old, old.model_copy(update={'state': 'cancelled'}), owner)
+        return self._replace(
+            old, old.model_copy(update={'state': 'cancelled'}), owner,
+            mutation_request_id=request_id, mutation_digest=digest)
 
     def queue_revision(self, operation_id: str, *, owner: str | None) -> int:
         self.get(operation_id, owner=owner)
@@ -730,13 +767,53 @@ class SubchatSubmissions:
             (operation_id, owner)).fetchone()
         return row[0] if row is not None else 0
 
+    def mutation_receipt(self, request_id: str, *, owner: str | None,
+                         tool: str, digest: str) -> dict[str, JsonValue] | None:
+        """Return an exact committed mutation result, or reject a reused request ID."""
+        row = self.connection.execute(
+            'SELECT owner, tool, digest, result FROM subchat_mutation_receipts '
+            'WHERE request_id=?', (request_id,)).fetchone()
+        if row is None:
+            return None
+        if (row[0], row[1], row[2]) != (owner, tool, digest):
+            raise SubchatRequestConflict('Subchat mutation ID was already used')
+        result = json.loads(row[3])
+        if not isinstance(result, dict):
+            raise ValueError('Saved Subchat mutation result is invalid')
+        return result
+
+    def _save_mutation_receipt(self, request_id: str | None, *, owner: str | None,
+                               tool: str, digest: str | None,
+                               result: dict[str, JsonValue]) -> None:
+        if request_id is None:
+            return
+        if digest is None:
+            raise ValueError('Mutation digest is required with a request ID')
+        self.connection.execute(
+            'INSERT INTO subchat_mutation_receipts '
+            '(request_id, owner, tool, digest, result) VALUES (?,?,?,?,?)',
+            (request_id, owner, tool, digest,
+             json.dumps(result, sort_keys=True, separators=(',', ':'))))
+
     def change_queued_model(self, operation_id: str, *, owner: str | None,
                             expected_revision: int, model: str, effort: str,
-                            http_selection: SubchatHTTPSelection | None
+                            http_selection: SubchatHTTPSelection | None,
+                            request_id: str | None = None, digest: str | None = None
                             ) -> tuple[SubchatSubmission, int]:
         """CAS a queued selection before the durable send reservation."""
         with self.connection:
             self.connection.execute('BEGIN IMMEDIATE')
+            if request_id is not None:
+                if digest is None:
+                    raise ValueError('Mutation digest is required')
+                receipt = self.mutation_receipt(
+                    request_id, owner=owner, tool='subchat_queue_model_change', digest=digest)
+                if receipt is not None:
+                    saved_revision = receipt['queue_revision']
+                    if type(saved_revision) is not int:
+                        raise ValueError('Saved queue revision is invalid')
+                    return (SubchatSubmission.model_validate(receipt['submission']),
+                            saved_revision)
             old = self.get(operation_id, owner=owner)
             if old.state != 'queued':
                 raise ValueError('Only a queued input can change its model')
@@ -763,14 +840,31 @@ class SubchatSubmissions:
                 'INSERT INTO subchat_queue_revisions VALUES (?,?,?) '
                 'ON CONFLICT(operation_id) DO UPDATE SET revision=excluded.revision',
                 (operation_id, owner, revision + 1))
+            self._save_mutation_receipt(
+                request_id, owner=owner, tool='subchat_queue_model_change', digest=digest,
+                result={'submission': updated.model_dump(mode='json'),
+                        'queue_revision': revision + 1})
             return updated, revision + 1
 
     def change_queued_resources(self, operation_id: str, *, owner: str | None,
-                                expected_revision: int, resources: SubchatResources
+                                expected_revision: int, resources: SubchatResources,
+                                request_id: str | None = None, digest: str | None = None
                                 ) -> tuple[SubchatSubmission, int]:
         """Replace explicit resource references only before a queued send is reserved."""
         with self.connection:
             self.connection.execute('BEGIN IMMEDIATE')
+            if request_id is not None:
+                if digest is None:
+                    raise ValueError('Mutation digest is required')
+                receipt = self.mutation_receipt(
+                    request_id, owner=owner, tool='subchat_queue_resources_change',
+                    digest=digest)
+                if receipt is not None:
+                    saved_revision = receipt['queue_revision']
+                    if type(saved_revision) is not int:
+                        raise ValueError('Saved queue revision is invalid')
+                    return (SubchatSubmission.model_validate(receipt['submission']),
+                            saved_revision)
             old = self.get(operation_id, owner=owner)
             if old.state != 'queued':
                 raise ValueError('Only a queued input can change its resources')
@@ -796,6 +890,10 @@ class SubchatSubmissions:
                 'INSERT INTO subchat_queue_revisions VALUES (?,?,?) '
                 'ON CONFLICT(operation_id) DO UPDATE SET revision=excluded.revision',
                 (operation_id, owner, revision + 1))
+            self._save_mutation_receipt(
+                request_id, owner=owner, tool='subchat_queue_resources_change', digest=digest,
+                result={'submission': updated.model_dump(mode='json'),
+                        'queue_revision': revision + 1})
             return updated, revision + 1
 
     def interrupt(self, operation_id: str, *, owner: str | None,
@@ -985,7 +1083,8 @@ class SubchatSubmissions:
 
     def arm_auto_queue(self, operation_id: str, *, owner: str | None,
                        lease_seconds: int, authorization_grant_id: str | None = None,
-                       notify_desktop: bool = False
+                       notify_desktop: bool = False, request_id: str | None = None,
+                       digest: str | None = None
                        ) -> dict[str, JsonValue]:
         """Opt in a saved queue; keep only bounded delivery metadata, never prompt text."""
         if not self._auto_queue_available:
@@ -996,6 +1095,13 @@ class SubchatSubmissions:
             raise ValueError('Invalid desktop notification preference')
         with self.connection:
             self.connection.execute('BEGIN IMMEDIATE')
+            if request_id is not None:
+                if digest is None:
+                    raise ValueError('Mutation digest is required')
+                receipt = self.mutation_receipt(
+                    request_id, owner=owner, tool='subchat_queue_auto', digest=digest)
+                if receipt is not None:
+                    return receipt
             saved = self.get(operation_id, owner=owner)
             if saved.state != 'queued':
                 raise ValueError('Automatic delivery requires a queued input')
@@ -1027,9 +1133,13 @@ class SubchatSubmissions:
                 'WHERE operation_id=?', (operation_id,)).fetchone()
             if row is None or row[0] != owner:
                 raise SubchatOperationNotFound('No queue visible to this owner')
-            return {'state': row[1], 'expires_at': row[2],
-                    'event_cursor': event_cursor, 'epoch': row[3],
-                    'notify_desktop': bool(row[4])}
+            result: dict[str, JsonValue] = {'state': row[1], 'expires_at': row[2],
+                                            'event_cursor': event_cursor, 'epoch': row[3],
+                                            'notify_desktop': bool(row[4])}
+            self._save_mutation_receipt(
+                request_id, owner=owner, tool='subchat_queue_auto', digest=digest,
+                result=result)
+            return result
 
     def auto_queue_grant_id(self, operation_id: str, *, owner: str | None) -> str | None:
         self.get(operation_id, owner=owner)
@@ -1038,11 +1148,20 @@ class SubchatSubmissions:
             'WHERE operation_id=? AND owner IS ?', (operation_id, owner)).fetchone()
         return str(row[0]) if row is not None and isinstance(row[0], str) else None
 
-    def disable_auto_queue(self, operation_id: str, *, owner: str | None) -> bool:
-        self.get(operation_id, owner=owner)
+    def disable_auto_queue(self, operation_id: str, *, owner: str | None,
+                           request_id: str | None = None, digest: str | None = None) -> bool:
         if not self._auto_queue_available:
             return False
         with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            if request_id is not None:
+                if digest is None:
+                    raise ValueError('Mutation digest is required')
+                receipt = self.mutation_receipt(
+                    request_id, owner=owner, tool='subchat_queue_auto', digest=digest)
+                if receipt is not None:
+                    return bool(receipt['changed'])
+            self.get(operation_id, owner=owner)
             now = time.time()
             changed = self.connection.execute(
                 "UPDATE subchat_auto_queue SET state='disabled', event='disabled', "
@@ -1053,7 +1172,12 @@ class SubchatSubmissions:
                     'INSERT INTO subchat_auto_queue_events '
                     '(operation_id, owner, event, updated_at) VALUES (?,?,?,?)',
                     (operation_id, owner, 'disabled', now))
-            return changed.rowcount == 1
+            result = changed.rowcount == 1
+            status = self.auto_queue_status(operation_id, owner=owner)
+            self._save_mutation_receipt(
+                request_id, owner=owner, tool='subchat_queue_auto', digest=digest,
+                result={'changed': result, 'auto_status': status or {'state': 'disabled'}})
+            return result
 
     def active_auto_queues(self, *, owner: str | None) -> tuple[str, ...]:
         if not self._auto_queue_available:

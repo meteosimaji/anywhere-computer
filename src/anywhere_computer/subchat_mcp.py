@@ -2,6 +2,8 @@
 
 import asyncio
 import base64
+import hashlib
+import json
 import re
 import sys
 import time
@@ -54,6 +56,13 @@ from .subchat_state import (
 
 _QUEUE_AUTHORIZATION_GRANT: ContextVar[str | None] = ContextVar(
     'subchat_queue_authorization_grant', default=None)
+
+
+def _mutation_digest(request: Request, grant_id: str | None = None) -> str:
+    """Bind one mutation ID to its exact tool, arguments and trusted grant."""
+    payload = json.dumps((request.tool, request.arguments, grant_id),
+                         sort_keys=True, separators=(',', ':'), ensure_ascii=False)
+    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
 
 
 class Send(Contract):
@@ -1000,6 +1009,24 @@ def session(service: Subchats, *,
                     trusted_grant is None or not auto_queue_grant_active(trusted_grant)
                 ):
                     raise SubchatAccessError(403)
+                digest = _mutation_digest(request, trusted_grant)
+                receipt = service.store.mutation_receipt(
+                    request.operation_id, owner=owner, tool=request.tool, digest=digest)
+                if receipt is not None:
+                    if auto.enabled:
+                        current_status = service.store.auto_queue_status(
+                            auto.operation_id, owner=owner)
+                        if current_status is not None and current_status['state'] == 'armed':
+                            start_auto_queue(auto.operation_id)
+                        saved_status = receipt
+                    else:
+                        recorded_status = receipt['auto_status']
+                        if not isinstance(recorded_status, dict):
+                            raise ValueError('Saved automatic queue status is invalid')
+                        saved_status = recorded_status
+                    return Reply(operation_id=request.operation_id, state='completed',
+                                 data={'submission_operation_id': auto.operation_id,
+                                       **saved_status})
                 auto_status: dict[str, JsonValue] | None
                 if auto.enabled:
                     if auto.notify_desktop and sys.platform != 'darwin':
@@ -1015,14 +1042,17 @@ def session(service: Subchats, *,
                     auto_status = service.store.arm_auto_queue(
                         auto.operation_id, owner=owner, lease_seconds=auto.lease_seconds,
                         authorization_grant_id=trusted_grant,
-                        notify_desktop=auto.notify_desktop)
+                        notify_desktop=auto.notify_desktop,
+                        request_id=request.operation_id, digest=digest)
                     cursor = auto_status['event_cursor']
                     epoch = auto_status['epoch']
                     assert type(cursor) is int and type(epoch) is int
                     start_auto_notification(auto.operation_id, cursor, epoch)
                     start_auto_queue(auto.operation_id)
                 else:
-                    service.store.disable_auto_queue(auto.operation_id, owner=owner)
+                    service.store.disable_auto_queue(
+                        auto.operation_id, owner=owner,
+                        request_id=request.operation_id, digest=digest)
                     subscriber = server.auto_queue_notifications.pop(auto.operation_id, None)
                     if subscriber is not None:
                         subscriber.cancel()
@@ -1089,7 +1119,9 @@ def session(service: Subchats, *,
                              data=page.model_dump(mode='json'))
             if request.tool == 'subchat_cancel':
                 target = OperationId.model_validate(request.arguments)
-                result = service.store.cancel(target.operation_id, owner=owner)
+                result = service.store.cancel(
+                    target.operation_id, owner=owner, request_id=request.operation_id,
+                    digest=_mutation_digest(request))
                 pending: list[asyncio.Task[Reply] | asyncio.Task[SubchatSubmission]] = [
                     task for task, call in server.calls.items()
                            if call.tool == 'subchat_send'
@@ -1129,6 +1161,14 @@ def session(service: Subchats, *,
                              data=public_submission_data(result))
             if request.tool == 'subchat_queue_model_change':
                 change = QueueModelChange.model_validate(request.arguments)
+                digest = _mutation_digest(request)
+                receipt = service.store.mutation_receipt(
+                    request.operation_id, owner=owner, tool=request.tool, digest=digest)
+                if receipt is not None:
+                    saved = SubchatSubmission.model_validate(receipt['submission'])
+                    return Reply(operation_id=request.operation_id, state='completed',
+                                 data={**public_submission_data(saved),
+                                       'queue_revision': receipt['queue_revision']})
                 current = service.store.get(change.operation_id, owner=owner)
                 if current.state != 'queued':
                     raise ValueError('Only an unsent queued input can change its model')
@@ -1162,16 +1202,26 @@ def session(service: Subchats, *,
                 result, revision = service.store.change_queued_model(
                     change.operation_id, owner=owner,
                     expected_revision=change.expected_revision, model=queue_model,
-                    effort=queue_effort, http_selection=queue_selection)
+                    effort=queue_effort, http_selection=queue_selection,
+                    request_id=request.operation_id, digest=digest)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={**public_submission_data(result),
                                    'queue_revision': revision})
             if request.tool == 'subchat_queue_resources_change':
                 change_resources = QueueResourcesChange.model_validate(request.arguments)
+                digest = _mutation_digest(request)
+                receipt = service.store.mutation_receipt(
+                    request.operation_id, owner=owner, tool=request.tool, digest=digest)
+                if receipt is not None:
+                    saved = SubchatSubmission.model_validate(receipt['submission'])
+                    return Reply(operation_id=request.operation_id, state='completed',
+                                 data={**public_submission_data(saved),
+                                       'queue_revision': receipt['queue_revision']})
                 result, revision = service.store.change_queued_resources(
                     change_resources.operation_id, owner=owner,
                     expected_revision=change_resources.expected_revision,
-                    resources=change_resources.resources)
+                    resources=change_resources.resources,
+                    request_id=request.operation_id, digest=digest)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={**public_submission_data(result),
                                    'queue_revision': revision})
