@@ -87,6 +87,28 @@ def test_generated_bytecode_is_removed_before_manifest(tmp_path):
     assert not compiled.exists()
 
 
+def test_portable_runtime_excludes_installers_and_headers_but_keeps_licenses(tmp_path):
+    runtime = tmp_path / "runtime"
+    stdlib = runtime / "lib/python3.12"
+    site = stdlib / "site-packages"
+    removed = (runtime / "include/Python.h", stdlib / "ensurepip/__init__.py",
+               site / "pip/__init__.py", site / "pip-26.0.dist-info/METADATA",
+               runtime / "bin/pip", runtime / "bin/pip3.12",
+               runtime / "Scripts/pip.exe")
+    retained = (stdlib / "LICENSE.txt", site / "playwright/__init__.py",
+                site / "pip-tools-7.0.dist-info/METADATA",
+                runtime / "bin/python3", runtime / "bin/pipeline",
+                runtime / "Scripts/pip-tools.exe")
+    for path in (*removed, *retained):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture")
+
+    portable_builder.discard_build_tools(runtime, stdlib, site)
+
+    assert all(not path.exists() for path in removed)
+    assert all(path.read_text() == "fixture" for path in retained)
+
+
 def test_failed_archive_publication_leaves_no_partial_output(tmp_path, monkeypatch):
     staged = tmp_path / "staged.zip"
     published = tmp_path / "published.zip"

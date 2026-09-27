@@ -1048,10 +1048,17 @@ async def test_mcp_reports_http_preflight_failure_without_replay(tmp_path):
                         'prompt': 'preflight',
                         'model': 'Future Chat', 'effort': 'Future effort',
                         'http_selection': SELECTION.model_dump(mode='json')}))
-                assert result.state == 'failed'
-                assert result.data == {'error_code': 'http_preflight_failed',
-                                       'dispatched': False, 'automatic_retry': False}
+                if result.state == 'running':
+                    assert result.data['submission_operation_id'] == operation
+                    with pytest.raises(SubchatPreflightFailed):
+                        await asyncio.wait_for(asyncio.shield(server.sends[operation]), 60)
+                else:
+                    assert result.state == 'failed'
+                    assert result.data == {'error_code': 'http_preflight_failed',
+                                           'dispatched': False, 'automatic_retry': False}
                 assert store.get(operation, owner=None).state == 'preflight_failed'
+                assert store.connection.execute('SELECT COUNT(*) FROM '
+                    'subchat_http_dispatch_claims').fetchone()[0] == 0
                 count = len(api.requests)
                 recovered = await server.execute(Request(operation_id='b' * 32,
                     tool='subchat_recover', arguments={'operation_id': operation}))
