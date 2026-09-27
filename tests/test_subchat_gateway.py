@@ -741,6 +741,81 @@ async def test_https_queue_events_are_scope_and_owner_bound_without_browser(tmp_
 
 
 @pytest.mark.asyncio
+async def test_activity_over_real_http_mcp_requires_its_oauth_scope(tmp_path, monkeypatch):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    @asynccontextmanager
+    async def forbidden_gateway(config, *, owner):
+        raise AssertionError("An activity read must not launch Chrome")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", forbidden_gateway)
+    engine = Engine(tmp_path / "engine")
+    authority = AuthorizationStore(
+        tmp_path / "auth", resource=RESOURCE,
+        known_tools=frozenset(engine.tools) | SUBCHAT_GATEWAY_TOOLS,
+    )
+    redirect = "https://client.example/callback"
+    authority.register_client("client", frozenset({redirect}))
+    authority.enroll_device("owner", "device", frozenset({
+        "subchat_activity", "computer_status",
+    }))
+
+    def grant(tool):
+        verifier = "v" * 43
+        code = authority.approve(
+            owner="owner", device="device", client="client", redirect=redirect,
+            resource=RESOURCE, tools=frozenset({tool}), challenge=pkce_s256(verifier),
+        )
+        return authority.exchange_code(
+            code=code, verifier=verifier, client="client", redirect=redirect,
+            resource=RESOURCE,
+        ).value
+
+    activity_token = grant("subchat_activity")
+    other_token = grant("computer_status")
+    gateway = LazySubchatGateway(SubchatGatewayConfig(
+        profile=str(tmp_path / "selected" / "Default"),
+        ledger=str(tmp_path / "ledger"), account_id="account",
+        consent="ordinary-chat-browser-control-approved"), owner="owner")
+    backend = AuthorizedDeviceMCP(
+        authority, engine, owner="owner", device="device", client="client",
+        subchat_gateway=gateway,
+    )
+    adapter = HTTPMCP(backend.authenticate, backend.session)
+    port = await adapter.start()
+    try:
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}",
+                                     trust_env=False) as http:
+            headers = await initialize(http, activity_token)
+            listed = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": 1, "method": "tools/list",
+            })
+            assert {tool["name"] for tool in listed.json()["result"]["tools"]} == {
+                "subchat_activity"}
+            response = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "subchat_activity", "arguments": {}},
+            })
+            assert response.status_code == 200
+            data = response.json()["result"]["structuredContent"]["data"]
+            assert data["state"] == "idle" and data["active_count"] == 0
+            assert gateway._gateway is None
+
+            other_headers = await initialize(http, other_token)
+            other_listed = await http.post("/mcp", headers=other_headers, json={
+                "jsonrpc": "2.0", "id": 3, "method": "tools/list",
+            })
+            assert "subchat_activity" not in {
+                tool["name"] for tool in other_listed.json()["result"]["tools"]}
+    finally:
+        await adapter.close()
+        await gateway.close()
+        authority.close()
+        await engine.close()
+
+
+@pytest.mark.asyncio
 async def test_queue_events_over_real_http_mcp_use_separate_oauth_scope(tmp_path):
     engine = Engine(tmp_path / "engine")
     authority = AuthorizationStore(
