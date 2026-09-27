@@ -12,15 +12,19 @@ from pathlib import Path
 from .mcp_server import serve_stdio
 from .peer_mailbox import Peer, PeerMailbox
 from .peer_mcp import session
+from .private_file import (
+    create_windows_private_file,
+    require_windows_credential_path,
+    validate_windows_private_file,
+)
 
 
-def _require_private_peer_storage() -> None:
+def _credential(path: Path, directory: Path | None = None) -> str:
     if sys.platform == "win32":
-        raise RuntimeError("Local peer messaging requires private file ACLs on Windows")
-
-
-def _credential(path: Path) -> str:
-    _require_private_peer_storage()
+        if directory is None:
+            raise ValueError("Windows peer credentials require a state directory")
+        require_windows_credential_path(directory, path)
+        validate_windows_private_file(path)
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode):
         raise ValueError("Peer credential must be a regular file")
@@ -35,23 +39,35 @@ def _credential(path: Path) -> str:
     return value
 
 
-def _publish_credential(path: Path) -> str:
-    _require_private_peer_storage()
+def _publish_credential(path: Path, directory: Path | None = None) -> str:
+    if sys.platform == "win32":
+        if directory is None:
+            raise ValueError("Windows peer credentials require a state directory")
+        require_windows_credential_path(directory, path)
     token = secrets.token_urlsafe(32)
     staged: Path | None = None
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="w", encoding="ascii", dir=path.parent, prefix=".peer-", delete=False,
-        ) as output:
-            staged = Path(output.name)
-            os.chmod(staged, 0o600)
+        if sys.platform == "win32":
+            staged = path.parent / (".peer-" + secrets.token_hex(16))
+            descriptor = create_windows_private_file(staged)
+            output_context = os.fdopen(descriptor, "w", encoding="ascii")
+        else:
+            output_context = tempfile.NamedTemporaryFile(
+                mode="w", encoding="ascii", dir=path.parent, prefix=".peer-", delete=False,
+            )
+            staged = Path(output_context.name)
+        with output_context as output:
+            if sys.platform == "win32":
+                validate_windows_private_file(staged)
+            else:
+                os.chmod(staged, 0o600)
             output.write(token + "\n")
             output.flush()
             os.fsync(output.fileno())
         try:
             os.link(staged, path)
         except FileExistsError:
-            token = _credential(path)
+            token = _credential(path, directory)
         else:
             if os.name != "nt":
                 directory_fd = os.open(path.parent, os.O_RDONLY)
@@ -67,8 +83,7 @@ def _publish_credential(path: Path) -> str:
 
 async def _serve(directory: Path, credential_file: Path, *,
                  session_id: str | None = None, thread_id: str | None = None) -> None:
-    _require_private_peer_storage()
-    token = _credential(credential_file)
+    token = _credential(credential_file, directory)
     with PeerMailbox(directory) as mailbox:
         mailbox.bind(session_id=session_id, thread_id=thread_id)
         server = session(mailbox, token)
@@ -104,7 +119,6 @@ async def _serve(directory: Path, credential_file: Path, *,
 
 
 def main() -> None:
-    _require_private_peer_storage()
     parser = argparse.ArgumentParser(description="Local authenticated peer mailbox")
     parser.add_argument("--state-dir", type=Path, required=True)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -131,7 +145,7 @@ def main() -> None:
     # Stage complete bytes on the same filesystem and publish with an exclusive
     # hard link. A crash before publication leaves no partial final credential;
     # a crash after publication can be reconciled by rerunning enrollment.
-    token = _publish_credential(path)
+    token = _publish_credential(path, directory)
     with PeerMailbox(directory) as mailbox:
         mailbox.enroll(peer, credential=token)
     print(path)

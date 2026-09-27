@@ -14,31 +14,56 @@ from anywhere_computer import peer_cli
 from anywhere_computer.peer_mailbox import PeerMailbox
 
 
-def test_windows_peer_entry_points_fail_closed_without_private_acls(tmp_path, monkeypatch):
+def test_windows_peer_entry_points_require_state_directory(tmp_path, monkeypatch):
     credential = tmp_path / "peer-token"
     credential.write_text("secret", encoding="ascii")
     monkeypatch.setattr(peer_cli.sys, "platform", "win32")
-    with pytest.raises(RuntimeError, match="private file ACLs"):
+    with pytest.raises(ValueError, match="state directory"):
         peer_cli._publish_credential(tmp_path / "new-token")
-    with pytest.raises(RuntimeError, match="private file ACLs"):
+    with pytest.raises(ValueError, match="state directory"):
         peer_cli._credential(credential)
-    with pytest.raises(RuntimeError, match="private file ACLs"):
-        peer_cli.main()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific fail-closed guard")
-def test_windows_peer_enrollment_cli_refuses_unprotected_credential(tmp_path):
+def test_windows_peer_enrollment_and_serve_require_private_credential(tmp_path):
+    state = tmp_path / "mailbox"
     credential = tmp_path / "peer-token"
     result = subprocess.run(
         [sys.executable, "-m", "anywhere_computer.peer_cli", "--state-dir",
-         str(tmp_path / "mailbox"), "enroll", "--peer-id", "codex:task-1",
+         str(state), "enroll", "--peer-id", "codex:task-1",
          "--owner", "owner", "--account", "account", "--project", "project",
          "--runtime", "codex", "--credential-file", str(credential)],
         capture_output=True, text=True,
     )
     assert result.returncode != 0
-    assert "private file ACLs" in result.stderr
+    assert "state/credentials" in result.stderr
     assert not credential.exists()
+
+    credential = state / "credentials" / "peer-token"
+    _provision(state, credential, "codex:task-1")
+    token = peer_cli._credential(credential, state)
+    with PeerMailbox(state) as mailbox:
+        assert mailbox.identity(token).peer_id == "codex:task-1"
+    served = subprocess.run(
+        [sys.executable, "-m", "anywhere_computer.peer_cli", "--state-dir", str(state),
+         "serve", "--credential-file", str(credential)],
+        stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
+    )
+    assert served.returncode == 0, served.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows ACL integration")
+def test_windows_peer_rejects_broad_credential_acl(tmp_path):
+    state = tmp_path / "mailbox"
+    credential = state / "credentials" / "peer-token"
+    _provision(state, credential, "codex:task-1")
+    changed = subprocess.run(
+        ["icacls", str(credential), "/grant", "*S-1-1-0:R"],
+        capture_output=True, text=True, check=True,
+    )
+    assert changed.returncode == 0
+    with pytest.raises(PermissionError, match="ACL"):
+        peer_cli._credential(credential, state)
 
 
 def _provision(state, credential, peer, *, account="account"):
@@ -128,12 +153,12 @@ asyncio.run(peer_cli._serve(Path(sys.argv[1]), Path(sys.argv[2])))
             process.stdin.close()
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="peer CLI requires private Windows file ACLs")
 async def test_two_local_peer_mcp_processes_exchange_and_ack(tmp_path):
     state = tmp_path / "mailbox"
-    codex = tmp_path / "codex-token"
-    claude = tmp_path / "claude-token"
-    foreign = tmp_path / "foreign-token"
+    credential_dir = state / "credentials" if sys.platform == "win32" else tmp_path
+    codex = credential_dir / "codex-token"
+    claude = credential_dir / "claude-token"
+    foreign = credential_dir / "foreign-token"
     _provision(state, codex, "codex:task-1")
     _provision(state, claude, "claude:session-1")
     _provision(state, foreign, "claude:foreign", account="other-account")
@@ -149,7 +174,7 @@ async def test_two_local_peer_mcp_processes_exchange_and_ack(tmp_path):
             *args,
         ])
 
-    async with asyncio.timeout(15):
+    async with asyncio.timeout(30):
         async with stdio_client(params(codex)) as (codex_read, codex_write):
             async with ClientSession(codex_read, codex_write) as codex_client:
                 await codex_client.initialize()

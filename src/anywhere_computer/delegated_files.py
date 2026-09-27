@@ -1,7 +1,8 @@
-"""Descriptor-confined file operations for locally delegated child tasks.
+"""Handle-confined file operations for locally delegated child tasks.
 
-Every component is opened relative to an already opened directory descriptor.
-Symlinks are rejected, including in the configured root and its ancestors.
+POSIX opens every component relative to a directory descriptor. Windows pins
+the parent ancestry and permits reads and create-only writes. Both reject
+symlinks, including in the configured root and its ancestors.
 """
 
 import hashlib
@@ -85,8 +86,13 @@ def _read_at(parent: int, name: str) -> tuple[bytes, os.stat_result]:
 
 
 def read(args: ReadFile, roots: tuple[str, ...]) -> dict[str, JsonValue]:
-    with _parent(args.path, roots) as (parent, name):
-        content, _ = _read_at(parent, name)
+    if os.name == "nt":
+        from .delegated_win32 import read_content
+
+        content = read_content(args.path, roots)
+    else:
+        with _parent(args.path, roots) as (parent, name):
+            content, _ = _read_at(parent, name)
     lines = content.decode("utf-8").splitlines(keepends=True)
     start = max(0, len(lines) + args.offset) if args.offset < 0 else args.offset
     stop = min(len(lines), start + args.limit)
@@ -96,6 +102,10 @@ def read(args: ReadFile, roots: tuple[str, ...]) -> dict[str, JsonValue]:
 
 
 def write(args: WriteFile, roots: tuple[str, ...], backup_dir: Path) -> dict[str, JsonValue]:
+    if os.name == "nt":
+        from .delegated_win32 import create_file
+
+        return create_file(args, roots)
     data = args.text.encode()
     with _parent(args.path, roots) as (parent, name):
         try:

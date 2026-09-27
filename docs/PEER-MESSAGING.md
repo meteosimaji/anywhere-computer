@@ -172,7 +172,11 @@ synthetic local peer send.
 
 To reproduce, create a fresh temporary state directory and enroll two peers
 with `anywhere-peer --state-dir <state> enroll` using the same owner, account,
-and project and distinct `--credential-file` paths. Configure one MCP stdio
+and project and distinct `--credential-file` paths. On Windows, each credential
+file must be located directly in
+`<state>/credentials/`; enrollment creates that private directory and rejects
+existing files whose owner or ACL grants access outside the current user,
+SYSTEM, and Administrators. Configure one MCP stdio
 server per CLI, with command `python -m anywhere_computer.peer_cli`, arguments
 `--state-dir <state> serve --credential-file <that CLI's credential>`, and
 `PYTHONPATH=<repository>/src` when running from source. Start the Claude Code
