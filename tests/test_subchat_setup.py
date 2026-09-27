@@ -69,6 +69,8 @@ def test_inspect_then_select_pins_only_verified_account_without_send(tmp_path, m
     assert json.loads(selection.read_text())["enable_background_send"] is True
 
 
+@pytest.mark.skipif(sys.platform != "darwin",
+                    reason="Existing Chrome login selection is macOS-only")
 def test_doctor_checks_selected_account_without_sending(tmp_path, monkeypatch, capsys):
     source = tmp_path / 'Chrome' / 'Default'
     source.mkdir(parents=True)
@@ -380,6 +382,7 @@ def test_discover_choose_and_revoke_profile_id(tmp_path, monkeypatch, capsys):
     assert not (state.parent / "login-selection.json").exists()
 
 
+@pytest.mark.skipif(sys.platform != "darwin", reason="Named Chrome login selection is macOS-only")
 def test_named_profiles_require_confirmed_account_and_preserve_active_selection(
     tmp_path, monkeypatch, capsys,
 ):

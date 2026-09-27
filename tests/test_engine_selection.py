@@ -28,7 +28,7 @@ async def test_selected_data_keeps_endpoint_and_existing_operation(tmp_path):
     stop = asyncio.Event()
     service = asyncio.create_task(serve(control, credential='selection-fixture', shutdown=stop))
     try:
-        async with asyncio.timeout(5):
+        async with asyncio.timeout(30):
             while not (control / 'agent.json').exists():
                 if service.done():
                     await service

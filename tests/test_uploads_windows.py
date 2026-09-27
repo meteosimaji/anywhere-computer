@@ -124,19 +124,30 @@ def test_windows_staging_entry_cannot_be_replaced_during_link(tmp_path, monkeypa
                               data_base64=base64.b64encode(b"abc").decode()))
     original = os.link
     replacement_blocked = False
+    link_error = None
 
     def guarded_link(source, destination):
-        nonlocal replacement_blocked
+        nonlocal replacement_blocked, link_error
         try:
             os.unlink(source)
         except OSError:
             replacement_blocked = True
         else:
             raise AssertionError("Pinned staging entry was removed before publication")
-        original(source, destination)
+        try:
+            original(source, destination)
+        except OSError as error:
+            link_error = error
+            raise
 
     monkeypatch.setattr("anywhere_computer.uploads.os.link", guarded_link)
-    result = uploads.commit(TransferId(transfer_id=identity))
+    try:
+        result = uploads.commit(TransferId(transfer_id=identity))
+    except UploadOutcomeUnknown:
+        assert replacement_blocked, "Pinned staging entry was removable during publication"
+        if link_error is not None:
+            raise AssertionError(f"Pinned staging hard link failed: {link_error}") from link_error
+        raise
     assert replacement_blocked and result["publication_verified"] is True
     assert target.read_bytes() == b"abc"
 

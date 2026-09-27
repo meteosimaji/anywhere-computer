@@ -8,6 +8,20 @@ from anywhere_computer.delegated_files import read, write
 from anywhere_computer.models import ReadFile, WriteFile
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows-specific fail-closed guard")
+def test_windows_delegated_file_operations_fail_closed(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    source = root / "source.txt"
+    source.write_text("private", encoding="utf-8")
+    with pytest.raises(ValueError, match="unavailable on this host"):
+        read(ReadFile(path=str(source)), (str(root),))
+    with pytest.raises(ValueError, match="unavailable on this host"):
+        write(WriteFile(path=str(root / "new.txt"), mode="create", text="bad"),
+              (str(root),), tmp_path / "backups")
+    assert not (root / "new.txt").exists()
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX dir_fd confinement")
 def test_confined_read_write_and_swapped_parent(tmp_path):
     root = tmp_path / "root"

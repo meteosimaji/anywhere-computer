@@ -73,7 +73,7 @@ async def test_auto_queue_desktop_notice_only_for_opted_in_winning_epoch(
     tmp_path, monkeypatch,
 ):
     monkeypatch.setattr(subchat_mcp, 'QUEUE_WATCH_INTERVAL', .01)
-    monkeypatch.setattr(subchat_mcp.sys, 'platform', 'darwin')
+    original_platform = subchat_mcp.sys.platform
     calls = []
 
     class NoticeProcess:
@@ -86,6 +86,7 @@ async def test_auto_queue_desktop_notice_only_for_opted_in_winning_epoch(
 
     monkeypatch.setattr(subchat_mcp.asyncio, 'create_subprocess_exec', launch)
     ledger = Ledger(tmp_path)
+    monkeypatch.setattr(subchat_mcp.sys, 'platform', 'darwin')
     try:
         store = SubchatSubmissions(ledger.connection)
         provider = Provider()
@@ -114,6 +115,7 @@ async def test_auto_queue_desktop_notice_only_for_opted_in_winning_epoch(
             await controller.close()
     finally:
         ledger.close()
+        monkeypatch.setattr(subchat_mcp.sys, 'platform', original_platform)
     reopened = Ledger(tmp_path)
     try:
         status = SubchatSubmissions(reopened.connection).auto_queue_status(

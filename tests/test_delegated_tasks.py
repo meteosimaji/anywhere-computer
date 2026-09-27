@@ -1,6 +1,7 @@
 """A child bearer never inherits the parent's broad execution scope."""
 
 import asyncio
+import os
 import sqlite3
 import threading
 import time
@@ -28,6 +29,7 @@ from anywhere_computer.remote_bridge import RemoteAgent
 from anywhere_computer.state import Ledger
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX dir_fd confinement")
 @pytest.mark.asyncio
 async def test_delegated_child_read_denial_revocation_and_reconnect(tmp_path):
     engine = Engine(tmp_path / "engine")
@@ -406,6 +408,7 @@ async def test_delegated_child_read_denial_revocation_and_reconnect(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX dir_fd confinement")
 async def test_production_http_service_accepts_scoped_child_bearer(tmp_path, unused_tcp_port):
     config = await setup(tmp_path, unused_tcp_port)
     owner = OwnerCredentials(tmp_path, resource=config.resource, owner=config.owner,
@@ -515,6 +518,7 @@ async def test_production_http_service_accepts_scoped_child_bearer(tmp_path, unu
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX dir_fd confinement")
 async def test_remote_child_call_uses_target_child_grant_not_parent_route(tmp_path):
     def parent_grant(authority, owner, device, tools):
         authority.register_client('client', frozenset({'https://client.example/callback'}))

@@ -26,6 +26,21 @@ def test_windows_peer_entry_points_fail_closed_without_private_acls(tmp_path, mo
         peer_cli.main()
 
 
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific fail-closed guard")
+def test_windows_peer_enrollment_cli_refuses_unprotected_credential(tmp_path):
+    credential = tmp_path / "peer-token"
+    result = subprocess.run(
+        [sys.executable, "-m", "anywhere_computer.peer_cli", "--state-dir",
+         str(tmp_path / "mailbox"), "enroll", "--peer-id", "codex:task-1",
+         "--owner", "owner", "--account", "account", "--project", "project",
+         "--runtime", "codex", "--credential-file", str(credential)],
+        capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert "private file ACLs" in result.stderr
+    assert not credential.exists()
+
+
 def _provision(state, credential, peer, *, account="account"):
     completed = subprocess.run(
         [sys.executable, "-m", "anywhere_computer.peer_cli", "--state-dir", str(state),
@@ -37,6 +52,7 @@ def _provision(state, credential, peer, *, account="account"):
     assert completed.stdout.strip() == str(credential)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="peer CLI requires private Windows file ACLs")
 def test_provisioning_retry_after_credential_publish(tmp_path):
     state = tmp_path / "mailbox"
     credential = tmp_path / "peer-token"
@@ -58,6 +74,7 @@ def test_provisioning_retry_after_credential_publish(tmp_path):
     assert len(conflict.read_text(encoding="ascii").strip()) >= 32
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="peer CLI requires private Windows file ACLs")
 def test_credential_publication_failure_leaves_no_partial_final(tmp_path, monkeypatch):
     final = tmp_path / "peer-token"
 
@@ -70,6 +87,7 @@ def test_credential_publication_failure_leaves_no_partial_final(tmp_path, monkey
     assert list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="peer CLI requires private Windows file ACLs")
 def test_heartbeat_failure_exits_with_open_stdin(tmp_path):
     state = tmp_path / "mailbox"
     credential = tmp_path / "peer-token"
@@ -110,6 +128,7 @@ asyncio.run(peer_cli._serve(Path(sys.argv[1]), Path(sys.argv[2])))
             process.stdin.close()
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="peer CLI requires private Windows file ACLs")
 async def test_two_local_peer_mcp_processes_exchange_and_ack(tmp_path):
     state = tmp_path / "mailbox"
     codex = tmp_path / "codex-token"

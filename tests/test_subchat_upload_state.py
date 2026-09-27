@@ -76,6 +76,7 @@ def test_ui_batch_claim_is_durable_and_cannot_replay(tmp_path):
 
 
 def test_mcp_preparation_is_distinct_from_reservation_and_expires(tmp_path, monkeypatch):
+    source_path = str(tmp_path / 'approved' / 'fixture.txt')
     with sqlite3.connect(tmp_path / 'ledger.sqlite3') as connection:
         store = LibraryUploadLedger(connection)
         _reserve(store)
@@ -83,7 +84,7 @@ def test_mcp_preparation_is_distinct_from_reservation_and_expires(tmp_path, monk
             store.claim_ui_batch(OPERATION, owner='owner', account_id='account',
                                  require_prepared=True)
         prepared = store.authorize_mcp_upload(
-            OPERATION, owner='owner', account_id='account', source_path='/approved/fixture.txt')
+            OPERATION, owner='owner', account_id='account', source_path=source_path)
         assert prepared.mcp_prepared_until is not None
         assert prepared.mcp_prepared_until > time.time()
         with monkeypatch.context() as later_clock:
@@ -91,26 +92,28 @@ def test_mcp_preparation_is_distinct_from_reservation_and_expires(tmp_path, monk
                                 lambda: prepared.mcp_prepared_until + 1)
             with pytest.raises(ValueError, match='expired'):
                 store.claim_ui_batch(OPERATION, owner='owner', account_id='account',
-                                     require_prepared=True, source_path='/approved/fixture.txt')
+                                     require_prepared=True, source_path=source_path)
         assert not store.get(OPERATION, owner='owner', account_id='account').create_claimed
         assert store.claim_ui_batch(OPERATION, owner='owner', account_id='account',
-                                    require_prepared=True, source_path='/approved/fixture.txt')
+                                    require_prepared=True, source_path=source_path)
         with pytest.raises(ValueError, match='already started'):
             store.authorize_mcp_upload(OPERATION, owner='owner', account_id='account',
-                                       source_path='/approved/fixture.txt')
+                                       source_path=source_path)
 
 
 def test_mcp_preparation_binds_exact_path_and_legacy_approval_expires(tmp_path):
     database = tmp_path / 'ledger.sqlite3'
+    source_path = str(tmp_path / 'approved' / 'fixture.txt')
+    other_path = str(tmp_path / 'other' / 'fixture.txt')
     with sqlite3.connect(database) as connection:
         store = LibraryUploadLedger(connection)
         _reserve(store)
         store.authorize_mcp_upload(OPERATION, owner='owner', account_id='account',
-                                   source_path='/approved/fixture.txt')
+                                   source_path=source_path)
         with pytest.raises(ValueError, match='preparation'):
             store.claim_ui_batch(OPERATION, owner='owner', account_id='account',
                                  require_prepared=True,
-                                 source_path='/other/fixture.txt')
+                                 source_path=other_path)
         assert not store.get(OPERATION, owner='owner', account_id='account').create_claimed
         connection.execute('ALTER TABLE subchat_library_uploads DROP COLUMN mcp_source_path')
     with sqlite3.connect(database) as connection:
@@ -120,12 +123,12 @@ def test_mcp_preparation_binds_exact_path_and_legacy_approval_expires(tmp_path):
         with pytest.raises(ValueError, match='preparation'):
             store.claim_ui_batch(OPERATION, owner='owner', account_id='account',
                                  require_prepared=True,
-                                 source_path='/approved/fixture.txt')
+                                 source_path=source_path)
         store.authorize_mcp_upload(OPERATION, owner='owner', account_id='account',
-                                   source_path='/approved/fixture.txt')
+                                   source_path=source_path)
         assert store.claim_ui_batch(OPERATION, owner='owner', account_id='account',
                                     require_prepared=True,
-                                    source_path='/approved/fixture.txt')
+                                    source_path=source_path)
 
 
 def test_exact_ready_library_item_reconciles_without_dispatch(tmp_path):

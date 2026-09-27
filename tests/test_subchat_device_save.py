@@ -26,6 +26,21 @@ def test_remote_save_accepts_canonical_windows_destination(path):
     assert args.destination_path == path
 
 
+def test_remote_save_accepts_canonical_posix_destination():
+    args = DeviceSave(source_operation_id="a" * 32,
+                      sandbox_link="sandbox:/result.bin", device_id="b" * 32,
+                      destination_path="/home/owner/result.bin")
+    assert args.destination_path == "/home/owner/result.bin"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="POSIX paths are local on POSIX")
+def test_windows_local_save_rejects_foreign_posix_destination():
+    with pytest.raises(ValueError, match="canonical absolute path"):
+        DeviceSave(source_operation_id="a" * 32,
+                   sandbox_link="sandbox:/result.bin", device_id="local",
+                   destination_path="/home/owner/result.bin")
+
+
 @pytest.mark.parametrize("path", [r"C:result.bin", r"C:\dir\..\result.bin",
                                   "C:/dir/result.bin", r"C:\dir\\result.bin"])
 def test_remote_save_rejects_ambiguous_windows_destination(path):
@@ -403,13 +418,13 @@ async def test_local_save_reconciles_canonical_target_path_without_replaying_beg
 
 
 @pytest.mark.asyncio
-async def test_provider_adapter_keeps_base64_inside_service():
+async def test_provider_adapter_keeps_base64_inside_service(tmp_path):
     grant = GrantIdentity(grant_id="grant", owner="owner", device="device",
                           client="client", resource="https://example.test/mcp",
                           tools=frozenset({"subchat_save_file"}))
     args = DeviceSave(source_operation_id="a" * 32,
                       sandbox_link="sandbox:/answer.bin", device_id="local",
-                      destination_path="/tmp/answer.bin")
+                      destination_path=str(tmp_path / "answer.bin"))
 
     class Gateway:
         account_id = "account"

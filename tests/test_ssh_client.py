@@ -1,4 +1,5 @@
 import asyncio
+import os
 import sys
 import time
 import uuid
@@ -57,6 +58,7 @@ async def test_actual_stdio_protocol_and_operation_replay(ssh_peer, tmp_path):
     assert process.returncode is not None
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='requires POSIX dir_fd confinement')
 async def test_child_ssh_stdio_scopes_replay_and_revocation(tmp_path, monkeypatch):
     engine = Engine(tmp_path / 'agent')
     authority = AuthorizationStore(tmp_path / 'authority',

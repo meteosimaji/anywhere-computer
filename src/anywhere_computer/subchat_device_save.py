@@ -17,13 +17,14 @@ import tempfile
 import time
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Literal, Protocol, Self
 
 from pydantic import Field, model_validator
 
 from .authorization import GrantIdentity
 from .models import Contract
+from .private_directory import create_private_directory
 
 _active_save_lease: ContextVar[tuple[str, str] | None] = ContextVar(
     "active_save_lease", default=None)
@@ -38,9 +39,10 @@ class DeviceSave(Contract):
     @model_validator(mode="after")
     def canonical_absolute_path(self) -> Self:
         value = self.destination_path
-        path = Path(value)
-        native = (os.name != "nt" and path.is_absolute() and not any(
-            part in {".", "..", ""} for part in value.split("/")[1:]))
+        posix = PurePosixPath(value)
+        native = ((os.name != "nt" or self.device_id != "local")
+                  and posix.is_absolute() and str(posix) == value
+                  and not any(part in {".", "..", ""} for part in value.split("/")[1:]))
         windows = PureWindowsPath(value)
         windows_target = ((os.name == "nt" or self.device_id != "local")
                           and windows.is_absolute() and str(windows) == value
@@ -344,8 +346,8 @@ class SaveRunner:
         self.account_id = account_id
         if spool_directory.is_symlink():
             raise ValueError("Save spool must not be a symlink")
-        spool_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        if spool_directory.stat().st_mode & 0o077:
+        create_private_directory(spool_directory)
+        if os.name != "nt" and spool_directory.stat().st_mode & 0o077:
             raise PermissionError("Save spool must be private")
         self.spool_directory = spool_directory
 
