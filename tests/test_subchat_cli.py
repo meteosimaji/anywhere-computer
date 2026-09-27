@@ -39,6 +39,7 @@ async def test_windows_browser_transport_launches_selected_edge(tmp_path, monkey
 
     async def inspect(service, _source, _destination, *, owner):
         await service.backend._browser()
+        events.append(('background_pages', service.backend._background_pages))
 
     monkeypatch.setattr(playwright.async_api, 'async_playwright', runtime)
     monkeypatch.setattr(subchat_cli, 'process_lines', inspect)
@@ -49,6 +50,7 @@ async def test_windows_browser_transport_launches_selected_edge(tmp_path, monkey
     monkeypatch.setattr(subchat_cli.sys, 'platform', 'win32')
     await subchat_cli.run(profile, tmp_path / 'state', browser_channel='msedge')
     assert ('launch', str(profile), 'msedge', False, []) in events
+    assert ('background_pages', False) in events
     assert 'closed' in events
 
     events.clear()
@@ -57,6 +59,7 @@ async def test_windows_browser_transport_launches_selected_edge(tmp_path, monkey
                           expected_account_id='account-a')
     assert ('launch', str(profile), 'msedge', False,
             list(subchat_cli.WINDOWS_DEDICATED_BROWSER_ARGS)) in events
+    assert ('background_pages', True) in events
     assert 'closed' in events
 
 

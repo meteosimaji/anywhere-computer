@@ -237,10 +237,17 @@ async def background_chrome_context(
 async def new_background_page(context: BrowserContext) -> Page:
     """Create an owned tab without activating a hidden Chrome application."""
     browser = context.browser
-    if browser is None or not browser.is_connected():
+    if browser is not None and not browser.is_connected():
         raise ConnectionError('Background Chrome disconnected')
     previous = set(context.pages)
-    session = await browser.new_browser_cdp_session()
+    if browser is None:
+        # Some persistent contexts expose no Browser. A page CDP session can
+        # still create a target in its owning browser.
+        if not previous:
+            raise ConnectionError('Background Chrome has no CDP anchor page')
+        session = await context.new_cdp_session(next(iter(previous)))
+    else:
+        session = await browser.new_browser_cdp_session()
     target_id = None
     try:
         target = await session.send('Target.createTarget', {

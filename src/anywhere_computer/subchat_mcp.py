@@ -254,6 +254,7 @@ def direct_gateway_catalog() -> list[JsonValue]:
         'with subchat_queue_events. A stopped service resumes only when a send-capable '
         'gateway session opens again. No parent model wakeup is implied.')
     definitions['subchat_capabilities'] = _CAPABILITIES_DEFINITION
+    definitions['subchat_activity'] = _BASE_TOOL_DEFINITIONS['subchat_activity']
     definitions['subchat_catalog'] = _GATEWAY_CATALOG_DEFINITION
     definitions['subchat_download_file'] = (
         SandboxFile, 'Download one exact saved final-answer sandbox link from the selected '

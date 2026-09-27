@@ -28,6 +28,60 @@ RESOURCE = "https://computer.example/mcp"
 
 
 @pytest.mark.asyncio
+async def test_gateway_activity_is_owner_scoped_and_never_opens_chrome(monkeypatch, tmp_path):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    opens = 0
+
+    @asynccontextmanager
+    async def open_gateway(config, *, owner):
+        nonlocal opens
+        opens += 1
+        raise AssertionError("activity must not start Chrome")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gateway_module, "open_subchat_gateway", open_gateway)
+    config = SubchatGatewayConfig(
+        profile=str(tmp_path / "Default"), ledger=str(tmp_path / "ledger"),
+        account_id="account", consent="ordinary-chat-browser-control-approved")
+    gateway = LazySubchatGateway(config, owner="owner")
+    allowed = frozenset({"subchat_activity"})
+    request = Request(operation_id="a" * 32, tool="subchat_activity", arguments={})
+    try:
+        assert [item["name"] for item in await gateway.catalog("one", allowed)] == [
+            "subchat_activity"]
+        idle = await gateway.execute("one", request, allowed)
+        assert idle.state == "completed" and idle.data == {
+            "state": "idle", "active_count": 0, "active_sends": 0,
+            "active_recoveries": 0, "active_queue_watches": 0,
+            "active_auto_queues": 0, "live_generation": False}
+        denied = await gateway.execute("one", request, frozenset())
+        assert denied.state == "failed"
+        invalid = await gateway.execute("one", request.model_copy(
+            update={"arguments": {"unexpected": True}}), allowed)
+        assert invalid.state == "failed"
+
+        class Core:
+            async def execute(self, observed):
+                assert observed.tool == "subchat_activity"
+                return Reply(operation_id=observed.operation_id, state="completed",
+                             data={"state": "active", "active_count": 1,
+                                   "active_sends": 1, "active_recoveries": 0,
+                                   "active_queue_watches": 0, "active_auto_queues": 0,
+                                   "live_generation": False})
+
+        controller = SubchatGateway(lambda _owner: Core(), owner="owner")
+        controller.cores["one"] = Core()
+        gateway._gateway = controller
+        assert (await gateway.execute("one", request, allowed)).data["active_sends"] == 1
+        assert (await gateway.execute("two", request, allowed)).data["active_sends"] == 0
+        assert opens == 0
+    finally:
+        gateway._gateway = None
+        await gateway.close()
+
+
+@pytest.mark.asyncio
 async def test_lazy_gateway_discovery_is_static_and_execute_retries_login(monkeypatch, tmp_path):
     from types import SimpleNamespace
 

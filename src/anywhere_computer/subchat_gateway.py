@@ -41,6 +41,7 @@ if TYPE_CHECKING:
 SUBCHAT_GATEWAY_TOOLS = frozenset({
     "subchat_capabilities", "subchat_catalog", "subchat_send", "subchat_message",
     "subchat_recover", "subchat_wait", "subchat_status", "subchat_list",
+    "subchat_activity",
     "subchat_download_file", "subchat_download_image", "subchat_cancel",
     "subchat_queue_events", "subchat_queue_auto",
 })
@@ -227,6 +228,16 @@ class SubchatGateway:
         self.pending.clear()
         self.cores.clear()
 
+    async def activity(self, grant_id: str, request: Request) -> Reply:
+        """Read one owner's existing controller without creating a browser session."""
+        core = self.cores.get(grant_id)
+        if core is not None:
+            return await core.execute(request)
+        return Reply(operation_id=request.operation_id, state="completed",
+                     data={"state": "idle", "active_count": 0, "active_sends": 0,
+                           "active_recoveries": 0, "active_queue_watches": 0,
+                           "active_auto_queues": 0, "live_generation": False})
+
     def has_live_work(self) -> bool:
         """Keep owned sends and detached observations alive across HTTP idle gaps."""
         return (any(not entry[2].done() for entry in self.pending.values())
@@ -395,6 +406,7 @@ class LazySubchatGateway:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Subchat tool is not granted")
         if request.tool in {"subchat_status", "subchat_capabilities", "subchat_list",
+                            "subchat_activity",
                             "subchat_cancel", "subchat_queue_events"}:
             return await self._local_read(grant_id, request)
         if request.tool in {"subchat_download_file", "subchat_download_image"}:
@@ -473,6 +485,15 @@ class LazySubchatGateway:
                              data=capability_report(browser_capabilities(
                                  http_read=True, httpx_generation=True),
                                  queue_watch_supported=False))
+            if request.tool == "subchat_activity":
+                Contract.model_validate(request.arguments)
+                gateway = self._gateway
+                if gateway is not None:
+                    return await gateway.activity(grant_id, request)
+                return Reply(operation_id=request.operation_id, state="completed",
+                             data={"state": "idle", "active_count": 0, "active_sends": 0,
+                                   "active_recoveries": 0, "active_queue_watches": 0,
+                                   "active_auto_queues": 0, "live_generation": False})
             if request.tool == "subchat_list":
                 page = SubchatList.model_validate(request.arguments)
                 data = await asyncio.to_thread(self._saved_list, grant_id, page)

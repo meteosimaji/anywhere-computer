@@ -437,7 +437,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                     record_conversation=record_conversation if http_read else None,
                     record_rejection=record_rejection if http_read else None,
                     httpx_generation=httpx_generation,
-                    background_pages=httpx_generation and sys.platform == 'darwin',
+                    background_pages=httpx_generation,
                     store=store,
                     owner=ledger_owner,
                     expected_account_id=expected_account_id if httpx_generation else None)

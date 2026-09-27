@@ -39,6 +39,77 @@ async def test_background_page_uses_nonactivating_cdp_target():
     ]
 
 
+async def test_background_page_uses_persistent_context_cdp_anchor():
+    anchor = object()
+    created = object()
+    commands = []
+
+    class Session:
+        async def send(self, method, params):
+            commands.append((method, params))
+            context.pages.append(created)
+            return {'targetId': 'created-target'}
+
+        async def detach(self):
+            commands.append(('detach', None))
+
+    class Context:
+        browser = None
+        pages = [anchor]
+
+        async def new_cdp_session(self, page):
+            assert page is anchor
+            return Session()
+
+    context = Context()
+    assert await background.new_background_page(context) is created
+    assert commands == [
+        ('Target.createTarget', {'url': 'about:blank', 'background': True}),
+        ('detach', None),
+    ]
+
+
+async def test_background_page_rejects_persistent_context_without_anchor():
+    context = SimpleNamespace(browser=None, pages=[])
+    with pytest.raises(ConnectionError, match='CDP anchor page'):
+        await background.new_background_page(context)
+
+
+async def test_background_page_uses_real_persistent_chrome_context(tmp_path):
+    playwright = pytest.importorskip('playwright.async_api')
+
+    async with playwright.async_playwright() as driver:
+        try:
+            context = await driver.chromium.launch_persistent_context(
+                str(tmp_path / 'chrome-profile'), channel='chrome', headless=True)
+        except playwright.Error as error:
+            if 'not found' in str(error) or "doesn't exist" in str(error):
+                pytest.skip('Chrome required for persistent context integration')
+            raise
+        try:
+            anchor = context.pages[0]
+
+            class PersistentContextProxy:
+                browser = None
+
+                @property
+                def pages(self):
+                    return context.pages
+
+                async def new_cdp_session(self, page):
+                    return await context.new_cdp_session(page)
+
+            page = await background.new_background_page(PersistentContextProxy())
+            try:
+                await page.goto('data:text/html,<title>background probe</title>')
+                assert await page.title() == 'background probe'
+                assert anchor in context.pages
+            finally:
+                await page.close()
+        finally:
+            await context.close()
+
+
 @pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
 async def test_background_launch_attaches_only_to_fresh_profile_and_cleans_up(
     tmp_path, monkeypatch,
