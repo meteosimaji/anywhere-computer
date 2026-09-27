@@ -1,8 +1,13 @@
 """Local mailbox boundaries; no provider or browser message is sent here."""
 
 import hashlib
+import os
 import sqlite3
+import subprocess
+import sys
+import time
 
+import psutil
 import pytest
 
 from anywhere_computer import peer_mailbox
@@ -391,6 +396,55 @@ def test_read_only_diagnosis_distinguishes_process_claim_and_model_turn(tmp_path
             sender_box.diagnose(sender, recipient="foreign")
         now[0] += 6
         assert sender_box.diagnose(sender, recipient="recipient").presence == "MISMATCH"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Requires an unreaped POSIX child")
+def test_zombie_presence_cannot_accept_messages(tmp_path):
+    child = subprocess.Popen([sys.executable, "-c", "pass"], stdout=subprocess.DEVNULL)
+    try:
+        process = psutil.Process(child.pid)
+        deadline = time.monotonic() + 5
+        while process.status() != psutil.STATUS_ZOMBIE:
+            if time.monotonic() >= deadline:
+                pytest.fail("Child did not become a zombie")
+            time.sleep(.01)
+        with PeerMailbox(tmp_path) as sender_box, PeerMailbox(tmp_path) as recipient_box:
+            sender = sender_box.enroll(Peer("sender", "owner", "account", "project", "codex"))
+            recipient = sender_box.enroll(Peer(
+                "recipient", "owner", "account", "project", "claude"))
+            recipient_box._process_id = child.pid
+            recipient_box._process_started = process.create_time()
+            recipient_box.heartbeat(recipient, lease_seconds=5)
+            diagnostic = sender_box.diagnose(sender, recipient="recipient")
+            assert diagnostic.presence == "MISMATCH"
+            assert diagnostic.process == "MISMATCH"
+            with pytest.raises(PeerOffline, match="no message was accepted"):
+                sender_box.send(sender, recipient="recipient", delivery_id="zombie",
+                                text="must not accept")
+            with pytest.raises(PeerOffline, match="sole live recipient"):
+                recipient_box.inbox(recipient)
+    finally:
+        child.wait(timeout=5)
+
+
+@pytest.mark.parametrize("status,expected", [
+    (psutil.STATUS_RUNNING, True),
+    (psutil.STATUS_ZOMBIE, False),
+    (psutil.STATUS_DEAD, False),
+])
+def test_process_status_controls_presence(monkeypatch, status, expected):
+    class Process:
+        def __init__(self, pid):
+            assert pid == 123
+
+        def create_time(self):
+            return 456.0
+
+        def status(self):
+            return status
+
+    monkeypatch.setattr(peer_mailbox.psutil, "Process", Process)
+    assert PeerMailbox._live_process(123, 456.0) is expected
 
 
 def test_diagnosis_does_not_pick_one_of_two_live_destinations(tmp_path):

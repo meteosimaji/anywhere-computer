@@ -278,7 +278,12 @@ class PeerMailbox:
         if not isinstance(pid, int) or not isinstance(started, float):
             return None
         try:
-            return psutil.Process(pid).create_time() == started
+            process = psutil.Process(pid)
+            if process.create_time() != started:
+                return False
+            # An unreaped POSIX child still has its PID and creation time, but
+            # cannot serve its mailbox. Some platforms also expose "dead".
+            return process.status() not in {psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD}
         except psutil.NoSuchProcess:
             return False
         except (psutil.AccessDenied, ValueError, OSError):
