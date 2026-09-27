@@ -1,10 +1,10 @@
 # Local peer messaging
 
-The `anywhere-peer` entry point currently runs on macOS and Linux. On Windows
-it refuses enrollment and serving because POSIX mode `0600` does not protect
-the bearer file or mailbox SQLite database with a Windows private ACL. Windows
-support requires an ACL-backed storage implementation and a cross-user access
-test before enabling this transport there.
+The `anywhere-peer` entry point runs on macOS, Linux and Windows. On Windows,
+enrollment and serving require credential files with an owner-specific private
+ACL inside the private state directory. The Windows CI exercises enrollment,
+serving, ACL rejection and two-process message delivery. A separate cross-user
+host test remains an acceptance gate for broader deployment.
 
 Issue [#181](https://github.com/meteosimaji/anywhere-computer/issues/181)
 tracks coordination between Codex, Claude Code and ordinary ChatGPT Chats.
@@ -14,7 +14,7 @@ MCP stdio server. It does not inject a message into a model turn.
 ## Identity and delivery
 
 The owner enrolls each peer with a stable ID and explicit owner, account,
-project and runtime bindings. Enrollment writes a separate mode-0600 bearer
+project and runtime bindings. Enrollment writes a separate private bearer
 credential file for each peer. A runtime can resolve only the identity attached
 to its credential; it cannot self-enroll or choose a different sender name.
 The owner must provision a new identity if a session's account or project
