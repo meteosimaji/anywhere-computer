@@ -198,6 +198,26 @@ _DOCUMENT_EDIT_REJECTIONS: dict[str, tuple[str, str]] = {
         "document_changed", "Read the document again before editing."
     ),
 }
+_TOOL_INPUT_REJECTIONS: dict[str, dict[str, tuple[str, str]]] = {
+    "files_write": {
+        "File changed or expected_sha256 is missing; read it again": (
+            "file_changed", "Read the file again and use its current SHA-256."
+        ),
+    },
+    "search_start": {
+        "Invalid regular expression": (
+            "invalid_search_pattern", "Correct the regular expression before searching again."
+        ),
+        "Search root must be a directory": (
+            "invalid_search_root", "Choose an existing directory before searching again."
+        ),
+    },
+    "browser_navigate": {
+        "Browser navigation requires an HTTP or HTTPS URL": (
+            "invalid_browser_url", "Use an HTTP or HTTPS URL without embedded credentials."
+        ),
+    },
+}
 _NATIVE_GUI_FAILURES: dict[str, str] = {
     "Native GUI request exceeds limit": "native_gui_request_too_large",
     "Invalid native GUI response framing": "native_gui_invalid_response",
@@ -1005,7 +1025,8 @@ class Engine:
             "upload_begin",
             "Reserve an upload of up to 1 GiB to a new absolute destination. "
             "Supply a fresh 32-hex transfer_id, final length and SHA-256; "
-            "retain the ID for resume.",
+            "retain the ID for resume. Unavailable on Windows pending a "
+            "directory-handle-safe publication path.",
             BeginUpload,
             upload_begin,
         )
@@ -1028,7 +1049,8 @@ class Engine:
         self.register(
             "upload_commit",
             "Stream-verify the complete upload and publish exclusively at its "
-            "new destination. Never overwrite. A lost publication outcome needs inspection.",
+            "new destination. Never overwrite. A lost publication outcome needs inspection. "
+            "Unavailable on Windows pending a directory-handle-safe publication path.",
             TransferId,
             upload_commit,
             destructive=True,
@@ -1054,7 +1076,9 @@ class Engine:
             "upload_resolve",
             "Resolve unknown publication without publishing again: "
             "confirm_published checks the destination; discard_staging frees database chunks "
-            "without deleting the destination or leftover staging_path files.",
+            "without deleting the destination or leftover staging_path files. "
+            "On Windows, confirm_published is unavailable pending a "
+            "directory-handle-safe publication path; discard_staging remains available.",
             ResolveUpload,
             upload_resolve,
             destructive=True,
@@ -1665,6 +1689,17 @@ class Engine:
                                   "Open a new native GUI session and observe the target before "
                                   "further input."
                               )},
+                    )
+                elif (type(error) is ValueError
+                      and (fixed := _TOOL_INPUT_REJECTIONS.get(request.tool, {}).get(
+                          str(error)
+                      )) is not None):
+                    code, action = fixed
+                    reply = Reply(
+                        operation_id=request.operation_id, state="failed",
+                        error="Operation was not dispatched.",
+                        data={"error_code": code, "dispatched": False,
+                              "execution_state": "not_dispatched", "next_action": action},
                     )
                 elif (request.tool == "terminal_input" and type(error) is ValueError
                       and (fixed := _TERMINAL_INPUT_REJECTIONS.get(str(error))) is not None):

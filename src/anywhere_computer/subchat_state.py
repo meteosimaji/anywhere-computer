@@ -4,6 +4,9 @@ A persisted 'sending' record is intentionally not reset on restart. Its caller
 may inspect the conversation, but may not dispatch the same submission again.
 """
 
+from __future__ import annotations
+
+import builtins
 import json
 import re
 import sqlite3
@@ -44,14 +47,18 @@ class SubchatConcurrentSend(ValueError):
         super().__init__('Conversation has another active send; recover it first')
 
 
+class SubchatAutoQueueDisarmed(ValueError):
+    """An unattended worker lost its explicit opt-in before send reservation."""
+
+
 class SubchatSelectionError(ValueError):
     """Safe, field-specific local catalog validation failure before dispatch."""
 
     code = 'invalid_parameter'
 
-    def __init__(self, field: Literal['http_selection', 'version_id', 'preset_id',
+    def __init__(self, field: Literal['choice_id', 'http_selection', 'version_id', 'preset_id',
                                      'model_slug', 'thinking_effort', 'model', 'effort'],
-                 reason: Literal['required', 'not_found', 'unavailable', 'mismatch',
+                 reason: Literal['required', 'invalid', 'not_found', 'unavailable', 'mismatch',
                                  'ambiguous']) -> None:
         self.field = field
         self.reason = reason
@@ -111,6 +118,7 @@ class SubchatSubmission(Contract):
     answer_message_id: str | None = None
     answer: str | None = None
     answer_type: Literal['text', 'image', 'multimodal'] | None = None
+    interruption_reason: Literal['provider_interrupted', 'output_limit'] | None = None
     generation_http_status: int | None = Field(default=None, ge=400, le=599)
     reported_settings: SubchatReportedSettings | None = None
     provider_account_id: str | None = Field(default=None, min_length=1, max_length=256)
@@ -123,18 +131,25 @@ class SubchatSubmission(Contract):
         return self.resources.prompt(self.prompt) if self.resources else self.prompt
 
 
+class SubchatQueueRevisionConflict(ValueError):
+    """The queued selection changed while a caller was preparing it."""
+
+
 def _saved_submission_json(submission: SubchatSubmission) -> str:
     """Keep new optional fields absent until they have evidence to persist."""
     excluded = {'reported_settings', 'provider_account_id', 'generation_http_status',
                 'answer_type'}
     if submission.http_selection is None:
         excluded.add('http_selection')
+    if submission.interruption_reason is None:
+        excluded.add('interruption_reason')
     return submission.model_dump_json(exclude=excluded)
 
 
 class SubchatList(Contract):
     limit: int = Field(default=20, ge=1, le=100)
     before: int | None = Field(default=None, ge=1)
+    include_prompt_preview: bool = Field(default=False, strict=True)
 
 
 class SubchatSummary(Contract):
@@ -143,6 +158,8 @@ class SubchatSummary(Contract):
     model: str
     effort: str
     conversation_id: str | None
+    created_at: float | None = None
+    prompt_preview: str | None = None
 
 
 class SubchatPage(Contract):
@@ -162,6 +179,21 @@ class SubchatSubmissions:
             self._preparation_failures_available = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
                 "AND name='subchat_preparation_failures'").fetchone() is not None
+            self._created_at_available = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='subchat_created_at'").fetchone() is not None
+            self._auto_queue_available = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='subchat_auto_queue'").fetchone() is not None
+            self._auto_queue_events_available = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='subchat_auto_queue_events'").fetchone() is not None
+            self._auto_queue_epoch_available = (
+                self._auto_queue_available and 'epoch' in {row[1] for row in
+                connection.execute('PRAGMA table_info(subchat_auto_queue)')})
+            self._auto_queue_notify_available = (
+                self._auto_queue_available and 'notify_desktop' in {row[1] for row in
+                connection.execute('PRAGMA table_info(subchat_auto_queue)')})
             return
         with connection:
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_generation_responses ('
@@ -173,6 +205,49 @@ class SubchatSubmissions:
                                'user_message_id TEXT NOT NULL, account_id TEXT NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_submissions ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, body TEXT NOT NULL)')
+            # A side table keeps older submission JSON readable and gives legacy rows
+            # an honest null timestamp rather than an invented migration time.
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_created_at ('
+                               'operation_id TEXT PRIMARY KEY, owner TEXT, '
+                               'created_at REAL NOT NULL)')
+            self._created_at_available = True
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_auto_queue ('
+                               'operation_id TEXT PRIMARY KEY, owner TEXT, '
+                               'state TEXT NOT NULL, expires_at REAL NOT NULL, '
+                               'event TEXT, updated_at REAL NOT NULL, '
+                               'epoch INTEGER NOT NULL DEFAULT 1, '
+                               'authorization_grant_id TEXT, '
+                               'notify_desktop INTEGER NOT NULL DEFAULT 0)')
+            auto_columns = {row[1] for row in connection.execute(
+                'PRAGMA table_info(subchat_auto_queue)')}
+            if 'epoch' not in auto_columns:
+                connection.execute('ALTER TABLE subchat_auto_queue ADD COLUMN '
+                                   'epoch INTEGER NOT NULL DEFAULT 1')
+            if 'authorization_grant_id' not in auto_columns:
+                connection.execute('ALTER TABLE subchat_auto_queue ADD COLUMN '
+                                   'authorization_grant_id TEXT')
+            if 'notify_desktop' not in auto_columns:
+                connection.execute('ALTER TABLE subchat_auto_queue ADD COLUMN '
+                                   'notify_desktop INTEGER NOT NULL DEFAULT 0')
+            self._auto_queue_epoch_available = True
+            self._auto_queue_notify_available = True
+            events_exist = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='subchat_auto_queue_events'").fetchone() is not None
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_auto_queue_events ('
+                               'id INTEGER PRIMARY KEY, operation_id TEXT NOT NULL, '
+                               'owner TEXT, event TEXT NOT NULL, updated_at REAL NOT NULL)')
+            self._auto_queue_events_available = True
+            if not events_exist:
+                connection.execute(
+                    'INSERT INTO subchat_auto_queue_events '
+                    '(operation_id, owner, event, updated_at) '
+                    'SELECT operation_id, owner, event, updated_at '
+                    'FROM subchat_auto_queue WHERE event IS NOT NULL')
+            self._auto_queue_available = True
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_queue_revisions ('
+                               'operation_id TEXT PRIMARY KEY, owner TEXT, '
+                               'revision INTEGER NOT NULL)')
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_send_intents ('
                                'owner TEXT, intent_key TEXT NOT NULL, '
                                'operation_id TEXT NOT NULL UNIQUE, '
@@ -424,17 +499,30 @@ class SubchatSubmissions:
         return saved
 
     def list(self, request: SubchatList, *, owner: str | None) -> SubchatPage:
-        rows = self.connection.execute(
-            'SELECT rowid, body FROM subchat_submissions WHERE owner IS ? '
-            'AND (? IS NULL OR rowid < ?) ORDER BY rowid DESC LIMIT ?',
-            (owner, request.before, request.before, request.limit + 1),
-        ).fetchall()
+        if self._created_at_available:
+            rows = self.connection.execute(
+                'SELECT s.rowid, s.body, c.created_at FROM subchat_submissions AS s '
+                'LEFT JOIN subchat_created_at AS c ON c.operation_id=s.operation_id '
+                'AND c.owner IS s.owner WHERE s.owner IS ? '
+                'AND (? IS NULL OR s.rowid < ?) ORDER BY s.rowid DESC LIMIT ?',
+                (owner, request.before, request.before, request.limit + 1),
+            ).fetchall()
+        else:
+            rows = [(*row, None) for row in self.connection.execute(
+                'SELECT rowid, body FROM subchat_submissions WHERE owner IS ? '
+                'AND (? IS NULL OR rowid < ?) ORDER BY rowid DESC LIMIT ?',
+                (owner, request.before, request.before, request.limit + 1),
+            )]
         summaries = []
         for row in rows[:request.limit]:
             item = SubchatSubmission.model_validate_json(row[1])
-            summaries.append(SubchatSummary.model_validate(item.model_dump(include={
+            summary = item.model_dump(include={
                 'operation_id', 'state', 'model', 'effort', 'conversation_id',
-            })))
+            })
+            summary['created_at'] = row[2]
+            if request.include_prompt_preview:
+                summary['prompt_preview'] = item.prompt[:160]
+            summaries.append(SubchatSummary.model_validate(summary))
         return SubchatPage(submissions=summaries, next_before=(
             rows[request.limit - 1][0] if len(rows) > request.limit else None))
 
@@ -456,8 +544,14 @@ class SubchatSubmissions:
             if after_operation_id == operation_id:
                 raise ValueError('A message cannot wait for itself')
             target = self.get(after_operation_id, owner=owner)
-            if target.state not in {'submitted', 'completed'} or target.user_message_id is None:
-                raise ValueError('Queue target identity must be confirmed first')
+            checkpointed_sending = (target.state == 'sending'
+                                    and target.user_message_id is not None
+                                    and target.provider_account_id is not None
+                                    and target.conversation_id is not None)
+            if ((target.state not in {'submitted', 'completed'}
+                 and not checkpointed_sending)
+                    or target.user_message_id is None):
+                raise ValueError('Queue target identity must be checkpointed first')
             if conversation_id != target.conversation_id:
                 raise ValueError('Queue target conversation does not match')
             if http_selection != target.http_selection:
@@ -497,25 +591,53 @@ class SubchatSubmissions:
                                          state='queued' if after_operation_id else 'prepared',
                                          after_operation_id=after_operation_id,
                                          expected_last_user_message_id=expected_last_user_message_id)
-            self.connection.execute(
+            inserted = self.connection.execute(
                 'INSERT OR IGNORE INTO subchat_submissions VALUES (?,?,?)',
                 (operation_id, owner, _saved_submission_json(proposed)),
             )
+            if inserted.rowcount == 1:
+                self.connection.execute(
+                    'INSERT INTO subchat_created_at VALUES (?,?,?)',
+                    (operation_id, owner, time.time()),
+                )
             existing = self.get(operation_id, owner=owner)
-            if (existing.prompt, existing.model, existing.effort,
-                existing.requested_conversation_id, existing.work_context,
-                existing.after_operation_id, existing.resources, existing.http_selection) != (
-                    prompt, model, effort, conversation_id, work_context, after_operation_id,
-                    resources, http_selection):
+            changed_queue_selection = (existing.state == 'queued'
+                                       and after_operation_id is not None
+                                       and self.queue_revision(operation_id, owner=owner) > 0
+                                       and (model, effort, http_selection) ==
+                                       (target.model, target.effort, target.http_selection))
+            if ((existing.prompt, existing.requested_conversation_id,
+                 existing.work_context, existing.after_operation_id,
+                 existing.resources) != (
+                     prompt, conversation_id, work_context, after_operation_id, resources)
+                    or (not changed_queue_selection and
+                        (existing.model, existing.effort, existing.http_selection) !=
+                        (model, effort, http_selection))):
                 raise SubchatRequestConflict(
                     'Subchat submission ID was already used for different arguments')
             return existing
 
     def _replace(self, old: SubchatSubmission, new: SubchatSubmission,
-                 owner: str | None, *, http_event: str | None = None) -> SubchatSubmission:
+                 owner: str | None, *, http_event: str | None = None,
+                 require_auto_queue_armed: bool = False,
+                 expected_queue_revision: int | None = None) -> SubchatSubmission:
         with self.connection:
             # Serialize identity validation and mutation across ledger connections.
             self.connection.execute('BEGIN IMMEDIATE')
+            if (expected_queue_revision is not None and
+                    self.queue_revision(old.operation_id, owner=owner)
+                    != expected_queue_revision):
+                raise SubchatQueueRevisionConflict('Queued model changed during preparation')
+            if require_auto_queue_armed:
+                if (not self._auto_queue_available or old.state != 'queued'
+                        or new.state != 'sending'):
+                    raise SubchatAutoQueueDisarmed('Automatic queue is no longer armed')
+                armed = self.connection.execute(
+                    "SELECT 1 FROM subchat_auto_queue WHERE operation_id=? "
+                    "AND owner IS ? AND state='armed' AND expires_at>?",
+                    (old.operation_id, owner, time.time())).fetchone()
+                if armed is None:
+                    raise SubchatAutoQueueDisarmed('Automatic queue is no longer armed')
             if new.state == 'sending' and new.conversation_id is not None:
                 deletion_table = self.connection.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' "
@@ -599,14 +721,61 @@ class SubchatSubmissions:
             raise ValueError('Submission may already be dispatched; cancellation is unavailable')
         return self._replace(old, old.model_copy(update={'state': 'cancelled'}), owner)
 
-    def interrupt(self, operation_id: str, *, owner: str | None) -> SubchatSubmission:
+    def queue_revision(self, operation_id: str, *, owner: str | None) -> int:
+        self.get(operation_id, owner=owner)
+        row = self.connection.execute(
+            'SELECT revision FROM subchat_queue_revisions WHERE operation_id=? AND owner IS ?',
+            (operation_id, owner)).fetchone()
+        return row[0] if row is not None else 0
+
+    def change_queued_model(self, operation_id: str, *, owner: str | None,
+                            expected_revision: int, model: str, effort: str,
+                            http_selection: SubchatHTTPSelection | None
+                            ) -> tuple[SubchatSubmission, int]:
+        """CAS a queued selection before the durable send reservation."""
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            old = self.get(operation_id, owner=owner)
+            if old.state != 'queued':
+                raise ValueError('Only a queued input can change its model')
+            revision = self.queue_revision(operation_id, owner=owner)
+            if revision != expected_revision:
+                raise SubchatQueueRevisionConflict('Queued model revision changed')
+            if old.after_operation_id is None:
+                raise ValueError('Queued input has no parent')
+            parent = self.get(old.after_operation_id, owner=owner)
+            if (old.conversation_id != parent.conversation_id
+                    or old.expected_last_user_message_id != parent.user_message_id):
+                raise ValueError('Queued parent identity changed')
+            updated = old.model_copy(update={
+                'model': model, 'effort': effort, 'http_selection': http_selection})
+            # Keep old JSON readers compatible and make the row and revision atomic.
+            row = self.connection.execute(
+                'UPDATE subchat_submissions SET body=? WHERE operation_id=? AND owner IS ? '
+                'AND body=?',
+                (_saved_submission_json(updated), operation_id, owner,
+                 _saved_submission_json(old)))
+            if row.rowcount != 1:
+                raise SubchatQueueRevisionConflict('Queued input changed')
+            self.connection.execute(
+                'INSERT INTO subchat_queue_revisions VALUES (?,?,?) '
+                'ON CONFLICT(operation_id) DO UPDATE SET revision=excluded.revision',
+                (operation_id, owner, revision + 1))
+            return updated, revision + 1
+
+    def interrupt(self, operation_id: str, *, owner: str | None,
+                  reason: Literal['provider_interrupted', 'output_limit'] =
+                  'provider_interrupted') -> SubchatSubmission:
         """Persist an explicitly observed provider interruption, not a timeout."""
+        if reason not in {'provider_interrupted', 'output_limit'}:
+            raise ValueError('Invalid interruption reason')
         old = self.get(operation_id, owner=owner)
         if old.state == 'interrupted':
             return old
         if old.state != 'submitted':
             raise ValueError('Only a confirmed submission can be marked interrupted')
-        return self._replace(old, old.model_copy(update={'state': 'interrupted'}), owner)
+        return self._replace(old, old.model_copy(update={
+            'state': 'interrupted', 'interruption_reason': reason}), owner)
 
     def begin_send(self, operation_id: str, *, owner: str | None,
                    conversation_id: str | None = None,
@@ -614,8 +783,13 @@ class SubchatSubmissions:
                    baseline_identity_kind: Literal[
                        'legacy_turn_key', 'message_id', 'empty'] | None = None,
                    user_message_id: str | None = None,
-                   provider_account_id: str | None = None) -> SubchatSubmission:
+                   provider_account_id: str | None = None,
+                   require_auto_queue_armed: bool = False,
+                   expected_queue_revision: int | None = None) -> SubchatSubmission:
         old = self.get(operation_id, owner=owner)
+        if (expected_queue_revision is not None and
+                self.queue_revision(operation_id, owner=owner) != expected_queue_revision):
+            raise SubchatQueueRevisionConflict('Queued model changed during preparation')
         if old.state not in {'prepared', 'queued'}:
             raise ValueError('Submission may already have been sent; recover it without resending')
         if old.after_operation_id is not None:
@@ -654,7 +828,9 @@ class SubchatSubmissions:
             'baseline_message_ids': baseline_message_ids,
             'baseline_identity_kind': baseline_identity_kind,
             'user_message_id': user_message_id,
-            'provider_account_id': provider_account_id}), owner)
+            'provider_account_id': provider_account_id}), owner,
+            require_auto_queue_armed=require_auto_queue_armed,
+            expected_queue_revision=expected_queue_revision)
 
     def observe_request(self, operation_id: str, user_message_id: str,
                         *, owner: str | None, provider_account_id: str | None = None
@@ -771,3 +947,171 @@ class SubchatSubmissions:
             if submission.state == 'queued' and submission.conversation_id == conversation_id:
                 return True
         return False
+
+    def arm_auto_queue(self, operation_id: str, *, owner: str | None,
+                       lease_seconds: int, authorization_grant_id: str | None = None,
+                       notify_desktop: bool = False
+                       ) -> dict[str, JsonValue]:
+        """Opt in a saved queue; keep only bounded delivery metadata, never prompt text."""
+        if not self._auto_queue_available:
+            raise ValueError('Automatic queue storage is unavailable')
+        if type(lease_seconds) is not int or not 30 <= lease_seconds <= 86_400:
+            raise ValueError('Invalid automatic queue lease')
+        if type(notify_desktop) is not bool:
+            raise ValueError('Invalid desktop notification preference')
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            saved = self.get(operation_id, owner=owner)
+            if saved.state != 'queued':
+                raise ValueError('Automatic delivery requires a queued input')
+            active = self.connection.execute(
+                "SELECT COUNT(*) FROM subchat_auto_queue WHERE owner IS ? "
+                "AND state='armed' AND operation_id<>?", (owner, operation_id)).fetchone()
+            if active is not None and active[0] >= 8:
+                raise ValueError('Automatic queue limit reached')
+            now = time.time()
+            expires_at = now + lease_seconds
+            event_cursor = self.connection.execute(
+                'SELECT COALESCE(MAX(id),0) FROM subchat_auto_queue_events '
+                'WHERE owner IS ?', (owner,)
+            ).fetchone()[0]
+            self.connection.execute(
+                'INSERT INTO subchat_auto_queue '
+                '(operation_id, owner, state, expires_at, event, updated_at, epoch, '
+                'authorization_grant_id, notify_desktop) VALUES (?,?,?,?,?,?,1,?,?) '
+                'ON CONFLICT(operation_id) DO UPDATE SET state=excluded.state, '
+                'expires_at=excluded.expires_at, event=NULL, updated_at=excluded.updated_at, '
+                'epoch=subchat_auto_queue.epoch+1, '
+                'authorization_grant_id=excluded.authorization_grant_id, '
+                'notify_desktop=excluded.notify_desktop '
+                'WHERE subchat_auto_queue.owner IS excluded.owner',
+                (operation_id, owner, 'armed', expires_at, None, now,
+                 authorization_grant_id, int(notify_desktop)))
+            row = self.connection.execute(
+                'SELECT owner, state, expires_at, epoch, notify_desktop FROM subchat_auto_queue '
+                'WHERE operation_id=?', (operation_id,)).fetchone()
+            if row is None or row[0] != owner:
+                raise SubchatOperationNotFound('No queue visible to this owner')
+            return {'state': row[1], 'expires_at': row[2],
+                    'event_cursor': event_cursor, 'epoch': row[3],
+                    'notify_desktop': bool(row[4])}
+
+    def auto_queue_grant_id(self, operation_id: str, *, owner: str | None) -> str | None:
+        self.get(operation_id, owner=owner)
+        row = self.connection.execute(
+            'SELECT authorization_grant_id FROM subchat_auto_queue '
+            'WHERE operation_id=? AND owner IS ?', (operation_id, owner)).fetchone()
+        return str(row[0]) if row is not None and isinstance(row[0], str) else None
+
+    def disable_auto_queue(self, operation_id: str, *, owner: str | None) -> bool:
+        self.get(operation_id, owner=owner)
+        if not self._auto_queue_available:
+            return False
+        with self.connection:
+            now = time.time()
+            changed = self.connection.execute(
+                "UPDATE subchat_auto_queue SET state='disabled', event='disabled', "
+                'updated_at=? WHERE operation_id=? AND owner IS ? AND state=?',
+                (now, operation_id, owner, 'armed'))
+            if changed.rowcount == 1:
+                self.connection.execute(
+                    'INSERT INTO subchat_auto_queue_events '
+                    '(operation_id, owner, event, updated_at) VALUES (?,?,?,?)',
+                    (operation_id, owner, 'disabled', now))
+            return changed.rowcount == 1
+
+    def active_auto_queues(self, *, owner: str | None) -> tuple[str, ...]:
+        if not self._auto_queue_available:
+            return ()
+        return tuple(row[0] for row in self.connection.execute(
+            "SELECT operation_id FROM subchat_auto_queue WHERE owner IS ? AND state='armed' "
+            'ORDER BY updated_at, operation_id', (owner,)))
+
+    def auto_queue_status(self, operation_id: str, *, owner: str | None
+                          ) -> dict[str, JsonValue] | None:
+        self.get(operation_id, owner=owner)
+        if not self._auto_queue_available:
+            return None
+        epoch_column = 'epoch' if self._auto_queue_epoch_available else '1'
+        notify_column = 'notify_desktop' if self._auto_queue_notify_available else '0'
+        row = self.connection.execute(
+            f'SELECT state, expires_at, event, updated_at, {epoch_column}, {notify_column} '
+            'FROM subchat_auto_queue '
+            'WHERE operation_id=? AND owner IS ?', (operation_id, owner)).fetchone()
+        return ({'state': row[0], 'expires_at': row[1], 'event': row[2],
+                 'updated_at': row[3], 'epoch': row[4],
+                 'notify_desktop': bool(row[5])} if row is not None else None)
+
+    def finish_auto_queue(self, operation_id: str, *, owner: str | None,
+                          event: str, expected_epoch: int | None = None) -> int | None:
+        if event not in {'completed', 'cancelled', 'interrupted', 'preflight_failed',
+                         'lease_expired', 'authorization_lost', 'observation_failed',
+                         'preparation_failed', 'predecessor_interrupted'}:
+            raise ValueError('Invalid automatic queue event')
+        if not self._auto_queue_available:
+            return None
+        if expected_epoch is not None and (type(expected_epoch) is not int
+                                           or expected_epoch < 1):
+            raise ValueError('Invalid automatic queue epoch')
+        with self.connection:
+            now = time.time()
+            changed = self.connection.execute(
+                "UPDATE subchat_auto_queue SET state='stopped', event=?, updated_at=? "
+                "WHERE operation_id=? AND owner IS ? AND state='armed' "
+                "AND (? IS NULL OR epoch=?)",
+                (event, now, operation_id, owner, expected_epoch, expected_epoch))
+            if changed.rowcount == 1:
+                saved = self.connection.execute(
+                    'INSERT INTO subchat_auto_queue_events '
+                    '(operation_id, owner, event, updated_at) VALUES (?,?,?,?)',
+                    (operation_id, owner, event, now))
+                if saved.lastrowid is None:
+                    raise ValueError('Automatic queue event has no durable identity')
+                return saved.lastrowid
+            return None
+
+    def auto_queue_events(self, *, owner: str | None, limit: int = 50,
+                          operation_id: str | None = None
+                          ) -> builtins.list[dict[str, JsonValue]]:
+        if not 1 <= limit <= 100:
+            raise ValueError('Invalid event limit')
+        if not self._auto_queue_available:
+            return []
+        if not self._auto_queue_events_available:
+            # A read-only controller may inspect a pre-migration ledger.
+            return [
+                {'operation_id': operation_id, 'event': event,
+                 'updated_at': updated_at}
+                for operation_id, event, updated_at in self.connection.execute(
+                    'SELECT operation_id, event, updated_at FROM subchat_auto_queue '
+                    'WHERE owner IS ? AND event IS NOT NULL '
+                    'AND (? IS NULL OR operation_id=?) '
+                    'ORDER BY updated_at DESC LIMIT ?',
+                    (owner, operation_id, operation_id, limit))
+            ]
+        return [
+            {'operation_id': operation_id, 'event': event, 'updated_at': updated_at}
+            for operation_id, event, updated_at in self.connection.execute(
+                'SELECT operation_id, event, updated_at FROM subchat_auto_queue_events '
+                'WHERE owner IS ? AND (? IS NULL OR operation_id=?) '
+                'ORDER BY id DESC LIMIT ?',
+                (owner, operation_id, operation_id, limit))
+        ]
+
+    def auto_queue_events_page(self, *, owner: str | None, after_id: int,
+                               limit: int = 50, operation_id: str | None = None
+                               ) -> tuple[builtins.list[dict[str, JsonValue]], bool]:
+        """Read a stable forward cursor so missed notices cannot age out of a recent list."""
+        if type(after_id) is not int or after_id < 0 or not 1 <= limit <= 100:
+            raise ValueError('Invalid queue event cursor or limit')
+        if not self._auto_queue_available:
+            return [], False
+        if not self._auto_queue_events_available:
+            raise ValueError('Queue event cursors require migrated writable state')
+        rows = self.connection.execute(
+            'SELECT id, operation_id, event, updated_at FROM subchat_auto_queue_events '
+            'WHERE owner IS ? AND id>? AND (? IS NULL OR operation_id=?) '
+            'ORDER BY id ASC LIMIT ?',
+            (owner, after_id, operation_id, operation_id, limit + 1)).fetchall()
+        return ([{'id': row[0], 'operation_id': row[1], 'event': row[2],
+                  'updated_at': row[3]} for row in rows[:limit]], len(rows) > limit)

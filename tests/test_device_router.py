@@ -5,6 +5,7 @@ import pytest
 from test_http_client import http_remote as http_remote
 
 from anywhere_computer.device_router import DeviceRouter
+from anywhere_computer.devices import DeviceStore
 from anywhere_computer.engine import Engine
 from anywhere_computer.models import Request
 
@@ -54,7 +55,7 @@ async def routed(tmp_path):
 async def test_catalog_is_connector_only_and_routes_explicitly(routed):
     router, local, remote, sent, first, _ = routed
     tools = await router.catalog()
-    assert len(tools) == len(local.catalog()) + 3
+    assert len(tools) == len(local.catalog()) + 4
     assert len({tool['name'] for tool in tools}) == len(tools)
     assert not any(tool['name'].startswith('devices_') for tool in remote.catalog())
     listed = await router.execute(request('devices_list'))
@@ -68,6 +69,41 @@ async def test_catalog_is_connector_only_and_routes_explicitly(routed):
     assert (await router.execute(request('devices_call', tool='computer_status'))).state == 'failed'
     assert (await router.execute(request('devices_call', device_id='missing',
                                         tool='computer_status'))).state == 'failed'
+
+
+async def test_probe_checks_registered_device_now_without_running_target_tool(
+    routed, monkeypatch,
+):
+    router, _, _, sent, first, _ = routed
+
+    def fake_probe(store, identity):
+        assert identity == first
+        return store.record(identity, 'ready', 'Authenticated status response')
+
+    monkeypatch.setattr(DeviceStore, 'probe', fake_probe)
+    result = await router.execute(request('devices_probe', device_id=first))
+    assert result.state == 'completed'
+    assert result.data['device']['state'] == 'ready'
+    assert result.data['device']['checked_at'] is not None
+    assert sent == []
+    assert (await router.execute(request('devices_probe', device_id='local'))).state == 'failed'
+    assert (await router.execute(request('devices_probe', device_id='missing'))).state == 'failed'
+
+
+async def test_probe_http_uses_status_check_without_target_tool(routed, monkeypatch):
+    router, _, _, sent, _, _ = routed
+    identity = router.store.add_http('HTTP target', 'https://device.example/mcp',
+                                     'client', 'profile')['device_id']
+
+    async def fake_probe(store, target):
+        assert target == identity
+        return store.record(target, 'authorization_required', 'Authorize this connection')
+
+    monkeypatch.setattr(DeviceStore, 'probe_http', fake_probe)
+    result = await router.execute(request('devices_probe', device_id=identity))
+    assert result.state == 'completed'
+    assert result.data['device']['state'] == 'authorization_required'
+    assert sent == []
 
 
 async def test_replayed_route_is_not_forwarded_and_cross_device_reuse_fails(routed, tmp_path):

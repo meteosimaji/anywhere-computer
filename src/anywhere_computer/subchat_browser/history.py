@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
@@ -12,7 +12,9 @@ from ..subchat import (
     SubchatAccessError,
     SubchatAnswer,
     SubchatInterrupted,
+    SubchatOutputLimit,
     SubchatPendingObservation,
+    SubchatPreview,
     SubchatReceipt,
 )
 from ..subchat_state import SubchatReportedSettings, SubchatSubmission
@@ -76,6 +78,66 @@ def project_history(payload: bytes, submission: SubchatSubmission) -> SubchatAns
     """Compatibility projection for callers that only need a verified final answer."""
     observed = project_observation(payload, submission)
     return observed if isinstance(observed, SubchatAnswer) else None
+
+
+def project_preview(payload: bytes, submission: SubchatSubmission) -> SubchatPreview | None:
+    """Expose only uniquely correlated, incomplete text from authenticated history."""
+    observation = project_observation(payload, submission)
+    if (not isinstance(observation, SubchatPendingObservation)
+            or observation.reason != 'final_not_complete'):
+        return None
+    matched = matched_input(payload, submission)
+    if matched is None:
+        return None
+    history, user = matched
+    keys = ('request_id', 'turn_exchange_id', 'working_turn_id')
+    if any(not isinstance(user.metadata.get(key), str) or not user.metadata[key]
+           for key in keys):
+        return None
+    correlated_users = [message for message in history.messages
+                        if message.author.get('role') == 'user'
+                        and all(message.metadata.get(key) == user.metadata[key]
+                                for key in keys)]
+    answers = [message for message in history.messages
+               if message.author.get('role') == 'assistant' and message.channel == 'final'
+               and all(message.metadata.get(key) == user.metadata[key] for key in keys)]
+    async_answers = [message for message in history.messages
+                     if message.author.get('role') == 'assistant'
+                     and message.channel == 'final'
+                     and isinstance(request_id := message.metadata.get('request_id'), str)
+                     and request_id.strip() and request_id != user.metadata['request_id']
+                     and isinstance(async_source := message.metadata.get('async_source'), str)
+                     and async_source.strip()
+                     and message.metadata.get('message_type') == 'next'
+                     and all(message.metadata.get(key) == user.metadata[key]
+                             for key in keys[1:])]
+    if async_answers:
+        turn_users = [message for message in history.messages
+                      if message.author.get('role') == 'user'
+                      and all(message.metadata.get(key) == user.metadata[key]
+                              for key in keys[1:])]
+        if len(turn_users) != 1:
+            return None
+        answers.extend(async_answers)
+    if len(correlated_users) != 1 or len(answers) != 1:
+        return None
+    answer = answers[0]
+    if (history.messages.index(answer) <= history.messages.index(user)
+            or answer.status != 'in_progress' or answer.end_turn is True
+            or answer.metadata.get('is_complete') is True
+            or answer.metadata.get('finish_details') is not None
+            or answer.content.get('content_type') != 'text'):
+        return None
+    parts = answer.content.get('parts')
+    if not isinstance(parts, list) or not parts or any(not isinstance(part, str)
+                                                      for part in parts):
+        return None
+    text = ''.join(cast(str, part) for part in parts)
+    if not text:
+        return None
+    return SubchatPreview(operation_id=submission.operation_id,
+                          answer_message_id=answer.id, text=text[-512:],
+                          truncated=len(text) > 512)
 
 
 _IMAGE_POINTER = re.compile(r'sediment://file_[0-9a-f]{32}\Z')
@@ -211,6 +273,9 @@ def project_observation(payload: bytes, submission: SubchatSubmission
     finish = answer.metadata.get('finish_details')
     if isinstance(finish, dict) and finish.get('type') == 'interrupted':
         raise SubchatInterrupted('Provider recorded an interrupted response; do not resend')
+    if (answer.status == 'finished_successfully' and answer.end_turn is True
+            and isinstance(finish, dict) and finish.get('type') == 'max_tokens'):
+        raise SubchatOutputLimit('Provider stopped at its output limit; do not resend')
     if (answer.status != 'finished_successfully' or answer.end_turn is not True
             or ('is_complete' in answer.metadata and answer.metadata['is_complete'] is not True)
             or ('finish_details' in answer.metadata

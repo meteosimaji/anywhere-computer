@@ -8,6 +8,128 @@ from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatList, SubchatSubmissions
 
 
+async def test_queued_model_change_uses_revision_and_never_resends(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    browser = BrowserFixture()
+    parent, child = '1' * 32, '2' * 32
+    store.prepare(parent, 'parent', 'old', 'effort', owner='peer',
+                  conversation_id='conversation')
+    store.begin_send(parent, owner='peer', user_message_id='user',
+                     provider_account_id='account')
+    store.submitted(parent, 'conversation', 'user', owner='peer')
+    store.complete(parent, 'answer', 'done', owner='peer')
+    store.prepare(child, 'child', 'old', 'effort', owner='peer',
+                  conversation_id='conversation', after_operation_id=parent)
+    server = session(Subchats(store, browser), owner='peer')
+    try:
+        status = await server.execute(Request(operation_id='3' * 32,
+            tool='subchat_status', arguments={'operation_id': child}))
+        assert status.data['queue_revision'] == 0
+        changed = await server.execute(Request(operation_id='4' * 32,
+            tool='subchat_queue_model_change', arguments={
+                'operation_id': child, 'expected_revision': 0,
+                'model': 'new', 'effort': 'more'}))
+        assert changed.state == 'completed'
+        assert changed.data['queue_revision'] == 1
+        assert store.get(child, owner='peer').model == 'new'
+        assert browser.sends == 0
+        stale = await server.execute(Request(operation_id='5' * 32,
+            tool='subchat_queue_model_change', arguments={
+                'operation_id': child, 'expected_revision': 0,
+                'model': 'another', 'effort': 'more'}))
+        assert stale.state == 'failed'
+        assert stale.data['error_code'] == 'queue_revision_conflict'
+        assert store.get(child, owner='peer').model == 'new'
+        assert browser.sends == 0
+    finally:
+        await server.close()
+        ledger.close()
+
+
+async def test_queued_http_model_change_requires_current_choice(tmp_path):
+    import json
+
+    from test_subchat_http_catalog import catalog
+
+    from anywhere_computer.subchat_browser.catalog import project_http_catalog
+    from anywhere_computer.subchat_state import SubchatHTTPSelection
+
+    payload = catalog()
+    observed = project_http_catalog(json.dumps(payload).encode())
+    choice = observed['versions'][0]['choices'][0]
+    selection = SubchatHTTPSelection.model_validate(choice['http_selection'])
+
+    class CatalogBrowser(BrowserFixture):
+        def validate_send_selection(self, selected):
+            assert selected is not None
+
+        async def http_catalog(self):
+            return project_http_catalog(json.dumps(payload).encode())
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    parent, child = '6' * 32, '7' * 32
+    store.prepare(parent, 'parent', 'Future Chat', 'Future effort', owner='peer',
+                  conversation_id='conversation', http_selection=selection)
+    store.begin_send(parent, owner='peer', user_message_id='user',
+                     provider_account_id='account')
+    store.submitted(parent, 'conversation', 'user', owner='peer')
+    store.complete(parent, 'answer', 'done', owner='peer')
+    store.prepare(child, 'child', 'Future Chat', 'Future effort', owner='peer',
+                  conversation_id='conversation', after_operation_id=parent,
+                  http_selection=selection)
+    server = session(Subchats(store, CatalogBrowser()), owner='peer')
+    try:
+        valid = await server.execute(Request(operation_id='8' * 32,
+            tool='subchat_queue_model_change', arguments={
+                'operation_id': child, 'expected_revision': 0,
+                'choice_id': choice['choice_id']}))
+        assert valid.state == 'completed' and valid.data['queue_revision'] == 1
+        payload['versions'][0]['enabled'] = False
+        unavailable = await server.execute(Request(operation_id='9' * 32,
+            tool='subchat_queue_model_change', arguments={
+                'operation_id': child, 'expected_revision': 1,
+                'choice_id': choice['choice_id']}))
+        assert unavailable.state == 'failed'
+        assert store.queue_revision(child, owner='peer') == 1
+        assert store.get(child, owner='peer').state == 'queued'
+    finally:
+        await server.close()
+        ledger.close()
+
+
+async def test_catalog_choice_id_fills_send_fields_and_rejects_conflicts(tmp_path):
+    import json
+
+    from test_subchat_http_catalog import catalog
+
+    from anywhere_computer.subchat_browser.catalog import project_http_catalog
+
+    choice = project_http_catalog(json.dumps(catalog()).encode())['versions'][0]['choices'][0]
+    ledger = Ledger(tmp_path)
+    browser = BrowserFixture()
+    store = SubchatSubmissions(ledger.connection)
+    server = session(Subchats(store, browser))
+    try:
+        bad = await server.execute(Request(operation_id='a' * 32, tool='subchat_send',
+            arguments={'prompt': 'review', 'choice_id': choice['choice_id'],
+                       'model': 'wrong'}))
+        assert bad.data['field'] == 'choice_id'
+        assert bad.data['dispatched'] is False
+        assert store.list(SubchatList(), owner=None).submissions == []
+        result = await server.execute(Request(operation_id='b' * 32, tool='subchat_send',
+            arguments={'prompt': 'review', 'choice_id': choice['choice_id']}))
+        assert result.state == 'unknown'
+        saved = store.get('b' * 32, owner=None)
+        assert (saved.model, saved.effort, saved.http_selection.model_slug) == (
+            'Future Chat', 'Future effort', 'future-chat')
+        assert browser.sends == 1
+    finally:
+        await server.close()
+        ledger.close()
+
+
 async def test_unexpected_send_error_is_unknown_and_never_invites_replay(tmp_path):
     class UnexpectedSend(Subchats):
         async def send(self, *args, **kwargs):
@@ -430,7 +552,9 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
         assert names == {'subchat_activity', 'subchat_send', 'subchat_recover',
                         'subchat_status', 'subchat_wait',
                         'subchat_message', 'subchat_cancel', 'subchat_delete',
-                        'subchat_list', 'subchat_queue_watch'}
+                        'subchat_list', 'subchat_queue_watch',
+                        'subchat_queue_auto', 'subchat_queue_events',
+                        'subchat_queue_model_change'}
         listed = await call('tools/call', {'name': 'subchat_list', 'arguments': {}})
         assert listed['result']['structuredContent']['data']['submissions'] == []
         op = '1' * 32
@@ -494,15 +618,17 @@ async def test_mcp_session_owner_isolates_saved_operations_and_downloads(tmp_pat
     class Backend(BrowserFixture):
         image_download_available = True
 
-        async def download_sandbox_file(self, operation_id, sandbox_link, *, max_bytes):
+        async def download_sandbox_file(self, operation_id, sandbox_link, *, max_bytes,
+                                        offset=0):
             downloads.append(('file', operation_id))
             return SimpleNamespace(file_name='result.txt', mime_type='text/plain',
-                                   file_size_bytes=2, content=b'ok')
+                                   file_size_bytes=2, content=b'ok', offset=0, eof=True)
 
-        async def download_image(self, operation_id, *, max_bytes):
+        async def download_image(self, operation_id, *, max_bytes, image_index=None):
             downloads.append(('image', operation_id))
             return SimpleNamespace(file_size_bytes=2, content=b'ok', mime_type='image/png',
-                                   submission_state='completed', width=1, height=1)
+                                   submission_state='completed', width=1, height=1,
+                                   image_index=0, image_count=1)
 
     backend = Backend()
     service = Subchats(store, backend)
@@ -633,7 +759,9 @@ asyncio.run(main())
                         'subchat_activity', 'subchat_send', 'subchat_recover',
                         'subchat_status', 'subchat_wait',
                         'subchat_message', 'subchat_cancel', 'subchat_delete',
-                        'subchat_list', 'subchat_queue_watch'}
+                        'subchat_list', 'subchat_queue_watch',
+                        'subchat_queue_auto', 'subchat_queue_events',
+                        'subchat_queue_model_change'}
                     sent = await client.call_tool('subchat_send', arguments)
                     assert not sent.isError
                     answer = await client.call_tool('subchat_recover',
@@ -980,11 +1108,12 @@ async def test_session_owner_scopes_ledger_tools_and_download_authorization(tmp_
         file_reads = 0
         image_reads = 0
 
-        async def download_sandbox_file(self, operation_id, sandbox_link, *, max_bytes):
+        async def download_sandbox_file(self, operation_id, sandbox_link, *, max_bytes,
+                                        offset=0):
             self.file_reads += 1
             raise AssertionError('Cross-owner file download reached backend')
 
-        async def download_image(self, operation_id, *, max_bytes):
+        async def download_image(self, operation_id, *, max_bytes, image_index=None):
             self.image_reads += 1
             raise AssertionError('Cross-owner image download reached backend')
 

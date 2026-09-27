@@ -1,0 +1,128 @@
+"""Exercise the real consent scripts with Chromium's isolated WebAuthn device."""
+
+from urllib.parse import parse_qs, urlencode, urlsplit
+
+import pytest
+from playwright.async_api import async_playwright
+from test_client_tokens import MemoryVault
+
+from anywhere_computer.authorization import AuthorizationStore, pkce_s256
+from anywhere_computer.browser_authorization import BrowserAuthorization
+from anywhere_computer.owner_credentials import OwnerCredentials
+from anywhere_computer.owner_passkeys import OwnerPasskeys
+
+
+@pytest.mark.asyncio
+async def test_virtual_authenticator_registers_and_approves_consent(tmp_path):
+    # A routed HTTPS origin gives Chromium a secure context without touching the
+    # user's keychain, passkeys, network service, or persisted HTTP configuration.
+    origin = "https://localhost"
+    resource = origin + "/mcp"
+    redirect = "https://client.example/callback"
+    verifier = "a" * 43
+    store = AuthorizationStore(tmp_path, resource=resource, known_tools=frozenset({"files_read"}))
+    store.register_client("client", frozenset({redirect}))
+    store.enroll_device("owner", "device", frozenset({"files_read"}))
+    owner = OwnerCredentials(tmp_path, resource=resource, owner="owner", vault=MemoryVault())
+    owner.initialize("owner-password")
+    consent = BrowserAuthorization(store, owner, device="device")
+    ticket = OwnerPasskeys(owner, device="device").issue_local_ticket("owner-password")
+    try:
+        async with async_playwright() as driver:
+            try:
+                browser = await driver.chromium.launch(channel="chrome", headless=True)
+            except Exception as exc:
+                pytest.skip(f"Chromium unavailable: {exc}")
+            try:
+                context = await browser.new_context()
+                page = await context.new_page()
+                cdp = await context.new_cdp_session(page)
+                await cdp.send("WebAuthn.enable")
+                await cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
+                    "protocol": "ctap2", "transport": "internal", "hasResidentKey": True,
+                    "hasUserVerification": True, "isUserVerified": True,
+                    "automaticPresenceSimulation": True,
+                }})
+                approvals = []
+
+                async def route_request(route):
+                    request = route.request
+                    parsed = urlsplit(request.url)
+                    if parsed.hostname == "client.example":
+                        await route.fulfill(status=200, body="callback")
+                        return
+                    handler = consent.routes().get(parsed.path)
+                    assert handler is not None
+                    status, body, headers = await handler(
+                        request.method,
+                        {key.lower(): value for key, value in request.headers.items()},
+                        request.post_data_buffer or b"",
+                        parsed.query,
+                    )
+                    if parsed.path == "/authorize" and request.method == "POST":
+                        approvals.append((status, headers, request.post_data_buffer or b""))
+                        # The registered callback is external to this test. Keep
+                        # the browser on the consent origin while retaining the
+                        # actual approval result and cookie expiry header.
+                        if status == 303:
+                            headers = {key: value for key, value in headers.items()
+                                       if key != "Location"}
+                            status, body = 200, b"approved"
+                    await route.fulfill(status=status, body=body or b"", headers=headers)
+
+                await context.route("https://**/*", route_request)
+                await page.goto(origin + "/owner-passkey?" + urlencode({"ticket": ticket}))
+                assert await page.evaluate("window.isSecureContext")
+                await page.locator("#register-passkey").click()
+                await page.wait_for_load_state()
+                assert "Passkey registered." in await page.locator("body").inner_text()
+                assert len(consent.passkeys.list()) == 1
+                assert not consent.passkeys.ticket_valid(ticket)
+
+                query = urlencode({
+                    "response_type": "code", "client_id": "client", "redirect_uri": redirect,
+                    "resource": resource, "scope": "files_read", "state": "browser-state",
+                    "code_challenge": pkce_s256(verifier), "code_challenge_method": "S256",
+                })
+                await page.goto(origin + "/authorize?" + query)
+                identity = await page.locator("input[name=request_id]").input_value()
+                assert identity in consent.pending
+                await page.evaluate("""() => {
+                  document.querySelector('input[name=csrf]').value = 'invalid';
+                  const decision = document.createElement('input');
+                  decision.type = 'hidden'; decision.name = 'passkey'; decision.value = 'yes';
+                  document.querySelector('form').append(decision);
+                  document.querySelector('form').submit();
+                }""")
+                await page.get_by_text("invalid or expired").wait_for()
+                assert identity in consent.pending
+                assert store.db.execute("SELECT count(*) FROM grants").fetchone()[0] == 0
+                await page.goto(origin + "/authorize?" + query)
+                identity = await page.locator("input[name=request_id]").input_value()
+                await page.locator("#passkey-approve").click()
+                await page.get_by_text("approved").wait_for()
+                assert [item[0] for item in approvals] == [403, 303]
+                result = parse_qs(urlsplit(approvals[1][1]["Location"]).query)
+                assert result["state"] == ["browser-state"]
+                assert "code" in result
+                assert len(store.db.execute("SELECT id FROM grants").fetchall()) == 1
+                assert identity not in consent.pending
+                assert not any(cookie["name"].endswith(identity)
+                               for cookie in await context.cookies(origin))
+                await page.evaluate("""body => {
+                  const form = document.createElement('form');
+                  form.method = 'POST'; form.action = '/authorize';
+                  for (const [name, value] of new URLSearchParams(body)) {
+                    const field = document.createElement('input');
+                    field.name = name; field.value = value; form.append(field);
+                  }
+                  document.body.append(form); form.submit();
+                }""", approvals[1][2].decode())
+                await page.wait_for_load_state()
+                assert "Start again from your client" in await page.locator("body").inner_text()
+                assert approvals[-1][0] == 403
+                assert store.db.execute("SELECT count(*) FROM grants").fetchone()[0] == 1
+            finally:
+                await browser.close()
+    finally:
+        store.close()

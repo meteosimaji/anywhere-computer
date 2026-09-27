@@ -122,7 +122,8 @@ HTTP 応答を失った操作は再送せず、既知の操作 ID と `unknown` 
 
 ## 複数端末
 
-ローカル接続では `devices_list` → `devices_tools` → `devices_call` の順に、登録した
+ローカル接続では `devices_list` → 必要なら `devices_probe` → `devices_tools` →
+`devices_call` の順に、登録した
 端末を明示的なIDで指定できます。通常のツールはローカルを対象としたままです。
 認証・再送の契約は [会話からの端末指定](DEVICE-ROUTING.md) を参照してください。
 

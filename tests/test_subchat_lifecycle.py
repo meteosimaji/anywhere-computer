@@ -10,7 +10,93 @@ from anywhere_computer.subchat import (
     SubchatReceipt,
     Subchats,
 )
-from anywhere_computer.subchat_state import SubchatSubmissions
+from anywhere_computer.subchat_state import SubchatQueueRevisionConflict, SubchatSubmissions
+
+
+async def test_queued_model_change_during_preparation_never_sends_stale_choice(tmp_path):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class PreparingBrowser:
+        def __init__(self):
+            self.sends = 0
+
+        async def prepare(self, submission):
+            entered.set()
+            await release.wait()
+            return ()
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    browser = PreparingBrowser()
+    service = Subchats(store, browser)
+    parent, child = '1' * 32, '2' * 32
+    try:
+        store.prepare(parent, 'parent', 'old', 'effort', owner='peer',
+                      conversation_id='conversation')
+        store.begin_send(parent, owner='peer', user_message_id='user',
+                         provider_account_id='account')
+        store.submitted(parent, 'conversation', 'user', owner='peer')
+        store.complete(parent, 'answer', 'done', owner='peer')
+        store.prepare(child, 'child', 'old', 'effort', owner='peer',
+                      conversation_id='conversation', after_operation_id=parent)
+        recovering = asyncio.create_task(service.recover(child, owner='peer'))
+        await entered.wait()
+        store.change_queued_model(child, owner='peer', expected_revision=0,
+                                  model='new', effort='more', http_selection=None)
+        release.set()
+        with pytest.raises(SubchatQueueRevisionConflict):
+            await recovering
+        assert store.get(child, owner='peer').state == 'queued'
+        assert browser.sends == 0
+    finally:
+        release.set()
+        ledger.close()
+
+
+async def test_https_cancel_during_preparation_discards_page_without_sending(tmp_path):
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class PreparingBrowser:
+        def __init__(self):
+            self.sends = 0
+            self.discards = 0
+
+        async def prepare(self, submission):
+            entered.set()
+            await release.wait()
+            return ()
+
+        async def discard_prepared(self, submission):
+            self.discards += 1
+
+        async def send(self, submission):
+            self.sends += 1
+            raise AssertionError('Cancelled submission was sent')
+
+    ledger = Ledger(tmp_path)
+    browser = PreparingBrowser()
+    service = Subchats(SubchatSubmissions(ledger.connection), browser)
+    operation = '3' * 32
+    task = asyncio.create_task(service.send(operation, 'prompt', 'model', 'effort', owner='peer'))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert service.store.get(operation, owner='peer').state == 'prepared'
+        other = Ledger(tmp_path)
+        try:
+            SubchatSubmissions(other.connection).cancel(operation, owner='peer')
+        finally:
+            other.close()
+        release.set()
+        result = await asyncio.wait_for(task, timeout=5)
+        assert result.state == 'cancelled'
+        assert browser.discards == 1
+        assert browser.sends == 0
+    finally:
+        release.set()
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        ledger.close()
 
 
 class BrowserFixture:

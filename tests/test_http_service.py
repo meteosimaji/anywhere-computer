@@ -171,7 +171,7 @@ async def test_subchat_login_failure_keeps_http_tools_and_recovers_without_resta
                          state="completed", data={"ready": True})
 
     @asynccontextmanager
-    async def open_gateway(config, *, owner):
+    async def open_gateway(config, *, owner, queue_grant_active=None):
         nonlocal opens, closes
         assert config == selected and owner == "owner"
         opens += 1

@@ -7,8 +7,9 @@
         "run",
         "--python",
         "3.12",
+        "--no-cache",
         "--from",
-        "./bundled/anywhere_computer-0.2.0b10-py3-none-any.whl",
+        "./bundled/anywhere_computer-0.2.0b12-py3-none-any.whl",
         "--with-requirements",
         "./bundled/dependencies.txt",
         "anywhere",
@@ -23,11 +24,28 @@
         "run",
         "--python",
         "3.12",
+        "--no-cache",
         "--from",
-        "./bundled/anywhere_computer-0.2.0b10-py3-none-any.whl",
+        "./bundled/anywhere_computer-0.2.0b12-py3-none-any.whl",
         "--with-requirements",
         "./bundled/dependencies.txt",
         "anywhere-subchat-plugin"
+      ],
+      "cwd": "."
+    },
+    "anywhere-subchat-library": {
+      "command": "uv",
+      "args": [
+        "tool",
+        "run",
+        "--python",
+        "3.12",
+        "--no-cache",
+        "--from",
+        "./bundled/anywhere_computer-0.2.0b12-py3-none-any.whl",
+        "--with-requirements",
+        "./bundled/dependencies.txt",
+        "anywhere-subchat-library-mcp"
       ],
       "cwd": "."
     }

@@ -102,13 +102,44 @@ manual MCP registrations.
 When ChatGPT calls Subchat through Anywhere Computer's `codex_plugin_call`
 bridge, open `codex_plugin_session_open` with the workspace cwd first. Pass its
 `session_id` to `codex_plugin_tools` and each `codex_plugin_call` for Subchat
-send, message, recover, wait or queue watch. A one-call bridge context rejects
+send, message, recover, wait, queue watch or durable queue arming. A one-call bridge context rejects
 these operations before dispatch, including when the MCP server was registered
 under a different name. Keep the session through final answer recovery and
 close it explicitly. Idle cleanup consults `subchat_activity`; it preserves a
-session while a send, recovery or queue watch is live, then allows normal idle
+session while a send, recovery or queue worker is live, then allows normal idle
 expiry after the work finishes. An explicit session close or Engine shutdown
 still ends that local background work.
+
+`subchat_queue_auto` opts one already saved `queued` follow-up into unattended
+delivery for a bounded lease (30 seconds to 24 hours). Unlike the short-lived
+`subchat_queue_watch`, it saves the opt-in in the owner-scoped ledger and
+re-arms it when a send-capable controller restarts. It may reopen the selected
+browser profile; the selected account is still checked before dispatch. The
+worker recovers the predecessor, sends only after its final answer is saved,
+then observes the child until completion or a stop condition. An operation in
+`sending` is recovered from history, never sent again. Disabling the opt-in
+prevents its worker from reserving a queued child for dispatch, including
+while parent recovery is in progress. Once the child's durable state advances
+to `sending`, disable cannot undo the provider request; recover that original
+operation ID. Use `subchat_cancel` to cancel the queued child itself.
+
+Terminal completion and failure reasons are saved for `subchat_queue_events`.
+While the stdio session that armed the queue remains connected, it emits a
+bounded MCP `notifications/message` event with the operation ID, outcome, and the same
+durable `event_id` returned by the cursor-based event query. Deduplicate
+notifications by `event_id` before starting parent follow-up work. This is a
+transport notification; a host is not guaranteed to surface it in the parent
+model turn. A different controller may resume the queue but does not receive
+the arming session's notification. The durable event query is the recovery
+path after the arming session closes or loses its notice.
+Re-arming the same queued operation starts a new epoch. A session subscribed
+to an older epoch does not receive the new epoch's outcome.
+Automatic work cannot progress while the controller process is fully stopped;
+the next send-capable session resumes an armed, unexpired queue. Expiry or an
+observation error stops the worker and requires a fresh explicit arm. A parent
+in `sending` can accept a queued child only after its exact conversation,
+user-message and account identities have been checkpointed. The worker still
+waits for a verified final parent answer before dispatch.
 An older server without `subchat_activity` is rejected before a stateful bridge
 call. Sanitized preparation failures are saved with their operation ID so a
 later status call can report the reason after a controller restart; an exact
@@ -120,8 +151,32 @@ current principal without opening Chrome, so a client can recover an operation
 ID after losing local state. Results are paginated. Operations owned by older
 grant identities remain accessible only through their exact IDs after the
 principal and account checks; the list does not enumerate those legacy rows.
+Newly saved operations include a creation timestamp; older rows retain a null
+timestamp. Prompt text is omitted by default. Set `include_prompt_preview=true`
+only when a bounded 160-character preview is needed for the selected owner.
 Publishing this tool does not grant it to an existing OAuth connection. The
 owner must consent to its scope before an ordinary Chat can invoke it.
+The HTTPS gateway also exposes read-only `subchat_queue_events` with its own
+OAuth tool scope. It reads the selected account's owner-scoped durable event
+history using `after_id`, `next_cursor`, and `has_more`, without opening Chrome
+or dispatching a queued send. A grant for another Subchat tool does not include
+this scope automatically. HTTPS polling can recover an event that a local stdio
+notification did not reach, but it does not wake a parent Chat model turn by
+itself. Older rows saved under another grant identity are not enumerated by a
+new grant's event query. If the original operation ID is known, pass it as
+`operation_id` to retrieve only that operation's events. A replacement grant
+can use this form only when it belongs to the same OAuth principal and the
+saved operation is bound to the selected Chat account.
+The direct HTTPS gateway now also offers `subchat_queue_auto` under a separate
+OAuth scope. Enable it only for a saved `queued` follow-up and retain that
+operation ID. Its service-owned worker may continue after the HTTP connection
+closes; a new connection can read `subchat_queue_events` for completion or
+failure. Revoking the OAuth grant that armed a queue stops its worker before
+the next queued send is reserved and records `authorization_lost`. A send
+already in `sending` remains subject to recovery under its original operation
+ID. A fully
+stopped service cannot run the worker; its next send-capable gateway session
+resumes an armed queue. The HTTPS tool does not wake a parent model turn.
 
 To enable actual sends through the dedicated Chrome profile, set
 `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-send` in the Plugin process and restart
@@ -137,6 +192,18 @@ model and effort labels plus an available
 operation ID for `subchat_wait` or `subchat_recover`. Keep the controller alive
 until a pending send reaches a confirmed result. This mode uses Chrome to send;
 it does not prove independent HTTP-only generation.
+For each HTTP choice, `available` and `availability_basis=authenticated_http_catalog`
+report what the selected account's model catalog exposed. The separate
+`generation_sendability=unknown` means no generation was attempted for that
+choice. A visible choice can still fail UI preparation, quota checks or
+generation; use the operation result and recovered history for send evidence.
+In a send-capable local session, call `subchat_catalog` with `source=compare`
+and no `model` to observe both the HTTP catalog and the current UI model menu
+without submitting a message. Each HTTP choice reports `ui_picker_status` as
+`selectable_row_observed`, `not_confirmed`, or `unknown`, plus the matched row
+label when available. This checks only the model row; it does not verify the
+effort control, quota, generation request, or final answer. The HTTPS gateway
+and read-only Plugin mode continue to provide the HTTP catalog alone.
 
 On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` exposes the
 same send tools with a different generation transport. Use the dedicated logged-in
@@ -161,12 +228,27 @@ the next one. If its outcome cannot be established from conversation history,
 the original conversation stays blocked against automated sends. Start a new
 Chat instead of resending the uncertain request. This prevents duplicate or
 out-of-order turns when the provider's receipt is unavailable.
+The new Chat needs a new operation ID and explicit user intent; the original
+operation remains saved for later read-only recovery. Before moving work,
+inspect any queued child with `subchat_status`. Cancel it while still unsent,
+or disable its automatic queue watcher, so it cannot later dispatch into the
+old conversation. A confirmed provider interruption is still not a completed
+answer and does not make the old queued child safe to send.
 The installed Codex Plugin has passed live new-Chat, same-conversation
 follow-up and saved-answer recovery checks on macOS. In sampled runs the
 dedicated Chrome windows stayed offscreen and another app retained focus; a
 temporary Dock icon may appear during execution. This does not guarantee the
 same behavior on every macOS/Chrome combination or after provider changes.
 Do not resend an operation whose outcome is uncertain; recover it by operation ID.
+
+An unsent queued follow-up can change its model through `subchat_queue_model_change` in
+the local Subchat controller. Read `queue_revision` with `subchat_status`, then pass the
+same operation ID and `expected_revision`. For an HTTP-selected queue pass a current
+`choice_id` from the selected account's HTTP catalog; for a UI-selected queue pass
+`model` and `effort`. The controller checks the HTTP choice on change and again during
+send preparation. A stale revision or a `sending` checkpoint rejects the change, and
+neither this tool nor same-ID status/recover sends a second copy. A running automatic
+queue may reserve the input first; inspect status after any rejection.
 
 In Codex, the model may select Subchat when the user asks a separate ordinary
 ChatGPT Chat to help, even without saying "Subchat". This requires discovery
@@ -175,6 +257,14 @@ match does not authorize sending. ChatGPT Work tasks are a different surface.
 Inspect `subchat_capabilities` and `subchat_catalog`. For an HTTP-read send,
 choose an available `source=http` choice, set `model` to its exact `model_title`
 and `effort` to its exact `title`, and copy its `http_selection` unchanged.
+Alternatively pass that choice's `choice_id` alone with the prompt; it binds
+those three values and is rechecked against the current account catalog before
+dispatch. A choice ID is not an authorization credential. The HTTP catalog's
+`available` flag does not establish that the current browser picker can select
+that model. The controller resolves the version against the current picker and
+checks the intercepted generation model and effort before dispatch. If a model
+moves out of `latest`, select a fresh catalog choice; an older `choice_id` may
+be rejected. A missing or ambiguous UI row fails before send.
 Version `label` and `selected_display_version` are not the `model` field. For a
 transport without HTTP selection, use the exact `source=ui` picker labels. Do
 not replace an HTTP choice's `model_title` with a differing UI label. For
@@ -201,8 +291,10 @@ content. It writes no local file and does not upload into another Chat or Librar
 An unknown link, changed account, or oversized file fails explicitly. The
 source Chat's path alone does not give another Chat access to its sandbox.
 
-`subchat_download_image` takes a saved operation ID. It finds one generated image
-in the exact account, conversation and turn bound to that operation, then returns
+`subchat_download_image` takes a saved operation ID. It finds generated images
+in the exact account, conversation and turn bound to that operation. If there
+is more than one, pass the zero-based `image_index`; the response includes
+`image_count` and the selected index. It then returns
 its PNG, JPEG or WebP bytes as bounded base64 content. The result includes
 `submission_state` and `final_answer_verified`; image availability alone does
 not prove a final assistant answer. A live macOS MCP call retrieved a 1254 × 1254
@@ -262,6 +354,7 @@ For ordinary macOS Chrome, use the profile-ID workflow to avoid entering a path:
 anywhere-subchat-setup discover
 anywhere-subchat-setup choose 'Profile 2' --expect-account-id ID_FROM_DISCOVER \
   --enable-background-send
+anywhere-subchat-setup doctor
 ```
 
 `discover` inspects at most 20 `Default` or `Profile N` directories under the
@@ -269,6 +362,28 @@ current macOS user's standard Chrome profile store. It reports the Chat account
 ID or an availability state for each; it does not read another directory chosen
 by the caller. `choose` inspects the chosen profile again, requires the observed
 account ID to match, and stores only the profile ID, account pin and send choice.
+`doctor` reads the selected login and checks the account again without creating
+a Chat message. It reports the configured tool groups, including whether the
+current transport setting permits background send. `tool_catalog=not_observed`
+means it has not inspected a running MCP session's actual tool list; use that
+session's catalog to confirm registration.
+To keep several macOS Chrome choices, save each selected profile under a local
+name, then explicitly confirm the account before switching:
+
+```sh
+anywhere-subchat-setup save-named --name personal
+anywhere-subchat-setup list-named
+anywhere-subchat-setup use-named --name personal --expect-account-id ID_FROM_LIST
+```
+
+`save-named` requires a profile-ID selection made with `choose`. The separate
+named list is private to the local user and contains profile IDs, account IDs,
+and the saved send setting; it contains no login credentials. `use-named`
+rechecks the currently observed Chat account before replacing the active
+selection. Restart the Plugin after switching so the running controller opens
+the newly selected account. This workflow does not switch an active generation
+or move operations between account scopes. Windows dedicated-browser selections
+are not supported by these named commands.
 Run these commands as the macOS user who owns Chrome and the Plugin state. To
 remove this saved choice, run `anywhere-subchat-setup revoke` and restart the
 Plugin. Environment overrides and an explicit transport setting are separate
@@ -375,6 +490,27 @@ Attachments refer to files already uploaded to the selected account; a local
 path is not an attachment ID. For shared work, identify the intended
 device and expected content hash, then verify the child's result before using
 it.
+
+The local `anywhere-subchat-library` Plugin server exposes
+`subchat_upload_library` and `subchat_upload_status` on macOS. The first tool
+requires an explicit absolute local path and a caller-generated, stable
+`request_id`. Before an MCP upload, the owner runs
+`anywhere-subchat-upload /absolute/file --operation-id ID --prepare` in a local
+terminal. Preparation reads and fingerprints the file, pins the selected
+account and operation ID, and makes no browser or provider request. The MCP
+authorization lasts 15 minutes and is separate from an ordinary CLI upload
+reservation. The MCP tool requires that exact prepared file, account and ID;
+it checks authorization again immediately before dispatch and uploads to ChatGPT
+Library, not to a conversation. The status tool takes the original upload
+operation ID and performs read-only reconciliation without the source file.
+If the first call is interrupted or reports `unknown`, inspect that exact ID
+before any new upload decision. The existing CLI `anywhere-subchat-upload`
+uses the same ledger. Neither entry point turns a local path into an existing
+Chat attachment automatically, and the Library item ID must be observed before
+the caller attaches it to a Chat. A `ready` MCP result includes an
+`attachment` object with the saved file ID, Library item ID, filename, MIME
+type, and exact byte count for an explicit `subchat_send` resource. It is
+`null` until ready; do not guess these fields from a local path or file name.
 
 ## HTTP paths and scope
 

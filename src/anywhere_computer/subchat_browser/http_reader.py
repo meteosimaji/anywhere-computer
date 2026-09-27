@@ -12,12 +12,19 @@ from ..subchat import (
     SubchatAccessError,
     SubchatAnswer,
     SubchatPendingObservation,
+    SubchatPreview,
     SubchatReceipt,
     SubchatUnsupported,
 )
 from ..subchat_state import SubchatAccountMismatch, SubchatSubmission
 from .catalog import observe_http_catalog, project_http_catalog
-from .history import matched_input, observe_history, project_observation, project_receipt
+from .history import (
+    matched_input,
+    observe_history,
+    project_observation,
+    project_preview,
+    project_receipt,
+)
 
 if TYPE_CHECKING:
     from httpx import AsyncClient
@@ -233,6 +240,10 @@ class ChatHTTPReader:
     async def history(self, context: BrowserContext | None,
                       submission: SubchatSubmission) -> SubchatAnswer | SubchatPendingObservation:
         return project_observation(await self._history_payload(context, submission), submission)
+
+    async def preview(self, context: BrowserContext | None,
+                      submission: SubchatSubmission) -> SubchatPreview | None:
+        return project_preview(await self._history_payload(context, submission), submission)
 
     async def receipt(self, context: BrowserContext | None,
                       submission: SubchatSubmission) -> SubchatReceipt | None:

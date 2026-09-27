@@ -108,7 +108,7 @@ def test_setup_scopes_are_current_explicit_tool_names():
     assert read < all_tools and files < all_tools
     assert "terminal_start" in all_tools and "files_write" in all_tools
     assert "operations_recent" not in all_tools
-    assert {"devices_list", "devices_tools", "devices_call"} <= all_tools
+    assert {"devices_list", "devices_probe", "devices_tools", "devices_call"} <= all_tools
     assert not any(name.startswith("devices_") for name in read | files)
     assert "terminal_start" not in files and "files_write" not in read
     assert "workspace_open" in files & read & all_tools

@@ -10,6 +10,7 @@ import shutil
 import signal
 import sys
 from pathlib import Path
+from urllib.parse import quote, urlsplit
 
 from .autostart import preview_startup
 from .client_tokens import ClientTokens
@@ -36,6 +37,7 @@ from .http_tool_upgrade import add_http_tools
 from .mcp_server import run_mcp
 from .native_login import login
 from .owner_credentials import OwnerCredentials
+from .owner_passkeys import OwnerPasskeys
 from .parent_liveness import watch_parent_pipe
 from .remote_health import configure_public_monitor
 from .remote_service import serve_remote, watch_remote
@@ -78,6 +80,7 @@ def main() -> None:
             "auto-update-disable",
             "serve",
             "mcp",
+            "ssh-child-mcp",
             "status",
             "doctor",
             "management-status",
@@ -93,6 +96,14 @@ def main() -> None:
             "owner-init",
             "owner-change",
             "owner-reset",
+            "owner-passkey-enroll",
+            "owner-passkey-list",
+            "owner-passkey-remove",
+            "http-delegate-issue",
+            "http-delegate-list",
+            "http-delegate-revoke",
+            "http-delegate-route",
+            "http-delegate-unroute",
             "login",
             "http-configure",
             "http-add-tools",
@@ -145,7 +156,20 @@ def main() -> None:
     parser.add_argument("--resource", help="Authorized HTTPS /mcp resource")
     parser.add_argument("--client-id", help="Registered public OAuth client ID")
     parser.add_argument("--owner", help="Owner identifier for initial authentication setup")
+    parser.add_argument("--credential-id", help="Passkey ID to remove locally")
     parser.add_argument("--scope", action="append", help="Tool to authorize (repeat per tool)")
+    parser.add_argument("--parent-grant-id", help="Active parent OAuth grant ID for child issue")
+    parser.add_argument("--child-id", help="Delegated child ID to revoke")
+    parser.add_argument("--target-child-id",
+                        help="Target-issued child ID recorded with a delegated route")
+    parser.add_argument("--delegated-device-id", default=None,
+                        help="Child device ID (default: local)")
+    parser.add_argument("--read-root", action="append",
+                        help="Existing absolute directory granted for reads")
+    parser.add_argument("--write-root", action="append",
+                        help="Existing absolute directory granted for writes")
+    parser.add_argument("--expires-in", type=int,
+                        help="Child lifetime in seconds (default: 3600, maximum: 86400)")
     parser.add_argument("--subchat-profile-id",
                         help="Default or Profile N from the ordinary macOS Chrome store")
     parser.add_argument("--subchat-ledger", type=Path,
@@ -286,8 +310,41 @@ def main() -> None:
         parser.error("--client-id is only valid for HTTP connection setup")
     if args.profile is not None and args.command not in {"http-mcp", "login", "device-add-http"}:
         parser.error("--profile is only valid for HTTP client setup")
-    if args.scope is not None and args.command not in {"login", "http-configure", "http-add-tools"}:
-        parser.error("--scope is only valid for login, http-configure and http-add-tools")
+    if args.scope is not None and args.command not in {
+        "login", "http-configure", "http-add-tools", "http-delegate-issue",
+    }:
+        parser.error("--scope is not valid for this command")
+    delegation_options = (args.parent_grant_id, args.child_id, args.target_child_id,
+                          args.delegated_device_id,
+                          args.read_root, args.write_root, args.expires_in)
+    if any(value is not None for value in delegation_options) and args.command not in {
+        "http-delegate-issue", "http-delegate-revoke", "http-delegate-route",
+        "http-delegate-unroute",
+    }:
+        parser.error("Delegation options are only valid for delegate issue/revoke")
+    if args.command == "http-delegate-issue" and (
+        not args.parent_grant_id or not args.scope or args.child_id is not None
+        or args.target_child_id is not None
+    ):
+        parser.error("Delegate issue requires --parent-grant-id and --scope")
+    if args.command == "http-delegate-revoke" and (
+        not args.child_id or any(value is not None for value in (
+            args.parent_grant_id, args.target_child_id, args.delegated_device_id, args.read_root,
+            args.write_root, args.expires_in,
+        ))
+    ):
+        parser.error("Delegate revoke requires only --child-id")
+    if args.command in {"http-delegate-route", "http-delegate-unroute"} and (
+        not args.child_id or any(value is not None for value in (
+            args.parent_grant_id, args.delegated_device_id, args.read_root,
+            args.write_root, args.expires_in,
+        ))
+    ):
+        parser.error("Delegate route management requires only --child-id")
+    if args.command == "http-delegate-route" and not args.target_child_id:
+        parser.error("Delegate route requires --target-child-id")
+    if args.command == "http-delegate-unroute" and args.target_child_id is not None:
+        parser.error("Delegate unroute does not accept --target-child-id")
     if args.command == "http-add-tools" and not args.scope:
         parser.error("http-add-tools requires at least one --scope tool")
     subchat_options = (args.subchat_profile_id, args.subchat_ledger,
@@ -304,6 +361,10 @@ def main() -> None:
         "http-configure",
     }:
         parser.error("--owner is only valid for owner setup and HTTP configuration")
+    if args.credential_id is not None and args.command != "owner-passkey-remove":
+        parser.error("--credential-id is only valid for owner-passkey-remove")
+    if args.command == "owner-passkey-remove" and not args.credential_id:
+        parser.error("owner-passkey-remove requires --credential-id")
     if (
         args.port is not None or args.redirect_uri is not None
     ) and args.command != "http-configure":
@@ -597,6 +658,57 @@ def main() -> None:
                 raise ValueError("Owner passwords did not match")
             reset_http_owner_password(directory, password)
             print(json.dumps({"owner_password_reset": True, "http_device_enabled": False}))
+        elif args.command in {
+            "owner-passkey-enroll", "owner-passkey-list", "owner-passkey-remove",
+        }:
+            config = load_http_config(directory)
+            owner_credentials = OwnerCredentials(
+                directory, resource=config.resource, owner=config.owner
+            )
+            passkeys = OwnerPasskeys(owner_credentials, device=config.device)
+            if args.command == "owner-passkey-list":
+                print(json.dumps({"passkeys": [
+                    {"credential_id": item.credential_id, "label": item.label}
+                    for item in passkeys.list()
+                ]}))
+            else:
+                if not has_interactive_input():
+                    raise ValueError("Passkey management requires an interactive terminal")
+                password = getpass.getpass("Current owner password: ")
+                if args.command == "owner-passkey-enroll":
+                    token = passkeys.issue_local_ticket(password)
+                    parsed = urlsplit(config.resource)
+                    origin = f"{parsed.scheme}://{parsed.netloc}"
+                    print(json.dumps({"registration_url": (
+                        origin + "/owner-passkey?ticket=" + quote(token, safe="")
+                    ), "expires_in_seconds": 300}))
+                else:
+                    passkeys.remove_with_password(args.credential_id, password)
+                    print(json.dumps({"passkey_removed": True}))
+        elif args.command in {
+            "http-delegate-issue", "http-delegate-list", "http-delegate-revoke",
+            "http-delegate-route", "http-delegate-unroute",
+        }:
+            from .delegation_admin import manage_delegation
+
+            if not has_interactive_input():
+                raise ValueError("Delegation management requires an interactive terminal")
+            password = getpass.getpass("Current owner password: ")
+            action = args.command.removeprefix("http-delegate-")
+            target_bearer = (getpass.getpass("Target child bearer (hidden): ")
+                             if action == 'route' else None)
+            delegation_result = manage_delegation(
+                directory, action=action, password=password,
+                parent_grant_id=args.parent_grant_id, child_id=args.child_id,
+                device_id=args.delegated_device_id or "local",
+                tools=frozenset(args.scope or ()),
+                read_roots=tuple(args.read_root or ()),
+                write_roots=tuple(args.write_root or ()),
+                expires_in=3600 if args.expires_in is None else args.expires_in,
+                target_bearer=target_bearer,
+                target_child_id=args.target_child_id,
+            )
+            print(json.dumps(delegation_result))
         elif args.command in {"http-mcp", "login"}:
             tokens = ClientTokens(
                 directory, resource=args.resource, client=args.client_id, profile=args.profile
@@ -609,6 +721,10 @@ def main() -> None:
                 asyncio.run(run_http_mcp(tokens))
         elif args.command == "remote-mcp":
             raise SystemExit(run_ssh_mcp(args.ssh_host))
+        elif args.command == "ssh-child-mcp":
+            from .ssh_child import run_ssh_child_mcp
+
+            asyncio.run(run_ssh_child_mcp(directory))
         elif args.command == "serve":
             asyncio.run(serve(directory))
         elif args.command == "skills-configure":

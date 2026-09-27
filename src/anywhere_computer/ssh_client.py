@@ -17,8 +17,11 @@ def _reject_constant(value: str) -> None:
 
 
 class SSHBackend:
-    def __init__(self, host: str) -> None:
+    def __init__(self, host: str, *, child_bearer: str | None = None) -> None:
+        if child_bearer is not None and not child_bearer:
+            raise ValueError("Child bearer must not be empty")
         self.host = host
+        self.child_bearer = child_bearer
         self.process: asyncio.subprocess.Process | None = None
 
     async def _write(self, packet: dict[str, JsonValue]) -> None:
@@ -58,23 +61,36 @@ class SSHBackend:
     async def _connect(self) -> None:
         if self.process is not None:
             return
+        command = (ssh_command(self.host, "ssh-child-mcp") if self.child_bearer is not None
+                   else ssh_command(self.host))
         self.process = await asyncio.create_subprocess_exec(
-            *ssh_command(self.host), stdin=asyncio.subprocess.PIPE,
+            *command,
+            stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=WIRE_LIMIT,
         )
-        result = await self._rpc("initialize", {
-            "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
-            "clientInfo": {"name": "anywhere-computer-device", "version": "1"},
-        })
-        capabilities = result.get("capabilities")
-        experimental = capabilities.get("experimental") if isinstance(capabilities, dict) else None
-        extension = (
-            experimental.get(OPERATION_CAPABILITY) if isinstance(experimental, dict) else None
-        )
-        if (result.get("protocolVersion") != PROTOCOL_VERSION
-                or not isinstance(extension, dict) or extension.get("operationId") is not True):
-            raise ConnectionError("Remote agent does not support recoverable operation IDs")
-        await self._write({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        try:
+            if self.child_bearer is not None:
+                from .ssh_child import AUTH_METHOD
+                authenticated = await self._rpc(AUTH_METHOD, {"bearer": self.child_bearer})
+                if authenticated.get("authenticated") is not True:
+                    raise ConnectionError("Remote child authentication failed")
+            result = await self._rpc("initialize", {
+                "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
+                "clientInfo": {"name": "anywhere-computer-device", "version": "1"},
+            })
+            capabilities = result.get("capabilities")
+            experimental = (capabilities.get("experimental")
+                            if isinstance(capabilities, dict) else None)
+            extension = (
+                experimental.get(OPERATION_CAPABILITY) if isinstance(experimental, dict) else None
+            )
+            if (result.get("protocolVersion") != PROTOCOL_VERSION
+                    or not isinstance(extension, dict) or extension.get("operationId") is not True):
+                raise ConnectionError("Remote agent does not support recoverable operation IDs")
+            await self._write({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        except BaseException:
+            await self.close()
+            raise
 
     async def catalog(self) -> list[JsonValue]:
         await self._connect()

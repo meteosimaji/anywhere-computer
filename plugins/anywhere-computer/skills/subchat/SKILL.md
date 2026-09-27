@@ -20,6 +20,29 @@ bridge context rejects stateful Subchat calls before dispatch. A long running
 send or queue watch keeps the explicit session alive during idle periods;
 `subchat_activity` reports live work without opening Chrome.
 
+For an unattended follow-up, first queue it with `subchat_message`, then call
+`subchat_queue_auto` for its saved operation ID. This opt-in is durable for a
+bounded lease and can reopen the selected browser when a send-capable
+controller restarts. Inspect `subchat_queue_events` for a saved completion or
+failure; MCP logging notifications are also emitted while connected, but the
+host may not relay them to this model turn. Keep the plugin session alive for
+delivery; after a full process stop, a new send-capable session resumes an
+armed, unexpired queue. Do not re-send a child whose state is `sending`.
+Disabling `subchat_queue_auto` prevents its worker from starting an unsent
+child, even if parent recovery is in progress. Once the child is `sending`,
+disable cannot undo the provider request; recover its original operation ID.
+Use `subchat_cancel` to cancel a child that remains `queued`.
+On the direct HTTPS gateway, `subchat_queue_auto` and
+`subchat_queue_events` each require their own OAuth scope. An armed queue can
+continue after the HTTP client disconnects; inspect its durable event through
+a fresh connection. A full service stop pauses work until a send-capable
+gateway session resumes it. No notification guarantees a parent model turn.
+On macOS, `notify_desktop=true` requests a local alert after a durable terminal
+event; a missed alert is recovered through `subchat_queue_events`.
+Revoking the OAuth grant that armed the HTTPS queue stops an unsent child and
+records `authorization_lost`; recover any child already in `sending` by its
+original operation ID.
+
 For a new HTTP-read send, inspect `subchat_catalog` with `source=http` and
 choose an available choice. Set `model` to that choice's exact `model_title`,
 `effort` to its exact `title`, and copy its `http_selection` unchanged, including
@@ -27,6 +50,14 @@ an explicit null `thinking_effort`. The version `label` and
 `selected_display_version` are not the `model` field. If the selected transport
 does not use HTTP selection, inspect `source=ui` for the exact picker model and
 effort labels. Do not use a differing UI label as the HTTP send's `model`.
+On a version that exposes `choice_id`, it can supply those three HTTP fields
+together. It is rechecked before dispatch and is not authorization. A model
+listed as available by HTTP may still be unavailable in the current UI picker;
+inspect an unsent preparation failure by the original operation ID.
+For a send-capable local session, `source=compare` also checks whether the
+current UI has a selectable model row for each HTTP choice without sending.
+Its UI result and `available` are preparation evidence; only a saved generation
+receipt and final history confirm a send.
 Do not substitute another model or effort. Save a fresh 32-character lowercase
 hex request ID and one stable 32-character lowercase hex `intent_key` for each
 intended child Chat before direct `subchat_send`. A returned
@@ -39,11 +70,17 @@ Treat `queued` as local acceptance, `sending` as unconfirmed dispatch, and
 `submitted` as a receipt. `completed` confirms a verified final turn; saved
 text is present only for a text-bearing answer. For an image-only result, check
 the saved answer type and use the optional `subchat_download_image` tool to
-inspect the image bytes. `subchat_wait` stops after at most ten seconds and does
+inspect the image bytes. For multiple images in one turn, pass the zero-based
+`image_index` and verify the returned `image_count`. `subchat_wait` stops after
+at most ten seconds and does
 not stop Chat's generation. Its `elapsed_ms` is local call duration, and
 `suggested_poll_interval_ms` is a delay before the next observation, not an
 answer ETA. An interrupted reply requires inspecting the conversation before
-any follow-up.
+any follow-up. `reply_output_limit` means the provider ended at its output cap;
+the saved operation stays interrupted and its queued children remain unsent.
+When the catalog offers `subchat_preview`, call it only for a submitted input
+whose provisional text is useful. It returns the latest 512 characters from
+verified in-progress history, or no preview; it never replaces final recovery.
 
 Use `subchat_list` to find saved operation IDs, then `subchat_status` for a
 specific record. Saved prompts and answers can contain private data: request
@@ -51,10 +88,48 @@ only the records needed for the user's task, and do not copy their contents to
 other tools or messages without a reason grounded in that task. The selected
 local ledger and owner determine visibility; an unknown operation in another
 ledger or owner is not evidence it was never sent.
+`subchat_list` omits prompt text by default. Request
+`include_prompt_preview=true` only when a bounded preview is needed.
+The local macOS setup command can save several named Chrome profile selections.
+Switching requires the expected account ID, a fresh observed account match, and
+a Plugin restart. It does not move saved operations between account scopes.
 
 For a follow-up, `subchat_message` with `mode=queue` stores input until its
 confirmed predecessor is complete; recover the queued operation to dispatch
-it. `mode=steer` is unsupported. Check the actual tool catalog before relying
+it. Pass `resources` explicitly to attach already-uploaded file references or
+observed plugin references to that follow-up; the parent's resources are never
+inherited. A local file path is still not an uploaded attachment ID. To change
+the model before dispatch, read `queue_revision` from
+`subchat_status` and call `subchat_queue_model_change` with that revision and
+either a current HTTP `choice_id` or exact UI model and effort labels. A
+revision conflict means another controller changed or reserved the queue;
+inspect status before deciding what to do. The HTTPS gateway does not expose
+this model-change tool. `mode=steer` is unsupported. Check the actual tool catalog before relying
 on optional delete, download, queue watch, or authentication tools. Deletion
 changes provider visibility and an unknown deletion outcome must not be
 repeated automatically.
+
+The direct HTTPS gateway may offer `subchat_save_file` under a separate OAuth
+scope. It saves one verified final-answer sandbox file to a new absolute path
+on the explicitly selected device without returning its bytes to the model.
+Choose one stable `request_id`, keep it after a running or unknown result, and
+inspect that same ID; do not create a second save for a lost response. The
+source Chat account and destination device permissions are checked separately.
+This tool is unavailable in the local stdio Subchat server.
+
+For an explicitly requested local file upload on macOS, use the separate
+`anywhere-subchat-library` MCP server when installed. Its
+`subchat_upload_library` tool requires an absolute path and a fresh, stable
+32-character `request_id`. The owner must first run
+`anywhere-subchat-upload /absolute/file --operation-id ID --prepare` locally;
+this authorizes that exact file and selected account for 15 minutes. A normal
+upload reservation does not authorize MCP dispatch. The tool refuses an
+unprepared, expired, or changed file before dispatch. It uploads
+to the selected account's Library, not directly into a Chat. If its result is
+missing or unknown, call
+`subchat_upload_status` with the same upload operation ID; never invent a new
+ID to retry an uncertain upload. A `ready` Library item ID may then be used
+as an already-uploaded resource in a separate, explicit Chat send. Copy the
+`attachment` object from the ready Library result into the Chat send's
+`resources.attachments`; it carries the saved byte count and IDs. Do not
+invent attachment metadata.

@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 import html
+import json
 import re
 import secrets
 import threading
@@ -19,11 +20,35 @@ from dataclasses import dataclass, field
 from http.cookies import CookieError, SimpleCookie
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
+from webauthn import (
+    base64url_to_bytes,
+    generate_authentication_options,
+    generate_registration_options,
+    options_to_json,
+    verify_authentication_response,
+    verify_registration_response,
+)
+from webauthn.helpers.exceptions import InvalidAuthenticationResponse, InvalidRegistrationResponse
+from webauthn.helpers.structs import (
+    AuthenticatorSelectionCriteria,
+    PublicKeyCredentialDescriptor,
+    ResidentKeyRequirement,
+    UserVerificationRequirement,
+)
+
 from .authorization import AuthorizationStore
+from .client_tokens import ClientCredentialError, CredentialStoreUnavailable
 from .http_mcp import HTTPResult, HTTPRoute
 from .owner_credentials import OwnerCredentials
+from .owner_passkeys import (
+    OwnerPasskeys,
+    PasskeyEnrollmentLimitReached,
+    PasskeyNoLongerEnrolled,
+    PasskeyRecord,
+    credential_bytes,
+)
 
-_PASSWORD_VISIBILITY_SCRIPT = """(() => {
+_PASSWORD_VISIBILITY_SCRIPT = r"""(() => {
   const field = document.getElementById('password');
   const toggle = document.getElementById('password-visibility');
   function hide() {
@@ -57,10 +82,66 @@ _PASSWORD_VISIBILITY_SCRIPT = """(() => {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) hide();
   });
+  const passkey = document.getElementById('passkey-approve');
+  if (passkey) passkey.addEventListener('click', async event => {
+    if (document.getElementById('passkey-assertion').value) return;
+    event.preventDefault();
+    const status = document.getElementById('submit-status');
+    try {
+      const encoded = passkey.dataset.options;
+      const options = JSON.parse(atob(encoded.replace(/-/g, '+').replace(/_/g, '/')));
+      const decode = value => Uint8Array.from(
+        atob(value.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+      options.challenge = decode(options.challenge);
+      options.allowCredentials = options.allowCredentials.map(item => ({...item,
+        id: decode(item.id)}));
+      const credential = await navigator.credentials.get({publicKey: options});
+      const bytes = value => btoa(String.fromCharCode(...new Uint8Array(value)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      const assertion = {id: credential.id, rawId: bytes(credential.rawId), type: credential.type,
+        response: {clientDataJSON: bytes(credential.response.clientDataJSON),
+          authenticatorData: bytes(credential.response.authenticatorData),
+          signature: bytes(credential.response.signature),
+          userHandle: credential.response.userHandle
+            ? bytes(credential.response.userHandle) : null}};
+      document.getElementById('passkey-assertion').value = JSON.stringify(assertion);
+      field.form.requestSubmit(passkey);
+    } catch (_) { status.textContent = 'Passkey approval was cancelled or unavailable.'; }
+  });
 })();"""
 _PASSWORD_VISIBILITY_HASH = base64.b64encode(
     hashlib.sha256(_PASSWORD_VISIBILITY_SCRIPT.encode()).digest()
 ).decode('ascii')
+
+_PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
+  const button = document.getElementById('register-passkey');
+  button.addEventListener('click', async event => {
+    if (document.getElementById('registration-response').value) return;
+    event.preventDefault();
+    const status = document.getElementById('registration-status');
+    try {
+      const encoded = button.dataset.options;
+      const options = JSON.parse(atob(encoded.replace(/-/g, '+').replace(/_/g, '/')));
+      const decode = value => Uint8Array.from(
+        atob(value.replace(/-/g, '+').replace(/_/g, '/')), c => c.charCodeAt(0));
+      options.challenge = decode(options.challenge);
+      options.user.id = decode(options.user.id);
+      options.excludeCredentials = options.excludeCredentials.map(
+        item => ({...item, id: decode(item.id)}));
+      const credential = await navigator.credentials.create({publicKey: options});
+      const bytes = value => btoa(String.fromCharCode(...new Uint8Array(value)))
+        .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+      document.getElementById('registration-response').value = JSON.stringify({
+        id: credential.id, rawId: bytes(credential.rawId), type: credential.type,
+        response: {clientDataJSON: bytes(credential.response.clientDataJSON),
+          attestationObject: bytes(credential.response.attestationObject)}});
+      button.form.requestSubmit(button);
+    } catch (_) { status.textContent = 'Passkey registration was cancelled or unavailable.'; }
+  });
+})();"""
+_PASSKEY_REGISTRATION_HASH = base64.b64encode(
+    hashlib.sha256(_PASSKEY_REGISTRATION_SCRIPT.encode()).digest()
+).decode("ascii")
 
 
 @dataclass(frozen=True)
@@ -76,6 +157,16 @@ class PendingConsent:
     expires: float
     generation: int
     missing_subchat_tools: bool
+    passkey_challenge: bytes = field(repr=False)
+
+
+@dataclass(frozen=True)
+class PendingRegistration:
+    challenge: bytes = field(repr=False)
+    ticket_digest: str = field(repr=False)
+    browser_hash: str = field(repr=False)
+    csrf_hash: str = field(repr=False)
+    expires: float
 
 
 def _digest(value: str) -> str:
@@ -110,6 +201,7 @@ class BrowserAuthorization:
         if credentials.resource != store.resource:
             raise ValueError("Owner credentials belong to another resource")
         self.store, self.credentials, self.device = store, credentials, device
+        self.passkeys = OwnerPasskeys(credentials, device=device)
         parsed = urlsplit(store.resource)
         # Issuer comparison is exact; unlike the browser Origin, preserve the
         # resource authority's spelling and explicit port to match discovery.
@@ -121,13 +213,14 @@ class BrowserAuthorization:
             host += ":" + str(parsed.port)
         self.origin = urlunsplit((parsed.scheme, host, "", "", ""))
         self.pending: dict[str, PendingConsent] = {}
+        self.registrations: dict[str, PendingRegistration] = {}
         self.attempts: dict[str, deque[float]] = {}
         # Acquire in the actual worker, so observer cancellation cannot release
         # a slot while password verification is still running.
         self.password_slots = threading.BoundedSemaphore(2)
 
     def routes(self) -> dict[str, HTTPRoute]:
-        return {"/authorize": self.authorize}
+        return {"/authorize": self.authorize, "/owner-passkey": self.owner_passkey}
 
     @property
     def authorization_endpoint(self) -> str:
@@ -186,6 +279,8 @@ class BrowserAuthorization:
             abilities.append("call other connected services")
         if record.tools & {"subchat_send", "subchat_message"}:
             abilities.append("send Chat messages")
+        if "subchat_save_file" in record.tools:
+            abilities.append("save verified Chat files to a selected computer")
         if "subchat_delete" in record.tools:
             abilities.append("hide Chat conversations")
         if "settings_update" in record.tools:
@@ -212,6 +307,29 @@ class BrowserAuthorization:
             "tools and the owner must approve a new consent page.</p>"
             if record.missing_subchat_tools else ""
         )
+        passkey_html = ""
+        try:
+            enrolled = self.passkeys.list()
+            if enrolled:
+                options = generate_authentication_options(
+                    rp_id=urlsplit(self.origin).hostname or "",
+                    challenge=record.passkey_challenge,
+                    allow_credentials=[PublicKeyCredentialDescriptor(id=credential_bytes(item)[0])
+                                       for item in enrolled],
+                    user_verification=UserVerificationRequirement.REQUIRED,
+                )
+                options_b64 = base64.urlsafe_b64encode(
+                    options_to_json(options).encode()
+                ).decode().rstrip("=")
+                passkey_html = (
+                    "<input id=passkey-assertion type=hidden name=assertion>"
+                    f"<button type=submit id=passkey-approve name=passkey value=yes formnovalidate "
+                    f"data-options='{options_b64}'>Allow with passkey</button>"
+                )
+        except (ClientCredentialError, ValueError):
+            # An invalid optional passkey record must not hide the established
+            # password consent route.
+            pass
         return (
             "<!doctype html><html lang=en><meta charset=utf-8>"
             "<meta name=viewport content='width=device-width, initial-scale=1'>"
@@ -261,6 +379,7 @@ class BrowserAuthorization:
             "<button type=button id=password-visibility aria-controls=password "
             "aria-pressed=false aria-label='Show password'>Show</button></div>"
             "<button type=submit name=approve value=yes>Allow connection</button>"
+            f"{passkey_html}"
             "<button type=submit name=deny value=yes formnovalidate>Deny</button>"
             "<p id=submit-status role=status></p>"
             "</form><p><small>This request expires 5 minutes after it was opened. "
@@ -342,6 +461,7 @@ class BrowserAuthorization:
             now + 300,
             generation,
             missing_subchat_tools,
+            secrets.token_bytes(32),
         )
         self.pending[identity] = record
         headers = self._headers(record.redirect)
@@ -394,9 +514,9 @@ class BrowserAuthorization:
             return self._error(
                 403, "This connection request is invalid or expired. Start again from your client."
             )
-        if ("approve" in params) == ("deny" in params):
+        if sum(name in params for name in ("approve", "deny", "passkey")) != 1:
             raise ValueError("Choose one consent decision")
-        if "approve" in params:
+        if "approve" in params or "passkey" in params:
             now = time.monotonic()
             attempts = self.attempts.setdefault(identity, deque())
             while attempts and attempts[0] <= now - 60:
@@ -406,8 +526,20 @@ class BrowserAuthorization:
                     429, "Too many authentication attempts. Try again in one minute."
                 )
             attempts.append(now)
+            valid: bool | None
+            verified_passkey_id: str | None = None
             try:
-                valid = await asyncio.to_thread(self._verify_password, params.get("password", ""))
+                if "passkey" in params:
+                    verified_passkey_id = await asyncio.to_thread(
+                        self._verify_passkey, params.get("assertion", ""), record
+                    )
+                    valid = verified_passkey_id is not None
+                else:
+                    valid = await asyncio.to_thread(
+                        self._verify_password, params.get("password", "")
+                    )
+            except (InvalidAuthenticationResponse, ValueError):
+                valid = False
             except Exception:
                 return self._error(
                     503, "Owner authentication is unavailable. Check the device credential store."
@@ -417,11 +549,17 @@ class BrowserAuthorization:
                     503, "Authentication is busy. Wait a moment and try again."
                 )
             if not valid:
+                retry = (
+                    "The passkey could not be verified. Try again or use the owner password. "
+                    if "passkey" in params else
+                    "Check the Anywhere Computer owner password and try again. "
+                )
                 return (
                     403,
                     self._page(identity, record, csrf, error=(
-                        "Check the Anywhere Computer owner password and try again. "
-                        "If you forgot it, stop the HTTP service and run anywhere owner-reset "
+                        retry +
+                        "If you forgot the password, stop the HTTP service and run "
+                        "anywhere owner-reset "
                         "locally. That reset disconnects every client of this device."
                     )),
                     self._headers(record.redirect),
@@ -435,16 +573,30 @@ class BrowserAuthorization:
         if "deny" in params:
             result["error"] = "access_denied"
         else:
-            result["code"] = self.store.approve(
-                owner=self.credentials.owner,
-                device=self.device,
-                client=record.client,
-                redirect=record.redirect,
-                resource=record.resource,
-                tools=record.tools,
-                challenge=record.challenge,
-                generation=record.generation,
-            )
+            def approve() -> str:
+                return self.store.approve(
+                    owner=self.credentials.owner,
+                    device=self.device,
+                    client=record.client,
+                    redirect=record.redirect,
+                    resource=record.resource,
+                    tools=record.tools,
+                    challenge=record.challenge,
+                    generation=record.generation,
+                )
+
+            if verified_passkey_id is not None:
+                try:
+                    with self.passkeys.authorization_guard(verified_passkey_id):
+                        result["code"] = approve()
+                except PasskeyNoLongerEnrolled:
+                    return self._error(403, "The verified passkey is no longer enrolled.")
+                except TimeoutError:
+                    return self._error(503, "Passkey is busy. Start a new connection request.")
+                except ClientCredentialError:
+                    return self._error(503, "Passkey storage is unavailable. Try again later.")
+            else:
+                result["code"] = approve()
         target = urlsplit(record.redirect)
         query = target.query + ("&" if target.query else "") + urlencode(result)
         response_headers = self._headers(record.redirect)
@@ -455,6 +607,34 @@ class BrowserAuthorization:
             f"{self._cookie_name(identity)}=; Path=/; Max-Age=0; Secure; HttpOnly; SameSite=Strict"
         )
         return 303, None, response_headers
+
+    def _verify_passkey(self, assertion: str, consent: PendingConsent) -> str | None:
+        if len(assertion) > 12000:
+            return None
+        try:
+            packet = json.loads(assertion)
+            if not isinstance(packet, dict) or not isinstance(packet.get("rawId"), str):
+                return None
+            credential_id = packet["rawId"]
+            def verify(record: PasskeyRecord) -> int:
+                _, public_key = credential_bytes(record)
+                result = verify_authentication_response(
+                    credential=packet,
+                    expected_challenge=consent.passkey_challenge,
+                    expected_rp_id=urlsplit(self.origin).hostname or "",
+                    expected_origin=self.origin,
+                    credential_public_key=public_key,
+                    credential_current_sign_count=0 if record.synced else record.sign_count,
+                    require_user_verification=True,
+                )
+                if result.credential_id != base64url_to_bytes(record.credential_id):
+                    raise ValueError("Passkey identity changed")
+                return result.new_sign_count
+
+            return (credential_id if self.passkeys.verify_and_update_counter(
+                credential_id, verify) else None)
+        except (KeyError, TypeError, ValueError, InvalidAuthenticationResponse):
+            return None
 
     async def authorize(
         self,
@@ -474,3 +654,161 @@ class BrowserAuthorization:
             return self._error(
                 400, "Cannot verify the connection request. Start again from your client."
             )
+
+    def _registration_page(
+        self, identity: str, csrf: str, ticket: str, record: PendingRegistration,
+    ) -> bytes:
+        options = generate_registration_options(
+            rp_id=urlsplit(self.origin).hostname or "",
+            rp_name="Anywhere Computer",
+            user_name=self.credentials.owner,
+            user_id=hashlib.sha256(self.credentials.account.encode()).digest(),
+            challenge=record.challenge,
+            authenticator_selection=AuthenticatorSelectionCriteria(
+                resident_key=ResidentKeyRequirement.PREFERRED,
+                user_verification=UserVerificationRequirement.REQUIRED,
+            ),
+            exclude_credentials=[PublicKeyCredentialDescriptor(id=credential_bytes(item)[0])
+                                 for item in self.passkeys.list()],
+        )
+        options_b64 = base64.urlsafe_b64encode(
+            options_to_json(options).encode()
+        ).decode().rstrip("=")
+        return (
+            "<!doctype html><html lang=en><meta charset=utf-8>"
+            "<meta name=viewport content='width=device-width, initial-scale=1'>"
+            "<title>Register owner passkey — Anywhere Computer</title>"
+            "<style>body{font:16px/1.6 system-ui;max-width:580px;margin:40px auto;padding:24px}"
+            "button,input{font:inherit;padding:10px}</style>"
+            "<h1>Register an owner passkey</h1>"
+            f"<p>This passkey will approve future connection requests for "
+            f"{html.escape(self.device)}. "
+            "Only register a passkey you control.</p>"
+            "<form method=post action=/owner-passkey>"
+            f"<input type=hidden name=request_id value='{identity}'>"
+            f"<input type=hidden name=csrf value='{csrf}'>"
+            f"<input type=hidden name=ticket value='{ticket}'>"
+            "<input type=hidden id=registration-response name=response>"
+            "<label for=passkey-label>Passkey label</label>"
+            "<input id=passkey-label name=label maxlength=80 value='Owner passkey' required>"
+            f"<button id=register-passkey type=submit data-options='{options_b64}'>"
+            "Register passkey</button></form><p id=registration-status role=status></p>"
+            f"<script>{_PASSKEY_REGISTRATION_SCRIPT}</script></html>"
+        ).encode()
+
+    def _registration_begin(self, query: str) -> HTTPResult:
+        params = _fields(query)
+        if set(params) != {"ticket"} or not self.passkeys.ticket_valid(params["ticket"]):
+            return self._error(403, "Registration link is invalid or expired. Start locally again.")
+        if len(self.passkeys.list()) >= 20:
+            raise PasskeyEnrollmentLimitReached("Too many passkeys; reset the owner")
+        now = time.monotonic()
+        self.registrations = {key: value for key, value in self.registrations.items()
+                              if value.expires > now}
+        if len(self.registrations) >= 16:
+            return self._error(429, "Too many registrations in progress.")
+        identity = secrets.token_hex(16)
+        browser, csrf = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
+        record = PendingRegistration(
+            secrets.token_bytes(32), _digest(params["ticket"]),
+            _digest(browser), _digest(csrf), now + 180,
+        )
+        self.registrations[identity] = record
+        headers = self._headers()
+        headers["Content-Security-Policy"] = headers["Content-Security-Policy"].replace(
+            f"sha256-{_PASSWORD_VISIBILITY_HASH}", f"sha256-{_PASSKEY_REGISTRATION_HASH}"
+        )
+        # The same-origin registration POST must carry its real Origin for the
+        # strict check below. no-referrer makes Chrome send Origin: null.
+        headers["Referrer-Policy"] = "same-origin"
+        headers["Set-Cookie"] = (
+            f"{self._cookie_name('enroll-' + identity)}={browser}; Path=/; Max-Age=180; "
+            "Secure; HttpOnly; SameSite=Strict"
+        )
+        return 200, self._registration_page(identity, csrf, params["ticket"], record), headers
+
+    def _registration_finish(self, headers: dict[str, str], body: bytes) -> HTTPResult:
+        if headers.get("origin") != self.origin:
+            return self._error(403, "Registration origin is invalid.")
+        if (len(body) > 131072 or headers.get("content-type", "").split(";")[0].strip().lower()
+                != "application/x-www-form-urlencoded"):
+            raise ValueError("Invalid registration form")
+        pairs = parse_qsl(body.decode(), strict_parsing=True, max_num_fields=6,
+                          encoding="utf-8", errors="strict")
+        params = dict(pairs)
+        if len(params) != len(pairs) or set(params) != {
+            "request_id", "csrf", "ticket", "response", "label",
+        }:
+            raise ValueError("Invalid registration form")
+        identity = params["request_id"]
+        if re.fullmatch(r"[a-f0-9]{32}", identity) is None:
+            raise ValueError("Invalid registration request")
+        record = self.registrations.get(identity)
+        cookies = SimpleCookie()
+        cookies.load(headers.get("cookie", ""))
+        cookie = cookies.get(self._cookie_name("enroll-" + identity))
+        if (record is None or record.expires <= time.monotonic() or cookie is None
+                or not hmac.compare_digest(record.browser_hash, _digest(cookie.value))
+                or not hmac.compare_digest(record.csrf_hash, _digest(params["csrf"]))
+                or not hmac.compare_digest(record.ticket_digest, _digest(params["ticket"]))
+                or not self.passkeys.ticket_valid(params["ticket"])):
+            return self._error(403, "Registration expired. Start locally again.")
+        label = params["label"].strip()
+        if not label or len(label) > 80 or len(label.encode()) > 160:
+            raise ValueError("Invalid passkey label")
+        try:
+            packet = json.loads(params["response"])
+            verified = verify_registration_response(
+                credential=packet,
+                expected_challenge=record.challenge,
+                expected_rp_id=urlsplit(self.origin).hostname or "",
+                expected_origin=self.origin,
+                require_user_verification=True,
+            )
+        except (ValueError, TypeError, InvalidRegistrationResponse):
+            return self._error(403, "Passkey registration could not be verified.")
+        encoded_id = base64.urlsafe_b64encode(verified.credential_id).decode().rstrip("=")
+        encoded_key = base64.urlsafe_b64encode(verified.credential_public_key).decode().rstrip("=")
+        try:
+            enrolled = self.passkeys.register_with_ticket(params["ticket"], PasskeyRecord(
+                credential_id=encoded_id,
+                public_key=encoded_key,
+                sign_count=verified.sign_count,
+                synced=verified.credential_device_type.value == "multi_device",
+                label=label,
+            ))
+        except (ClientCredentialError, CredentialStoreUnavailable):
+            return self._error(
+                503, "Passkey storage is unavailable. Check enrolled keys and "
+                "start locally again with a new link."
+            )
+        if not enrolled:
+            return self._error(403, "Registration was already processed or expired.")
+        self.registrations.pop(identity, None)
+        response_headers = self._headers()
+        response_headers["Referrer-Policy"] = "no-referrer"
+        response_headers["Set-Cookie"] = (
+            f"{self._cookie_name('enroll-' + identity)}=; Path=/; Max-Age=0; "
+            "Secure; HttpOnly; SameSite=Strict"
+        )
+        return (
+            200,
+            b"<!doctype html><title>Passkey registered</title><p>Passkey registered.</p>",
+            response_headers,
+        )
+
+    async def owner_passkey(
+        self, method: str, headers: dict[str, str], body: bytes, query: str = "",
+    ) -> HTTPResult:
+        try:
+            if method == "GET":
+                return self._registration_begin(query)
+            if method == "POST" and not query:
+                return await asyncio.to_thread(self._registration_finish, headers, body)
+            return 405, None, {"Allow": "GET, POST", "Cache-Control": "no-store"}
+        except ClientCredentialError:
+            return self._error(503, "Passkey storage is unavailable. Try again later.")
+        except PasskeyEnrollmentLimitReached:
+            return self._error(409, "Passkey enrollment limit reached. Reset the owner locally.")
+        except (ValueError, UnicodeError, CookieError):
+            return self._error(400, "Cannot verify registration. Start locally again.")

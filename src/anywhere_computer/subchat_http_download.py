@@ -22,9 +22,9 @@ class _DownloadMetadata(BaseModel):
     model_config = ConfigDict(strict=True)
 
     download_url: str = Field(min_length=1, max_length=8192)
-    file_name: str = Field(min_length=1, max_length=255)
+    file_name: str | None = Field(min_length=1, max_length=255)
     file_size_bytes: int | None = Field(default=None, ge=0)
-    mime_type: str = Field(min_length=1, max_length=255)
+    mime_type: str | None = Field(min_length=1, max_length=255)
     status: str = Field(min_length=1, max_length=128)
 
 
@@ -34,6 +34,8 @@ class SandboxDownload:
     mime_type: str
     file_size_bytes: int
     content: bytes
+    offset: int = 0
+    eof: bool = True
 
 
 class SandboxFileTooLarge(ValueError):
@@ -63,10 +65,12 @@ def _content_url(value: str) -> str:
 async def download_verified_sandbox_file(
         saved: SubchatSubmission, answer: SubchatAnswer, sandbox_link: str,
         *, session: ObservedHTTPSession, client: httpx.AsyncClient,
-        max_bytes: int = MAX_FILE_BYTES) -> SandboxDownload:
+        max_bytes: int = MAX_FILE_BYTES, offset: int = 0) -> SandboxDownload:
     """Fetch only a final-answer link bound to the saved account and message."""
     if max_bytes <= 0 or max_bytes > MAX_FILE_BYTES:
         raise ValueError('Invalid file size limit')
+    if offset < 0 or offset >= MAX_FILE_BYTES:
+        raise ValueError('Invalid file offset')
     if (saved.state != 'completed' or saved.provider_account_id != session.account_id
             or saved.provider_account_id is None):
         raise SubchatAccountMismatch('Completed Chat belongs to another account')
@@ -103,32 +107,63 @@ async def download_verified_sandbox_file(
                 raise ValueError('Chat file metadata is too large')
             metadata_bytes.extend(chunk)
     metadata = _DownloadMetadata.model_validate_json(metadata_bytes)
-    if metadata.file_size_bytes is not None and metadata.file_size_bytes > max_bytes:
+    if metadata.file_size_bytes is not None and metadata.file_size_bytes > MAX_FILE_BYTES:
         raise SandboxFileTooLarge('Chat file exceeds the size limit')
-    if (metadata.file_name in ('.', '..') or '/' in metadata.file_name
-            or '\\' in metadata.file_name or any(ord(char) < 32 for char in metadata.file_name)
-            or any(ord(char) < 33 for char in metadata.mime_type)):
+    if metadata.file_size_bytes is not None and offset >= metadata.file_size_bytes:
+        raise ValueError('File offset is outside the file')
+    # Chat may omit display metadata for a generated sandbox file. The verified
+    # sandbox path supplies a basename; unknown MIME is reported generically.
+    file_name = metadata.file_name or path.rsplit('/', 1)[-1]
+    mime_type = metadata.mime_type or 'application/octet-stream'
+    if (len(file_name) > 255 or file_name in ('.', '..') or '/' in file_name
+            or '\\' in file_name or any(ord(char) < 32 for char in file_name)
+            or any(ord(char) < 33 for char in mime_type)):
         raise ValueError('Invalid Chat file metadata')
     content_url = _content_url(metadata.download_url)
     content = bytearray()
-    async with client.stream('GET', content_url, headers=headers,
+    range_headers = {**headers, 'range': f'bytes={offset}-{offset + max_bytes - 1}'}
+    async with client.stream('GET', content_url, headers=range_headers,
                              timeout=httpx.Timeout(120.0, connect=10.0),
                              follow_redirects=False) as file_response:
         if file_response.status_code in (401, 403):
             raise SubchatAccessError(file_response.status_code)
-        if file_response.status_code != 200:
+        if file_response.status_code not in (200, 206):
             raise ConnectionError('Chat file content was not accepted')
+        if (file_response.status_code == 200 and offset == 0
+                and metadata.file_size_bytes is not None
+                and metadata.file_size_bytes > max_bytes):
+            raise SandboxFileTooLarge('Chat file exceeds the size limit')
+        if file_response.status_code == 200 and offset != 0:
+            raise ValueError('Chat file server did not honor the requested range')
         received_type = file_response.headers.get('content-type', '').split(';', 1)[0].strip()
         if received_type in {'text/html', 'application/json'}:
             raise ValueError('Chat file response has an unexpected content type')
         if file_response.headers.get('content-encoding', 'identity').lower() != 'identity':
             raise ValueError('Compressed Chat file response is unsupported')
+        total_size = metadata.file_size_bytes
+        if file_response.status_code == 206:
+            match = re.fullmatch(r'bytes (\d+)-(\d+)/(\d+)',
+                                 file_response.headers.get('content-range', ''))
+            if match is None:
+                raise ValueError('Invalid Chat file content range')
+            start, end, total_size = (int(group) for group in match.groups())
+            if (start != offset or end < start or end - start + 1 > max_bytes
+                    or total_size <= end or total_size > MAX_FILE_BYTES
+                    or (metadata.file_size_bytes is not None
+                        and total_size != metadata.file_size_bytes)):
+                raise ValueError('Invalid Chat file content range')
         for_chunk_limit = max_bytes + 1
         async for chunk in file_response.aiter_raw():
             if len(content) + len(chunk) >= for_chunk_limit:
                 raise SandboxFileTooLarge('Chat file exceeds the size limit')
             content.extend(chunk)
-    if metadata.file_size_bytes is not None and len(content) != metadata.file_size_bytes:
+    if file_response.status_code == 206 and len(content) != end - start + 1:
+        raise ValueError('Chat file size does not match content range')
+    if (file_response.status_code == 200 and metadata.file_size_bytes is not None
+            and len(content) != metadata.file_size_bytes):
         raise ValueError('Chat file size does not match metadata')
-    return SandboxDownload(metadata.file_name, metadata.mime_type,
-                           len(content), bytes(content))
+    if total_size is None:
+        total_size = len(content)
+    return SandboxDownload(file_name, mime_type,
+                           total_size, bytes(content), offset,
+                           offset + len(content) == total_size)

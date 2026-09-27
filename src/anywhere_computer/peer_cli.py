@@ -14,7 +14,13 @@ from .peer_mailbox import Peer, PeerMailbox
 from .peer_mcp import session
 
 
+def _require_private_peer_storage() -> None:
+    if sys.platform == "win32":
+        raise RuntimeError("Local peer messaging requires private file ACLs on Windows")
+
+
 def _credential(path: Path) -> str:
+    _require_private_peer_storage()
     info = path.lstat()
     if not stat.S_ISREG(info.st_mode):
         raise ValueError("Peer credential must be a regular file")
@@ -30,6 +36,7 @@ def _credential(path: Path) -> str:
 
 
 def _publish_credential(path: Path) -> str:
+    _require_private_peer_storage()
     token = secrets.token_urlsafe(32)
     staged: Path | None = None
     try:
@@ -58,9 +65,12 @@ def _publish_credential(path: Path) -> str:
             staged.unlink(missing_ok=True)
 
 
-async def _serve(directory: Path, credential_file: Path) -> None:
+async def _serve(directory: Path, credential_file: Path, *,
+                 session_id: str | None = None, thread_id: str | None = None) -> None:
+    _require_private_peer_storage()
     token = _credential(credential_file)
     with PeerMailbox(directory) as mailbox:
+        mailbox.bind(session_id=session_id, thread_id=thread_id)
         server = session(mailbox, token)
         mailbox.heartbeat(token)
 
@@ -70,15 +80,31 @@ async def _serve(directory: Path, credential_file: Path) -> None:
                 mailbox.heartbeat(token)
 
         task = asyncio.create_task(renew())
+        serving = asyncio.create_task(serve_stdio(server, sys.stdin.buffer,
+                                                  sys.stdout.buffer))
         try:
-            await serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer)
+            done, _ = await asyncio.wait({task, serving}, return_when=asyncio.FIRST_COMPLETED)
+            if task in done:
+                # A failed lease renewal must not leave a running server that
+                # appears to accept messages while its presence has expired.
+                # The stdio reader uses a blocking thread; cancelling its
+                # coroutine does not interrupt a silent connected pipe.
+                failure = task.exception()
+                if failure is not None:
+                    print("Peer presence renewal failed; stopping server", file=sys.stderr,
+                          flush=True)
+                    os._exit(1)
+            if serving in done:
+                serving.result()
         finally:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            serving.cancel()
+            await asyncio.gather(task, serving, return_exceptions=True)
             mailbox.disconnect(token)
 
 
 def main() -> None:
+    _require_private_peer_storage()
     parser = argparse.ArgumentParser(description="Local authenticated peer mailbox")
     parser.add_argument("--state-dir", type=Path, required=True)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -88,12 +114,15 @@ def main() -> None:
     enroll.add_argument("--credential-file", type=Path, required=True)
     serve = commands.add_parser("serve", help="Serve peer tools over MCP stdio")
     serve.add_argument("--credential-file", type=Path, required=True)
+    serve.add_argument("--session-id", help="Host session label claimed by this MCP process")
+    serve.add_argument("--thread-id", help="Host thread label claimed by this MCP process")
     args = parser.parse_args()
     directory: Path = args.state_dir
     if not directory.is_absolute():
         parser.error("--state-dir must be absolute")
     if args.command == "serve":
-        asyncio.run(_serve(directory, args.credential_file))
+        asyncio.run(_serve(directory, args.credential_file,
+                           session_id=args.session_id, thread_id=args.thread_id))
         return
     path: Path = args.credential_file
     if not path.is_absolute():

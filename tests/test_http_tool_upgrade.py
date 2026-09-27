@@ -124,7 +124,7 @@ async def test_upgrade_does_not_expand_restricted_revoked_or_expired_grants(
 @pytest.mark.parametrize("added_tools", [
     frozenset({"mcp_session_open", "mcp_call"}),
     frozenset({"codex_plugin_tools", "codex_plugin_call"}),
-    frozenset({"devices_list", "devices_tools", "devices_call"}),
+    frozenset({"devices_list", "devices_probe", "devices_tools", "devices_call"}),
 ])
 async def test_delegation_upgrade_requires_new_consent_without_expanding_existing_grant(
     tmp_path, unused_tcp_port, added_tools,

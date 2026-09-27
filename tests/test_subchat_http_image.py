@@ -112,6 +112,60 @@ async def test_image_download_accepts_finished_tool_before_final_answer(tmp_path
         ledger.close()
 
 
+async def test_multiple_bound_images_require_explicit_index(tmp_path):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        saved, payload = image_history(store)
+        second_id = 'file_' + 'b' * 32
+        second_part = payload['messages'][1]['content']['parts'][0].copy()
+        second_part['asset_pointer'] = 'sediment://' + second_id
+        payload['messages'][1]['content']['parts'].append(second_part)
+        downloaded = []
+
+        def serve(request):
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            if request.url.path.startswith('/backend-api/files/download/'):
+                file_id = request.url.path.rsplit('/', 1)[1]
+                downloaded.append(file_id)
+                return streamed_json({
+                    'status': 'success',
+                    'download_url': ('https://chatgpt.com/backend-api/estuary/content?id='
+                                     + file_id + '&sig=fixture'),
+                    'file_size_bytes': len(png()),
+                })
+            assert request.url.params['id'] == second_id
+            return streamed_content(png(), content_type='image/png')
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve),
+                                     follow_redirects=False) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            with pytest.raises(ValueError, match='image_index'):
+                await backend.download_image(saved.operation_id, max_bytes=2_000_000)
+            result = await backend.download_image(saved.operation_id, max_bytes=2_000_000,
+                                                  image_index=1)
+            assert (result.image_index, result.image_count, result.content) == (1, 2, png())
+            assert downloaded == [second_id]
+            server = mcp_session(Subchats(store, backend), read_only=True,
+                                 observe_http_catalog=backend.http_catalog)
+            reply = await server.execute(Request(operation_id='f' * 32,
+                tool='subchat_download_image', arguments={
+                    'operation_id': saved.operation_id, 'image_index': 1,
+                    'chunk_bytes': 8}))
+            assert reply.state == 'completed' and reply.data is not None
+            assert (reply.data['image_index'], reply.data['image_count']) == (1, 2)
+            assert base64.b64decode(reply.data['content_base64']) == png()[:8]
+            with pytest.raises(ValueError, match='out of range'):
+                await backend.download_image(saved.operation_id, max_bytes=2_000_000,
+                                             image_index=2)
+    finally:
+        ledger.close()
+
+
 async def test_image_download_after_image_only_final_is_still_bound(tmp_path):
     ledger = Ledger(tmp_path)
     try:

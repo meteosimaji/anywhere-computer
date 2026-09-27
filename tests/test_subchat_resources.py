@@ -107,6 +107,49 @@ def test_resource_identity_is_durable_and_cannot_be_reused(tmp_path):
 
 
 @pytest.mark.parametrize('entry', ['cli', 'mcp'])
+async def test_follow_up_explicitly_reattaches_saved_resources(entry, tmp_path):
+    from test_subchat_lifecycle import BrowserFixture
+
+    from anywhere_computer.models import Request
+    from anywhere_computer.subchat_cli import QueueCommand, dispatch
+    from anywhere_computer.subchat_mcp import session
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    parent, child = '1' * 32, '2' * 32
+    try:
+        store.prepare(parent, 'parent', 'model', 'effort', owner=None,
+                      conversation_id='conversation', resources=resources())
+        store.begin_send(parent, owner=None, user_message_id='user',
+                         provider_account_id='fixture-account')
+        store.submitted(parent, 'conversation', 'user', owner=None)
+        store.complete(parent, 'answer', 'done', owner=None)
+        service = Subchats(store, BrowserFixture())
+        if entry == 'cli':
+            await dispatch(service, QueueCommand(action='queue', operation_id=child,
+                target_operation_id=parent, prompt='child', resources=resources()))
+        else:
+            server = session(service)
+            try:
+                reply = await server.execute(Request(operation_id=child,
+                    tool='subchat_message', arguments={'mode': 'queue',
+                    'target_operation_id': parent, 'prompt': 'child',
+                    'resources': resources().model_dump(mode='json')}))
+                assert reply.state == 'completed'
+            finally:
+                await server.close()
+        saved = store.get(child, owner=None)
+        assert saved.state == 'queued' and saved.resources == resources()
+        assert store.queue_revision(child, owner=None) == 0
+        with pytest.raises(ValueError, match='different arguments'):
+            service.queue(child, parent, 'child', owner=None)
+        inherited = service.queue('3' * 32, parent, 'another', owner=None)
+        assert inherited.resources is None
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('entry', ['cli', 'mcp'])
 async def test_resources_reach_persisted_submission_through_public_entry(entry, tmp_path):
     from test_subchat_lifecycle import BrowserFixture
 

@@ -21,7 +21,11 @@ from anywhere_computer.models import (
     UploadChunk,
 )
 from anywhere_computer.remote_bridge import RemoteAgent
-from anywhere_computer.uploads import UPLOAD_TOOLS, Uploads
+from anywhere_computer.uploads import UPLOAD_TOOLS, UploadOutcomeUnknown, Uploads
+
+pytestmark = pytest.mark.skipif(
+    os.name == "nt", reason="Upload publication requires safe directory-relative operations"
+)
 
 
 def transfer():
@@ -56,6 +60,19 @@ def chunk(store, identity, offset, content):
             transfer_id=identity, offset=offset, data_base64=base64.b64encode(content).decode()
         )
     )
+
+
+def test_upload_status_binds_original_path_when_parent_is_alias(uploads, tmp_path):
+    actual = tmp_path / "actual"
+    actual.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(actual, target_is_directory=True)
+    args = begin(uploads, alias / "result.bin", b"x")
+    status = uploads.status(TransferId(transfer_id=args.transfer_id))
+    assert status["requested_path"] == str(alias / "result.bin")
+    assert status["path"] == str(actual / "result.bin")
+    with pytest.raises(ValueError, match="different content or destination"):
+        uploads.begin(args.model_copy(update={"path": str(actual / "result.bin")}))
 
 
 def test_upload_larger_than_old_limit_streams_and_resumes_after_reopen(uploads, tmp_path):
@@ -124,6 +141,88 @@ def test_empty_upload_target_reservations_and_external_create(uploads, tmp_path)
     assert (tmp_path / "empty").read_bytes() == b""
 
 
+def test_parent_symlink_swap_after_begin_cannot_publish_elsewhere(uploads, tmp_path):
+    parent = tmp_path / "destination"
+    parent.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    args = begin(uploads, parent / "result.bin", b"abc")
+    chunk(uploads, args.transfer_id, 0, b"abc")
+    parent.rename(tmp_path / "moved")
+    parent.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="parent directory changed"):
+        uploads.commit(TransferId(transfer_id=args.transfer_id))
+    assert not (outside / "result.bin").exists()
+    assert not (tmp_path / "moved" / "result.bin").exists()
+    assert uploads.status(TransferId(transfer_id=args.transfer_id))["state"] == "receiving"
+
+
+def test_parent_swap_during_link_never_claims_original_path(uploads, tmp_path, monkeypatch):
+    parent = tmp_path / "destination"
+    parent.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    args = begin(uploads, parent / "result.bin", b"abc")
+    chunk(uploads, args.transfer_id, 0, b"abc")
+    original = os.link
+
+    def moved(source, destination, **kwargs):
+        parent.rename(tmp_path / "moved")
+        parent.symlink_to(outside, target_is_directory=True)
+        original(source, destination, **kwargs)
+
+    monkeypatch.setattr("anywhere_computer.uploads.os.link", moved)
+    with pytest.raises(UploadOutcomeUnknown):
+        uploads.commit(TransferId(transfer_id=args.transfer_id))
+    assert not (outside / "result.bin").exists()
+    assert (tmp_path / "moved" / "result.bin").read_bytes() == b"abc"
+    assert uploads.status(TransferId(transfer_id=args.transfer_id))["publication_verified"] is False
+    with pytest.raises(ValueError, match="parent directory changed"):
+        uploads.resolve(ResolveUpload(transfer_id=args.transfer_id,
+                                      action="confirm_published"))
+
+
+def test_legacy_upload_without_parent_identity_fails_closed(uploads, tmp_path):
+    args = begin(uploads, tmp_path / "legacy.bin", b"abc")
+    chunk(uploads, args.transfer_id, 0, b"abc")
+    with sqlite3.connect(uploads.database) as db:
+        db.execute("DELETE FROM upload_parents WHERE id=?", (args.transfer_id,))
+    with pytest.raises(ValueError, match="parent identity is unavailable"):
+        uploads.commit(TransferId(transfer_id=args.transfer_id))
+    assert not (tmp_path / "legacy.bin").exists()
+    assert uploads.status(TransferId(transfer_id=args.transfer_id))["state"] == "receiving"
+
+
+def test_platform_without_safe_directory_operations_rejects_begin(
+    uploads, tmp_path, monkeypatch,
+):
+    monkeypatch.setattr("anywhere_computer.uploads._SAFE_DIRFD_SUPPORTED", False)
+    with pytest.raises(ValueError, match="unsupported on this platform"):
+        begin(uploads, tmp_path / "unsupported.bin", b"abc")
+    assert not (tmp_path / "unsupported.bin").exists()
+
+
+def test_link_eexist_does_not_claim_publication(uploads, tmp_path, monkeypatch):
+    target = tmp_path / "collision.bin"
+    args = begin(uploads, target, b"abc")
+    chunk(uploads, args.transfer_id, 0, b"abc")
+
+    def collision(source, destination, **kwargs):
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                             0o600, dir_fd=kwargs["dst_dir_fd"])
+        os.close(descriptor)
+        raise FileExistsError("simulated kernel collision")
+
+    monkeypatch.setattr("anywhere_computer.uploads.os.link", collision)
+    with pytest.raises(UploadOutcomeUnknown, match="Publication outcome is unknown"):
+        uploads.commit(TransferId(transfer_id=args.transfer_id))
+    assert target.read_bytes() == b""
+    status = uploads.status(TransferId(transfer_id=args.transfer_id))
+    assert status["state"] == "unknown" and not status["publication_verified"]
+    with pytest.raises(ValueError, match="unavailable"):
+        uploads.commit(TransferId(transfer_id=args.transfer_id))
+
+
 def test_active_count_and_reserved_bytes_are_transactional(uploads, tmp_path):
     ids = [begin(uploads, tmp_path / str(i), b"").transfer_id for i in range(8)]
     with pytest.raises(ValueError, match="capacity"):
@@ -151,9 +250,9 @@ def crash_during_publish(directory, identity, link_first):
     if link_first == "stream":
         module.os.fsync = lambda descriptor: os._exit(18)
 
-    def crash(source, target):
+    def crash(source, target, **kwargs):
         if link_first:
-            original(source, target)
+            original(source, target, **kwargs)
         os._exit(17)
 
     module.os.link = crash
@@ -189,11 +288,26 @@ def test_old_upload_schema_keeps_chunks_during_upgrade(uploads, tmp_path):
     chunk(uploads, args.transfer_id, 0, b"abc")
     with sqlite3.connect(uploads.database) as db:
         db.execute("ALTER TABLE uploads DROP COLUMN temporary")
+        db.execute("ALTER TABLE uploads DROP COLUMN requested_path")
         db.execute("PRAGMA user_version=1")
     reopened = Uploads(tmp_path, file_locks=tmp_path / "file-locks")
     assert reopened.status(args)["received_bytes"] == 3
+    assert reopened.status(args)["requested_path"] is None
     assert reopened.commit(args)["state"] == "complete"
     assert (tmp_path / "migrated").read_bytes() == b"abc"
+
+
+def test_version_two_upload_schema_preserves_active_transfer(uploads, tmp_path):
+    args = begin(uploads, tmp_path / "version-two.bin", b"abc")
+    with sqlite3.connect(uploads.database) as db:
+        db.execute("ALTER TABLE uploads DROP COLUMN requested_path")
+        db.execute("PRAGMA user_version=2")
+    reopened = Uploads(tmp_path, file_locks=tmp_path / "file-locks")
+    assert reopened.status(args)["requested_path"] is None
+    reopened.begin(args)
+    chunk(reopened, args.transfer_id, 0, b"abc")
+    assert reopened.commit(args)["publication_verified"] is True
+    assert (tmp_path / "version-two.bin").read_bytes() == b"abc"
 
 
 @pytest.mark.parametrize("link_first", [False, True])
@@ -317,8 +431,8 @@ async def test_concurrent_chunks_share_one_offset_and_report_unknown_effect(tmp_
             db.execute("UPDATE uploads SET digest=?", (sha256(data),))
         original = os.link
 
-        def lost(source, destination):
-            original(source, destination)
+        def lost(source, destination, **kwargs):
+            original(source, destination, **kwargs)
             raise ConnectionError("synthetic lost publication result")
 
         monkeypatch.setattr("anywhere_computer.uploads.os.link", lost)

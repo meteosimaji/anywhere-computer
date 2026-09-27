@@ -25,6 +25,7 @@ from .authorization import AuthorizationStore, validate_authorization_url
 from .authorized_http import AuthorizedDeviceMCP
 from .browser_authorization import BrowserAuthorization
 from .connection import ensure_agent, exchange
+from .delegated_tasks import DelegatedTaskStore
 from .device_router import ROUTER_TOOLS
 from .engine import Engine
 from .engine_selection import require_no_migration
@@ -34,11 +35,14 @@ from .locking import ProcessLock
 from .models import MAX_TOOL_SCOPES
 from .oauth_endpoints import OAuthEndpoints
 from .owner_credentials import OwnerCredentials
+from .owner_passkeys import OwnerPasskeys
 from .state import prepare_directory
+from .subchat_device_save import SUBCHAT_SAVE_TOOLS
 from .subchat_gateway import (
     SUBCHAT_GATEWAY_TOOLS,
     SubchatGatewayConfig,
     lazy_subchat_gateway,
+    subchat_ledger_owner,
 )
 
 
@@ -57,7 +61,7 @@ class HTTPServiceConfig(BaseModel):
 
     @model_validator(mode="after")
     def check_subchat_selection(self) -> "HTTPServiceConfig":
-        if self.subchat is None and self.scopes & SUBCHAT_GATEWAY_TOOLS:
+        if self.subchat is None and self.scopes & (SUBCHAT_GATEWAY_TOOLS | SUBCHAT_SAVE_TOOLS):
             raise ValueError("Subchat scopes require an explicit gateway selection")
         return self
 
@@ -147,7 +151,8 @@ async def save_http_config(directory: Path, config: HTTPServiceConfig) -> HTTPSe
                     staged / "authorization",
                     resource=config.resource,
                     known_tools=(frozenset(engine.tools) | ROUTER_TOOLS
-                                 | (SUBCHAT_GATEWAY_TOOLS if config.subchat else frozenset())),
+                                 | ((SUBCHAT_GATEWAY_TOOLS | SUBCHAT_SAVE_TOOLS)
+                                    if config.subchat else frozenset())),
                 )
                 try:
                     store.register_client(config.client, config.redirects)
@@ -224,7 +229,8 @@ async def http_service(
         if agent_directory is None:
             engine = Engine(service_directory / "engine", file_locks=directory / "file-locks")
             known_tools = (frozenset(engine.tools) | ROUTER_TOOLS
-                           | (SUBCHAT_GATEWAY_TOOLS if config.subchat else frozenset()))
+                           | ((SUBCHAT_GATEWAY_TOOLS | SUBCHAT_SAVE_TOOLS)
+                              if config.subchat else frozenset()))
         else:
             await asyncio.to_thread(ensure_agent, agent_directory)
             catalog = await exchange(agent_directory, "__catalog")
@@ -237,7 +243,8 @@ async def http_service(
                     raise ValueError("Shared agent catalog is invalid")
                 names.add(name)
             known_tools = (frozenset(names) | ROUTER_TOOLS
-                           | (SUBCHAT_GATEWAY_TOOLS if config.subchat else frozenset()))
+                           | ((SUBCHAT_GATEWAY_TOOLS | SUBCHAT_SAVE_TOOLS)
+                              if config.subchat else frozenset()))
         try:
             store = AuthorizationStore(
                 service_directory / "authorization",
@@ -247,9 +254,26 @@ async def http_service(
             try:
                 _check_enrollment(store, config)
                 async with AsyncExitStack() as resources:
+                    delegated = DelegatedTaskStore(service_directory / "delegated-tasks", store)
+                    resources.callback(delegated.close)
+                    selected_subchat = config.subchat
+
+                    def queue_grant_active(grant_id: str, ledger_owner: str) -> bool:
+                        grant = store.current_grant(grant_id)
+                        return (selected_subchat is not None and grant is not None
+                                and grant.owner == config.owner
+                                and grant.device == config.device
+                                and grant.client == config.client
+                                and grant.resource == config.resource
+                                and 'subchat_queue_auto' in grant.tools
+                                and subchat_ledger_owner(
+                                    grant, selected_subchat.account_id) == ledger_owner)
+
                     subchat_gateway = (await resources.enter_async_context(
-                        lazy_subchat_gateway(config.subchat, owner=config.owner))
-                        if config.subchat is not None else None)
+                        lazy_subchat_gateway(
+                            selected_subchat, owner=config.owner,
+                            queue_grant_active=queue_grant_active))
+                        if selected_subchat is not None else None)
                     backend = AuthorizedDeviceMCP(
                         store,
                         engine,
@@ -260,6 +284,7 @@ async def http_service(
                         allowed_tools=config.scopes,
                         device_directory=agent_directory or directory,
                         subchat_gateway=subchat_gateway,
+                        delegated_tasks=delegated,
                     )
                     consent = BrowserAuthorization(store, owner, device=config.device)
                     oauth = OAuthEndpoints(
@@ -278,6 +303,7 @@ async def http_service(
                         await adapter.start(config.port)
                         yield RunningHTTPService(config, adapter)
                     finally:
+                        await backend.close()
                         await adapter.close()
             finally:
                 store.close()
@@ -335,7 +361,7 @@ def reset_http_owner_password(directory: Path, replacement: str) -> None:
                     )
 
                     def revoke_and_check() -> None:
-                        store.revoke_device(owner=config.owner, device=config.device)
+                        store.begin_owner_reset(owner=config.owner, device=config.device)
                         if store.device_enabled(owner=config.owner, device=config.device):
                             raise ValueError("Device revocation was not confirmed")
                         remaining = store.db.execute(
@@ -346,6 +372,8 @@ def reset_http_owner_password(directory: Path, replacement: str) -> None:
                             raise ValueError("Grant revocation was not confirmed")
 
                     credentials.reset_password(replacement, revoke_and_check)
+                    OwnerPasskeys(credentials, device=config.device).clear()
+                    store.complete_owner_reset(owner=config.owner, device=config.device)
 
 
 def retain_http_grants(directory: Path) -> int:

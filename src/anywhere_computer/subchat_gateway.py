@@ -12,13 +12,14 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager, closing
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, field_validator
 
 from .authorization import GrantIdentity
 from .models import Contract, OperationId, Reply, Request
 from .subchat_mcp import (
+    QueueEvents,
     ReadOnlyHTTPCatalog,
     SubchatSession,
     capability_report,
@@ -40,6 +41,8 @@ if TYPE_CHECKING:
 SUBCHAT_GATEWAY_TOOLS = frozenset({
     "subchat_capabilities", "subchat_catalog", "subchat_send", "subchat_message",
     "subchat_recover", "subchat_wait", "subchat_status", "subchat_list",
+    "subchat_download_file", "subchat_download_image", "subchat_cancel",
+    "subchat_queue_events", "subchat_queue_auto",
 })
 _IDLE_CLOSE_SECONDS = 15.0
 _PENDING_RECEIPT_SECONDS = 20.0
@@ -88,21 +91,13 @@ class SubchatGateway:
         return core
 
     async def catalog(self, grant_id: str, granted: frozenset[str]) -> list[JsonValue]:
-        result: list[JsonValue] = []
-        for item in await self._core(grant_id).catalog():
-            if (not isinstance(item, dict)
-                    or item.get("name") not in granted & SUBCHAT_GATEWAY_TOOLS):
-                continue
-            if item.get("name") == "subchat_catalog":
-                # This gateway permits only an HTTP catalog observation. The
-                # UI picker variant can change the selected profile's default.
-                result.append(direct_gateway_catalog()[-1])
-            else:
-                result.append(item)
-        return result
+        return [item for item in direct_gateway_catalog()
+                if isinstance(item, dict)
+                and item.get("name") in granted & SUBCHAT_GATEWAY_TOOLS]
 
     async def execute(self, grant_id: str, request: Request,
-                      granted: frozenset[str]) -> Reply:
+                      granted: frozenset[str], *,
+                      authorization_grant_id: str | None = None) -> Reply:
         if request.tool not in granted & SUBCHAT_GATEWAY_TOOLS:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Subchat tool is not granted")
@@ -114,6 +109,12 @@ class SubchatGateway:
                              error="Only the HTTP catalog is available through this gateway",
                              data={"dispatched": False})
             request = request.model_copy(update={"arguments": {"source": "http"}})
+        async def execute_core() -> Reply:
+            core = self._core(grant_id)
+            if request.tool == "subchat_queue_auto" and authorization_grant_id is not None:
+                return await core.execute_with_queue_grant(request, authorization_grant_id)
+            return await core.execute(request)
+
         # A received request is scheduled independently of the HTTP connection.
         # A repeated ID with different content must never dispatch another input.
         digest = json.dumps(request.arguments, sort_keys=True, separators=(",", ":"))
@@ -175,7 +176,7 @@ class SubchatGateway:
                 elif request.tool not in {"subchat_send", "subchat_message"}:
                     # Reads can still recover an uncertain write when every
                     # retained ID is unsafe to evict. They need no write cache.
-                    observed = await self._core(grant_id).execute(request)
+                    observed = await execute_core()
                     if (request.tool == "subchat_recover"
                             and observed.state == "completed"
                             and observed.data.get("state") in {
@@ -191,7 +192,7 @@ class SubchatGateway:
                                        "another; the gateway has 128 unresolved operations",
                                  data={"dispatched": False})
             async def run() -> Reply:
-                reply = await self._core(grant_id).execute(request)
+                reply = await execute_core()
                 if request.tool == "subchat_capabilities" and reply.state == "completed":
                     # The direct HTTP gateway does not expose queue_watch.
                     return reply.model_copy(update={"data": {
@@ -234,14 +235,16 @@ class SubchatGateway:
                        for core in self.cores.values())
                 or any(not task.done() for core in self.cores.values()
                        for task in (*core.calls, *getattr(core, 'sends', {}).values(),
-                                    *core.queue_watches.values())))
+                                    *core.queue_watches.values(),
+                                    *getattr(core, 'auto_queue_tasks', {}).values())))
 
 
 class LazySubchatGateway:
     """Open a selected account only when discovered; retry failed preparation."""
 
     def __init__(self, config: SubchatGatewayConfig, *, owner: str,
-                 idle_close_seconds: float = _IDLE_CLOSE_SECONDS) -> None:
+                 idle_close_seconds: float = _IDLE_CLOSE_SECONDS,
+                 queue_grant_active: Callable[[str, str], bool] | None = None) -> None:
         self.config = config
         self.owner = owner
         self.account_id = config.account_id
@@ -255,6 +258,7 @@ class LazySubchatGateway:
         self._active_calls = 0
         self._idle_task: asyncio.Task[None] | None = None
         self._idle_close_seconds = idle_close_seconds
+        self._queue_grant_active = queue_grant_active
 
     async def _acquire(self) -> SubchatGateway | None:
         async with self._lock:
@@ -270,8 +274,10 @@ class LazySubchatGateway:
                 return None
             resources = AsyncExitStack()
             try:
+                options = ({"queue_grant_active": self._queue_grant_active}
+                           if self._queue_grant_active is not None else {})
                 gateway = await resources.enter_async_context(
-                    open_subchat_gateway(self.config, owner=self.owner))
+                    open_subchat_gateway(self.config, owner=self.owner, **options))
             except asyncio.CancelledError:
                 await resources.aclose()
                 raise
@@ -331,7 +337,10 @@ class LazySubchatGateway:
         if legacy_grant_id == stable_owner:
             return stable_owner
         target: object = request.operation_id
-        if request.tool in {"subchat_status", "subchat_recover", "subchat_wait"}:
+        if request.tool in {"subchat_status", "subchat_recover", "subchat_wait",
+                            "subchat_cancel", "subchat_download_file",
+                            "subchat_download_image", "subchat_queue_events",
+                            "subchat_queue_auto"}:
             target = request.arguments.get("operation_id")
         elif request.tool == "subchat_message":
             target = request.arguments.get("target_operation_id")
@@ -380,12 +389,32 @@ class LazySubchatGateway:
         return legacy_owner
 
     async def execute(self, grant_id: str, request: Request,
-                      granted: frozenset[str]) -> Reply:
+                      granted: frozenset[str], *,
+                      authorization_grant_id: str | None = None) -> Reply:
         if request.tool not in granted & SUBCHAT_GATEWAY_TOOLS:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Subchat tool is not granted")
-        if request.tool in {"subchat_status", "subchat_capabilities", "subchat_list"}:
+        if request.tool in {"subchat_status", "subchat_capabilities", "subchat_list",
+                            "subchat_cancel", "subchat_queue_events"}:
             return await self._local_read(grant_id, request)
+        if request.tool in {"subchat_download_file", "subchat_download_image"}:
+            # Reject hidden and differently bound submissions before opening
+            # the selected profile. The core validates all remaining fields.
+            target_id = request.arguments.get("operation_id")
+            if isinstance(target_id, str):
+                try:
+                    await asyncio.to_thread(self._saved_status, grant_id,
+                                            request.operation_id, target_id, None)
+                except SubchatOperationNotFound:
+                    return Reply(operation_id=request.operation_id, state="failed",
+                                 error="No operation with this ID is visible in the "
+                                       "selected ledger.",
+                                 data={"error_code": "unknown_operation"})
+                except SubchatAccountMismatch:
+                    return Reply(operation_id=request.operation_id, state="failed",
+                                 error="The selected Chat account does not match the "
+                                       "saved operation.",
+                                 data={"error_code": "account_mismatch"})
         gateway = await self._acquire()
         if gateway is None:
             # A retry can carry the same operation ID as a send already in the
@@ -422,7 +451,10 @@ class LazySubchatGateway:
                          error="Selected Subchat account is unavailable",
                          data=data)
         try:
-            return await gateway.execute(grant_id, request, granted)
+            return await gateway.execute(
+                grant_id, request, granted,
+                **({'authorization_grant_id': authorization_grant_id}
+                   if authorization_grant_id is not None else {}))
         finally:
             await self._release()
 
@@ -445,7 +477,16 @@ class LazySubchatGateway:
                 page = SubchatList.model_validate(request.arguments)
                 data = await asyncio.to_thread(self._saved_list, grant_id, page)
                 return Reply(operation_id=request.operation_id, state="completed", data=data)
+            if request.tool == "subchat_queue_events":
+                page_events = QueueEvents.model_validate(request.arguments)
+                data = await asyncio.to_thread(self._saved_queue_events,
+                                               grant_id, page_events)
+                return Reply(operation_id=request.operation_id, state="completed", data=data)
             target = OperationId.model_validate(request.arguments)
+            if request.tool == "subchat_cancel":
+                data = await asyncio.to_thread(self._cancel_unsent, grant_id,
+                                               target.operation_id)
+                return Reply(operation_id=request.operation_id, state="completed", data=data)
             queue_watch = None
             gateway = self._gateway
             if gateway is not None:
@@ -502,6 +543,49 @@ class LazySubchatGateway:
             store = SubchatSubmissions(connection, initialize=False)
             return store.list(request, owner=grant_id).model_dump(mode="json")
 
+    def _saved_queue_events(self, grant_id: str,
+                            request: QueueEvents) -> dict[str, JsonValue]:
+        """Read one OAuth owner's durable events without opening its browser."""
+        ledger_path = Path(self.config.ledger)
+        database = ledger_path / "operations.sqlite3"
+        if ledger_path.is_symlink() or database.is_symlink():
+            raise ValueError("Selected Subchat ledger is unavailable")
+        if not database.is_file():
+            return {"events": [], "next_cursor": request.after_id or 0,
+                    "has_more": False} if request.after_id is not None else {"events": []}
+        with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro",
+                                     uri=True)) as connection:
+            store = SubchatSubmissions(connection, initialize=False)
+            if request.after_id is None:
+                return {"events": cast(JsonValue, store.auto_queue_events(
+                    owner=grant_id, limit=request.limit,
+                    operation_id=request.operation_id))}
+            events, more = store.auto_queue_events_page(
+                owner=grant_id, after_id=request.after_id, limit=request.limit,
+                operation_id=request.operation_id)
+            return {"events": cast(JsonValue, events),
+                    "next_cursor": events[-1]["id"] if events else request.after_id,
+                    "has_more": more}
+
+    def _cancel_unsent(self, grant_id: str, operation_id: str) -> dict[str, JsonValue]:
+        """Cancel only a selected-account input that has not begun dispatch."""
+        from .state import Ledger
+
+        ledger_path = Path(self.config.ledger)
+        database = ledger_path / "operations.sqlite3"
+        if ledger_path.is_symlink() or database.is_symlink() or not database.is_file():
+            raise SubchatOperationNotFound("Unknown subchat submission")
+        ledger = Ledger(ledger_path)
+        try:
+            store = SubchatSubmissions(ledger.connection)
+            saved = store.get(operation_id, owner=grant_id)
+            if (saved.provider_account_id is not None
+                    and saved.provider_account_id != self.config.account_id):
+                raise SubchatAccountMismatch("Saved operation belongs to another account")
+            return public_submission_data(store.cancel(operation_id, owner=grant_id))
+        finally:
+            ledger.close()
+
     def _saved_intent_id(self, grant_id: str, intent_key: str) -> str | None:
         ledger_path = Path(self.config.ledger)
         database = ledger_path / "operations.sqlite3"
@@ -533,6 +617,7 @@ class LazySubchatGateway:
                 raise SubchatAccountMismatch("Saved operation belongs to another account")
             progress = store.http_progress(operation_id, owner=grant_id)
             failure_reason = store.preparation_failure(operation_id, owner=grant_id)
+            queue_revision = store.queue_revision(operation_id, owner=grant_id)
         if failure_reason is not None and result.state in {"prepared", "queued"}:
             return Reply(operation_id=request_id, state="failed",
                          error="Subchat preparation failed; retry the same operation ID "
@@ -540,6 +625,7 @@ class LazySubchatGateway:
                          data={"error_code": "preparation_failed", "dispatched": False,
                                "reason": failure_reason})
         data = public_submission_data(result)
+        data["queue_revision"] = queue_revision
         if progress is not None:
             data["http_progress"] = progress
         if queue_watch is not None:
@@ -561,9 +647,11 @@ class LazySubchatGateway:
 
 
 @asynccontextmanager
-async def lazy_subchat_gateway(config: SubchatGatewayConfig, *, owner: str
+async def lazy_subchat_gateway(config: SubchatGatewayConfig, *, owner: str,
+                               queue_grant_active: Callable[[str, str], bool] | None = None
                                ) -> AsyncIterator[LazySubchatGateway]:
-    gateway = LazySubchatGateway(config, owner=owner)
+    gateway = LazySubchatGateway(config, owner=owner,
+                                 queue_grant_active=queue_grant_active)
     try:
         yield gateway
     finally:
@@ -581,7 +669,8 @@ async def _background_account_session(context: BrowserContext, client: httpx.Asy
 
 
 @asynccontextmanager
-async def open_subchat_gateway(config: SubchatGatewayConfig, *, owner: str
+async def open_subchat_gateway(config: SubchatGatewayConfig, *, owner: str,
+                               queue_grant_active: Callable[[str, str], bool] | None = None
                                ) -> AsyncIterator[SubchatGateway]:
     """Use one selected local profile and ledger; never acquire login credentials."""
     profile = Path(config.profile)
@@ -667,7 +756,10 @@ async def open_subchat_gateway(config: SubchatGatewayConfig, *, owner: str
             return session(Subchats(store, backend), observe_catalog=catalog,
                            require_send_intent=True,
                            observe_http_catalog=http_catalog,
-                           owner=grant_id, serialize_recovery=True)
+                           owner=grant_id, serialize_recovery=True,
+                           auto_queue_grant_active=(
+                               (lambda auth_id: queue_grant_active(auth_id, grant_id))
+                               if queue_grant_active is not None else None))
 
         gateway = SubchatGateway(core_factory, owner=owner, account_id=config.account_id)
         try:

@@ -328,6 +328,28 @@ async def test_unclassified_provider_errors_are_withheld_and_recoverable(
     assert await engine.execute(operation) == reply
 
 
+async def test_safe_input_rejections_have_actionable_codes_without_mutation(engine, tmp_path):
+    target = tmp_path / "existing.txt"
+    target.write_text("keep", encoding="utf-8")
+    cases = [
+        (request("files_write", path=str(target), mode="replace", text="bad",
+                 expected_sha256="0" * 64), "file_changed"),
+        (request("search_start", path=str(tmp_path), pattern="(", mode="regex"),
+         "invalid_search_pattern"),
+        (request("browser_navigate", session_id=uuid.uuid4().hex,
+                 tab_id=uuid.uuid4().hex,
+                 url="file:///etc/passwd"), "invalid_browser_url"),
+    ]
+    for operation, code in cases:
+        reply = await engine.execute(operation)
+        assert reply.state == "failed"
+        assert reply.data["error_code"] == code
+        assert reply.data["dispatched"] is False
+        assert reply.data["next_action"]
+        assert engine.ledger.get(operation.operation_id) == reply
+    assert target.read_text(encoding="utf-8") == "keep"
+
+
 async def test_plugin_catalog_transport_error_does_not_expose_credentials(
     engine, tmp_path, monkeypatch,
 ):

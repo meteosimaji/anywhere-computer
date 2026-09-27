@@ -13,7 +13,7 @@ def validate_ssh_host(host: str) -> None:
 
 def ssh_command(host: str, command: str = "mcp") -> list[str]:
     validate_ssh_host(host)
-    if command not in {"mcp", "status"}:
+    if command not in {"mcp", "status", "ssh-child-mcp"}:
         raise ValueError("Unsupported remote entry point")
     executable = shutil.which("ssh")
     if executable is None:

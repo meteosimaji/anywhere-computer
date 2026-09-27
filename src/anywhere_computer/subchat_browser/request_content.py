@@ -57,11 +57,11 @@ def generation_input(payload: str, submission: SubchatSubmission) -> dict[str, J
             and submission.effort == 'Instant'
             and body.get('model') == 'gpt-5-6'
         )
-        # The current Latest > Pro composer sends standard on the wire, while
-        # the authenticated catalog's Pro preset has a null effort field.
+        # The GPT-6 Pro composer sends standard on the wire while the
+        # authenticated catalog's Pro preset has a null effort field. The
+        # version and preset ID can change as the model moves in the picker.
         observed_pro_effort = (
-            selected.version_id == 'latest' and selected.preset_id == 3
-            and selected.model_slug == 'gpt-6-pro'
+            selected.model_slug == 'gpt-6-pro'
             and selected.thinking_effort is None
             and submission.effort == 'Pro'
             and body.get('model') == 'gpt-6-pro'

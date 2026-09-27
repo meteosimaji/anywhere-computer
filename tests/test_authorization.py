@@ -280,7 +280,7 @@ def test_version_one_upgrade_preserves_existing_access_tokens(authority, tmp_pat
         authority.db.execute("PRAGMA user_version=1")
     upgraded = AuthorizationStore(tmp_path, resource=RESOURCE, known_tools=TOOLS)
     try:
-        assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 3
+        assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 4
         assert upgraded.verify(original.value, resource=RESOURCE) is not None
         assert upgraded.db.execute("SELECT count(*) FROM refresh_tokens").fetchone()[0] == 0
     finally:
@@ -358,14 +358,34 @@ def test_v2_generation_upgrade_preserves_tokens_and_serializes_concurrent_open(a
     def reopen():
         store = AuthorizationStore(tmp_path, resource=RESOURCE, known_tools=TOOLS)
         try:
-            assert store.db.execute("PRAGMA user_version").fetchone()[0] == 3
+            assert store.db.execute("PRAGMA user_version").fetchone()[0] == 4
             assert store.db.execute("SELECT generation FROM authorized_devices").fetchone()[0] == 0
+            assert store.db.execute(
+                "SELECT reset_pending FROM authorized_devices").fetchone()[0] == 0
             return store.verify(token.value, resource=RESOURCE)
         finally:
             store.close()
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         assert all(executor.map(lambda _: reopen(), range(2)))
+
+
+def test_v3_owner_reset_gate_upgrade_defaults_to_clear(authority, tmp_path):
+    with authority.db:
+        authority.db.execute("ALTER TABLE authorized_devices DROP COLUMN reset_pending")
+        authority.db.execute("PRAGMA user_version=3")
+    upgraded = AuthorizationStore(tmp_path, resource=RESOURCE, known_tools=TOOLS)
+    try:
+        assert upgraded.db.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert not upgraded.owner_reset_pending(owner="owner", device="device")
+        upgraded.begin_owner_reset(owner="owner", device="device")
+        assert upgraded.owner_reset_pending(owner="owner", device="device")
+        with pytest.raises(ValueError, match="incomplete"):
+            upgraded.enable_device(owner="owner", device="device")
+        upgraded.complete_owner_reset(owner="owner", device="device")
+        assert upgraded.enable_device(owner="owner", device="device")
+    finally:
+        upgraded.close()
 
 
 def test_permanent_grant_refreshes_years_later_but_access_expires(authority, monkeypatch):

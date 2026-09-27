@@ -243,6 +243,10 @@ async def test_listing_paginates_owned_records_after_reopen_without_browser(tmp_
         assert page['submissions'][0]['operation_id'] == f'{3:032x}'
         assert 'prompt' not in page['submissions'][0]
         assert 'answer' not in page['submissions'][0]
+        assert page['submissions'][0]['prompt_preview'] is None
+        preview = json.loads(await dispatch(service, ListCommand(
+            action='list', limit=1, include_prompt_preview=True)))
+        assert preview['submissions'][0]['prompt_preview'] == 'private prompt'
         store.prepare('4' * 32, 'new prompt', 'model', 'high', owner=None)
         older = store.list(SubchatList(limit=1, before=page['next_before']), owner=None)
         assert [entry.operation_id for entry in older.submissions] == [f'{1:032x}']
