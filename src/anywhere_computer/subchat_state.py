@@ -601,15 +601,17 @@ class SubchatSubmissions:
                     (operation_id, owner, time.time()),
                 )
             existing = self.get(operation_id, owner=owner)
-            changed_queue_selection = (existing.state == 'queued'
-                                       and after_operation_id is not None
-                                       and self.queue_revision(operation_id, owner=owner) > 0
+            changed_queue = (existing.state == 'queued'
+                             and after_operation_id is not None
+                             and self.queue_revision(operation_id, owner=owner) > 0)
+            changed_queue_selection = (changed_queue
                                        and (model, effort, http_selection) ==
                                        (target.model, target.effort, target.http_selection))
             if ((existing.prompt, existing.requested_conversation_id,
-                 existing.work_context, existing.after_operation_id,
-                 existing.resources) != (
-                     prompt, conversation_id, work_context, after_operation_id, resources)
+                 existing.work_context, existing.after_operation_id) != (
+                     prompt, conversation_id, work_context, after_operation_id)
+                    or (not changed_queue
+                        and existing.resources != resources)
                     or (not changed_queue_selection and
                         (existing.model, existing.effort, existing.http_selection) !=
                         (model, effort, http_selection))):
@@ -781,7 +783,8 @@ class SubchatSubmissions:
             if (old.conversation_id != parent.conversation_id
                     or old.expected_last_user_message_id != parent.user_message_id):
                 raise ValueError('Queued parent identity changed')
-            updated = old.model_copy(update={'resources': resources})
+            updated = old.model_copy(update={
+                'resources': resources if resources.attachments or resources.plugins else None})
             row = self.connection.execute(
                 'UPDATE subchat_submissions SET body=? WHERE operation_id=? AND owner IS ? '
                 'AND body=?',

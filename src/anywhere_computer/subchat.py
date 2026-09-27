@@ -203,11 +203,14 @@ class Subchats:
                         require_auto_queue_armed: bool = False,
                         auto_queue_authorized: Callable[[], bool] | None = None
                         ) -> SubchatSubmission:
+        # Read the revision first. If a concurrent editor commits after this
+        # read, begin_send rejects the prepared snapshot rather than reserving
+        # resources that were never checked by backend.prepare.
+        snapshot_revision = self.store.queue_revision(submission.operation_id, owner=owner)
         submission = self.store.get(submission.operation_id, owner=owner)
         if submission.state not in {'prepared', 'queued'}:
             return submission
-        queue_revision = (self.store.queue_revision(submission.operation_id, owner=owner)
-                          if submission.state == 'queued' else None)
+        queue_revision = snapshot_revision if submission.state == 'queued' else None
         try:
             prepared = await self.backend.prepare(submission)
             identity_kind = getattr(self.backend, 'baseline_identity_kind', None)

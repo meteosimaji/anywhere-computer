@@ -10,7 +10,61 @@ from anywhere_computer.subchat import (
     SubchatReceipt,
     Subchats,
 )
+from anywhere_computer.subchat_content import SubchatResources
 from anywhere_computer.subchat_state import SubchatQueueRevisionConflict, SubchatSubmissions
+
+
+async def test_queue_resource_edit_between_revision_and_snapshot_prepares_new_resources(
+        tmp_path, monkeypatch):
+    """A resource edit cannot bypass the checks used to prepare the send."""
+    refs = SubchatResources.model_validate({'attachments': [{
+        'id': 'file_uploaded', 'name': 'note.txt', 'mime_type': 'text/plain', 'size': 4}]})
+
+    class PreparingBrowser:
+        def __init__(self):
+            self.prepared_resources = None
+            self.sends = 0
+
+        async def prepare(self, submission):
+            self.prepared_resources = submission.resources
+            return ()
+
+        async def send(self, submission):
+            self.sends += 1
+            raise ConnectionError('Response lost after submission')
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    browser = PreparingBrowser()
+    parent, child = 'a' * 32, 'b' * 32
+    try:
+        store.prepare(parent, 'parent', 'model', 'effort', owner='peer',
+                      conversation_id='conversation')
+        store.begin_send(parent, owner='peer', user_message_id='user',
+                         provider_account_id='account')
+        store.submitted(parent, 'conversation', 'user', owner='peer')
+        store.complete(parent, 'answer', 'done', owner='peer')
+        store.prepare(child, 'child', 'model', 'effort', owner='peer',
+                      conversation_id='conversation', after_operation_id=parent)
+        original_revision = store.queue_revision
+        edited = False
+
+        def concurrent_edit(operation_id, *, owner):
+            nonlocal edited
+            if operation_id == child and not edited:
+                edited = True
+                monkeypatch.setattr(store, 'queue_revision', original_revision)
+                store.change_queued_resources(child, owner='peer', expected_revision=0,
+                                              resources=refs)
+            return original_revision(operation_id, owner=owner)
+
+        monkeypatch.setattr(store, 'queue_revision', concurrent_edit)
+        with pytest.raises(SubchatOutcomeUnknown):
+            await Subchats(store, browser).recover(child, owner='peer')
+        assert browser.prepared_resources == refs
+        assert browser.sends == 1
+    finally:
+        ledger.close()
 
 
 async def test_queued_model_change_during_preparation_never_sends_stale_choice(tmp_path):
