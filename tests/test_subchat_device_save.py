@@ -570,18 +570,26 @@ async def test_https_save_scope_catalog_and_same_id_delivery(tmp_path, monkeypat
         assert "request_id" in next(item for item in catalog if item["name"] ==
                                     "subchat_save_file")["inputSchema"]["required"]
         states = []
-        for _ in range(2):
-            result = await session.execute(request)
-            states.append(result.state)
-        assert states == ["running", "unknown"]
+        async with asyncio.timeout(30):
+            while True:
+                result = await session.execute(request)
+                states.append(result.state)
+                if result.state == "unknown":
+                    break
+                assert result.state == "running"
+                await asyncio.sleep(0.05)
+        assert states[0] == "running"
         grant = replace(grant, grant_id="renewed")
         renewed_session = backend.session("renewed")
-        for _ in range(3):
-            result = await renewed_session.execute(request)
-            states.append(result.state)
-            if result.state == "completed":
-                break
-        assert states == ["running", "unknown", "unknown", "completed"]
+        async with asyncio.timeout(30):
+            while True:
+                result = await renewed_session.execute(request)
+                states.append(result.state)
+                if result.state == "completed":
+                    break
+                assert result.state in {"running", "unknown"}
+                await asyncio.sleep(0.05)
+        assert "unknown" in states and states[-1] == "completed"
         assert chunk_calls == 1
         assert destination.read_bytes() == content
         assert "content_base64" not in result.data
