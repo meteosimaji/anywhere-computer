@@ -554,7 +554,8 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
                         'subchat_message', 'subchat_cancel', 'subchat_delete',
                         'subchat_list', 'subchat_queue_watch',
                         'subchat_queue_auto', 'subchat_queue_events',
-                        'subchat_queue_model_change'}
+                        'subchat_queue_model_change',
+                        'subchat_queue_resources_change'}
         listed = await call('tools/call', {'name': 'subchat_list', 'arguments': {}})
         assert listed['result']['structuredContent']['data']['submissions'] == []
         op = '1' * 32
@@ -761,7 +762,8 @@ asyncio.run(main())
                         'subchat_message', 'subchat_cancel', 'subchat_delete',
                         'subchat_list', 'subchat_queue_watch',
                         'subchat_queue_auto', 'subchat_queue_events',
-                        'subchat_queue_model_change'}
+                        'subchat_queue_model_change',
+                        'subchat_queue_resources_change'}
                     sent = await client.call_tool('subchat_send', arguments)
                     assert not sent.isError
                     answer = await client.call_tool('subchat_recover',

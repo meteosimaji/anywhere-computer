@@ -93,6 +93,11 @@ class HTTPQueueModelChange(OperationId):
     choice_id: str = Field(min_length=1, max_length=8192)
 
 
+class QueueResourcesChange(OperationId):
+    expected_revision: int = Field(ge=0)
+    resources: SubchatResources
+
+
 def public_submission_data(submission: SubchatSubmission) -> dict[str, JsonValue]:
     """Expose a submission receipt without repeating the caller's full prompt."""
     return cast(dict[str, JsonValue], submission.model_dump(mode='json', exclude={'prompt'}))
@@ -187,6 +192,11 @@ _BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
         'Pass expected_revision from subchat_status; use choice_id for HTTP selections, or '
         'model and effort for UI selections. A stale revision or sending input is rejected. '
         'The selected choice is checked again at dispatch; this never resends.'),
+    'subchat_queue_resources_change': (QueueResourcesChange,
+        'Replace resource references on one unsent queued follow-up. Pass the current '
+        'queue_revision and explicit already-uploaded Chat file descriptors or observed '
+        'plugin references. No parent resources are inherited. Empty resources clears '
+        'the references. Local paths are never accepted; this does not send.'),
     'subchat_delete': (DeleteRequest, 'Hide one exact saved ordinary Chat conversation. '
         'Requires matching saved operation and conversation ID and checks the bound account. '
         'Makes one authenticated HTTP PATCH; unknown outcomes are never replayed.'),
@@ -251,7 +261,8 @@ def direct_gateway_catalog() -> list[JsonValue]:
                    if name in {'subchat_message', 'subchat_send', 'subchat_recover',
                                'subchat_status', 'subchat_list', 'subchat_wait',
                                'subchat_cancel', 'subchat_queue_events',
-                               'subchat_queue_auto', 'subchat_queue_model_change'}}
+                               'subchat_queue_auto', 'subchat_queue_model_change',
+                               'subchat_queue_resources_change'}}
     definitions['subchat_queue_model_change'] = (
         HTTPQueueModelChange, 'Change an unsent queued HTTP follow-up to one exact '
         'available choice_id from subchat_catalog. Requires its own OAuth scope and '
@@ -1152,6 +1163,15 @@ def session(service: Subchats, *,
                     change.operation_id, owner=owner,
                     expected_revision=change.expected_revision, model=queue_model,
                     effort=queue_effort, http_selection=queue_selection)
+                return Reply(operation_id=request.operation_id, state='completed',
+                             data={**public_submission_data(result),
+                                   'queue_revision': revision})
+            if request.tool == 'subchat_queue_resources_change':
+                change_resources = QueueResourcesChange.model_validate(request.arguments)
+                result, revision = service.store.change_queued_resources(
+                    change_resources.operation_id, owner=owner,
+                    expected_revision=change_resources.expected_revision,
+                    resources=change_resources.resources)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={**public_submission_data(result),
                                    'queue_revision': revision})

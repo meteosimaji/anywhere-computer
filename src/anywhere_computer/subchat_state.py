@@ -763,6 +763,38 @@ class SubchatSubmissions:
                 (operation_id, owner, revision + 1))
             return updated, revision + 1
 
+    def change_queued_resources(self, operation_id: str, *, owner: str | None,
+                                expected_revision: int, resources: SubchatResources
+                                ) -> tuple[SubchatSubmission, int]:
+        """Replace explicit resource references only before a queued send is reserved."""
+        with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
+            old = self.get(operation_id, owner=owner)
+            if old.state != 'queued':
+                raise ValueError('Only a queued input can change its resources')
+            revision = self.queue_revision(operation_id, owner=owner)
+            if revision != expected_revision:
+                raise SubchatQueueRevisionConflict('Queued resources revision changed')
+            if old.after_operation_id is None:
+                raise ValueError('Queued input has no parent')
+            parent = self.get(old.after_operation_id, owner=owner)
+            if (old.conversation_id != parent.conversation_id
+                    or old.expected_last_user_message_id != parent.user_message_id):
+                raise ValueError('Queued parent identity changed')
+            updated = old.model_copy(update={'resources': resources})
+            row = self.connection.execute(
+                'UPDATE subchat_submissions SET body=? WHERE operation_id=? AND owner IS ? '
+                'AND body=?',
+                (_saved_submission_json(updated), operation_id, owner,
+                 _saved_submission_json(old)))
+            if row.rowcount != 1:
+                raise SubchatQueueRevisionConflict('Queued input changed')
+            self.connection.execute(
+                'INSERT INTO subchat_queue_revisions VALUES (?,?,?) '
+                'ON CONFLICT(operation_id) DO UPDATE SET revision=excluded.revision',
+                (operation_id, owner, revision + 1))
+            return updated, revision + 1
+
     def interrupt(self, operation_id: str, *, owner: str | None,
                   reason: Literal['provider_interrupted', 'output_limit'] =
                   'provider_interrupted') -> SubchatSubmission:

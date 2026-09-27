@@ -21,6 +21,7 @@ from .models import Contract, OperationId, Reply, Request
 from .subchat_mcp import (
     HTTPQueueModelChange,
     QueueEvents,
+    QueueResourcesChange,
     ReadOnlyHTTPCatalog,
     SubchatSession,
     capability_report,
@@ -45,6 +46,7 @@ SUBCHAT_GATEWAY_TOOLS = frozenset({
     "subchat_activity",
     "subchat_download_file", "subchat_download_image", "subchat_cancel",
     "subchat_queue_events", "subchat_queue_auto", "subchat_queue_model_change",
+    "subchat_queue_resources_change",
 })
 _IDLE_CLOSE_SECONDS = 15.0
 _PENDING_RECEIPT_SECONDS = 20.0
@@ -352,7 +354,8 @@ class LazySubchatGateway:
         if request.tool in {"subchat_status", "subchat_recover", "subchat_wait",
                             "subchat_cancel", "subchat_download_file",
                             "subchat_download_image", "subchat_queue_events",
-                            "subchat_queue_auto", "subchat_queue_model_change"}:
+                            "subchat_queue_auto", "subchat_queue_model_change",
+                            "subchat_queue_resources_change"}:
             target = request.arguments.get("operation_id")
         elif request.tool == "subchat_message":
             target = request.arguments.get("target_operation_id")
@@ -428,12 +431,17 @@ class LazySubchatGateway:
                                  error="The selected Chat account does not match the "
                                        "saved operation.",
                                  data={"error_code": "account_mismatch"})
-        if request.tool == "subchat_queue_model_change":
+        if request.tool in {"subchat_queue_model_change",
+                            "subchat_queue_resources_change"}:
             try:
-                HTTPQueueModelChange.model_validate(request.arguments)
+                (HTTPQueueModelChange if request.tool == "subchat_queue_model_change"
+                 else QueueResourcesChange).model_validate(request.arguments)
             except ValueError:
                 return Reply(operation_id=request.operation_id, state="failed",
-                             error="An exact choice_id and expected_revision are required for "
+                             error="Valid resources and expected_revision are required for "
+                                   "a queued resource change." if request.tool ==
+                                   "subchat_queue_resources_change" else
+                                   "An exact choice_id and expected_revision are required for "
                                    "an HTTPS queued model change.",
                              data={"error_code": "invalid_parameter", "dispatched": False})
             target_id = request.arguments.get("operation_id")
