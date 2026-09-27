@@ -152,8 +152,10 @@ ID after losing local state. Results are paginated. Operations owned by older
 grant identities remain accessible only through their exact IDs after the
 principal and account checks; the list does not enumerate those legacy rows.
 Newly saved operations include a creation timestamp; older rows retain a null
-timestamp. Prompt text is omitted by default. Set `include_prompt_preview=true`
-only when a bounded 160-character preview is needed for the selected owner.
+timestamp. Prompt text is omitted by default. A separate
+`subchat_prompt_preview` OAuth scope is required to set
+`include_prompt_preview=true` and read a bounded 160-character preview for the
+selected owner. Existing `subchat_list` grants continue to return summaries only.
 Publishing this tool does not grant it to an existing OAuth connection. The
 owner must consent to its scope before an ordinary Chat can invoke it.
 The HTTPS gateway also exposes read-only `subchat_queue_events` with its own

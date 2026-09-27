@@ -1,5 +1,6 @@
 import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -15,6 +16,7 @@ from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
 from anywhere_computer.subchat_gateway import (
     SUBCHAT_GATEWAY_TOOLS,
+    SUBCHAT_PROMPT_PREVIEW_SCOPE,
     LazySubchatGateway,
     SubchatGateway,
     SubchatGatewayConfig,
@@ -641,6 +643,14 @@ async def test_gateway_grant_catalog_and_disconnected_worker():
     observed = await gateway.execute("grant-a", Request(operation_id="d" * 32,
         tool="subchat_catalog", arguments={}), granted)
     assert observed.state == "completed" and calls[-1][1].arguments == {"source": "http"}
+    preview_request = Request(operation_id="e" * 32, tool="subchat_list",
+                              arguments={"include_prompt_preview": True})
+    count = len(calls)
+    refused = await gateway.execute("grant-a", preview_request, granted | {"subchat_list"})
+    assert refused.state == "failed" and len(calls) == count
+    approved = await gateway.execute(
+        "grant-a", preview_request, granted | {"subchat_list", SUBCHAT_PROMPT_PREVIEW_SCOPE})
+    assert approved.state == "completed" and len(calls) == count + 1
     await gateway.close()
     assert all(core.closed for core in created)
 
@@ -1016,6 +1026,22 @@ async def test_https_subchat_list_recovers_owned_ids_without_chrome(tmp_path, mo
         assert first.state == "completed"
         assert [item["operation_id"] for item in first.data["submissions"]] == [second_id]
         assert isinstance(first.data["next_before"], int)
+        preview = await view.execute(Request(
+            operation_id="f" * 32, tool="subchat_list",
+            arguments={"include_prompt_preview": True},
+        ))
+        assert preview.state == "failed" and preview.data == {"dispatched": False}
+        grants["new-grant"] = replace(
+            grants["new-grant"],
+            tools=frozenset({"subchat_list", SUBCHAT_PROMPT_PREVIEW_SCOPE}),
+        )
+        approved = await view.execute(Request(
+            operation_id="9" * 32, tool="subchat_list",
+            arguments={"include_prompt_preview": True, "limit": 1},
+        ))
+        assert approved.state == "completed"
+        assert approved.data["submissions"][0]["prompt_preview"] == "second"
+        assert [tool["name"] for tool in await view.catalog()] == ["subchat_list"]
         second = await view.execute(Request(operation_id="b" * 32, tool="subchat_list",
                                             arguments={"limit": 1,
                                                        "before": first.data["next_before"]}))

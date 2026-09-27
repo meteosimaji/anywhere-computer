@@ -28,6 +28,12 @@ agent or keep a separate Engine for an older configuration. The offline
 version, installed Plugin version and running Engine version can differ;
 compare `computer_status` runtime and instance IDs from each entrance.
 
+After `engine-unify`, the control directory keeps credentials and endpoint
+metadata while `engine_directory()` selects the Engine ledger. The agent and
+delegated file workers resolve that same selection before reading runtime
+settings. This is why a child file grant observes the active read and write
+line limits even when the old control ledger remains on disk.
+
 `Engine` registers typed tool contracts once and owns the operation ledger,
 file locks, terminal sessions, searches and optional browser, document, GUI and
 Plugin adapters. The transport supplies owner identity and allowed tools;
@@ -58,6 +64,11 @@ only a separate send using the returned attachment reference places that file
 in a Chat. A local path, a peer mailbox receipt or a queued child does not
 insert content into another model turn. See [Subchat](SUBCHAT-PROBE.md) and
 [peer messaging](PEER-MESSAGING.md).
+
+The HTTPS `subchat_list` scope exposes saved operation summaries. Its optional
+prompt preview reads stored message text, so the gateway checks the additional
+`subchat_prompt_preview` OAuth scope on each request. A previously approved
+list-only grant cannot gain prompt access merely by upgrading the server.
 
 ## Platform differences and dependencies
 

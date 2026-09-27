@@ -20,6 +20,7 @@ from anywhere_computer.delegated_tasks import DelegatedTaskGrant, DelegatedTaskS
 from anywhere_computer.delegation_admin import manage_delegation
 from anywhere_computer.devices import DeviceStore
 from anywhere_computer.engine import Engine
+from anywhere_computer.engine_selection import EngineSelection
 from anywhere_computer.http_client import ChildBearerTokens, HTTPBackend, HTTPResponse
 from anywhere_computer.http_mcp import HTTPMCP
 from anywhere_computer.http_service import http_service
@@ -27,6 +28,72 @@ from anywhere_computer.models import Reply, Request, RuntimeSettings
 from anywhere_computer.owner_credentials import OwnerCredentials
 from anywhere_computer.remote_bridge import RemoteAgent
 from anywhere_computer.state import Ledger
+
+
+@pytest.mark.asyncio
+async def test_shared_delegated_files_use_selected_engine_limits(tmp_path):
+    control = tmp_path / "control"
+    old_engine = Engine(control)
+    selected_directory = control / "engines" / "selected"
+    selected = Engine(selected_directory)
+    (control / "engine-selection.json").write_text(
+        EngineSelection(directory=str(selected_directory)).model_dump_json(),
+        encoding="utf-8",
+    )
+    with selected.ledger.connection:
+        selected.ledger.connection.execute(
+            "INSERT OR REPLACE INTO runtime_settings(id,value) VALUES(1,?)",
+            (RuntimeSettings(file_read_line_limit=1,
+                             file_write_line_limit=1).model_dump_json(),),
+        )
+    authority = AuthorizationStore(tmp_path / "authority", resource="https://fixture.example/mcp",
+                                   known_tools=frozenset(selected.tools))
+    authority.register_client("chat", frozenset({"https://chat.example/callback"}))
+    tools = frozenset({"files_read", "files_write", "operations_get"})
+    authority.enroll_device("owner", "gateway", tools)
+    code = authority.approve(
+        owner="owner", device="gateway", client="chat",
+        redirect="https://chat.example/callback", resource=authority.resource,
+        tools=tools, challenge=pkce_s256("v" * 43),
+    )
+    token = authority.exchange_code(
+        code=code, verifier="v" * 43, client="chat",
+        redirect="https://chat.example/callback", resource=authority.resource,
+    ).value
+    delegation = DelegatedTaskStore(tmp_path / "delegation", authority)
+    backend = AuthorizedDeviceMCP(authority, agent_directory=control,
+                                  owner="owner", device="gateway", delegated_tasks=delegation)
+    parent_id = await backend.authenticate(token)
+    assert parent_id is not None
+    allowed = tmp_path / "allowed"
+    allowed.mkdir()
+    source = allowed / "source.txt"
+    source.write_text("one\ntwo\n", encoding="utf-8")
+    child_id = uuid.uuid4().hex
+    delegation.issue(DelegatedTaskGrant(
+        owner="owner", child_id=child_id, parent_grant_id=parent_id,
+        device_id="local", tools=tools,
+        read_roots=(str(allowed.resolve()),), write_roots=(str(allowed.resolve()),),
+        expires_at=time.time() + 600,
+    ))
+    child = backend.session("child:" + child_id)
+    try:
+        read = await child.execute(Request(
+            operation_id=uuid.uuid4().hex, tool="files_read",
+            arguments={"path": str(source), "limit": 2},
+        ))
+        assert read.state == "completed" and read.data["text"] == "one\n"
+        target = allowed / "target.txt"
+        write = await child.execute(Request(
+            operation_id=uuid.uuid4().hex, tool="files_write",
+            arguments={"path": str(target), "text": "one\ntwo\n"},
+        ))
+        assert write.state == "failed" and not target.exists()
+    finally:
+        await backend.close()
+        delegation.close()
+        await selected.close()
+        await old_engine.close()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX dir_fd confinement")

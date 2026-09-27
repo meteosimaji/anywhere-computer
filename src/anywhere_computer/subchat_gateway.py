@@ -52,9 +52,17 @@ SUBCHAT_GATEWAY_TOOLS = frozenset({
     "subchat_queue_events", "subchat_queue_auto", "subchat_queue_model_change",
     "subchat_queue_resources_change",
 })
+SUBCHAT_PROMPT_PREVIEW_SCOPE = "subchat_prompt_preview"
+SUBCHAT_AUTH_SCOPES = SUBCHAT_GATEWAY_TOOLS | frozenset({SUBCHAT_PROMPT_PREVIEW_SCOPE})
 _IDLE_CLOSE_SECONDS = 15.0
 _PENDING_RECEIPT_SECONDS = 20.0
 logger = logging.getLogger(__name__)
+
+
+def _preview_denied(request: Request, granted: frozenset[str]) -> bool:
+    return (request.tool == "subchat_list"
+            and request.arguments.get("include_prompt_preview") is True
+            and SUBCHAT_PROMPT_PREVIEW_SCOPE not in granted)
 
 
 def subchat_ledger_owner(grant: GrantIdentity, account_id: str) -> str:
@@ -109,6 +117,10 @@ class SubchatGateway:
         if request.tool not in granted & SUBCHAT_GATEWAY_TOOLS:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Subchat tool is not granted")
+        if _preview_denied(request, granted):
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="Subchat prompt preview requires separate consent",
+                         data={"dispatched": False})
         if request.tool == "subchat_catalog":
             try:
                 ReadOnlyHTTPCatalog.model_validate(request.arguments)
@@ -419,6 +431,10 @@ class LazySubchatGateway:
         if request.tool not in granted & SUBCHAT_GATEWAY_TOOLS:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Subchat tool is not granted")
+        if _preview_denied(request, granted):
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="Subchat prompt preview requires separate consent",
+                         data={"dispatched": False})
         if request.tool in {"subchat_status", "subchat_capabilities", "subchat_list",
                             "subchat_activity",
                             "subchat_cancel", "subchat_queue_events"}:

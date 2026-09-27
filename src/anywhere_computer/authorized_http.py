@@ -17,6 +17,7 @@ from .delegated_tasks import DelegatedTaskStore
 from .device_router import NESTED_REQUEST_ID_ERROR, ROUTER_TOOLS, DeviceBackend, DeviceRouter
 from .devices import DeviceData
 from .engine import Engine
+from .engine_selection import engine_directory
 from .http_client import ChildBearerTokens, HTTPBackend
 from .mcp_server import INSTRUCTIONS as MCP_INSTRUCTIONS
 from .mcp_server import OPERATION_META, REQUEST_ID_SCHEMA, MCPSession, rpc_error
@@ -27,6 +28,7 @@ from .state import Ledger
 from .subchat_device_adapters import RoutedSaveTarget, SubchatSaveSource
 from .subchat_device_save import SUBCHAT_SAVE_TOOLS, DeviceSave, SaveJournal, SaveRunner
 from .subchat_gateway import (
+    SUBCHAT_AUTH_SCOPES,
     SUBCHAT_GATEWAY_TOOLS,
     LazySubchatGateway,
     SubchatGateway,
@@ -120,7 +122,7 @@ class AuthorizedDeviceMCP:
         async def local_catalog() -> list[JsonValue]:
             grant = current()
             if self.engine is not None:
-                return self.engine.catalog(grant.tools - ROUTER_TOOLS - SUBCHAT_GATEWAY_TOOLS)
+                return self.engine.catalog(grant.tools - ROUTER_TOOLS - SUBCHAT_AUTH_SCOPES)
             if self.agent_directory is None:
                 raise RuntimeError("No engine was configured")
             # Retained HTTP sessions must recover before MCP's pre-dispatch catalog
@@ -139,7 +141,7 @@ class AuthorizedDeviceMCP:
             if self.agent_directory is not None:
                 return await exchange_remote(
                     self.agent_directory, grant.grant_id,
-                    grant.tools - ROUTER_TOOLS - SUBCHAT_GATEWAY_TOOLS
+                    grant.tools - ROUTER_TOOLS - SUBCHAT_AUTH_SCOPES
                     - SUBCHAT_SAVE_TOOLS, request,
                     authorization_database=(self.store.database
                                             if request.tool == 'mcp_session_open' else None),
@@ -151,7 +153,7 @@ class AuthorizedDeviceMCP:
             # Reuse the peer namespace and lookup checks; grants are reloaded per dispatch.
             bridge = RemoteAgent(
                 self.engine, {grant.grant_id: grant.tools - ROUTER_TOOLS
-                                                - SUBCHAT_GATEWAY_TOOLS
+                                                - SUBCHAT_AUTH_SCOPES
                                                 - SUBCHAT_SAVE_TOOLS}, transport="http",
             )
             return Reply.model_validate_json(
@@ -214,7 +216,7 @@ class AuthorizedDeviceMCP:
                         assert self.device_directory is not None
                         async def save_local_execute(inner: Request) -> Reply:
                             active = current()
-                            allowed = (active.tools - ROUTER_TOOLS - SUBCHAT_GATEWAY_TOOLS
+                            allowed = (active.tools - ROUTER_TOOLS - SUBCHAT_AUTH_SCOPES
                                        - SUBCHAT_SAVE_TOOLS)
                             identity = "subchat-save:" + principal
                             if self.agent_directory is not None:
@@ -367,7 +369,10 @@ class AuthorizedDeviceMCP:
                 return self.engine.settings()
             if self.agent_directory is None:
                 raise ValueError("Delegated file settings are unavailable")
-            database = self.agent_directory / "operations.sqlite3"
+            try:
+                database = engine_directory(self.agent_directory) / "operations.sqlite3"
+            except RuntimeError as error:
+                raise ValueError("Delegated file settings are unavailable") from error
             if database.is_symlink() or not database.is_file():
                 raise ValueError("Delegated file settings are unavailable")
             try:

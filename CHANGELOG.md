@@ -3,7 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0b24 / Plugin 0.2.0-beta.24 — development prerelease (2026-09-28)
+## 0.2.0b25 / Plugin 0.2.0-beta.25 — development prerelease (2026-09-28)
+
+- Apply the selected shared Engine's current read and write line limits to
+  delegated child file operations after migration.
+- Keep existing `subchat_list` OAuth grants limited to operation summaries;
+  prompt previews require the separate `subchat_prompt_preview` consent scope.
+- Use two test workers on every CI platform after two successful local runs of
+  the remaining suite (170–171 seconds locally). Platform CI timing still needs
+  measurement.
+
+## 0.2.0b24 / Plugin 0.2.0-beta.24 — unpublished candidate (2026-09-28)
 
 - Consolidate private Subchat selection writes while keeping account checks and
   send consent intact.

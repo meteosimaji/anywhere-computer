@@ -39,7 +39,7 @@ from .owner_passkeys import OwnerPasskeys
 from .state import prepare_directory
 from .subchat_device_save import SUBCHAT_SAVE_TOOLS
 from .subchat_gateway import (
-    SUBCHAT_GATEWAY_TOOLS,
+    SUBCHAT_AUTH_SCOPES,
     SubchatGatewayConfig,
     lazy_subchat_gateway,
     subchat_ledger_owner,
@@ -61,7 +61,7 @@ class HTTPServiceConfig(BaseModel):
 
     @model_validator(mode="after")
     def check_subchat_selection(self) -> "HTTPServiceConfig":
-        if self.subchat is None and self.scopes & (SUBCHAT_GATEWAY_TOOLS | SUBCHAT_SAVE_TOOLS):
+        if self.subchat is None and self.scopes & (SUBCHAT_AUTH_SCOPES | SUBCHAT_SAVE_TOOLS):
             raise ValueError("Subchat scopes require an explicit gateway selection")
         return self
 
@@ -151,7 +151,7 @@ async def save_http_config(directory: Path, config: HTTPServiceConfig) -> HTTPSe
                     staged / "authorization",
                     resource=config.resource,
                     known_tools=(frozenset(engine.tools) | ROUTER_TOOLS
-                                 | ((SUBCHAT_GATEWAY_TOOLS | SUBCHAT_SAVE_TOOLS)
+                                 | ((SUBCHAT_AUTH_SCOPES | SUBCHAT_SAVE_TOOLS)
                                     if config.subchat else frozenset())),
                 )
                 try:
@@ -229,7 +229,7 @@ async def http_service(
         if agent_directory is None:
             engine = Engine(service_directory / "engine", file_locks=directory / "file-locks")
             known_tools = (frozenset(engine.tools) | ROUTER_TOOLS
-                           | ((SUBCHAT_GATEWAY_TOOLS | SUBCHAT_SAVE_TOOLS)
+                           | ((SUBCHAT_AUTH_SCOPES | SUBCHAT_SAVE_TOOLS)
                               if config.subchat else frozenset()))
         else:
             await asyncio.to_thread(ensure_agent, agent_directory)
@@ -243,7 +243,7 @@ async def http_service(
                     raise ValueError("Shared agent catalog is invalid")
                 names.add(name)
             known_tools = (frozenset(names) | ROUTER_TOOLS
-                           | ((SUBCHAT_GATEWAY_TOOLS | SUBCHAT_SAVE_TOOLS)
+                           | ((SUBCHAT_AUTH_SCOPES | SUBCHAT_SAVE_TOOLS)
                               if config.subchat else frozenset()))
         try:
             store = AuthorizationStore(
