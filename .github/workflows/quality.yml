@@ -118,6 +118,8 @@ jobs:
           node --version
           uv run pytest -v tests/test_workspace_ui.py::test_workspace_mutation_recovery_in_javascript --junitxml="${{ runner.temp }}/pytest-workspace.xml"
       - run: uv run pytest -ra tests/test_startup_native.py --junitxml="${{ runner.temp }}/pytest-native.xml"
+      - name: Check owner pipe timing before parallel workers
+        run: uv run pytest -ra tests/test_owner_json_pipe.py --junitxml="${{ runner.temp }}/pytest-owner-pipe.xml"
       - name: Check terminal ownership and continuous work before the full suite
         run: >-
           uv run pytest -v tests/test_terminal_children.py
@@ -125,7 +127,7 @@ jobs:
           tests/test_file_search_terminal_workflow.py
       - name: Check shared-agent recovery before parallel workers
         run: uv run pytest -v tests/test_shared_agent_reconnect.py --junitxml="${{ runner.temp }}/pytest-reconnect.xml"
-      - name: Run remaining suite with four workers
+      - name: Run remaining suite with bounded platform workers
         run: >-
           uv run pytest -ra --ignore=tests/test_startup_native.py --durations=20
           --ignore=tests/test_shared_agent_reconnect.py
@@ -133,8 +135,10 @@ jobs:
           --ignore=tests/test_terminal_pty.py
           --ignore=tests/test_terminal_conpty.py
           --ignore=tests/test_file_search_terminal_workflow.py
+          --ignore=tests/test_owner_json_pipe.py
           --deselect=tests/test_workspace_ui.py::test_workspace_mutation_recovery_in_javascript
-          -n 4 --dist loadfile --max-worker-restart=0
+          -n ${{ matrix.os == 'windows-latest' && 2 || 4 }}
+          --dist loadfile --max-worker-restart=0
           --junitxml="${{ runner.temp }}/pytest-results.xml"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
@@ -270,15 +274,27 @@ jobs:
           tag="$(python3 scripts/assemble_release_assets.py --version)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           draft="$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+          # GraphQL returns null for a missing tag; REST 404 writes JSON to stdout.
+          existing_ref="$(gh api graphql \
+            -f query='query($owner: String!, $name: String!, $ref: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: $ref) { target { oid ... on Tag { target { oid } } } } } }' \
+            -f owner="$GITHUB_REPOSITORY_OWNER" \
+            -f name="${GITHUB_REPOSITORY#*/}" \
+            -f ref="refs/tags/$tag" \
+            --jq '.data.repository.ref.target | if . == null then "" else (.target.oid // .oid) end')"
+          if [[ -n "$existing_ref" && "$existing_ref" != "$GITHUB_SHA" ]]; then
+            echo "Release tag points at another commit; bump the version before merging" >&2
+            exit 1
+          fi
           if [[ "$draft" == false ]]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          existing_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" \
-            --jq '.object.sha' 2>/dev/null || true)"
-          if [[ -n "$existing_ref" && "$existing_ref" != "$GITHUB_SHA" ]]; then
-            echo "Release tag already points at another commit" >&2
-            exit 1
+          if [[ "$draft" == true && -z "$existing_ref" ]]; then
+            draft_target="$(gh release view "$tag" --json targetCommitish --jq '.targetCommitish')"
+            if [[ "$draft_target" != "$GITHUB_SHA" ]]; then
+              echo "Draft release targets another commit; bump the version before merging" >&2
+              exit 1
+            fi
           fi
           echo "publish=true" >> "$GITHUB_OUTPUT"
           echo "draft=$draft" >> "$GITHUB_OUTPUT"

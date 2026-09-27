@@ -9,9 +9,18 @@
   delegated child file operations after migration.
 - Keep existing `subchat_list` OAuth grants limited to operation summaries;
   prompt previews require the separate `subchat_prompt_preview` consent scope.
-- Use four test workers on every CI platform after a local 2,532-test run
+- Use four test workers on macOS and Linux after a local 2,532-test run
   completed in 89.86 seconds, down from 171.47 seconds with two workers.
-  Platform CI timing still needs measurement.
+  Keep Windows at two workers after four-worker runs exposed timing-sensitive
+  failures; reliable end-to-end CI time takes priority over one fast run.
+- Resolve release tags without treating a missing tag's HTTP 404 body as an
+  existing ref; reject a published version tag or unfinished draft bound to
+  another main commit.
+- Keep the short-timeout Windows owner-pipe tests in the serial CI preflight
+  rather than competing with parallel test workers.
+- Check Subchat save recovery by the first uncertain receipt, same-ID final
+  result and single target write; a renewed caller may skip another unknown
+  response when background reconciliation finishes first.
 
 ## 0.2.0b24 / Plugin 0.2.0-beta.24 — unpublished candidate (2026-09-28)
 
