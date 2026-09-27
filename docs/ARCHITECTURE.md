@@ -96,3 +96,5 @@ and artifact evidence. Live ChatGPT, OS permissions, physical hosts and a
 fresh installed client still require separate acceptance observations.
 An existing version tag bound to another main commit stops publication, so a
 new main revision needs a new version before it can become a release.
+An interrupted draft can resume only for the same commit when its tag has not
+yet been created.

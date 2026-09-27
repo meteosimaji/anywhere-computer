@@ -14,7 +14,8 @@
   Keep Windows at two workers after four-worker runs exposed timing-sensitive
   failures; reliable end-to-end CI time takes priority over one fast run.
 - Resolve release tags without treating a missing tag's HTTP 404 body as an
-  existing ref; reject a published version tag on an older main commit.
+  existing ref; reject a published version tag or unfinished draft bound to
+  another main commit.
 - Keep the short-timeout Windows owner-pipe tests in the serial CI preflight
   rather than competing with parallel test workers.
 - Check Subchat save recovery by the first uncertain receipt, same-ID final

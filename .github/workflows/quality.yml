@@ -289,6 +289,13 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          if [[ "$draft" == true && -z "$existing_ref" ]]; then
+            draft_target="$(gh release view "$tag" --json targetCommitish --jq '.targetCommitish')"
+            if [[ "$draft_target" != "$GITHUB_SHA" ]]; then
+              echo "Draft release targets another commit; bump the version before merging" >&2
+              exit 1
+            fi
+          fi
           echo "publish=true" >> "$GITHUB_OUTPUT"
           echo "draft=$draft" >> "$GITHUB_OUTPUT"
       - name: Download verified portable archives
