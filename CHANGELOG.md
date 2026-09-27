@@ -3,6 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b26 / Plugin 0.2.0-beta.26 — development prerelease (2026-09-28)
+
+- Remove `pip`, `ensurepip` and C extension headers from portable application
+  ZIPs after installing the pinned dependencies. A same-runtime macOS build
+  shrank by 4.04 MB (5.8%); the Python license remains bundled.
+- Keep the portable interpreter focused on running Anywhere Computer and
+  document the build-machine `uv` dependency installation boundary.
+
 ## 0.2.0b25 / Plugin 0.2.0-beta.25 — development prerelease (2026-09-28)
 
 - Apply the selected shared Engine's current read and write line limits to
