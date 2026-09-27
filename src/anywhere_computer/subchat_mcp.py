@@ -88,6 +88,11 @@ class QueueModelChange(OperationId):
     choice_id: str | None = Field(default=None, min_length=1, max_length=8192)
 
 
+class HTTPQueueModelChange(OperationId):
+    expected_revision: int = Field(ge=0)
+    choice_id: str = Field(min_length=1, max_length=8192)
+
+
 def public_submission_data(submission: SubchatSubmission) -> dict[str, JsonValue]:
     """Expose a submission receipt without repeating the caller's full prompt."""
     return cast(dict[str, JsonValue], submission.model_dump(mode='json', exclude={'prompt'}))
@@ -246,7 +251,12 @@ def direct_gateway_catalog() -> list[JsonValue]:
                    if name in {'subchat_message', 'subchat_send', 'subchat_recover',
                                'subchat_status', 'subchat_list', 'subchat_wait',
                                'subchat_cancel', 'subchat_queue_events',
-                               'subchat_queue_auto'}}
+                               'subchat_queue_auto', 'subchat_queue_model_change'}}
+    definitions['subchat_queue_model_change'] = (
+        HTTPQueueModelChange, 'Change an unsent queued HTTP follow-up to one exact '
+        'available choice_id from subchat_catalog. Requires its own OAuth scope and '
+        'the queue_revision from subchat_status; the queued row is updated atomically '
+        'only if both its revision and account binding still match. Does not send.')
     definitions['subchat_queue_auto'] = (
         QueueAuto, 'Opt one saved queued follow-up into bounded automatic delivery '
         'through the selected account. This has its own OAuth scope. A service-owned '

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, f
 from .authorization import GrantIdentity
 from .models import Contract, OperationId, Reply, Request
 from .subchat_mcp import (
+    HTTPQueueModelChange,
     QueueEvents,
     ReadOnlyHTTPCatalog,
     SubchatSession,
@@ -43,7 +44,7 @@ SUBCHAT_GATEWAY_TOOLS = frozenset({
     "subchat_recover", "subchat_wait", "subchat_status", "subchat_list",
     "subchat_activity",
     "subchat_download_file", "subchat_download_image", "subchat_cancel",
-    "subchat_queue_events", "subchat_queue_auto",
+    "subchat_queue_events", "subchat_queue_auto", "subchat_queue_model_change",
 })
 _IDLE_CLOSE_SECONDS = 15.0
 _PENDING_RECEIPT_SECONDS = 20.0
@@ -351,7 +352,7 @@ class LazySubchatGateway:
         if request.tool in {"subchat_status", "subchat_recover", "subchat_wait",
                             "subchat_cancel", "subchat_download_file",
                             "subchat_download_image", "subchat_queue_events",
-                            "subchat_queue_auto"}:
+                            "subchat_queue_auto", "subchat_queue_model_change"}:
             target = request.arguments.get("operation_id")
         elif request.tool == "subchat_message":
             target = request.arguments.get("target_operation_id")
@@ -427,6 +428,30 @@ class LazySubchatGateway:
                                  error="The selected Chat account does not match the "
                                        "saved operation.",
                                  data={"error_code": "account_mismatch"})
+        if request.tool == "subchat_queue_model_change":
+            try:
+                HTTPQueueModelChange.model_validate(request.arguments)
+            except ValueError:
+                return Reply(operation_id=request.operation_id, state="failed",
+                             error="An exact choice_id and expected_revision are required for "
+                                   "an HTTPS queued model change.",
+                             data={"error_code": "invalid_parameter", "dispatched": False})
+            target_id = request.arguments.get("operation_id")
+            if isinstance(target_id, str):
+                try:
+                    await asyncio.to_thread(self._check_queued_account, grant_id, target_id)
+                except SubchatOperationNotFound:
+                    return Reply(operation_id=request.operation_id, state="failed",
+                                 error="No queued operation with this ID is visible in the "
+                                       "selected ledger.",
+                                 data={"error_code": "unknown_operation",
+                                       "dispatched": False})
+                except SubchatAccountMismatch:
+                    return Reply(operation_id=request.operation_id, state="failed",
+                                 error="The selected Chat account does not match the "
+                                       "queued operation.",
+                                 data={"error_code": "account_mismatch",
+                                       "dispatched": False})
         gateway = await self._acquire()
         if gateway is None:
             # A retry can carry the same operation ID as a send already in the
@@ -622,6 +647,28 @@ class LazySubchatGateway:
                 return row[0] if row is not None else None
         except sqlite3.Error:
             return None
+
+    def _check_queued_account(self, grant_id: str, operation_id: str) -> None:
+        """Bind an unsent follow-up to the selected account before opening Chrome."""
+        ledger_path = Path(self.config.ledger)
+        database = ledger_path / "operations.sqlite3"
+        if ledger_path.is_symlink() or database.is_symlink() or not database.is_file():
+            raise SubchatOperationNotFound("Unknown subchat submission")
+        with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro",
+                                     uri=True)) as connection:
+            store = SubchatSubmissions(connection, initialize=False)
+            saved = store.get(operation_id, owner=grant_id)
+            if saved.after_operation_id is None:
+                raise SubchatAccountMismatch("Queued input has no account-bound parent")
+            for _ in range(256):
+                if saved.provider_account_id is not None:
+                    if saved.provider_account_id != self.config.account_id:
+                        raise SubchatAccountMismatch("Saved operation belongs to another account")
+                    return
+                if saved.after_operation_id is None:
+                    break
+                saved = store.get(saved.after_operation_id, owner=grant_id)
+        raise SubchatAccountMismatch("Queued parent has no verified account binding")
 
     def _saved_status(self, grant_id: str, request_id: str, operation_id: str,
                       queue_watch: dict[str, JsonValue] | None) -> Reply:
