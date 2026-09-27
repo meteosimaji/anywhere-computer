@@ -73,13 +73,17 @@ def _completed_process_stream(body: bytes, file_id: str) -> bool:
 
 def _read_source(path: Path) -> tuple[str, bytes, str]:
     """Pin bytes in memory before browser dispatch; reject redirected or mutable files."""
+    directory_flag = getattr(os, 'O_DIRECTORY', 0)
+    nofollow_flag = getattr(os, 'O_NOFOLLOW', 0)
+    if not directory_flag or not nofollow_flag:
+        raise ValueError('Upload source confinement is unavailable on this host')
     if not path.is_absolute():
         raise ValueError('Upload source must be an absolute regular file without a symlink')
     name = path.name
     if (not name or len(name) > 256 or name in {'.', '..'}
             or any(ord(character) < 32 for character in name)):
         raise ValueError('Upload filename is invalid')
-    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    directory_flags = os.O_RDONLY | directory_flag | nofollow_flag
     directories: list[tuple[Path, int]] = []
     try:
         parent = Path(path.anchor)
@@ -88,7 +92,7 @@ def _read_source(path: Path) -> tuple[str, bytes, str]:
             parent = parent / component
             directories.append((parent, os.open(
                 component, directory_flags, dir_fd=directories[-1][1])))
-        descriptor = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW,
+        descriptor = os.open(path.name, os.O_RDONLY | nofollow_flag,
                              dir_fd=directories[-1][1])
         try:
             metadata = os.fstat(descriptor)

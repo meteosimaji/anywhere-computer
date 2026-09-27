@@ -17,9 +17,12 @@ from pydantic import JsonValue
 from .files import MAX_READ_BYTES, sha256
 from .models import ReadFile, WriteFile
 
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+
 
 def _require_flags() -> None:
-    if os.name == "nt" or not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+    if os.name == "nt" or not _O_NOFOLLOW or not _O_DIRECTORY:
         raise ValueError("Descriptor-confined delegated files are unavailable on this host")
 
 
@@ -34,10 +37,10 @@ def _components(path: str) -> tuple[str, ...]:
 @contextmanager
 def _directory(path: str) -> Iterator[int]:
     _require_flags()
-    current = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    current = os.open("/", os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW)
     try:
         for component in _components(path):
-            following = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            following = os.open(component, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW,
                                 dir_fd=current)
             os.close(current)
             current = following
@@ -59,7 +62,7 @@ def _parent(path: str, roots: tuple[str, ...]) -> Iterator[tuple[int, str]]:
         current = os.dup(root_fd)
         try:
             for component in parts[len(selected):-1]:
-                following = os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                following = os.open(component, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW,
                                     dir_fd=current)
                 os.close(current)
                 current = following
@@ -69,7 +72,7 @@ def _parent(path: str, roots: tuple[str, ...]) -> Iterator[tuple[int, str]]:
 
 
 def _read_at(parent: int, name: str) -> tuple[bytes, os.stat_result]:
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
+    flags = os.O_RDONLY | _O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0)
     descriptor = os.open(name, flags, dir_fd=parent)
     with os.fdopen(descriptor, "rb") as source:
         metadata = os.fstat(source.fileno())
@@ -123,7 +126,7 @@ def write(args: WriteFile, roots: tuple[str, ...], backup_dir: Path) -> dict[str
                 if backup.is_symlink() or backup.read_bytes() != original:
                     raise ValueError("Existing backup is invalid; no file was changed") from None
         temporary = ".anywhere-delegated-" + secrets.token_hex(16)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW
         descriptor = os.open(temporary, flags, 0o600, dir_fd=parent)
         try:
             with os.fdopen(descriptor, "wb") as destination:
@@ -131,7 +134,10 @@ def write(args: WriteFile, roots: tuple[str, ...], backup_dir: Path) -> dict[str
                 destination.flush()
                 os.fsync(destination.fileno())
                 if metadata is not None:
-                    os.fchmod(destination.fileno(), stat.S_IMODE(metadata.st_mode))
+                    fchmod = getattr(os, "fchmod", None)
+                    if fchmod is None:
+                        raise ValueError("Descriptor permissions are unavailable on this host")
+                    fchmod(destination.fileno(), stat.S_IMODE(metadata.st_mode))
             if exists and metadata is not None:
                 current, current_metadata = _read_at(parent, name)
                 if (current != original or (current_metadata.st_dev, current_metadata.st_ino)

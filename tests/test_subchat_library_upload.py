@@ -30,6 +30,7 @@ UPLOAD_URL = 'https://upload.example.test/object'
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != 'darwin', reason='macOS-only Library upload')
 async def test_mcp_upload_requires_prepared_exact_file(tmp_path, monkeypatch):
     from anywhere_computer import subchat_plugin
 
@@ -66,6 +67,7 @@ async def test_mcp_upload_requires_prepared_exact_file(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(sys.platform != 'darwin', reason='macOS-only Library upload')
 @pytest.mark.parametrize('ready', [False, True])
 async def test_started_upload_is_recovered_before_source_or_approval_checks(
         tmp_path, monkeypatch, ready):
@@ -294,6 +296,7 @@ async def test_ambiguous_input_does_not_claim(tmp_path):
         assert not ledger.get(OPERATION, owner=None, account_id='account').create_claimed
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='POSIX descriptor confinement')
 def test_source_bytes_are_pinned_and_symlink_is_rejected(tmp_path):
     source = tmp_path / 'fixture.txt'
     source.write_bytes(b'test')
