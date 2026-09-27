@@ -60,6 +60,8 @@ uv run --offline python scripts/build_portable.py \
 
 既存の出力ファイルは上書きしない。配布 ZIP は dist に置き、リポジトリへ追加しない。
 Python と第三者依存のライセンスは runtime 内に保持し、本体の MIT と区別する。
+同梱 Python は本体の実行用とし、実行時に参照しない `pip`、`ensurepip`、
+C 拡張の開発用ヘッダーはビルド後に除く。依存の導入にはビルド機側の `uv` を使う。
 
 展開した Anywhere Computer フォルダー内で実行する。
 

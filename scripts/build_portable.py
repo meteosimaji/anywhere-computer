@@ -74,6 +74,14 @@ def discard_bytecode(app: Path) -> None:
         path.unlink()
 
 
+def discard_build_tools(runtime: Path, stdlib: Path, site: Path) -> None:
+    """Ship the application runtime without Python's installers or C headers."""
+    for path in (runtime / "include", stdlib / "ensurepip", site / "pip",
+                 *site.glob("pip-[0-9]*.dist-info")):
+        if path.is_dir():
+            shutil.rmtree(path)
+
+
 def manager_bundle_versions(release_version: str) -> tuple[str, str]:
     """Map the release version to Apple's numeric bundle version fields."""
     match = re.fullmatch(
@@ -194,12 +202,16 @@ def build_portable(
         shutil.copytree(runtime, copied, symlinks=False,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         interpreter = copied / ("python.exe" if os.name == "nt" else "bin/python3")
-        site = Path(subprocess.check_output(
+        python_paths = json.loads(subprocess.check_output(
             [str(interpreter), "-B", "-I", "-c",
-             "import sysconfig;print(sysconfig.get_path('purelib'))"],
+             "import json,sysconfig;print(json.dumps({name:sysconfig.get_path(name) "
+             "for name in ('purelib','stdlib')}))"],
             text=True,
-        ).strip())
-        if not site.resolve().is_relative_to(copied.resolve()):
+        ))
+        site = Path(python_paths["purelib"])
+        stdlib = Path(python_paths["stdlib"])
+        if any(not path.resolve().is_relative_to(copied.resolve())
+               for path in (site, stdlib)):
             raise ValueError("Copied interpreter is not relocatable")
         wheel = bundled / wheels[0]
         requirements = stage / "requirements.txt"
@@ -210,6 +222,7 @@ def build_portable(
                         "--require-hashes",
                         "--python", str(interpreter), "--target", str(site),
                         "-r", str(requirements)], check=True)
+        discard_build_tools(copied, stdlib, site)
         if os.name == "nt":
             (app / "anywhere.cmd").write_text(
                 '@echo off\r\n"%~dp0runtime\\python.exe" -B -I -X utf8 -m anywhere_computer %*\r\n')
