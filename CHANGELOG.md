@@ -14,6 +14,8 @@
   Platform CI timing still needs measurement.
 - Resolve release tags without treating a missing tag's HTTP 404 body as an
   existing ref; reject a published version tag on an older main commit.
+- Keep the short-timeout Windows owner-pipe tests in the serial CI preflight
+  rather than competing with four parallel test workers.
 
 ## 0.2.0b24 / Plugin 0.2.0-beta.24 — unpublished candidate (2026-09-28)
 

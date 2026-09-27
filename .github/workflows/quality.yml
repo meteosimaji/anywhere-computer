@@ -118,6 +118,8 @@ jobs:
           node --version
           uv run pytest -v tests/test_workspace_ui.py::test_workspace_mutation_recovery_in_javascript --junitxml="${{ runner.temp }}/pytest-workspace.xml"
       - run: uv run pytest -ra tests/test_startup_native.py --junitxml="${{ runner.temp }}/pytest-native.xml"
+      - name: Check owner pipe timing before parallel workers
+        run: uv run pytest -ra tests/test_owner_json_pipe.py --junitxml="${{ runner.temp }}/pytest-owner-pipe.xml"
       - name: Check terminal ownership and continuous work before the full suite
         run: >-
           uv run pytest -v tests/test_terminal_children.py
@@ -133,6 +135,7 @@ jobs:
           --ignore=tests/test_terminal_pty.py
           --ignore=tests/test_terminal_conpty.py
           --ignore=tests/test_file_search_terminal_workflow.py
+          --ignore=tests/test_owner_json_pipe.py
           --deselect=tests/test_workspace_ui.py::test_workspace_mutation_recovery_in_javascript
           -n 4 --dist loadfile --max-worker-restart=0
           --junitxml="${{ runner.temp }}/pytest-results.xml"
