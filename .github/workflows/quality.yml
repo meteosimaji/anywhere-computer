@@ -270,15 +270,20 @@ jobs:
           tag="$(python3 scripts/assemble_release_assets.py --version)"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           draft="$(gh release view "$tag" --json isDraft --jq '.isDraft' 2>/dev/null || true)"
+          # GraphQL returns null for a missing tag; REST 404 writes JSON to stdout.
+          existing_ref="$(gh api graphql \
+            -f query='query($owner: String!, $name: String!, $ref: String!) { repository(owner: $owner, name: $name) { ref(qualifiedName: $ref) { target { oid ... on Tag { target { oid } } } } } }' \
+            -f owner="$GITHUB_REPOSITORY_OWNER" \
+            -f name="${GITHUB_REPOSITORY#*/}" \
+            -f ref="refs/tags/$tag" \
+            --jq '.data.repository.ref.target | if . == null then "" else (.target.oid // .oid) end')"
+          if [[ -n "$existing_ref" && "$existing_ref" != "$GITHUB_SHA" ]]; then
+            echo "Release tag points at another commit; bump the version before merging" >&2
+            exit 1
+          fi
           if [[ "$draft" == false ]]; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             exit 0
-          fi
-          existing_ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" \
-            --jq '.object.sha' 2>/dev/null || true)"
-          if [[ -n "$existing_ref" && "$existing_ref" != "$GITHUB_SHA" ]]; then
-            echo "Release tag already points at another commit" >&2
-            exit 1
           fi
           echo "publish=true" >> "$GITHUB_OUTPUT"
           echo "draft=$draft" >> "$GITHUB_OUTPUT"

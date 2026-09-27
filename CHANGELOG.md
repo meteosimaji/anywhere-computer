@@ -12,6 +12,8 @@
 - Use four test workers on every CI platform after a local 2,532-test run
   completed in 89.86 seconds, down from 171.47 seconds with two workers.
   Platform CI timing still needs measurement.
+- Resolve release tags without treating a missing tag's HTTP 404 body as an
+  existing ref; reject a published version tag on an older main commit.
 
 ## 0.2.0b24 / Plugin 0.2.0-beta.24 — unpublished candidate (2026-09-28)
 
