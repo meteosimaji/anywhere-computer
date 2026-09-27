@@ -578,7 +578,7 @@ async def test_https_save_scope_catalog_and_same_id_delivery(tmp_path, monkeypat
                     break
                 assert result.state == "running"
                 await asyncio.sleep(0.05)
-        assert states[0] == "running"
+        assert states[0] == "running" and states[-1] == "unknown"
         grant = replace(grant, grant_id="renewed")
         renewed_session = backend.session("renewed")
         renewed_states = []
@@ -591,7 +591,8 @@ async def test_https_save_scope_catalog_and_same_id_delivery(tmp_path, monkeypat
                     break
                 assert result.state in {"running", "unknown"}
                 await asyncio.sleep(0.05)
-        assert "unknown" in renewed_states and renewed_states[-1] == "completed"
+        # The resumed worker may complete before the renewed caller sees another unknown.
+        assert renewed_states[-1] == "completed"
         assert chunk_calls == 1
         assert destination.read_bytes() == content
         assert "content_base64" not in result.data
