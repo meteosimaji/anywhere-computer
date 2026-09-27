@@ -3,6 +3,27 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b24 / Plugin 0.2.0-beta.24 — development prerelease (2026-09-28)
+
+- Consolidate private Subchat selection writes while keeping account checks and
+  send consent intact.
+- Publish a new version from successful `main` CI only after five portable
+  archives pass provenance and matching-release checks. Include `SHA256SUMS`.
+- Run time-sensitive CI preflight tests once instead of repeating them in the
+  remaining suite. Physical-host acceptance remains a separate check.
+
+## 0.2.0b11–b23 — development candidates (2026-09-27)
+
+- Add owner passkey enrollment and revocation, and bounded delegated child
+  permissions for tools, devices, paths and expiry.
+- Add a local Codex/Claude peer mailbox with delivery receipts, presence and
+  restart recovery. Delivery does not wake another model turn.
+- Extend Subchat with saved operation discovery, file attachments and Library
+  upload, queued model and resource changes, durable mutation receipts, and
+  explicitly armed automatic follow-ups.
+- Confine Windows upload, delegated create and peer credential publication to
+  verified handles and pinned directories. Add platform CI coverage.
+
 ## 0.2.0b10 / Plugin 0.2.0-beta.10 — beta prerelease (2026-09-26)
 
 - Use the installed Microsoft Edge for isolated browser sessions on Windows,

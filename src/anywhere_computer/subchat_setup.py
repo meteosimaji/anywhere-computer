@@ -166,6 +166,18 @@ def _private_directory(path: Path) -> None:
         path.chmod(0o700)
 
 
+def _write_private_text(destination: Path, content: str, *, prefix: str) -> None:
+    descriptor, temporary = tempfile.mkstemp(prefix=prefix, dir=destination.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, destination)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 async def stage_profile(source: Path, stage_root: Path, account_id: str) -> Path:
     """Publish an account-verified, filtered snapshot under app-owned state."""
     if stage_root == source or stage_root in source.parents or source in stage_root.parents:
@@ -197,15 +209,8 @@ def _save_http_selection(directory: Path, source: Path, account_id: str) -> None
     destination = directory / "http-server/config.json"
     if destination.is_symlink():
         raise SetupInputError("HTTP configuration must not be a symbolic link")
-    descriptor, temporary = tempfile.mkstemp(prefix=".config-profile-", dir=destination.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(updated.model_dump_json(indent=2) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, destination)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    _write_private_text(destination, updated.model_dump_json(indent=2) + "\n",
+                        prefix=".config-profile-")
 
 
 def _remove_previous_managed_snapshot(previous: Path, stage_root: Path) -> None:
@@ -310,74 +315,46 @@ def save_dedicated_selection(state: Path, profile: Path, channel: str, account_i
         browser_spec(channel, sys.platform)
     except ValueError as error:
         raise SetupInputError("Select a supported Windows Chromium browser") from error
-    if not account_id or len(account_id) > 256 or any(ord(char) < 33 or ord(char) > 126
-                                                    for char in account_id):
-        raise SetupInputError("Observed Chat account ID is invalid")
+    _validate_account_id(account_id)
     _private_directory(state.parent)
-    selection = state.parent / "login-selection.json"
-    if selection.is_symlink():
-        raise SetupInputError("Subchat login selection must not be a symlink")
-    content = json.dumps({"dedicated_browser_channel": channel,
-                          "dedicated_profile": str(profile.resolve()),
-                          "expected_account_id": account_id,
-                          "enable_background_send": enable_send}, separators=(",", ":"))
-    descriptor, temporary = tempfile.mkstemp(prefix=".login-selection-", dir=state.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(content + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, selection)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    _save_login_selection(state, {"dedicated_browser_channel": channel,
+                                  "dedicated_profile": str(profile.resolve())},
+                          account_id, enable_send)
 
 
 def save_selection(state: Path, source: Path, account_id: str, *, enable_send: bool) -> None:
     """Replace only the local selection; never persist browser credentials."""
-    if not account_id or len(account_id) > 256 or any(ord(char) < 33 or ord(char) > 126
-                                                    for char in account_id):
-        raise SetupInputError("Observed Chat account ID is invalid")
+    _validate_account_id(account_id)
     create_private_directory(state.parent)
-    selection = state.parent / "login-selection.json"
-    if selection.is_symlink():
-        raise SetupInputError("Subchat login selection must not be a symlink")
-    content = json.dumps({"chrome_source_profile": str(source),
-                          "expected_account_id": account_id,
-                          "enable_background_send": enable_send}, separators=(",", ":"))
-    descriptor, temporary = tempfile.mkstemp(prefix=".login-selection-", dir=state.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(content + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, selection)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    _save_login_selection(state, {"chrome_source_profile": str(source)},
+                          account_id, enable_send)
 
 
 def save_profile_id_selection(state: Path, profile_id: str, account_id: str,
                               *, enable_send: bool) -> None:
     """Save an owner-selected Chrome ID, never an arbitrary source path."""
     chrome_profile_by_id(profile_id)
+    _validate_account_id(account_id)
+    _private_directory(state.parent)
+    _save_login_selection(state, {"chrome_profile_id": profile_id},
+                          account_id, enable_send)
+
+
+def _validate_account_id(account_id: str) -> None:
     if not account_id or len(account_id) > 256 or any(ord(char) < 33 or ord(char) > 126
                                                     for char in account_id):
         raise SetupInputError("Observed Chat account ID is invalid")
-    _private_directory(state.parent)
+
+
+def _save_login_selection(state: Path, choice: dict[str, str], account_id: str,
+                          enable_send: bool) -> None:
     selection = state.parent / "login-selection.json"
     if selection.is_symlink():
         raise SetupInputError("Subchat login selection must not be a symlink")
-    content = json.dumps({"chrome_profile_id": profile_id,
+    content = json.dumps({**choice,
                           "expected_account_id": account_id,
                           "enable_background_send": enable_send}, separators=(",", ":"))
-    descriptor, temporary = tempfile.mkstemp(prefix=".login-selection-", dir=state.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            stream.write(content + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, selection)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    _write_private_text(selection, content + "\n", prefix=".login-selection-")
 
 
 async def discover_profiles() -> list[dict[str, str]]:
@@ -455,16 +432,8 @@ def _named_selections(state: Path) -> dict[str, NamedSelection]:
 
 def _save_named_selections(state: Path, records: dict[str, NamedSelection]) -> None:
     path = state.parent / "named-login-selections.json"
-    descriptor, temporary = tempfile.mkstemp(prefix=".named-login-selections-", dir=state.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(records, stream, separators=(",", ":"))
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+    _write_private_text(path, json.dumps(records, separators=(",", ":")) + "\n",
+                        prefix=".named-login-selections-")
 
 
 async def diagnose_plugin_setup() -> dict[str, object]:

@@ -42,6 +42,15 @@ assets, so publishing does not require replacing a hard-coded "latest" version i
 both README files. Package consistency tests separately verify the bundled source,
 version mapping and hashes.
 
+After a version bump is merged into `main`, the Quality workflow publishes its
+release only when the full test and portable build jobs pass. The publish job
+checks the five archives against the same clean Plugin receipt, verifies their
+GitHub attestations, then compares every uploaded asset's digest and size before
+making the draft public. `SHA256SUMS` covers the downloadable ZIPs. A commit that
+keeps an already published version does not replace that release; bump the source
+version before changing published bytes. GitHub CI and an asset receipt do not
+establish live ChatGPT or physical-host acceptance.
+
 For a behavior change, update the owning feature guide and its evidence in the
 same PR. Change the README overview only if the product description or entry path
 changes. Report the code/test evidence separately from live Chat, hardware and

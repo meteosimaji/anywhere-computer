@@ -511,6 +511,13 @@ the caller attaches it to a Chat. A `ready` MCP result includes an
 `attachment` object with the saved file ID, Library item ID, filename, MIME
 type, and exact byte count for an explicit `subchat_send` resource. It is
 `null` until ready; do not guess these fields from a local path or file name.
+This is a multi-step alternative to attaching a PDF directly in the visible
+Chat composer. For several files, prepare and upload each one with its own
+operation ID, then include each returned `attachment` in one explicit
+`subchat_send` call. The local path alone and the Library upload alone do not
+attach anything to that conversation. The current schema permits up to ten
+attachments of at most 20 MiB each; check the selected account's actual
+acceptance before relying on a particular file type.
 
 ## HTTP paths and scope
 
