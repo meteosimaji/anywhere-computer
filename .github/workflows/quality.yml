@@ -346,7 +346,9 @@ jobs:
               --notes "Build from $GITHUB_SHA. Quality run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. Live service and hardware acceptance are separate." \
               --generate-notes
           fi
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" > release.json
+          # GitHub gives unpublished drafts an untagged URL. The CLI resolves
+          # their requested tag even while the REST tag endpoint returns 404.
+          gh release view "$RELEASE_TAG" --json isDraft,assets > release.json
           python3 - <<'PY'
           import hashlib
           import json
@@ -360,7 +362,7 @@ jobs:
                                          path.stat().st_size)
           actual = {asset['name']: (asset['digest'], asset['size'])
                     for asset in release['assets']}
-          if release['draft'] is not True or actual != expected:
+          if release['isDraft'] is not True or actual != expected:
               raise SystemExit('Draft release assets do not match the verified CI files')
           PY
           gh release edit "$RELEASE_TAG" --draft=false --prerelease="$prerelease"
