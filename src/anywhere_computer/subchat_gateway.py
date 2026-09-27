@@ -32,6 +32,7 @@ from .subchat_mcp import (
 )
 from .subchat_state import (
     SubchatAccountMismatch,
+    SubchatCommittedMutationConflict,
     SubchatList,
     SubchatOperationNotFound,
     SubchatPage,
@@ -139,8 +140,12 @@ class SubchatGateway:
             tool, arguments, task = existing
             if (tool, arguments) != (request.tool, digest):
                 return Reply(operation_id=request.operation_id, state="failed",
-                             error="Operation ID was already used with different input",
-                             data={"dispatched": False})
+                             error="Operation ID was already used with different input. "
+                                   "Inspect the saved status before retrying.",
+                             data={"dispatched": (None if tool in {
+                                 "subchat_queue_auto", "subchat_queue_model_change",
+                                 "subchat_queue_resources_change"} else False),
+                                   "automatic_retry": False})
             if task.done() and not task.cancelled() and task.exception() is None:
                 reply = task.result()
                 sending = getattr(self._core(grant_id), "sends", {}).get(
@@ -454,7 +459,9 @@ class LazySubchatGateway:
                                    "an HTTPS queued model change.",
                              data={"error_code": "invalid_parameter", "dispatched": False})
             target_id = request.arguments.get("operation_id")
-            if isinstance(target_id, str):
+            if (isinstance(target_id, str)
+                    and (request.tool != "subchat_queue_auto"
+                         or request.arguments.get("enabled", True) is True)):
                 try:
                     await asyncio.to_thread(self._check_queued_account, grant_id, target_id)
                 except SubchatOperationNotFound:
@@ -580,6 +587,12 @@ class LazySubchatGateway:
                          error="The selected Chat account does not match the saved operation. "
                                "Use the original account to inspect this operation.",
                          data={"error_code": "account_mismatch", "automatic_retry": False})
+        except SubchatCommittedMutationConflict:
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="This request ID already committed a different Subchat "
+                               "mutation. Inspect its saved status before continuing.",
+                         data={"error_code": "request_conflict", "dispatched": None,
+                               "automatic_retry": False})
         except SubchatRequestConflict:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="This request ID belongs to a different Subchat mutation.",

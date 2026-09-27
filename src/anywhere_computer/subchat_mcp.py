@@ -43,6 +43,7 @@ from .subchat_http_download import SandboxFileTooLarge
 from .subchat_state import (
     SubchatAccountMismatch,
     SubchatAutoQueueDisarmed,
+    SubchatCommittedMutationConflict,
     SubchatConcurrentSend,
     SubchatHTTPSelection,
     SubchatList,
@@ -1495,6 +1496,13 @@ def session(service: Subchats, *,
                                'Check the original connection, account and ledger path, '
                                'then use subchat_list. This does not prove the send failed.',
                          data={'error_code': 'unknown_operation', 'dispatched': None,
+                               'automatic_retry': False})
+        except SubchatCommittedMutationConflict:
+            return Reply(operation_id=request.operation_id, state='failed',
+                         error='This request ID already committed a different Subchat '
+                               'mutation. Inspect subchat_status; do not retry with a new ID '
+                               'until the saved outcome is understood.',
+                         data={'error_code': 'request_conflict', 'dispatched': None,
                                'automatic_retry': False})
         except SubchatRequestConflict:
             return Reply(operation_id=request.operation_id, state='failed',

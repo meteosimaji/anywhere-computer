@@ -3,16 +3,18 @@
 import asyncio
 
 import pytest
+from test_subchat_lifecycle import BrowserFixture
 
 from anywhere_computer.models import Reply, Request
 from anywhere_computer.state import Ledger
+from anywhere_computer.subchat import Subchats
 from anywhere_computer.subchat_content import SubchatResources
 from anywhere_computer.subchat_gateway import (
     LazySubchatGateway,
     SubchatGateway,
     SubchatGatewayConfig,
 )
-from anywhere_computer.subchat_mcp import _mutation_digest
+from anywhere_computer.subchat_mcp import _mutation_digest, session
 from anywhere_computer.subchat_state import SubchatRequestConflict, SubchatSubmissions
 
 
@@ -149,6 +151,79 @@ async def test_lazy_gateway_cancel_replay_checks_durable_receipt(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_new_oauth_grant_replay_reports_prior_mutation_as_uncertain(tmp_path):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    parent, child = 'a' * 32, 'b' * 32
+    store.prepare(parent, 'parent', 'old', 'normal', owner='owner',
+                  conversation_id='conversation')
+    store.begin_send(parent, owner='owner', user_message_id='user',
+                     provider_account_id='account')
+    store.submitted(parent, 'conversation', 'user', owner='owner')
+    store.prepare(child, 'child', 'old', 'normal', owner='owner',
+                  conversation_id='conversation', after_operation_id=parent)
+    request = Request(operation_id='c' * 32, tool='subchat_queue_auto',
+                      arguments={'operation_id': child})
+    store.arm_auto_queue(child, owner='owner', lease_seconds=900,
+                         authorization_grant_id='old-grant',
+                         request_id=request.operation_id,
+                         digest=_mutation_digest(request, 'old-grant'))
+    server = session(Subchats(store, BrowserFixture()), owner='owner',
+                     auto_queue_grant_active=lambda _: True)
+    try:
+        result = await server.execute_with_queue_grant(request, 'new-grant')
+        assert result.state == 'failed'
+        assert result.data['error_code'] == 'request_conflict'
+        assert result.data['dispatched'] is None
+        assert result.data['automatic_retry'] is False
+        assert store.auto_queue_status(child, owner='owner')['state'] == 'armed'
+    finally:
+        await server.close()
+        ledger.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_unbound_queue_can_be_disabled_over_https(tmp_path, monkeypatch):
+    ledger_path = tmp_path / 'ledger'
+    ledger = Ledger(ledger_path)
+    store = SubchatSubmissions(ledger.connection)
+    parent, child = 'a' * 32, 'b' * 32
+    store.prepare(parent, 'parent', 'old', 'normal', owner='owner',
+                  conversation_id='conversation')
+    store.begin_send(parent, owner='owner')
+    store.submitted(parent, 'conversation', 'user', owner='owner')
+    store.prepare(child, 'child', 'old', 'normal', owner='owner',
+                  conversation_id='conversation', after_operation_id=parent)
+    store.arm_auto_queue(child, owner='owner', lease_seconds=900)
+    direct = SubchatGateway(
+        lambda owner: session(Subchats(store, BrowserFixture()), owner=owner),
+        owner='owner', account_id='account')
+    lazy = LazySubchatGateway(SubchatGatewayConfig(
+        profile=str(tmp_path / 'profile'), ledger=str(ledger_path),
+        account_id='account', consent='ordinary-chat-browser-control-approved'),
+        owner='owner')
+
+    async def acquire():
+        return direct
+
+    async def release():
+        return None
+
+    monkeypatch.setattr(lazy, '_acquire', acquire)
+    monkeypatch.setattr(lazy, '_release', release)
+    request = Request(operation_id='d' * 32, tool='subchat_queue_auto',
+                      arguments={'operation_id': child, 'enabled': False})
+    try:
+        result = await lazy.execute('owner', request, frozenset({'subchat_queue_auto'}))
+        assert result.state == 'completed'
+        assert store.auto_queue_status(child, owner='owner')['state'] == 'disabled'
+    finally:
+        await direct.close()
+        await lazy.close()
+        ledger.close()
+
+
+@pytest.mark.asyncio
 async def test_old_auto_enable_cannot_rearm_after_disable_eviction_or_restart(tmp_path):
     ledger = Ledger(tmp_path)
     store = SubchatSubmissions(ledger.connection)
@@ -203,6 +278,7 @@ async def test_old_auto_enable_cannot_rearm_after_disable_eviction_or_restart(tm
         assert store.auto_queue_status(child, owner='owner')['state'] == 'disabled'
         changed_grant = await call(1, True, grant='different-grant')
         assert changed_grant.state == 'failed'
+        assert changed_grant.data['dispatched'] is None
         assert store.auto_queue_status(child, owner='owner')['state'] == 'disabled'
 
         # The full-cache direct fallback also passes through the SQLite guard.

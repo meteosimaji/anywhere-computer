@@ -37,6 +37,10 @@ class SubchatRequestConflict(ValueError):
     code = 'request_conflict'
 
 
+class SubchatCommittedMutationConflict(SubchatRequestConflict):
+    """The request ID already committed a mutation with another binding."""
+
+
 class SubchatConcurrentSend(ValueError):
     """Another durable operation is active in the same conversation."""
 
@@ -776,7 +780,7 @@ class SubchatSubmissions:
         if row is None:
             return None
         if (row[0], row[1], row[2]) != (owner, tool, digest):
-            raise SubchatRequestConflict('Subchat mutation ID was already used')
+            raise SubchatCommittedMutationConflict('Subchat mutation ID was already used')
         result = json.loads(row[3])
         if not isinstance(result, dict):
             raise ValueError('Saved Subchat mutation result is invalid')
