@@ -16,6 +16,8 @@
 - Resolve release tags without treating a missing tag's HTTP 404 body as an
   existing ref; reject a published version tag or unfinished draft bound to
   another main commit.
+- Resolve the unpublished draft by its requested tag when comparing uploaded
+  asset digests; GitHub's REST tag endpoint cannot find a draft without a tag.
 - Keep the short-timeout Windows owner-pipe tests in the serial CI preflight
   rather than competing with parallel test workers.
 - Check Subchat save recovery by the first uncertain receipt, same-ID final
