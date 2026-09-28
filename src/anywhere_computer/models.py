@@ -280,6 +280,11 @@ class BrowserNetwork(BrowserSession):
     limit: int = Field(default=50, ge=1, le=100)
 
 
+class BrowserConsole(BrowserSession):
+    after_id: int = Field(default=0, ge=0)
+    limit: int = Field(default=50, ge=1, le=100)
+
+
 class BrowserResearch(BrowserSession):
     link_limit: int = Field(default=20, ge=1, le=30)
 
@@ -289,7 +294,8 @@ class BrowserNavigate(BrowserSession):
 
 
 BrowserRole = Literal["button", "link", "textbox", "searchbox", "combobox", "checkbox",
-                      "radio", "switch", "tab", "menuitem", "option", "spinbutton"]
+                      "radio", "switch", "tab", "menuitem", "option", "spinbutton",
+                      "listbox", "region", "grid"]
 
 
 class BrowserClick(BrowserSession):
@@ -341,6 +347,33 @@ class BrowserDrag(BrowserSession):
     source: BrowserTarget
     target: BrowserTarget
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class BrowserHover(BrowserSession):
+    target: BrowserTarget
+    snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class BrowserSelect(BrowserHover):
+    value: str | None = Field(default=None, max_length=512)
+    label: str | None = Field(default=None, min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def one_option(self) -> "BrowserSelect":
+        if (self.value is None) == (self.label is None):
+            raise ValueError("Choose exactly one browser option value or label")
+        return self
+
+
+class BrowserScroll(BrowserHover):
+    delta_x: int = Field(default=0, ge=-4000, le=4000)
+    delta_y: int = Field(default=0, ge=-4000, le=4000)
+
+    @model_validator(mode="after")
+    def nonzero_delta(self) -> "BrowserScroll":
+        if self.delta_x == 0 and self.delta_y == 0:
+            raise ValueError("Browser scroll requires a nonzero delta")
+        return self
 
 
 class BrowserFileUpload(BrowserSession):

@@ -39,15 +39,19 @@ from .models import (
     BeginDownload,
     BeginUpload,
     BrowserClick,
+    BrowserConsole,
     BrowserDownload,
     BrowserDrag,
     BrowserFileUpload,
     BrowserFill,
+    BrowserHover,
     BrowserKey,
     BrowserNavigate,
     BrowserNetwork,
     BrowserObserve,
     BrowserResearch,
+    BrowserScroll,
+    BrowserSelect,
     BrowserSession,
     BrowserSource,
     CodexPluginCall,
@@ -369,6 +373,9 @@ class Engine:
         async def browser_network(args: BrowserNetwork) -> Result:
             return await self.browser.network(args, owner=self._plugin_owner.get())
 
+        async def browser_console(args: BrowserConsole) -> Result:
+            return await self.browser.console(args, owner=self._plugin_owner.get())
+
         async def browser_research(args: BrowserResearch) -> Result:
             return await self.browser.research(args, owner=self._plugin_owner.get())
 
@@ -383,6 +390,15 @@ class Engine:
 
         async def browser_drag(args: BrowserDrag) -> Result:
             return await self.browser.drag(args, owner=self._plugin_owner.get())
+
+        async def browser_hover(args: BrowserHover) -> Result:
+            return await self.browser.hover(args, owner=self._plugin_owner.get())
+
+        async def browser_select(args: BrowserSelect) -> Result:
+            return await self.browser.select(args, owner=self._plugin_owner.get())
+
+        async def browser_scroll(args: BrowserScroll) -> Result:
+            return await self.browser.scroll(args, owner=self._plugin_owner.get())
 
         async def browser_file_upload(args: BrowserFileUpload) -> Result:
             return await self.browser.file_upload(args, owner=self._plugin_owner.get())
@@ -415,6 +431,11 @@ class Engine:
                       "observed in the exact owned tab. Query values, credentials, headers "
                       "and bodies are omitted. Use after_id to read newer events.",
                       BrowserNetwork, browser_network, read_only=True, open_world=True)
+        self.register("browser_console", "Read the last 100 bounded console messages and "
+                      "uncaught page errors from the exact owned tab. Messages are untrusted "
+                      "page data and may include values printed by that page; source URLs "
+                      "omit credentials, query values and fragments.",
+                      BrowserConsole, browser_console, read_only=True, open_world=True)
         self.register("browser_research", "Read compact current-page title, headings, "
                       "source-claimed publisher, author, publication date and canonical URL, "
                       "plus visible links. URL credentials and query values are omitted. "
@@ -441,6 +462,18 @@ class Engine:
                       "target in the owned tab. Both targets may use CSS, role/name or label. "
                       "Requires a fresh snapshot_id; observe the result before another action.",
                       BrowserDrag, browser_drag, destructive=True, open_world=True)
+        self.register("browser_hover", "Hover one unique visible CSS, role/name or label "
+                      "target in the owned tab. Requires a fresh snapshot_id and returns a new "
+                      "observation, including any menu exposed by the hover.",
+                      BrowserHover, browser_hover, destructive=True, open_world=True)
+        self.register("browser_select", "Select one uniquely matched enabled option in a "
+                      "visible select element by exact value or label. Requires a fresh "
+                      "snapshot_id and verifies the selected value in the result.",
+                      BrowserSelect, browser_select, destructive=True, open_world=True)
+        self.register("browser_scroll", "Scroll one unique visible element or the document "
+                      "body by bounded CSS-pixel deltas. Requires a fresh snapshot_id and "
+                      "returns before/after offsets and a new observation.",
+                      BrowserScroll, browser_scroll, destructive=True, open_world=True)
         self.register("browser_file_upload", "Attach one local regular file up to 16 MiB to "
                       "a unique file input in the owned tab. The page may send it on change; "
                       "confirm the owner intended disclosure to that site. Requires a fresh "
@@ -534,8 +567,9 @@ class Engine:
             return await self.gui_mcp.act(args, owner=self._plugin_owner.get())
 
         self.register('gui_observe', 'Observe an app through a selected MCP session. '
-                      'Requires window_id from the server window tool (action=list, app). '
-                      'Uses Peekaboo 4 exact-window capture without app focus. '
+                      'Discover window_id using the selected server catalog. '
+                      'Requires exact-window capture and snapshot-bound input schemas; '
+                      'older Peekaboo versions are rejected before capture or input. '
                       'Creates a screenshot/snapshot and a 60-second observation reference. '
                       'Requires the observed application name to match app exactly. '
                       'Returns available coordinate metadata; does not run a model.',
