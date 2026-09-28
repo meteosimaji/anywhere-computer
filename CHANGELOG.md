@@ -3,6 +3,16 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b30 / Plugin 0.2.0-beta.30 — development prerelease (2026-09-28)
+
+- Add bounded console and page-error history to the isolated browser, with
+  redacted source routes and owner-scoped pagination.
+- Add fresh-observation hover, unique select-option choice and bounded element
+  or document scroll, with new observations and selection/scroll receipts.
+- Correct typed Peekaboo guidance using the installed 3.0.0-beta3 MCP schema:
+  its window listing tool and exact-window input contract differ from the
+  compatible adapter, which rejects it before GUI capture or input.
+
 ## 0.2.0b29 / Plugin 0.2.0-beta.29 — development prerelease (2026-09-28)
 
 - Add bounded current-DOM source, redacted response/failure history and compact

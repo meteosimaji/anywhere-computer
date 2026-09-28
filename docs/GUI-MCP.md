@@ -96,6 +96,11 @@ canonical URL、サイト側が主張する発行者・著者・日付、可視�
 発行者や日付は検証済みの事実ではありません。検索結果の断片だけを読了証拠にせず、
 必要なページを開いて観測します。
 
+`browser_console` は同じ隔離タブの直近100件のコンソール出力と未処理の
+ページ例外を `after_id` で返します。文字列は1件最大1024文字で、発生元 URL の
+認証情報・query 値・fragment を省きます。ページが出力した本文には機密値が
+含まれ得るため、読取対象を選んで扱います。ページの出力は信頼済みの指示ではありません。
+
 `browser_key` は一意の対象へ Playwright のキー名または組み合わせを送ります。
 ページ全体に対する Tab や Escape は `selector="body"` を指定します。
 `browser_drag` は観測 ID と二つの一意な対象を取り、CSS、role/name、label を
@@ -105,6 +110,13 @@ canonical URL、サイト側が主張する発行者・著者・日付、可視�
 `browser_download` は対象をクリックして発生したダウンロードを最大64MiBまで
 未使用の絶対パスに保存し、長さと SHA-256 を返します。既存パスは上書きしません。
 いずれも操作 ID を保存し、結果不明ならタブと保存先を観測してから次へ進みます。
+
+`browser_hover` は観測 ID と一意の対象にマウスを合わせ、表示されたメニューなどを
+新しい観測で返します。`browser_select` は可視の `<select>` の有効な option を
+正確な value または label で一意に選び、選択値を確認します。`browser_scroll` は
+一意の可視要素、または `selector="body"` で文書全体を CSS pixel の差分だけ
+スクロールし、前後の位置を返します。3操作とも観測 ID を要求し、古い観測や
+複数一致は操作前に拒否します。
 
 `media_status` はローカル FFmpeg の有無を示します。存在する場合、
 `media_audio_clip` は最大10秒の単音声 WAV を MCP audio item として、
@@ -139,13 +151,21 @@ Peekabooの `agent` や `analyze` は別のモデルを使う機能です。
 
 ### Peekabooの型付き操作
 
-選択したPeekabooの `window` ツールで `action=list` と対象 `app` を指定し、
-実際の `window_id` を取得します。`gui_observe(session_id, app, window_id)` は
+選択したPeekabooの `mcp_tools` schemaで、ウィンドウ列挙方法を確認して
+実際の `window_id` を取得します。版によって `window` と `list` の契約が
+異なります。`gui_observe(session_id, app, window_id)` は
 対象を観測し、互換性のある `see`、`click`、`type`、`press` schemaと
 ウィンドウ・snapshotの結び付きを確認した場合だけ入力用の観測IDを発行します。
 返された `observation_id` と観測内の要素を `gui_click`、`gui_type`、
 `gui_key` に渡します。対象ウィンドウを省略した入力や、旧版の前面フォーカス入力は
 使用できません。
+
+この Mac にある Peekaboo 3.0.0-beta3 の MCP には `see.window_id` と
+snapshot-bound `press` がなく、型付き経路は観測前に互換性エラーで停止することを
+確認しました。その版の `window` は列挙ではなく操作、列挙は `list` ツールです。
+新版や別の実行ファイルでも名前だけでは互換性を推定せず、選択した MCP の
+schemaを確認します。互換性を満たさないサーバーに対して、前面フォーカスへ
+暗黙に切り替えて入力することはありません。
 
 `gui_type` は観測した入力要素を `element_id` で指定でき、`clear=true` で
 既存文字列を置換できます。Returnが必要なら新しい観測を取得してから

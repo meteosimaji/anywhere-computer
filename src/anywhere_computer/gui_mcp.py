@@ -28,9 +28,10 @@ class GUIObserve(DirectMCPSessionId):
     pid: int | None = Field(default=None, ge=1)
     query: str | None = Field(default=None, min_length=1, max_length=200)
     window_id: int = Field(ge=1, le=4294967295, description=(
-        'Required target window. Use the selected server window tool with action=list '
-        'and the app to discover its ID. Observes without app focus and pins actions '
-        'to the snapshot. Requires a compatible server; never uses foreground input.'
+        'Required target window. Discover the ID using the selected server catalog '
+        '(for example its window or list tool). Typed Peekaboo requires exact-window '
+        'see and snapshot-bound click, type and press schemas; incompatible versions '
+        'are rejected before capture or input. Never uses foreground input.'
     ))
     app: str = Field(min_length=1, max_length=256, description=(
         'Exact running app name accepted by the selected Peekaboo server. Names may be '

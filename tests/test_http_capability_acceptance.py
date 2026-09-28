@@ -118,6 +118,7 @@ for line in sys.stdin:
                        b"Content-Disposition: attachment; filename=payload.bin\r\n")
         else:
             body = (b"<html><head><title>Browser fixture</title></head><body>Ready"
+                    b"<script>console.warn('HTTP browser fixture')</script>"
                     b"<input id='entry' oninput=\"document.querySelector('#result').textContent"
                     b"=this.value\"><button id='go' onclick=\"document.querySelector('#result')"
                     b".textContent+=' clicked'\">Go</button><p id='result'></p>"
@@ -128,6 +129,10 @@ for line in sys.stdin:
                     b"<label for='file'>Choose file</label><input type='file' id='file' "
                     b"onchange=\"document.querySelector('#file-name').textContent="
                     b"this.files[0].name\"><p id='file-name'></p>"
+                    b"<label for='plan'>Plan</label><select id='plan'>"
+                    b"<option value='basic'>Basic</option><option value='pro'>Pro</option>"
+                    b"</select><div id='scrollpane' style='height:60px;overflow:auto'>"
+                    b"<div style='height:600px'>Scrollable</div></div>"
                     b"<a href='/payload'>Get file</a></body></html>")
             headers = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
         writer.write(headers
@@ -217,6 +222,8 @@ for line in sys.stdin:
             assert "Browser fixture" in source["html"]
             network = await call("browser_network", browser_ids)
             assert any(event["status"] == 200 for event in network["events"])
+            console = await call("browser_console", browser_ids)
+            assert any(event["text"] == "HTTP browser fixture" for event in console["events"])
             research = await call("browser_research", browser_ids)
             assert research["title"] == "Browser fixture"
             assert research["links"][0]["destination"]["route"].endswith("/payload")
@@ -234,10 +241,21 @@ for line in sys.stdin:
                 "source": {"selector": "#drag-source"},
                 "target": {"selector": "#drag-target"}})
             assert "moved" in dragged["text"]
+            hovered = await call("browser_hover", {**browser_ids,
+                "snapshot_id": dragged["snapshot_id"],
+                "target": {"selector": "#go"}})
+            selected_option = await call("browser_select", {**browser_ids,
+                "snapshot_id": hovered["snapshot_id"],
+                "target": {"label": "Plan"}, "label": "Pro"})
+            assert selected_option["selection_verified"] is True
+            scrolled = await call("browser_scroll", {**browser_ids,
+                "snapshot_id": selected_option["snapshot_id"],
+                "target": {"selector": "#scrollpane"}, "delta_y": 160})
+            assert scrolled["scroll"]["changed"] is True
             upload_path = tmp_path / "browser-upload.txt"
             upload_path.write_text("upload fixture", encoding="utf-8")
             selected = await call("browser_file_upload", {**browser_ids,
-                "snapshot_id": dragged["snapshot_id"],
+                "snapshot_id": scrolled["snapshot_id"],
                 "target": {"label": "Choose file"}, "path": str(upload_path)})
             assert selected["selected_file"]["name"] == upload_path.name
             downloaded = await call("browser_download", {**browser_ids,

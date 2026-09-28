@@ -19,15 +19,19 @@ from anywhere_computer.browser_control import (
 from anywhere_computer.engine import Engine
 from anywhere_computer.models import (
     BrowserClick,
+    BrowserConsole,
     BrowserDownload,
     BrowserDrag,
     BrowserFileUpload,
     BrowserFill,
+    BrowserHover,
     BrowserKey,
     BrowserNavigate,
     BrowserNetwork,
     BrowserObserve,
     BrowserResearch,
+    BrowserScroll,
+    BrowserSelect,
     BrowserSession,
     BrowserSource,
     BrowserTarget,
@@ -860,6 +864,98 @@ async def test_key_and_drag_recheck_observation_and_target(local_page):
         assert dragged["snapshot_id"] != keyed["snapshot_id"]
         with pytest.raises(ValueError, match="unavailable"):
             await control.key(BrowserKey(**ids, selector="#entry", key="Tab"), owner="owner-b")
+    finally:
+        await control.close()
+
+
+async def test_console_hover_select_and_scroll_use_owned_observation(local_page):
+    pytest.importorskip("playwright.async_api")
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="owner-a")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        await control.navigate(BrowserNavigate(**ids, url=local_page), owner="owner-a")
+        entry = control.entries[ids["session_id"]]
+        async with entry.page.expect_event("pageerror"):
+            await entry.page.evaluate("""() => {
+                console.warn('fixture warning');
+                setTimeout(() => { throw new Error('fixture page error'); }, 0);
+            }""")
+        console = await control.console(BrowserConsole(**ids), owner="owner-a")
+        assert any(row["text"] == "fixture warning" and row["type"] == "warning"
+                   for row in console["events"])
+        assert any("fixture page error" in row["text"] and row["event"] == "page_error"
+                   for row in console["events"])
+        class RedactedMessage:
+            text = "diagnostic message"
+            type = "info"
+            location = {"url": "https://user:password@example.test/app?token=secret#part",
+                        "lineNumber": 3, "columnNumber": 7}
+
+        control._record_console(entry, RedactedMessage())
+        redacted = await control.console(BrowserConsole(
+            **ids, after_id=console["latest_id"]), owner="owner-a")
+        assert redacted["events"][0]["source"]["route"] == "https://example.test/app"
+        assert redacted["events"][0]["source"]["query_keys"] == ["token"]
+        assert "secret" not in json.dumps(redacted)
+        console = redacted
+        assert (await control.console(BrowserConsole(
+            **ids, after_id=console["latest_id"]), owner="owner-a"))["events"] == []
+        with pytest.raises(ValueError, match="unavailable"):
+            await control.console(BrowserConsole(**ids), owner="owner-b")
+
+        await entry.page.evaluate("""() => {
+            const button = document.querySelector('#go');
+            button.addEventListener('mouseover', () => {
+                document.querySelector('#result').textContent = 'hovered';
+            });
+            const label = document.createElement('label');
+            label.textContent = 'Plan';
+            label.htmlFor = 'plan';
+            const select = document.createElement('select');
+            select.id = 'plan';
+            select.innerHTML = '<option value="basic">Basic</option>'
+                + '<option value="pro">Pro</option>';
+            select.addEventListener('change', () => {
+                document.querySelector('#result').textContent = select.value;
+            });
+            const pane = document.createElement('div');
+            pane.id = 'scrollpane';
+            pane.style.cssText = 'height:60px;width:180px;overflow:auto';
+            pane.innerHTML = '<div style="height:600px">Scrollable</div>';
+            document.body.append(label, select, pane);
+        }""")
+        observed = await control.observe(BrowserSession(**ids), owner="owner-a")
+        hovered = await control.hover(BrowserHover(
+            **ids, target=BrowserTarget(role="button", name="Go"),
+            snapshot_id=observed["snapshot_id"]), owner="owner-a")
+        assert "hovered" in hovered["text"]
+        with pytest.raises(ValueError, match="stale"):
+            await control.select(BrowserSelect(
+                **ids, target=BrowserTarget(label="Plan"),
+                snapshot_id=observed["snapshot_id"], label="Pro"), owner="owner-a")
+        await entry.page.evaluate("""() => {
+            document.querySelector('#plan').insertAdjacentHTML(
+                'beforeend', '<option value="other">Pro</option>');
+        }""")
+        with pytest.raises(ValueError, match="exactly one"):
+            await control.select(BrowserSelect(
+                **ids, target=BrowserTarget(label="Plan"),
+                snapshot_id=hovered["snapshot_id"], label="Pro"), owner="owner-a")
+        assert await entry.page.locator("#plan").input_value() == "basic"
+        await entry.page.locator("#plan option[value=other]").evaluate("el => el.remove()")
+        selected = await control.select(BrowserSelect(
+            **ids, target=BrowserTarget(label="Plan"),
+            snapshot_id=hovered["snapshot_id"], label="Pro"), owner="owner-a")
+        assert selected["selection_verified"] is True
+        assert selected["selected_option"] == {"value": "pro", "label": "Pro"}
+        assert "pro" in selected["text"]
+        scrolled = await control.scroll(BrowserScroll(
+            **ids, target=BrowserTarget(selector="#scrollpane"),
+            snapshot_id=selected["snapshot_id"], delta_y=180), owner="owner-a")
+        assert scrolled["scroll"]["changed"] is True
+        assert scrolled["scroll"]["after"]["y"] > 0
+        assert scrolled["snapshot_id"] != selected["snapshot_id"]
     finally:
         await control.close()
 

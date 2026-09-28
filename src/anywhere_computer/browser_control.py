@@ -25,15 +25,19 @@ from pydantic import JsonValue
 from .files import absolute_path, read_bytes, sha256
 from .models import (
     BrowserClick,
+    BrowserConsole,
     BrowserDownload,
     BrowserDrag,
     BrowserFileUpload,
     BrowserFill,
+    BrowserHover,
     BrowserKey,
     BrowserNavigate,
     BrowserNetwork,
     BrowserObserve,
     BrowserResearch,
+    BrowserScroll,
+    BrowserSelect,
     BrowserSession,
     BrowserSource,
     BrowserTarget,
@@ -43,6 +47,7 @@ if TYPE_CHECKING:
     from playwright.async_api import (
         Browser,
         BrowserContext,
+        ConsoleMessage,
         Locator,
         Page,
         Playwright,
@@ -68,6 +73,7 @@ _LOG = logging.getLogger(__name__)
 _IMAGE_LIMIT = 1024 * 1024
 _SOURCE_LIMIT = 32768
 _NETWORK_LIMIT = 100
+_CONSOLE_LIMIT = 100
 _BROWSER_DOWNLOAD_LIMIT = 64 * 1024 * 1024
 _FORM_CONTROLS_SCRIPT = r"""() => {
     const clean = value => String(value || '').replace(/[\r\n\t\u2028\u2029\u00a0]/g, ' ')
@@ -224,6 +230,12 @@ class _NetworkEvent:
 
 
 @dataclass
+class _ConsoleEvent:
+    id: int
+    data: dict[str, JsonValue]
+
+
+@dataclass
 class _Entry:
     owner: str | None
     session_id: str
@@ -241,6 +253,10 @@ class _Entry:
         default_factory=lambda: deque(maxlen=_NETWORK_LIMIT)
     )
     network_next_id: int = 0
+    console_events: deque[_ConsoleEvent] = field(
+        default_factory=lambda: deque(maxlen=_CONSOLE_LIMIT)
+    )
+    console_next_id: int = 0
 
 
 class BrowserControl:
@@ -303,6 +319,30 @@ class BrowserControl:
             "method": request.method[:16], "resource_type": request.resource_type[:32],
             "failure": str(request.failure or "network_error")[:128],
             **_network_url(request.url),
+        }))
+
+    @staticmethod
+    def _record_console(entry: _Entry, message: ConsoleMessage) -> None:
+        entry.console_next_id += 1
+        raw_text = _readable_lines(message.text)
+        location = message.location
+        entry.console_events.append(_ConsoleEvent(entry.console_next_id, {
+            "id": entry.console_next_id, "event": "console",
+            "type": message.type[:32], "text": raw_text[:1024],
+            "text_truncated": len(raw_text) > 1024,
+            "source": _network_url(str(location.get("url", ""))),
+            "line": location.get("lineNumber", 0),
+            "column": location.get("columnNumber", 0),
+        }))
+
+    @staticmethod
+    def _record_page_error(entry: _Entry, error: Exception) -> None:
+        entry.console_next_id += 1
+        raw_text = _readable_lines(str(error))
+        entry.console_events.append(_ConsoleEvent(entry.console_next_id, {
+            "id": entry.console_next_id, "event": "page_error",
+            "type": "error", "text": raw_text[:1024],
+            "text_truncated": len(raw_text) > 1024,
         }))
 
     async def open(self, *, owner: str | None) -> dict[str, JsonValue]:
@@ -377,6 +417,8 @@ class BrowserControl:
             entry = _Entry(owner, session_id, tab_id, driver, browser, context, page)
             page.on("response", lambda response: self._record_response(entry, response))
             page.on("requestfailed", lambda request: self._record_failure(entry, request))
+            page.on("console", lambda message: self._record_console(entry, message))
+            page.on("pageerror", lambda error: self._record_page_error(entry, error))
             self.entries[session_id] = entry
             return {"session_id": session_id, "tab_id": tab_id, "isolation": "ephemeral_context",
                     "url": page.url}
@@ -448,6 +490,20 @@ class BrowserControl:
             events: list[JsonValue] = [event.data for event in rows[:args.limit]]
             return {"session_id": entry.session_id, "tab_id": entry.tab_id,
                     "events": events, "latest_id": entry.network_next_id,
+                    "next_id": next_id,
+                    "history_truncated": first_id is not None and args.after_id < first_id - 1,
+                    "page_url": _network_url(entry.page.url)}
+
+    async def console(self, args: BrowserConsole, *, owner: str | None) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            rows = [event for event in entry.console_events if event.id > args.after_id]
+            first_id = entry.console_events[0].id if entry.console_events else None
+            next_id = rows[min(len(rows), args.limit) - 1].id if rows else args.after_id
+            events: list[JsonValue] = [event.data for event in rows[:args.limit]]
+            return {"session_id": entry.session_id, "tab_id": entry.tab_id,
+                    "events": events, "latest_id": entry.console_next_id,
                     "next_id": next_id,
                     "history_truncated": first_id is not None and args.after_id < first_id - 1,
                     "page_url": _network_url(entry.page.url)}
@@ -525,6 +581,24 @@ class BrowserControl:
             or entry.page.url != entry.snapshot_url
         ):
             raise ValueError("Browser snapshot is stale; observe the tab again")
+
+    @classmethod
+    async def _unique_target(cls, entry: _Entry, target: BrowserTarget,
+                             *, enabled: bool = False) -> Locator:
+        try:
+            locator = cls._target_locator(entry, target)
+            if await locator.count() > 1:
+                raise ValueError("Browser target must match exactly one element")
+            await locator.wait_for(state="visible", timeout=3000)
+            if await locator.count() != 1:
+                raise ValueError("Browser target must match exactly one element")
+            if enabled and not await locator.is_enabled():
+                raise ValueError("Browser target is disabled")
+            return locator
+        except ValueError:
+            raise
+        except Exception as error:
+            raise ValueError("Browser target could not be resolved") from error
 
     async def _action(self, args: BrowserClick, *, owner: str | None,
                       value: str | None = None,
@@ -613,6 +687,82 @@ class BrowserControl:
             except Exception as error:
                 raise BrowserActionUnknown(
                     "Browser drag outcome unconfirmed; observe the same tab before another action"
+                ) from error
+
+    async def hover(self, args: BrowserHover, *, owner: str | None) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            self._check_snapshot(entry, args.snapshot_id)
+            target = await self._unique_target(entry, args.target)
+            entry.snapshot_id = None
+            try:
+                await target.hover(timeout=10000)
+                return await self._snapshot(entry)
+            except Exception as error:
+                raise BrowserActionUnknown(
+                    "Browser hover outcome unconfirmed; observe the same tab before another action"
+                ) from error
+
+    async def select(self, args: BrowserSelect, *, owner: str | None) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            self._check_snapshot(entry, args.snapshot_id)
+            target = await self._unique_target(entry, args.target, enabled=True)
+            try:
+                matches = await target.evaluate("""(el, choice) => {
+                    if (!(el instanceof HTMLSelectElement)) return null;
+                    return Array.from(el.options).filter(option =>
+                        !option.disabled && !option.parentElement?.disabled &&
+                        (choice.value !== null ? option.value === choice.value
+                                               : option.label === choice.label))
+                        .map(option => ({value: option.value, label: option.label}));
+                }""", {"value": args.value, "label": args.label})
+            except Exception as error:
+                raise ValueError("Browser select option could not be resolved") from error
+            if matches is None:
+                raise ValueError("Browser target is not a select element")
+            if len(matches) != 1:
+                raise ValueError("Browser option must match exactly one enabled option")
+            entry.snapshot_id = None
+            try:
+                if args.value is not None:
+                    selected = await target.select_option(value=args.value, timeout=10000)
+                else:
+                    selected = await target.select_option(label=args.label, timeout=10000)
+                snapshot = await self._snapshot(entry)
+                snapshot["selected_option"] = matches[0]
+                snapshot["selection_verified"] = selected == [matches[0]["value"]]
+                return snapshot
+            except Exception as error:
+                raise BrowserActionUnknown(
+                    "Browser selection outcome unconfirmed; observe the same tab before retrying"
+                ) from error
+
+    async def scroll(self, args: BrowserScroll, *, owner: str | None) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            self._check_snapshot(entry, args.snapshot_id)
+            target = await self._unique_target(entry, args.target)
+            entry.snapshot_id = None
+            try:
+                offsets = await target.evaluate("""(el, delta) => {
+                    const scroller = el === document.body
+                        ? (document.scrollingElement || el) : el;
+                    const before = {x: scroller.scrollLeft, y: scroller.scrollTop};
+                    scroller.scrollTo({left: before.x + delta.x, top: before.y + delta.y,
+                                     behavior: 'instant'});
+                    return {before, after: {x: scroller.scrollLeft, y: scroller.scrollTop}};
+                }""", {"x": args.delta_x, "y": args.delta_y})
+                snapshot = await self._snapshot(entry)
+                snapshot["scroll"] = {**offsets,
+                    "changed": offsets["before"] != offsets["after"]}
+                return snapshot
+            except Exception as error:
+                raise BrowserActionUnknown(
+                    "Browser scroll outcome unconfirmed; observe the same tab before another action"
                 ) from error
 
     async def file_upload(self, args: BrowserFileUpload, *, owner: str | None
