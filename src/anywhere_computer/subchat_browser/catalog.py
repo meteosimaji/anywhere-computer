@@ -269,7 +269,7 @@ async def observe_http_catalog(page: Page) -> Response:
                 and url.path == '/backend-api/models' and response.request.method == 'GET')
 
     async with page.expect_response(catalog_response, timeout=15_000) as pending:
-        await page.goto('https://chatgpt.com/', wait_until='domcontentloaded')
+        await page.goto('https://chatgpt.com/', wait_until='commit')
     response = await pending.value
     if response.status in (401, 403):
         raise SubchatAccessError(response.status)
@@ -450,7 +450,7 @@ async def probe(profile: Path, headed: bool, minimized: bool = False) -> dict[st
                 if not await minimize_window(session, window["windowId"]):
                     return {"state": "minimization_unconfirmed", "submitted": False}
             page.set_default_timeout(10_000)
-            response = await page.goto("https://chatgpt.com/", wait_until="domcontentloaded")
+            response = await page.goto("https://chatgpt.com/", wait_until="commit")
             if response is None or not response.ok:
                 return {"state": "page_unavailable",
                         "http_status": response.status if response else None, "submitted": False}

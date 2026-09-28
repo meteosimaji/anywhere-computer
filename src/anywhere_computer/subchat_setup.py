@@ -74,7 +74,7 @@ _DEDICATED_AUTH_GET = """async ({url, limit}) => {
 async def _dedicated_browser_account_id(page: Page) -> str:
     """Read only the account ID using the logged-in browser's own network stack."""
     # The fixed home navigation establishes the same origin for the browser fetch.
-    home = await page.goto("https://chatgpt.com/", wait_until="domcontentloaded")
+    home = await page.goto("https://chatgpt.com/", wait_until="commit")
     if home is None or home.url != "https://chatgpt.com/":
         raise SetupInputError("Dedicated browser did not open ChatGPT")
     if home.status in (401, 403):

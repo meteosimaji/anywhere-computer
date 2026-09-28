@@ -1727,9 +1727,11 @@ async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same
                 operation_id="b" * 32 if tool == "subchat_status" else "c" * 32,
                 tool=tool, arguments={"operation_id": operation_id}), scopes)
             assert observed.state == "failed"
-            assert observed.data == {"error_code": "preparation_failed",
-                                     "dispatched": False,
-                                     "reason": "composer_has_draft"}
+            assert observed.data["error_code"] == "preparation_failed"
+            assert observed.data["dispatched"] is False
+            assert observed.data["reason"] == "composer_has_draft"
+            assert observed.data["submission_operation_id"] == operation_id
+            assert observed.data["provider_receipt"] == "not_sent"
         private = await gateway.execute("other-grant", Request(
             operation_id="d" * 32, tool="subchat_status",
             arguments={"operation_id": operation_id}), scopes)

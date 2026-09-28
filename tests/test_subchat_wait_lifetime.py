@@ -92,8 +92,11 @@ async def test_queued_preparation_failure_survives_controller_restart(tmp_path):
         server = session(service)
         failed = await server.execute(Request(operation_id='8' * 32,
             tool='subchat_status', arguments={'operation_id': child}))
-        assert failed.data == {'error_code': 'preparation_failed',
-                               'dispatched': False, 'reason': 'composer_has_draft'}
+        assert failed.data['error_code'] == 'preparation_failed'
+        assert failed.data['dispatched'] is False
+        assert failed.data['reason'] == 'composer_has_draft'
+        assert failed.data['submission_operation_id'] == child
+        assert failed.data['provider_receipt'] == 'not_sent'
         retried = await server.execute(Request(operation_id='9' * 32,
             tool='subchat_recover', arguments={'operation_id': child}))
         assert retried.state == 'unknown'

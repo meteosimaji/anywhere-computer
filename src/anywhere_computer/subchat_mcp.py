@@ -1599,6 +1599,8 @@ def session(service: Subchats, *,
                       if isinstance(cause, ValueError) else None)
             if request.tool == 'subchat_send':
                 save_preparation_failure(send_operation_id, error)
+            target_id = (send_operation_id if request.tool == 'subchat_send'
+                         else request.arguments.get('operation_id'))
             return Reply(operation_id=request.operation_id, state='failed',
                          error='Adapter preparation failed before dispatch. Check for an existing '
                                'draft, active generation, missing HTTP selection or unavailable '
@@ -1607,7 +1609,9 @@ def session(service: Subchats, *,
                                'a new queue also requires its parent selection to match this '
                                'controller. '
                                'For an existing queued message, recover its operation instead.',
-                         data={'error_code': 'preparation_failed', 'dispatched': False,
+                         data={**(saved_receipt(target_id) if isinstance(target_id, str)
+                                  else {}),
+                               'error_code': 'preparation_failed', 'dispatched': False,
                                **({'reason': reason} if reason is not None else {})})
         except SubchatPreflightFailed:
             return Reply(operation_id=request.operation_id, state='failed',

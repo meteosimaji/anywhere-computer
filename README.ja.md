@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b30` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.30` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b31` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.31` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -65,6 +65,9 @@ subchatは、役割を分担した通常のChatGPT Chatです。ChatGPT Workタ�
 親が作業範囲を指定し、複数の子から根拠付きの結果を集め、検証して統合する用途を目指します。
 子Chat同士は途中結果を交換しません。独立した担当には並列化が役立ちますが、
 重複する調査では作成と回収の時間が増えます。密接に関連する調査は単一Chatで進めます。
+子には実際にアクセスできる資料と回答形式を指定します。`work_context`は由来の記録であり、
+親のツールや会話履歴を共有しません。独立した子は先に送信し、親は別作業を進めてから、
+保存された各操作IDで結果を回収して根拠を確認します。
 このチェックアウトのCodex Pluginは、能力・モデル一覧・保存済み操作・結果回収と、
 保存済み回答のsandboxファイルと、保存済み会話に結び付く生成画像を
 上限付きで取得する読み取り専用ツールを

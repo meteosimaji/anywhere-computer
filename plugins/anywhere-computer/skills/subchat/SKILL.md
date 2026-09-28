@@ -12,6 +12,20 @@ saved submissions and authenticated history but cannot send. A send-capable mode
 still requires browser preparation; it is not independent HTTP-only generation.
 Do not infer provider authorization from a successful local call.
 
+For parallel work, split only independent, bounded questions with a clear
+answer format. Give each child the source material or access path it actually
+needs; `work_context` records provenance and does not grant the child the
+parent's files, tools, or conversation history. A child may lack the parent's
+browser or Computer Use tools, so require it to name the tools it used and to
+report access failure without guessing. Record one intent key and request ID
+for each intended child, send each child once, then continue useful parent
+work while the children run. Collect their saved operation IDs later and
+verify their cited evidence before integrating an answer. Do not serially wait
+for one child before starting the next independent child. Prefer the single
+current Chat when the tasks share context heavily or the expected answer is
+shorter than the setup and recovery work. No child-count limit is inferred
+from the wording of a prompt; the operation ledger records actual sends.
+
 If calling this server through ChatGPT's `codex_plugin_call` bridge, first open
 `codex_plugin_session_open` and pass its `session_id` to tool inspection and
 every stateful Subchat call. Keep the session open while sending, waiting, or

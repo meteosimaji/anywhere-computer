@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b30` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.30` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b31` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.31` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -138,6 +138,10 @@ Codex and Claude Code peers can use the separate mailbox described below;
 mailbox delivery does not prove a model read or acted on a message. Sending several
 children can help when the tasks are independent; overlapping research adds
 creation and recovery time. Use a single Chat for one closely related inquiry.
+Give each child the exact sources it can access and a bounded result format;
+`work_context` records provenance but does not share the parent's tools or
+history. Start independent children before waiting, continue parent work, then
+recover each saved operation ID and verify its evidence.
 
 This checkout's Codex Plugin adds a separate Subchat MCP server. Its read-only
 mode has tools for capabilities, catalog, saved operations, result recovery,
