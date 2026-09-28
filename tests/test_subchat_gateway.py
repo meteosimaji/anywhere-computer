@@ -1423,6 +1423,7 @@ async def test_reconsent_reuses_subchat_ledger_without_cross_client_or_account_a
         ("subchat_message", "6" * 32, {"target_operation_id": legacy_id}),
         ("subchat_wait", "7" * 32, {"operation_id": legacy_id}),
         ("subchat_recover", "8" * 32, {"operation_id": legacy_id}),
+        ("subchat_observe", "2" * 32, {"operation_id": legacy_id}),
         ("subchat_status", "9" * 32, {"operation_id": legacy_id}),
         ("subchat_queue_auto", "a" * 32, {"operation_id": legacy_id}),
     ):

@@ -53,6 +53,8 @@ from .subchat_state import (
     SubchatSelectionError,
     SubchatSubmission,
     SubchatWorkContext,
+    confirmed_conversation_url,
+    provider_receipt_state,
 )
 
 _QUEUE_AUTHORIZATION_GRANT: ContextVar[str | None] = ContextVar(
@@ -110,7 +112,12 @@ class QueueResourcesChange(OperationId):
 
 def public_submission_data(submission: SubchatSubmission) -> dict[str, JsonValue]:
     """Expose a submission receipt without repeating the caller's full prompt."""
-    return cast(dict[str, JsonValue], submission.model_dump(mode='json', exclude={'prompt'}))
+    return {
+        **cast(dict[str, JsonValue], submission.model_dump(mode='json', exclude={'prompt'})),
+        'submission_operation_id': submission.operation_id,
+        'provider_receipt': provider_receipt_state(submission),
+        'conversation_url': confirmed_conversation_url(submission),
+    }
 
 
 class Catalog(Contract):
@@ -162,8 +169,9 @@ SEND_ACK_TIMEOUT = 2.0
 WAIT_POLL_INTERVAL_MS = 10_000
 READ_ONLY_TOOLS = frozenset({
     'subchat_capabilities', 'subchat_activity', 'subchat_catalog', 'subchat_list',
-    'subchat_recover', 'subchat_status', 'subchat_wait', 'subchat_download_file',
-    'subchat_download_image', 'subchat_refresh_auth', 'subchat_preview',
+    'subchat_observe', 'subchat_recover', 'subchat_status', 'subchat_wait',
+    'subchat_download_file', 'subchat_download_image', 'subchat_refresh_auth',
+    'subchat_preview',
 })
 
 _BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
@@ -220,15 +228,23 @@ _BASE_TOOL_DEFINITIONS: dict[str, tuple[type[Contract], str]] = {
                      'together; the current catalog is checked again before dispatch. '
                      'For an HTTP catalog choice, model is its model_title (not the '
                      'version label), and effort is its title. '
-                     'Set one stable intent_key per intended child Chat. After a missing '
-                     'reply or host safety block, inspect subchat_list and subchat_status '
-                     'before considering another send. Never create a new key for the '
-                     'same child; reuse its key only after reconciliation.'),
-    'subchat_recover': (OperationId, 'Recover receipt/answer or progress a queued follow-up; '
-                        'never replay an uncertain send.'),
+                     'Set one stable intent_key per intended child Chat. A completed tool '
+                     'call is not proof of provider acceptance: inspect provider_receipt '
+                     'and the saved submission_operation_id. After a missing reply or '
+                     'host safety block, inspect subchat_list and subchat_status before '
+                     'considering another send. Never create a new key for the same child; '
+                     'reuse its key only after reconciliation.'),
+    'subchat_recover': (OperationId, 'Recover receipt/answer; in a send-capable session, '
+                        'a queued follow-up may be sent once when its parent is complete. '
+                        'Never replay an uncertain send.'),
+    'subchat_observe': (OperationId, 'Reconcile provider receipt and answer for one saved '
+                        'submission without dispatching a queued follow-up. May update '
+                        'the local saved receipt; never sends a Chat message.'),
     'subchat_status': (OperationId, 'Read the saved submission and latest HTTP transport '
                        'checkpoint without browser interaction.'),
     'subchat_wait': (Wait, 'Wait for an answer without stopping generation or resending. '
+                     'In a send-capable session, this may send a queued follow-up once '
+                     'when its parent is complete. '
                      'Other subchats can progress between observations. Timeout returns '
                      'the current saved state, elapsed_ms and a suggested next poll interval; '
                      'it is not a failed generation or a provider ETA.'),
@@ -240,14 +256,40 @@ _GATEWAY_CATALOG_DEFINITION = (
     'catalog without changing the browser model picker.')
 
 
-def _tool_catalog(definitions: dict[str, tuple[type[Contract], str]]) -> list[JsonValue]:
+def _tool_catalog(definitions: dict[str, tuple[type[Contract], str]], *,
+                  read_only_mode: bool = False) -> list[JsonValue]:
+    # MCP annotations describe the effect a tool can have, independently of
+    # whether it is admitted by the current account, grant or host policy.
+    local_reads = {
+        'subchat_activity', 'subchat_capabilities', 'subchat_list', 'subchat_status',
+        'subchat_queue_events',
+    }
+    account_reads = {
+        'subchat_preview', 'subchat_download_file', 'subchat_download_image',
+    }
+    # Recovery and waiting may dispatch a queued follow-up in send-capable
+    # sessions. Observation-only sessions explicitly leave queues untouched.
+    dispatch_capable = {'subchat_recover', 'subchat_wait'} if not read_only_mode else set()
+    irreversible = {
+        'subchat_send', 'subchat_delete', 'subchat_queue_watch',
+        'subchat_queue_auto', *dispatch_capable,
+    }
+    open_world = {
+        'subchat_send', 'subchat_queue_watch', 'subchat_queue_auto',
+        *dispatch_capable,
+    }
+    catalog_definition = definitions.get('subchat_catalog')
+    catalog_is_read_only = read_only_mode or (
+        catalog_definition is not None and catalog_definition[0] is ReadOnlyHTTPCatalog
+    )
     return [cast(JsonValue, {
         'name': name, 'description': description, 'inputSchema': schema.model_json_schema(),
-        'annotations': {'readOnlyHint': name in {
-            'subchat_capabilities', 'subchat_catalog', 'subchat_status', 'subchat_list',
-            'subchat_download_file', 'subchat_download_image', 'subchat_refresh_auth',
-            'subchat_preview'},
-                        'destructiveHint': name == 'subchat_delete', 'openWorldHint': True},
+        'annotations': {
+            'readOnlyHint': (name in local_reads | account_reads
+                             or (name == 'subchat_catalog' and catalog_is_read_only)),
+            'destructiveHint': name in irreversible,
+            'openWorldHint': name in open_world,
+        },
     }) for name, (schema, description) in definitions.items()]
 
 
@@ -269,6 +311,7 @@ def direct_gateway_catalog() -> list[JsonValue]:
     """Advertise selected direct tools without opening or authenticating Chrome."""
     definitions = {name: definition for name, definition in _BASE_TOOL_DEFINITIONS.items()
                    if name in {'subchat_message', 'subchat_send', 'subchat_recover',
+                               'subchat_observe',
                                'subchat_status', 'subchat_list', 'subchat_wait',
                                'subchat_cancel', 'subchat_queue_events',
                                'subchat_queue_auto', 'subchat_queue_model_change',
@@ -353,6 +396,8 @@ INSTRUCTIONS = (
     'new send; never invent a fresh key for the same slot. '
     'Poll subchat_recover with the returned submission_operation_id; with a new transport '
     'request_id for an existing intent, the original submission operation ID is returned. '
+    'Use subchat_observe to reconcile a saved send without dispatching a queued follow-up; '
+    'recover and wait may dispatch a ready queued follow-up in send-capable sessions. '
     'subchat_message mode=queue persists a follow-up bound to the target operation; '
     'pass resources explicitly to attach already-uploaded files or observed plugin '
     'references to that child. Parent resources are not inherited. '
@@ -386,7 +431,8 @@ INSTRUCTIONS = (
     'prepared means this adapter has not dispatched; external/manual sends are not tracked. '
     'After correcting preparation, reconcile the visible Chat before retrying the same ID. '
     'sending means receipt unconfirmed: recover it, never click Send again. '
-    'Only submitted/completed confirm a matching message receipt; completed includes the answer. '
+    'Submitted/completed/interrupted confirm a matching message receipt; '
+    'completed includes the answer. '
     'If a new Chat remains sending without a conversation_id after process loss, '
     'automatic recovery may be impossible: preserve unknown and reconcile manually; '
     'never scan unrelated history or resend to manufacture a receipt. '
@@ -746,7 +792,8 @@ def session(service: Subchats, *,
 
         task.add_done_callback(restart_if_rearmed)
 
-    async def observe(operation_id: str, *, auto_queue: bool = False
+    async def observe(operation_id: str, *, auto_queue: bool = False,
+                      allow_queue_dispatch: bool = True
                       ) -> SubchatSubmission:
         if server.closed:
             raise RuntimeError('Subchat session is closed')
@@ -763,7 +810,7 @@ def session(service: Subchats, *,
             return current
         # Recovering a queued follow-up can dispatch it when its parent is complete.
         # An observation-only server must leave that durable queue untouched.
-        if read_only and current.state == 'queued':
+        if (read_only or not allow_queue_dispatch) and current.state == 'queued':
             return current
         task = recoveries.get(operation_id)
         if task is None and current.state in {'queued', 'sending', 'submitted'}:
@@ -883,11 +930,19 @@ def session(service: Subchats, *,
                        if name in READ_ONLY_TOOLS}
 
     async def catalog() -> list[JsonValue]:
-        tools = _tool_catalog(definitions)
+        tools = _tool_catalog(definitions, read_only_mode=read_only)
         return _require_send_fields(tools) if require_send_intent else tools
 
     async def execute(request: Request) -> Reply:
         send_operation_id = request.operation_id
+
+        def saved_receipt(operation_id: str) -> dict[str, JsonValue]:
+            try:
+                return public_submission_data(service.store.get(operation_id, owner=owner))
+            except SubchatOperationNotFound:
+                return {'submission_operation_id': operation_id,
+                        'provider_receipt': None, 'conversation_url': None}
+
         if read_only and request.tool not in READ_ONLY_TOOLS:
             return Reply(operation_id=request.operation_id, state='failed',
                          error='This Subchat session permits observation only.',
@@ -1402,11 +1457,13 @@ def session(service: Subchats, *,
                                      data={**public_submission_data(current),
                                            'submission_operation_id': submission_id,
                                            'send_in_progress': True})
-            elif request.tool in {'subchat_recover', 'subchat_status'}:
+            elif request.tool in {'subchat_recover', 'subchat_observe', 'subchat_status'}:
                 target = OperationId.model_validate(request.arguments)
                 if request.tool == 'subchat_status':
                     result = service.store.get(target.operation_id, owner=owner)
                     raise_failed_preparation(target.operation_id, result)
+                elif request.tool == 'subchat_observe':
+                    result = await observe(target.operation_id, allow_queue_dispatch=False)
                 else:
                     current = service.store.get(target.operation_id, owner=owner)
                     if current.state == 'queued':
@@ -1562,9 +1619,10 @@ def session(service: Subchats, *,
                                'automatic_retry': False})
         except SubchatOutcomeUnknown as error:
             return Reply(operation_id=request.operation_id, state='unknown',
-                         error='Submission unconfirmed. Use subchat_recover with '
+                         error='Submission unconfirmed. Use subchat_observe with '
                                'submission_operation_id; do not send again with a new ID.',
-                         data={'submission_operation_id': error.operation_id})
+                         data={**saved_receipt(error.operation_id),
+                               'automatic_retry': False})
         except SubchatDeletionUnknown:
             return Reply(operation_id=request.operation_id, state='unknown',
                          error='Deletion outcome is unknown. Inspect the exact conversation; '
@@ -1577,8 +1635,8 @@ def session(service: Subchats, *,
                              error='Subchat send outcome is unconfirmed. Inspect subchat_list '
                                    'and subchat_status with the saved operation ID before '
                                    'considering another send.',
-                             data={'error_type': type(error).__name__,
-                                   'submission_operation_id': send_operation_id,
+                             data={**saved_receipt(send_operation_id),
+                                   'error_type': type(error).__name__,
                                    'dispatched': None, 'automatic_retry': False})
             if request.tool in {'subchat_wait', 'subchat_recover'}:
                 target_id = request.arguments.get('operation_id')

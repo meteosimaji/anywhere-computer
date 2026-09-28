@@ -8,6 +8,94 @@ from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatList, SubchatSubmissions
 
 
+async def test_saved_receipt_distinguishes_transport_checkpoint_from_provider_acceptance(
+    tmp_path,
+):
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    server = session(Subchats(store, BrowserFixture()), owner='peer')
+    operation = 'a' * 32
+    conversation = '12345678-1234-1234-1234-123456789abc'
+
+    async def status(request_id):
+        return await server.execute(Request(operation_id=request_id,
+            tool='subchat_status', arguments={'operation_id': operation}))
+
+    try:
+        store.prepare(operation, 'private prompt', 'model', 'effort', owner='peer',
+                      intent_key='b' * 32)
+        prepared = await status('1' * 32)
+        assert prepared.state == 'completed'
+        assert prepared.data['provider_receipt'] == 'not_sent'
+        assert prepared.data['conversation_url'] is None
+
+        store.begin_send(operation, owner='peer', user_message_id='user',
+                         provider_account_id='account')
+        store.record_http_event(operation, 'generation_response', owner='peer', status=200)
+        store.observe_conversation(operation, 'user', conversation, owner='peer',
+                                   provider_account_id='account')
+        pending = await status('2' * 32)
+        assert pending.state == 'completed'
+        assert pending.data['submission_operation_id'] == operation
+        assert pending.data['provider_receipt'] == 'unconfirmed'
+        assert pending.data['conversation_url'] is None
+        assert pending.data['http_progress']['status'] == 200
+        page = await server.execute(Request(operation_id='3' * 32,
+            tool='subchat_list', arguments={}))
+        assert page.data['submissions'][0]['submission_operation_id'] == operation
+        assert page.data['submissions'][0]['provider_receipt'] == 'unconfirmed'
+        assert page.data['submissions'][0]['conversation_url'] is None
+        assert 'private prompt' not in page.model_dump_json()
+
+        store.submitted(operation, conversation, 'user', owner='peer')
+        accepted = await status('4' * 32)
+        assert accepted.data['provider_receipt'] == 'confirmed'
+        assert accepted.data['conversation_url'] == f'https://chatgpt.com/c/{conversation}'
+        store.complete(operation, 'answer', 'answer text', owner='peer')
+        finished = await status('5' * 32)
+        assert finished.data['provider_receipt'] == 'confirmed'
+        assert finished.data['state'] == 'completed'
+        assert finished.data['conversation_url'] == accepted.data['conversation_url']
+    finally:
+        await server.close()
+        ledger.close()
+
+
+async def test_observe_reconciles_uncertain_send_without_dispatching_queued_child(tmp_path):
+    ledger = Ledger(tmp_path)
+    browser = BrowserFixture()
+    store = SubchatSubmissions(ledger.connection)
+    service = Subchats(store, browser)
+    server = session(service, owner='peer')
+    parent, child = 'a' * 32, 'b' * 32
+    try:
+        with pytest.raises(SubchatOutcomeUnknown):
+            await service.send(parent, 'parent', 'model', 'effort', owner='peer')
+        assert store.get(parent, owner='peer').state == 'sending'
+        observed = await server.execute(Request(operation_id='c' * 32,
+            tool='subchat_observe', arguments={'operation_id': parent}))
+        assert observed.state == 'completed'
+        assert observed.data['provider_receipt'] == 'confirmed'
+        assert observed.data['state'] == 'submitted'
+        assert browser.sends == 1
+
+        browser.thinking = False
+        finished = await server.execute(Request(operation_id='d' * 32,
+            tool='subchat_observe', arguments={'operation_id': parent}))
+        assert finished.data['state'] == 'completed'
+        store.prepare(child, 'child', 'model', 'effort', owner='peer',
+                      conversation_id='conversation', after_operation_id=parent)
+        queued = await server.execute(Request(operation_id='e' * 32,
+            tool='subchat_observe', arguments={'operation_id': child}))
+        assert queued.data['state'] == 'queued'
+        assert queued.data['provider_receipt'] == 'not_sent'
+        assert store.get(child, owner='peer').state == 'queued'
+        assert browser.sends == 1
+    finally:
+        await server.close()
+        ledger.close()
+
+
 async def test_queued_model_change_uses_revision_and_never_resends(tmp_path):
     ledger = Ledger(tmp_path)
     store = SubchatSubmissions(ledger.connection)
@@ -121,6 +209,7 @@ async def test_catalog_choice_id_fills_send_fields_and_rejects_conflicts(tmp_pat
         result = await server.execute(Request(operation_id='b' * 32, tool='subchat_send',
             arguments={'prompt': 'review', 'choice_id': choice['choice_id']}))
         assert result.state == 'unknown'
+        assert result.data['provider_receipt'] == 'unconfirmed'
         saved = store.get('b' * 32, owner=None)
         assert (saved.model, saved.effort, saved.http_selection.model_slug) == (
             'Future Chat', 'Future effort', 'future-chat')
@@ -174,6 +263,7 @@ async def test_intent_key_reuses_one_dispatch_across_new_request_ids(tmp_path):
         first = await server.execute(Request(operation_id=first_id,
             tool='subchat_send', arguments=args))
         assert first.state == 'unknown'
+        assert first.data['provider_receipt'] == 'unconfirmed'
         second = await server.execute(Request(operation_id='4' * 32,
             tool='subchat_send', arguments=args))
         assert second.data['operation_id'] == first_id
@@ -550,6 +640,7 @@ async def test_mcp_submission_identity_pending_recovery_and_retry(tmp_path):
         catalog = await call('tools/list', {})
         names = {tool['name'] for tool in catalog['result']['tools']}
         assert names == {'subchat_activity', 'subchat_send', 'subchat_recover',
+                        'subchat_observe',
                         'subchat_status', 'subchat_wait',
                         'subchat_message', 'subchat_cancel', 'subchat_delete',
                         'subchat_list', 'subchat_queue_watch',
@@ -758,6 +849,7 @@ asyncio.run(main())
                     tools = await client.list_tools()
                     assert {tool.name for tool in tools.tools} == {
                         'subchat_activity', 'subchat_send', 'subchat_recover',
+                        'subchat_observe',
                         'subchat_status', 'subchat_wait',
                         'subchat_message', 'subchat_cancel', 'subchat_delete',
                         'subchat_list', 'subchat_queue_watch',

@@ -119,7 +119,11 @@ async def test_json_commands_recover_without_repeating_send(tmp_path):
     try:
         with pytest.raises(SubchatOutcomeUnknown):
             await dispatch(service, command)
-        assert json.loads(await dispatch(service, command))['state'] == 'sending'
+        sent = json.loads(await dispatch(service, command))
+        assert sent['state'] == 'sending'
+        assert sent['submission_operation_id'] == op
+        assert sent['provider_receipt'] == 'unconfirmed'
+        assert sent['conversation_url'] is None
         recovery = Command(action='recover', operation_id=op)
         assert json.loads(await dispatch(service, recovery))['state'] == 'submitted'
         backend.thinking = False

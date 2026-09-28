@@ -158,7 +158,7 @@ class DeviceRouter:
                 "outputSchema": Reply.model_json_schema(),
                 "annotations": {
                     "readOnlyHint": read_only, "destructiveHint": not read_only,
-                    "idempotentHint": read_only, "openWorldHint": name != "devices_list",
+                    "idempotentHint": read_only, "openWorldHint": name == "devices_call",
                 },
             }
             for name, description, model, read_only in descriptions

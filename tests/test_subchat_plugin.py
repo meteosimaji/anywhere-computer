@@ -656,6 +656,36 @@ async def test_plugin_http_catalog_defaults_to_http_and_missing_id_is_clear(tmp_
         ledger.close()
 
 
+async def test_subchat_annotations_match_send_and_observation_effects(tmp_path):
+    from anywhere_computer.subchat_mcp import direct_gateway_catalog
+
+    direct = {tool['name']: tool['annotations'] for tool in direct_gateway_catalog()}
+    assert direct['subchat_send'] == {
+        'readOnlyHint': False, 'destructiveHint': True, 'openWorldHint': True}
+    assert direct['subchat_recover']['destructiveHint'] is True
+    assert direct['subchat_wait']['destructiveHint'] is True
+    assert direct['subchat_queue_auto']['destructiveHint'] is True
+    assert direct['subchat_observe'] == {
+        'readOnlyHint': False, 'destructiveHint': False, 'openWorldHint': False}
+    assert direct['subchat_status'] == {
+        'readOnlyHint': True, 'destructiveHint': False, 'openWorldHint': False}
+    assert direct['subchat_list'] == direct['subchat_status']
+    assert direct['subchat_catalog'] == direct['subchat_status']
+
+    ledger = Ledger(tmp_path)
+    observer = session(Subchats(SubchatSubmissions(ledger.connection), BrowserFixture()),
+                       read_only=True)
+    try:
+        catalog = {tool['name']: tool['annotations'] for tool in await observer.catalog()}
+        assert catalog['subchat_recover']['destructiveHint'] is False
+        assert catalog['subchat_wait']['destructiveHint'] is False
+        assert catalog['subchat_recover']['openWorldHint'] is False
+        assert catalog['subchat_wait']['openWorldHint'] is False
+    finally:
+        await observer.close()
+        ledger.close()
+
+
 async def test_cli_unknown_operation_names_the_ledger_check(tmp_path):
     from anywhere_computer.subchat_cli import process_lines
 
@@ -716,7 +746,9 @@ async def test_plugin_explicit_refresh_only_reauthenticates_selected_read_sessio
     try:
         definitions = {item['name']: item for item in await server.catalog()}
         assert set(definitions) == READ_ONLY_TOOLS
-        assert definitions['subchat_refresh_auth']['annotations']['readOnlyHint'] is True
+        # Credential refresh changes the adapter's local authenticated session.
+        assert definitions['subchat_refresh_auth']['annotations']['readOnlyHint'] is False
+        assert definitions['subchat_refresh_auth']['annotations']['destructiveHint'] is False
         response = await server.execute(Request(operation_id='a' * 32,
                                                 tool='subchat_refresh_auth', arguments={}))
         assert response.state == 'completed'

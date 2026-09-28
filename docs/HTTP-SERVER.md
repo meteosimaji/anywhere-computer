@@ -48,7 +48,8 @@ anywhere http-serve
 ```sh
 anywhere http-add-tools --scope subchat_capabilities --scope subchat_catalog \
   --scope subchat_list \
-  --scope subchat_send --scope subchat_recover --scope subchat_status \
+  --scope subchat_send --scope subchat_observe --scope subchat_recover \
+  --scope subchat_status \
   --scope subchat_wait --scope subchat_message \
   --subchat-profile-id Default \
   --subchat-ledger /absolute/path/to/subchat-ledger \
@@ -70,7 +71,7 @@ anywhere http-add-tools --scope subchat_capabilities --scope subchat_catalog \
 既存の `subchat_list` 許可だけではプレビューを返しません。
 ChatGPT の開発用 Plugin では、既存接続の「更新する」や「再接続」だけでは、
 Plugin 作成時に保存された既定スコープが増えない場合があります。認可画面の
-「Requested tools」に上記8個の `subchat_*` が含まれることを確認してください。
+「Requested tools」に上記の `subchat_*` が含まれることを確認してください。
 含まれなければ、その画面で所有者パスワードを入力しても Subchat 権限は得られません。
 同意画面では、端末に設定済みの Subchat ツールが接続元の要求から漏れている場合に
 警告を表示します。警告は権限を追加せず、要求されたツールだけを許可します。
@@ -87,6 +88,15 @@ ChatGPT 側のプラグイン許可設定は接続全体に適用されます。
 応答が途切れたら同じ ID で状態を回収してください。未確認の送信を新しい ID で
 再送しないでください。`tools/list` は許可済み Subchat ツールの定義を
 Chrome を起動せずに表示し、ログイン状態は検証しません。
+`subchat_send` のツール応答が完了しても、Chat 側の受理を意味しません。
+返却の `provider_receipt` は `not_sent`・`unconfirmed`・`confirmed` を区別します。
+`confirmed` は一致するユーザーメッセージを Chat の履歴で確認できた状態で、
+有効な会話 ID があれば `conversation_url` も返します。HTTP 200 と会話 ID の候補だけでは
+`unconfirmed` のままです。応答が欠けた場合、`subchat_list` で保存済みの
+`submission_operation_id` を確認してから同じ操作を回収します。
+`subchat_observe` は保存済みの送信を照合しますが、待機中の追送は開始しません。
+送信可能な環境の `subchat_recover`・`subchat_wait` は待機中の追送を開始できるため、
+必要な権限と操作意図を区別してください。
 `subchat_status` は保存済み操作を grant ごとに、`subchat_capabilities` は
 設定済みの能力を、Chrome やネットワークを使わずに読みます。
 送信・回収などブラウザーが必要な操作では、最初の実行時に選択アカウントを

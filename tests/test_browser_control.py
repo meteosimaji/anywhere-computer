@@ -555,11 +555,14 @@ async def test_engine_browser_tools_are_owned_and_block_update(tmp_path, local_p
         moved = await call("browser_navigate", {**ids, "url": local_page}, "owner-a")
         assert moved.state == "completed", moved.error
         assert moved.data["url"] == local_page
-        filled = await call("browser_fill", {**ids, "selector": "#entry",
+        filled = await call("browser_fill", {**ids, "role": "textbox",
+                                             "snapshot_id": moved.data["snapshot_id"],
                                              "value": "日本語 ✅"}, "owner-a")
         assert filled.state == "completed", filled.error
         assert "日本語 ✅" in filled.data["text"]
-        clicked = await call("browser_click", {**ids, "selector": "#go"}, "owner-a")
+        clicked = await call("browser_click", {**ids, "role": "button", "name": "Go",
+                                               "snapshot_id": filled.data["snapshot_id"]},
+                             "owner-a")
         assert clicked.state == "completed", clicked.error
         assert "日本語 ✅ clicked" in clicked.data["text"]
         async def lost_snapshot(_entry):
@@ -624,5 +627,42 @@ async def test_browser_click_fill_exact_target_owner_and_preflight(local_page):
         await control.stop(BrowserSession(**ids), owner="owner-a")
         with pytest.raises(ValueError, match="unavailable"):
             await control.click(BrowserClick(**ids, selector="#go"), owner="owner-a")
+    finally:
+        await control.close()
+
+
+async def test_semantic_browser_targets_use_observed_snapshot_and_exact_role(local_page):
+    pytest.importorskip("playwright.async_api")
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="owner-a")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        observed = await control.navigate(BrowserNavigate(**ids, url=local_page),
+                                          owner="owner-a")
+        assert 'button "Go"' in observed["semantic_tree"]
+        assert "textbox" in observed["semantic_tree"]
+        with pytest.raises(ValueError, match="exactly one"):
+            BrowserClick(**ids, selector="#go", role="button")
+        with pytest.raises(ValueError, match="snapshot_id"):
+            BrowserClick(**ids, role="button", name="Go")
+
+        filled = await control.fill(BrowserFill(**ids, role="textbox",
+            snapshot_id=observed["snapshot_id"], value="semantic input"), owner="owner-a")
+        assert filled["value_verified"] is True
+        with pytest.raises(ValueError, match="stale"):
+            await control.click(BrowserClick(**ids, role="button", name="Go",
+                snapshot_id=observed["snapshot_id"]), owner="owner-a")
+        clicked = await control.click(BrowserClick(**ids, role="button", name="Go",
+            snapshot_id=filled["snapshot_id"]), owner="owner-a")
+        assert "semantic input clicked" in clicked["text"]
+
+        entry = control.entries[ids["session_id"]]
+        await entry.page.evaluate("""() => document.querySelector('#entry').
+            insertAdjacentHTML('beforebegin', '<label for=entry>Message</label>')""")
+        labeled = await control.observe(BrowserSession(**ids), owner="owner-a")
+        by_label = await control.fill(BrowserFill(**ids, label="Message",
+            snapshot_id=labeled["snapshot_id"], value="by label"), owner="owner-a")
+        assert by_label["value_verified"] is True
+        assert "by label" in by_label["text"]
     finally:
         await control.close()

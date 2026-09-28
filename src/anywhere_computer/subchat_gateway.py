@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 
 SUBCHAT_GATEWAY_TOOLS = frozenset({
     "subchat_capabilities", "subchat_catalog", "subchat_send", "subchat_message",
-    "subchat_recover", "subchat_wait", "subchat_status", "subchat_list",
+    "subchat_recover", "subchat_observe", "subchat_wait", "subchat_status", "subchat_list",
     "subchat_activity",
     "subchat_download_file", "subchat_download_image", "subchat_cancel",
     "subchat_queue_events", "subchat_queue_auto", "subchat_queue_model_change",
@@ -203,7 +203,7 @@ class SubchatGateway:
                     # Reads can still recover an uncertain write when every
                     # retained ID is unsafe to evict. They need no write cache.
                     observed = await execute_core()
-                    if (request.tool == "subchat_recover"
+                    if (request.tool in {"subchat_recover", "subchat_observe"}
                             and observed.state == "completed"
                             and observed.data.get("state") in {
                                 "completed", "cancelled", "interrupted", "preflight_failed"
@@ -239,9 +239,10 @@ class SubchatGateway:
             # transport ID is the saved submission identity here.
             return Reply(operation_id=request.operation_id, state="running",
                          data={"result_pending": True,
+                               "provider_receipt": "unconfirmed",
                                "next_action": "Use subchat_list to locate the saved "
                                               "submission ID, then subchat_status or "
-                                              "subchat_recover. Do not resend."})
+                                              "subchat_observe. Do not resend."})
 
     async def close(self) -> None:
         # Closing the service is a lifecycle boundary; HTTP disconnect is not.
@@ -373,7 +374,7 @@ class LazySubchatGateway:
         if legacy_grant_id == stable_owner:
             return stable_owner
         target: object = request.operation_id
-        if request.tool in {"subchat_status", "subchat_recover", "subchat_wait",
+        if request.tool in {"subchat_status", "subchat_observe", "subchat_recover", "subchat_wait",
                             "subchat_cancel", "subchat_download_file",
                             "subchat_download_image", "subchat_queue_events",
                             "subchat_queue_auto", "subchat_queue_model_change",

@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b26` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.26` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b27` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.27` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -78,7 +78,7 @@ its MCP processes load the updated wheel. Then check that
 `subchat_capabilities` to confirm the Subchat server's actual mode and version.
 When accessing Subchat through ChatGPT's `codex_plugin_call` bridge, open
 `codex_plugin_session_open` first, then pass its `session_id` to
-`codex_plugin_tools` and each Subchat send, message, recover, wait or queue-watch
+`codex_plugin_tools` and each Subchat send, message, observe, recover, wait or queue-watch
 call. Keep the session open until the answer is recovered, then close it with
 `codex_plugin_session_close`. The temporary bridge context cannot retain a
 pending send after its call ends, so those stateful calls without a session are
@@ -219,6 +219,10 @@ addition to opening, navigating, observing and closing an owned tab. Actions
 require a single visible target and return an unknown outcome if the result
 cannot be observed; inspect the tab before another action. Existing Chrome
 profiles and tabs are not part of this isolated-browser interface.
+Snapshots include a bounded accessible role tree and `snapshot_id`. Click and
+fill accept exact role/name or label targets with that snapshot ID, so a page's
+CSS class changes do not require a new selector. Stale snapshots and ambiguous
+targets fail before input. Exact CSS selectors remain available.
 The default isolated browser is installed Edge on Windows and Chrome on macOS
 and Linux. A local startup failure returns `browser_startup_unavailable` before
 any tab navigation.

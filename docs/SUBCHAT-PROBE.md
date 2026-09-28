@@ -280,6 +280,20 @@ with `subchat_wait` or `subchat_recover` until the answer is final. If a host
 blocks or loses the reply, inspect `subchat_list` and saved status first; the
 missing reply does not prove that no Chat was created. A submission receipt
 alone is not a completed answer.
+`provider_receipt` separates the transport call from the provider: `not_sent`
+is a saved pre-dispatch state, `unconfirmed` means the outcome still needs
+reconciliation, and `confirmed` means matching provider history shows the
+user message. A generation HTTP 200 or candidate conversation ID remains
+`unconfirmed` until that history check. `subchat_list` returns the canonical
+`submission_operation_id` and this classification for each saved row, without
+prompt text by default. `conversation_url` is populated only for a confirmed
+UUID conversation. No child count is inferred from prompt wording; keep one
+stable intent key per intended child and inspect saved rows before creating a
+new key after a missing response or host block.
+`subchat_observe` can reconcile a saved sending/submitted operation without
+dispatching a queued follow-up. In a send-capable controller,
+`subchat_recover` and `subchat_wait` may dispatch a queued follow-up once its
+parent completes; their risk annotations reflect that effect.
 
 `subchat_capabilities` also returns `implementation_version` and
 `implementation_runtime_id` for the Subchat server that answered this call.

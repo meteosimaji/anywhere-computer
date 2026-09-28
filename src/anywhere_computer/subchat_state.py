@@ -135,6 +135,30 @@ class SubchatSubmission(Contract):
         return self.resources.prompt(self.prompt) if self.resources else self.prompt
 
 
+def provider_receipt_state(submission: SubchatSubmission) -> Literal[
+    'not_sent', 'unconfirmed', 'confirmed'
+]:
+    """Classify saved provider evidence, independently of tool-call completion."""
+    if submission.state in {'queued', 'prepared', 'cancelled', 'preflight_failed'}:
+        return 'not_sent'
+    if submission.state == 'sending':
+        return 'unconfirmed'
+    if submission.conversation_id and submission.user_message_id:
+        return 'confirmed'
+    return 'unconfirmed'
+
+
+def confirmed_conversation_url(submission: SubchatSubmission) -> str | None:
+    """Link only a conversation whose matching user-message receipt was confirmed."""
+    conversation_id = submission.conversation_id
+    if (provider_receipt_state(submission) != 'confirmed'
+            or conversation_id is None
+            or re.fullmatch(r'[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}',
+                            conversation_id) is None):
+        return None
+    return f'https://chatgpt.com/c/{conversation_id}'
+
+
 class SubchatQueueRevisionConflict(ValueError):
     """The queued selection changed while a caller was preparing it."""
 
@@ -158,10 +182,13 @@ class SubchatList(Contract):
 
 class SubchatSummary(Contract):
     operation_id: str
+    submission_operation_id: str
     state: str
     model: str
     effort: str
     conversation_id: str | None
+    provider_receipt: Literal['not_sent', 'unconfirmed', 'confirmed']
+    conversation_url: str | None
     created_at: float | None = None
     prompt_preview: str | None = None
 
@@ -526,6 +553,9 @@ class SubchatSubmissions:
             summary = item.model_dump(include={
                 'operation_id', 'state', 'model', 'effort', 'conversation_id',
             })
+            summary['submission_operation_id'] = item.operation_id
+            summary['provider_receipt'] = provider_receipt_state(item)
+            summary['conversation_url'] = confirmed_conversation_url(item)
             summary['created_at'] = row[2]
             if request.include_prompt_preview:
                 summary['prompt_preview'] = item.prompt[:160]
