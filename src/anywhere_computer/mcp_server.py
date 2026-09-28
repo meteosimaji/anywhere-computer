@@ -71,6 +71,7 @@ def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
     data = cast(dict[str, JsonValue], structured["data"])
     provider_result = name in {
         "codex_plugin_call", "mcp_call", "gui_observe", "gui_type", "gui_click", "gui_key",
+        "browser_observe",
     }
     project = provider_result and reply.state == "completed"
     if name == "operations_get" and reply.state == "completed":

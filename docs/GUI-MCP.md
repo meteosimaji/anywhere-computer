@@ -1,6 +1,7 @@
 # GUI操作の接続と確認
 
 GUI操作は実行中のツール一覧、選択したMCPのschema、OS権限を確認してから始めます。
+比較と追加実装の順序は [GUI-AUTOMATION-PLAN.md](GUI-AUTOMATION-PLAN.md) に記録します。
 開発ソースにはmacOS向けNative Accessibilityと、明示的に開いたMCP sessionを
 使うPeekaboo／Cuaアダプターがあります。ソースに実装があっても、古いインストール済み
 エンジンに同じツールがあるとは限りません。GUI操作にsubchatやChatGPTブラウザーの
@@ -17,6 +18,29 @@ sessionは不要です。
 `gui_native_observe(session_id, app, window_id)` に渡します。観測した要素に対して、
 次を使用できます。
 
+通常は `gui_native_observe(..., compact=true)` で、操作可能な要素の
+`role`、`label`、`identifier`、有効状態だけを受け取れます。内蔵ヘルパーが
+幅優先で対象を探索するため、先頭の長いリストが上限に達してもツールバーなどを
+見つけやすくなります。値やツリー構造が必要な場合は `compact=false` で
+再観測します。探索は最大128要素で、`truncated=true` の場合は全要素を
+確認した意味ではありません。意味的な操作は次のとおりです。
+
+- `gui_native_press_target(..., observation_id, role, label または identifier)`:
+  観測内で一意の要素に対して AXPress を1回実行します。
+- `gui_native_set_value_target(..., observation_id, role, label または identifier, value)`:
+  観測内で一意の書き込み可能な要素の AXValue を置換します。
+
+指定は大文字小文字を含め完全一致です。同じ名前が複数ある場合は
+`identifier` も指定するか、詳細ツリーから `element_ref` を選びます。
+意味的な操作の直前には最大1024要素まで対象ウィンドウを再走査し、
+未観測の同名要素を含めて一意性を確認します。走査が上限や期限で完了しない
+場合は入力せず拒否します。`element_ref` は観測済みの特定要素を指定します。
+対象が消えた、属性が変わった、または観測が期限切れの場合は入力前に拒否します。
+アプリ・ウィンドウ・操作 ID の紐付けと操作後の再観測は従来どおり必要です。
+古い接続の grant に新しいツールは自動追加されません。
+
+参照 ID による既存の操作も利用できます。
+
 - `gui_native_set_value(session_id, app, window_id, observation_id, element_ref, value)`:
   書き込み可能なAXValueを置換し、同じ要素の値を読み戻します。ファイル保存の確認ではありません。
 - `gui_native_press(session_id, app, window_id, observation_id, element_ref)`:
@@ -24,6 +48,8 @@ sessionは不要です。
 
 操作後は再観測します。最後に `gui_native_close(session_id)` でsessionを終了します。
 macOSのAccessibility権限とmanifest検証済みのnative helperが必要です。
+`AXWindows` が空のアプリでは、同じプロセスの `AXFocusedWindow` と
+`AXMainWindow` にあるウィンドウを補助的に列挙します。
 この経路は座標クリック、スクリーンショット、キー送信、Windows UI Automationを
 提供しません。アプリの前面化を代替手段として実行しませんが、アプリ側の動作で
 フォーカスやウィンドウが変わることはあります。
@@ -33,10 +59,29 @@ macOSのAccessibility権限とmanifest検証済みのnative helperが必要で�
 ## 隔離ブラウザの役割・ラベル操作
 
 `browser_navigate` と `browser_observe` は、URL・本文に加えて短い
-`semantic_tree` と `snapshot_id` を返します。`browser_click`・`browser_fill` は
+`semantic_tree`、HTMLフォーム要素の `form_controls` と `snapshot_id` を返します。
+`form_controls` は非表示でない入力・選択・ボタンについて、`<label>` の対応、
+`aria-label`、`aria-labelledby`、プレースホルダーなどを別の項目に整理します。
+この一覧はメイン文書を対象とし、iframe や shadow DOM 内の要素はまだ列挙しません。
+各要素の `box` は表示領域を基準にした CSS pixel 単位で、`in_viewport` は
+その枠が表示領域と交差するかを示します。重なりや操作可能性の保証ではありません。
+ラベルの改行や連続空白は読みやすい空白に整え、入力値はこの一覧に含めません。
+正確なアクセシブル名は `semantic_tree` も参照してください。表示用の本文と
+ツリーでは改行コードと余分な空行を正規化します。
+
+`browser_observe(..., include_image=true)` は同じ隔離タブの表示領域を
+最大1MiBの JPEG 画像として追加します。画像は CSS pixel の大きさで撮り、
+`form_controls` の `box` と見比べられます。MCP では画像 item として配送し、
+テキスト結果には画像のバイト数・ダイジェストだけを記載します。DOM観測と
+画像取得は順番に実行されるため同一時刻の状態とは限りません。画像の座標を
+入力に使う API はまだありません。
+画像取得に失敗しても文字とフォーム情報を返し、`visual_unavailable` で理由を示します。
+`browser_click`・`browser_fill` は
 従来の `selector` のほか、観測した `role` と正確な `name`、または `label` と
 `snapshot_id` を渡せます。役割・ラベル指定は1つだけにし、複数一致、非表示、
 無効、60秒を過ぎた観測、別ページへの遷移を入力前に拒否します。
+操作時は対象を再解決し、表示までの短い待機と Playwright の操作可能性確認を
+使うため、ページ内の再描画で以前の DOM 要素が消えても同じ対象を操作できます。
 入力後は新しい観測 ID が返るので、次の操作にはその ID を使います。
 処理結果が不明なら同じタブを再観測し、確認前にクリックを繰り返しません。
 この経路は新しい一時ブラウザを所有するもので、利用者が開いているタブの

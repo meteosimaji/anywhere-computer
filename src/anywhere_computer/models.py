@@ -262,6 +262,13 @@ class BrowserSession(Contract):
     tab_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
+class BrowserObserve(BrowserSession):
+    include_image: bool = Field(default=False, description=(
+        "Include a bounded rendered viewport image alongside the accessible page observation. "
+        "The image is returned as an MCP image item, not embedded in model text."
+    ))
+
+
 class BrowserNavigate(BrowserSession):
     url: str = Field(min_length=1, max_length=4096)
 

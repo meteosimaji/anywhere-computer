@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b27` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.27` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b28` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.28` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -222,7 +222,18 @@ profiles and tabs are not part of this isolated-browser interface.
 Snapshots include a bounded accessible role tree and `snapshot_id`. Click and
 fill accept exact role/name or label targets with that snapshot ID, so a page's
 CSS class changes do not require a new selector. Stale snapshots and ambiguous
-targets fail before input. Exact CSS selectors remain available.
+targets fail before input. The action resolves the current element after a page
+rerender and waits briefly for it to become visible. Exact CSS selectors remain
+available.
+On macOS, the built-in native Accessibility helper can also return a compact
+list of actionable AX role/label/identifier targets. New `gui_native_press_target`
+and `gui_native_set_value_target` tools require a unique target in a fresh
+observation, with app and window identity checked again before input.
+Isolated-browser observations also include structured HTML form labels and
+CSS-pixel element boxes. Call
+`browser_observe` with `include_image=true` to receive the rendered viewport
+as a bounded native MCP image alongside the semantic observation. The image
+and structure are captured sequentially and can differ on a changing page.
 The default isolated browser is installed Edge on Windows and Chrome on macOS
 and Linux. A local startup failure returns `browser_startup_unavailable` before
 any tab navigation.

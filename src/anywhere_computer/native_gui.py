@@ -9,7 +9,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from pydantic import Field, JsonValue, TypeAdapter
+from pydantic import Field, JsonValue, TypeAdapter, model_validator
 
 from .models import Contract
 
@@ -23,7 +23,8 @@ HELPER_ERROR_CODES = frozenset({
     "observation_mismatch", "observation_unavailable", "press_target_changed",
     "process_identity_changed", "process_identity_unavailable", "process_not_found",
     "response_too_large", "stdin_error", "tree_limit_exceeded", "unknown_method",
-    "value_changed", "value_not_comparable", "value_not_settable",
+    "target_ambiguous", "target_changed", "target_not_found", "value_changed",
+    "value_not_comparable", "value_not_settable",
     "window_limit_exceeded", "window_unavailable",
 })
 # The helper reports these only before AXPress/AXValue is attempted. A valid
@@ -33,7 +34,8 @@ NONFATAL_HELPER_ERRORS = frozenset({
     "element_unavailable", "invalid_input", "observation_limit_exceeded",
     "observation_mismatch", "observation_unavailable", "press_target_changed",
     "process_identity_changed", "process_identity_unavailable", "process_not_found",
-    "tree_limit_exceeded", "value_changed", "value_not_comparable",
+    "target_ambiguous", "target_changed", "target_not_found", "tree_limit_exceeded",
+    "value_changed", "value_not_comparable",
     "value_not_settable", "window_limit_exceeded", "window_unavailable",
 })
 AX_DIAGNOSTIC_STAGES = frozenset({
@@ -77,16 +79,44 @@ class NativeSession(Contract):
     session_id: str = Field(pattern=r"^[a-f0-9]{32}$")
 
 
-class NativeObserve(NativeSession, NativeApp):
+class NativeWindow(NativeSession, NativeApp):
     window_id: int = Field(strict=True, ge=1)
 
 
-class NativePress(NativeObserve):
+class NativeObserve(NativeWindow):
+    compact: bool = Field(default=False, exclude=True, description=(
+        "Return only actionable role/label/identifier targets, omitting the full AX tree. "
+        "Use the full tree when a target is missing or ambiguous."
+    ))
+
+
+class NativePress(NativeWindow):
     observation_id: str = Field(min_length=1, max_length=128)
     element_ref: str = Field(min_length=1, max_length=128)
 
 
 class NativeSetValue(NativePress):
+    value: str = Field(max_length=8000)
+
+
+class NativeTarget(NativeWindow):
+    observation_id: str = Field(min_length=1, max_length=128)
+    role: str = Field(min_length=1, max_length=128)
+    label: str | None = Field(default=None, min_length=1, max_length=512)
+    identifier: str | None = Field(default=None, min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def require_name(self) -> "NativeTarget":
+        if self.label is None and self.identifier is None:
+            raise ValueError("Choose an observed label or identifier")
+        return self
+
+
+class NativePressTarget(NativeTarget):
+    pass
+
+
+class NativeSetValueTarget(NativeTarget):
     value: str = Field(max_length=8000)
 
 
@@ -189,8 +219,9 @@ class NativeGUI:
                                     and request.get("method") != "windows"
                                     and "result" not in response
                                     and code in NONFATAL_HELPER_ERRORS)
-                    if keep_session and (code == "value_changed" or (
-                            code == "press_target_changed" and request.get("method") == "press")):
+                    if keep_session and (code in {"value_changed", "target_changed"} or (
+                            code == "press_target_changed"
+                            and request.get("method") in {"press", "press_target"})):
                         raise NativeGUIInputRefused(
                             "Native GUI target changed since observation; input was not attempted")
                     if keep_session and code == "value_not_comparable":
@@ -231,7 +262,8 @@ class NativeGUI:
         async with self.lock:
             entry = self._entry(args.session_id, owner)
             result = await self._call(args.session_id, {
-                "method": "observe", "app": args.app, "window_id": args.window_id,
+                "method": "observe_targets" if args.compact else "observe",
+                "app": args.app, "window_id": args.window_id,
             })
             observation = result.get("observation_id")
             if not isinstance(observation, str) or not observation or len(observation) > 128:
@@ -242,31 +274,49 @@ class NativeGUI:
             entry.observations.add(observation)
             return result
 
-    async def set_value(self, args: NativeSetValue, *, owner: str | None
-                        ) -> dict[str, JsonValue]:
+    async def _apply(self, session_id: str, observation_id: str,
+                     request: dict[str, JsonValue], *, owner: str | None
+                     ) -> dict[str, JsonValue]:
         async with self.lock:
-            entry = self._entry(args.session_id, owner)
-            if args.observation_id not in entry.observations:
+            entry = self._entry(session_id, owner)
+            if observation_id not in entry.observations:
                 raise ValueError("Native GUI observation unavailable; observe again")
             for current in self.entries.values():
                 current.observations.clear()
-            return await self._call(args.session_id, {
+            return await self._call(session_id, request, mutation=True)
+
+    async def set_value(self, args: NativeSetValue, *, owner: str | None
+                        ) -> dict[str, JsonValue]:
+        return await self._apply(args.session_id, args.observation_id, {
                 "method": "set_value", "app": args.app, "window_id": args.window_id,
                 "observation_id": args.observation_id, "element_ref": args.element_ref,
                 "value": args.value,
-            }, mutation=True)
+            }, owner=owner)
 
     async def press(self, args: NativePress, *, owner: str | None) -> dict[str, JsonValue]:
-        async with self.lock:
-            entry = self._entry(args.session_id, owner)
-            if args.observation_id not in entry.observations:
-                raise ValueError("Native GUI observation unavailable; observe again")
-            for current in self.entries.values():
-                current.observations.clear()
-            return await self._call(args.session_id, {
+        return await self._apply(args.session_id, args.observation_id, {
                 "method": "press", "app": args.app, "window_id": args.window_id,
                 "observation_id": args.observation_id, "element_ref": args.element_ref,
-            }, mutation=True)
+            }, owner=owner)
+
+    async def set_value_target(self, args: NativeSetValueTarget, *, owner: str | None
+                               ) -> dict[str, JsonValue]:
+        return await self._apply(args.session_id, args.observation_id, {
+            "method": "set_value_target", "app": args.app, "window_id": args.window_id,
+            "observation_id": args.observation_id, "role": args.role,
+            **({"label": args.label} if args.label is not None else {}),
+            **({"identifier": args.identifier} if args.identifier is not None else {}),
+            "value": args.value,
+        }, owner=owner)
+
+    async def press_target(self, args: NativePressTarget, *, owner: str | None
+                           ) -> dict[str, JsonValue]:
+        return await self._apply(args.session_id, args.observation_id, {
+            "method": "press_target", "app": args.app, "window_id": args.window_id,
+            "observation_id": args.observation_id, "role": args.role,
+            **({"label": args.label} if args.label is not None else {}),
+            **({"identifier": args.identifier} if args.identifier is not None else {}),
+        }, owner=owner)
 
     async def stop(self, args: NativeSession, *, owner: str | None) -> dict[str, JsonValue]:
         async with self.lock:

@@ -412,7 +412,8 @@ async def test_computer_status_reports_only_this_peers_feature_grant(tmp_path):
         assert denied.data["error_code"] == "capability_not_authorized"
         full = RemoteAgent(engine, {
             "full": frozenset({"computer_status", "gui_native_windows", "gui_native_observe",
-                               "gui_native_close", "gui_native_set_value", "gui_native_press"}),
+                               "gui_native_close", "gui_native_set_value", "gui_native_press",
+                               "gui_native_set_value_target", "gui_native_press_target"}),
         })
         full_reply = Reply.model_validate_json(await full.dispatch(
             "full", request("computer_status").model_dump_json().encode(),

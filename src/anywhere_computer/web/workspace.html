@@ -345,7 +345,7 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
       const highlights=[
         [hasAny(["files_write","files_write_binary","files_edit","files_move","files_restore","directories_create","documents_write","documents_edit_paragraph","upload_commit"]),"ファイル・文書の変更"],
         [hasAny(["terminal_start","terminal_input","mcp_session_open"]),"コマンド実行"],
-        [hasAny(["gui_click","gui_type","gui_key","gui_native_press","gui_native_set_value"]),"アプリの操作"],
+        [hasAny(["gui_click","gui_type","gui_key","gui_native_press","gui_native_set_value","gui_native_press_target","gui_native_set_value_target"]),"アプリの操作"],
         [hasAny(["browser_navigate","browser_click","browser_fill"]),"Webページの操作"],
         [granted.has("codex_plugin_call"),"ほかのPluginの呼出し"],
         [granted.has("mcp_call"),"MCPサービスの呼出し"],

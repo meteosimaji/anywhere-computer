@@ -22,7 +22,7 @@ for line in sys.stdin:
                 'code': 'accessibility_required'}}), flush=True)
             continue
         result = {'windows': [{'window_id': 1}]}
-    elif method == 'observe':
+    elif method in ('observe', 'observe_targets'):
         if mode in ('ax_diagnostic', 'private_ax_diagnostic'):
             error = {'code': 'ax_error', 'stage': 'copy_attribute',
                      'attribute': 'AXValue', 'ax_status': -25205}
@@ -43,8 +43,33 @@ for line in sys.stdin:
             print(json.dumps({'id': req['id'], 'error': {
                 'code': 'synthetic_secret_ABC123'}}), flush=True)
             continue
-        result = {'observation_id': 'fixture-observation', 'tree': {}}
+        tree = ({'element_ref': 'window', 'role': 'AXWindow', 'children': [
+            {'element_ref': 'button', 'role': 'AXButton', 'label': 'Save',
+             'identifier': 'save-primary', 'pressable': True, 'settable': False,
+             'enabled': True, 'value': 'private-value'},
+            {'element_ref': 'field', 'role': 'AXTextField', 'label': 'Name',
+             'identifier': 'name-field', 'pressable': False, 'settable': True,
+             'enabled': True, 'value': 'private-value'},
+        ]} if mode == 'semantic' else {})
+        if method == 'observe_targets':
+            result = {'observation_id': 'fixture-observation', 'tree_omitted': True,
+                      'targets': [{key: value for key, value in node.items()
+                                   if key != 'value'} for node in tree.get('children', [])]}
+        else:
+            result = {'observation_id': 'fixture-observation', 'tree': tree}
     else:
+        if mode in ('target_ambiguous', 'target_changed', 'target_not_found'):
+            print(json.dumps({'id': req['id'], 'error': {'code': mode}}), flush=True)
+            continue
+        if method == 'press_target' and (req.get('role') != 'AXButton'
+                or req.get('identifier') != 'save-primary'
+                or 'label' in req):
+            print(json.dumps({'id': req['id'], 'error': {'code': 'invalid_input'}}), flush=True)
+            continue
+        if method == 'set_value_target' and (req.get('role') != 'AXTextField'
+                or req.get('label') != 'Name' or 'identifier' in req):
+            print(json.dumps({'id': req['id'], 'error': {'code': 'invalid_input'}}), flush=True)
+            continue
         if mode in ('element_unavailable', 'value_not_comparable'):
             print(json.dumps({'id': req['id'], 'error': {
                 'code': mode}}), flush=True)
@@ -57,7 +82,7 @@ for line in sys.stdin:
         if mode == 'lost':
             sys.exit(0)
         result = ({'action_accepted': True, 'postcondition_verified': False}
-                  if method == 'press' else
+                  if method in ('press', 'press_target') else
                   {'value_verified': True, 'persistence_verified': False})
     print(json.dumps({'id': req['id'], 'result': result}), flush=True)
 '''
@@ -108,8 +133,75 @@ async def test_owner_binding_and_cross_session_snapshot_invalidation(helper_proc
     assert all(p.returncode is not None for p in helper_process[2])
 
 
+async def test_compact_semantic_targets_and_exact_native_actions(helper_process):
+    helper_process[0][0] = "semantic"
+    gui = native_gui.NativeGUI()
+    try:
+        opened = await gui.windows(native_gui.NativeApp(app="test"), owner="one")
+        target = {"session_id": opened["session_id"], "app": "test", "window_id": 1}
+        observed = await gui.observe(native_gui.NativeObserve(**target, compact=True), owner="one")
+        assert "tree" not in observed and observed["tree_omitted"] is True
+        assert observed["targets"] == [
+            {"element_ref": "button", "role": "AXButton", "label": "Save",
+             "identifier": "save-primary", "pressable": True, "settable": False,
+             "enabled": True},
+            {"element_ref": "field", "role": "AXTextField", "label": "Name",
+             "identifier": "name-field", "pressable": False, "settable": True,
+             "enabled": True},
+        ]
+        assert "private-value" not in str(observed)
+        press = native_gui.NativePressTarget(**target,
+            observation_id=observed["observation_id"], role="AXButton",
+            identifier="save-primary")
+        assert (await gui.press_target(press, owner="one"))["action_accepted"] is True
+        with pytest.raises(ValueError, match="observation unavailable"):
+            await gui.press_target(press, owner="one")
+        observed = await gui.observe(native_gui.NativeObserve(**target), owner="one")
+        write = native_gui.NativeSetValueTarget(**target,
+            observation_id=observed["observation_id"], role="AXTextField",
+            label="Name", value="new value")
+        assert (await gui.set_value_target(write, owner="one"))["value_verified"] is True
+        assert helper_process[1].read_text() == "write\nwrite\n"
+        with pytest.raises(ValueError, match="observed label or identifier"):
+            native_gui.NativePressTarget(**target,
+                observation_id="fixture-observation", role="AXButton")
+    finally:
+        await gui.close()
+
+
+@pytest.mark.parametrize("mode,expected", [
+    ("target_ambiguous", "target_ambiguous"),
+    ("target_not_found", "target_not_found"),
+    ("target_changed", "native_gui_input_refused"),
+])
+async def test_semantic_target_rejection_does_not_send_input(
+        tmp_path, helper_process, mode, expected):
+    helper_process[0][0] = mode
+    engine = Engine(tmp_path / "state")
+    try:
+        opened = await engine.execute(Request(operation_id="a" * 32,
+            tool="gui_native_windows", arguments={"app": "test"}), peer="one")
+        target = {"session_id": opened.data["session_id"], "app": "test", "window_id": 1}
+        observed = await engine.execute(Request(operation_id="b" * 32,
+            tool="gui_native_observe", arguments={**target, "compact": True}), peer="one")
+        attempt = await engine.execute(Request(operation_id="c" * 32,
+            tool="gui_native_press_target", arguments={**target,
+                "observation_id": observed.data["observation_id"], "role": "AXButton",
+                "label": "Save"}), peer="one")
+        assert attempt.state == "failed"
+        assert attempt.data["error_code"] == expected
+        assert attempt.data["input_attempted"] is False
+        if mode == "target_ambiguous":
+            assert "identifier" in attempt.data["next_action"]
+        assert not helper_process[1].exists()
+    finally:
+        await engine.close()
+
+
 @pytest.mark.parametrize("method,mode,expected", [
     ("set_value", "lost", "unknown"), ("press", "lost", "unknown"),
+    ("set_value_target", "lost", "unknown"),
+    ("press_target", "lost", "unknown"),
     ("set_value", "changed", "failed"), ("press", "changed", "failed"),
     ("press", "press_changed", "failed"),
     ("set_value", "value_not_comparable", "failed"),
@@ -127,9 +219,14 @@ async def test_native_outcome_is_durable_and_not_replayed(
         observed = await engine.execute(Request(operation_id="2" * 32,
             tool="gui_native_observe", arguments=arguments), peer="one")
         assert observed.state == "completed"
+        selected = ({"role": "AXButton", "identifier": "save-primary"}
+                    if method == "press_target" else
+                    {"role": "AXTextField", "label": "Name", "value": "write once"}
+                    if method == "set_value_target" else
+                    {"element_ref": "field", **({"value": "write once"}
+                                              if method == "set_value" else {})})
         request = Request(operation_id="3" * 32, tool=f"gui_native_{method}", arguments={
-            **arguments, "observation_id": observed.data["observation_id"],
-            "element_ref": "field", **({"value": "write once"} if method == "set_value" else {}),
+            **arguments, "observation_id": observed.data["observation_id"], **selected,
         })
         first = await engine.execute(request, peer="one")
         second = await engine.execute(request, peer="one")
