@@ -15,6 +15,7 @@ from pydantic import JsonValue
 from . import __version__
 from .connection import WIRE_LIMIT, ensure_agent, exchange
 from .models import Reply, Request
+from .plugin_audio import audio_summary
 from .plugin_images import image_summary
 from .workspace_ui import UI_ACTIONS, supports_ui, with_ui_metadata, workspace_resource
 
@@ -67,11 +68,11 @@ def rpc_error(identity: JsonValue, code: int, message: str) -> dict[str, JsonVal
 
 def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
     structured = cast(dict[str, JsonValue], reply.model_dump(mode="json"))
-    images: list[JsonValue] = []
+    media: list[JsonValue] = []
     data = cast(dict[str, JsonValue], structured["data"])
     provider_result = name in {
         "codex_plugin_call", "mcp_call", "gui_observe", "gui_type", "gui_click", "gui_key",
-        "browser_observe",
+        "browser_observe", "media_audio_clip", "media_video_frames",
     }
     project = provider_result and reply.state == "completed"
     if name == "operations_get" and reply.state == "completed":
@@ -86,30 +87,34 @@ def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
             projected: list[JsonValue] = []
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "image":
-                    images.append(item)
+                    media.append(item)
                     projected.append(image_summary(item))
+                elif isinstance(item, dict) and item.get("type") == "audio":
+                    media.append(item)
+                    projected.append(audio_summary(item))
                 else:
                     projected.append(item)
             data["content"] = projected
             def summarize_duplicate(value: JsonValue) -> JsonValue:
                 if isinstance(value, dict):
-                    for image in images:
-                        if (isinstance(image, dict) and value.get('type') == 'image'
-                                and value.get('data') == image.get('data')
-                                and value.get('mimeType') == image.get('mimeType')):
-                            return image_summary(image)
+                    for item in media:
+                        if (isinstance(item, dict) and value.get('type') == item.get('type')
+                                and value.get('data') == item.get('data')
+                                and value.get('mimeType') == item.get('mimeType')):
+                            return (image_summary(item) if item['type'] == 'image'
+                                    else audio_summary(item))
                     return {key: summarize_duplicate(item) for key, item in value.items()}
                 if isinstance(value, list):
                     return [summarize_duplicate(item) for item in value]
                 return value
 
-            if images and 'structured_content' in data:
+            if media and 'structured_content' in data:
                 data['structured_content'] = summarize_duplicate(data['structured_content'])
-    # Only the wire representation changes; the durable reply retains original image bytes.
+    # Only the wire representation changes; the durable reply retains original media bytes.
     return {
         "content": [{"type": "text", "text": json.dumps(
             structured, ensure_ascii=False, separators=(",", ":"), allow_nan=False,
-        )}, *images],
+        )}, *media],
         "structuredContent": structured,
         "isError": (
             reply.state not in {"completed", "running"}

@@ -4,6 +4,7 @@ import json
 
 from pydantic import JsonValue
 
+from .plugin_audio import AUDIO_LIMIT, MAX_AUDIO_ITEMS, bounded_audio
 from .plugin_images import IMAGE_LIMIT, MAX_IMAGES, bounded_image
 
 TEXT_LIMIT = 64 * 1024
@@ -74,6 +75,9 @@ def normalize_tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
     image_bytes = 0
     image_count = 0
     omitted_images = 0
+    audio_bytes = 0
+    audio_count = 0
+    omitted_audio = 0
     for item in content:
         if not isinstance(item, dict) or not isinstance(item.get("type"), str):
             raise ValueError("Invalid plugin content")
@@ -90,6 +94,26 @@ def normalize_tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
                 clean_content.append(image)
                 image_bytes += size
                 image_count += 1
+            continue
+        if item["type"] == "audio":
+            if not isinstance(item.get("mimeType"), str):
+                # Older providers may send opaque audio blocks that this bridge
+                # cannot safely identify. Preserve the former omit behavior.
+                unsupported += 1
+                truncated = True
+                continue
+            if audio_count >= MAX_AUDIO_ITEMS:
+                omitted_audio += 1
+                truncated = True
+                continue
+            audio, size = bounded_audio(item, AUDIO_LIMIT - audio_bytes)
+            if audio is None:
+                omitted_audio += 1
+                truncated = True
+            else:
+                clean_content.append(audio)
+                audio_bytes += size
+                audio_count += 1
             continue
         if item["type"] != "text":
             unsupported += 1
@@ -117,6 +141,8 @@ def normalize_tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
         output["provider_diagnostics"] = diagnostics
     if omitted_images:
         output["omitted_image_items"] = omitted_images
+    if omitted_audio:
+        output["omitted_audio_items"] = omitted_audio
     if unsupported:
         output["unsupported_content_items"] = unsupported
     structured = result.get("structuredContent")

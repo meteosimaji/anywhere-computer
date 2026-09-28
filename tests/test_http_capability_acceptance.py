@@ -70,6 +70,20 @@ for line in sys.stdin:
     executable.chmod(0o700)
     monkeypatch.setenv("ANYWHERE_CODEX_EXECUTABLE", str(executable))
     monkeypatch.setenv("PATH", str(os.path.dirname(sys.executable)) + os.pathsep + os.defpath)
+    async def audio_fixture(_args):
+        raw = b"RIFF" + b"\x00" * 4 + b"WAVE" + b"fixture"
+        return {"content": [{"type": "audio", "mimeType": "audio/wav",
+                             "data": base64.b64encode(raw).decode("ascii")}],
+                "audio_format": "fixture"}
+
+    async def video_fixture(_args):
+        png = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8"
+               "/x8AAwMCAO+a5XcAAAAASUVORK5CYII=")
+        return {"content": [{"type": "image", "mimeType": "image/png", "data": png}],
+                "frames": [{"requested_timestamp_seconds": 0}]}
+
+    monkeypatch.setattr(engine_module, "audio_clip", audio_fixture)
+    monkeypatch.setattr(engine_module, "video_frames", video_fixture)
     engine = Engine(tmp_path / "engine")
     known = frozenset(engine.tools) - LOCAL_ONLY_TOOLS
     authority = AuthorizationStore(
@@ -97,12 +111,26 @@ for line in sys.stdin:
     adapter = HTTPMCP(backend.authenticate, backend.session)
     port = await adapter.start()
     async def browser_fixture(reader, writer):
-        await reader.readuntil(b"\r\n\r\n")
-        body = (b"<html><head><title>Browser fixture</title></head><body>Ready"
-                b"<input id='entry' oninput=\"document.querySelector('#result').textContent"
-                b"=this.value\"><button id='go' onclick=\"document.querySelector('#result')"
-                b".textContent+=' clicked'\">Go</button><p id='result'></p></body></html>")
-        writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+        request = await reader.readuntil(b"\r\n\r\n")
+        if request.startswith(b"GET /payload "):
+            body = b"HTTP browser download 42\n"
+            headers = (b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+                       b"Content-Disposition: attachment; filename=payload.bin\r\n")
+        else:
+            body = (b"<html><head><title>Browser fixture</title></head><body>Ready"
+                    b"<input id='entry' oninput=\"document.querySelector('#result').textContent"
+                    b"=this.value\"><button id='go' onclick=\"document.querySelector('#result')"
+                    b".textContent+=' clicked'\">Go</button><p id='result'></p>"
+                    b"<div id='drag-source' draggable='true' ondragstart=\"event.dataTransfer"
+                    b".setData('text/plain','moved')\">Move</div><div id='drag-target' "
+                    b"ondragover=\"event.preventDefault()\" ondrop=\"event.preventDefault();"
+                    b"this.textContent=event.dataTransfer.getData('text/plain')\">Drop</div>"
+                    b"<label for='file'>Choose file</label><input type='file' id='file' "
+                    b"onchange=\"document.querySelector('#file-name').textContent="
+                    b"this.files[0].name\"><p id='file-name'></p>"
+                    b"<a href='/payload'>Get file</a></body></html>")
+            headers = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+        writer.write(headers
                      + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
                      + body)
         await writer.drain()
@@ -184,13 +212,50 @@ for line in sys.stdin:
             assert navigated["http_status"] == 200
             assert navigated["title"] == "Browser fixture"
             assert (await call("browser_observe", browser_ids))["tab_id"] == browser["tab_id"]
+            source = await call("browser_source", browser_ids)
+            assert source["source_kind"] == "current_dom_outer_html"
+            assert "Browser fixture" in source["html"]
+            network = await call("browser_network", browser_ids)
+            assert any(event["status"] == 200 for event in network["events"])
+            research = await call("browser_research", browser_ids)
+            assert research["title"] == "Browser fixture"
+            assert research["links"][0]["destination"]["route"].endswith("/payload")
             filled = await call("browser_fill", {**browser_ids, "selector": "#entry",
                                                  "value": "日本語 ✅"})
             assert "日本語 ✅" in filled["text"]
             assert filled["value_verified"] is True
+            keyed = await call("browser_key", {**browser_ids, "selector": "#entry",
+                                               "key": "End"})
+            assert keyed["tab_id"] == browser["tab_id"]
             clicked = await call("browser_click", {**browser_ids, "selector": "#go"})
             assert "日本語 ✅ clicked" in clicked["text"]
+            dragged = await call("browser_drag", {**browser_ids,
+                "snapshot_id": clicked["snapshot_id"],
+                "source": {"selector": "#drag-source"},
+                "target": {"selector": "#drag-target"}})
+            assert "moved" in dragged["text"]
+            upload_path = tmp_path / "browser-upload.txt"
+            upload_path.write_text("upload fixture", encoding="utf-8")
+            selected = await call("browser_file_upload", {**browser_ids,
+                "snapshot_id": dragged["snapshot_id"],
+                "target": {"label": "Choose file"}, "path": str(upload_path)})
+            assert selected["selected_file"]["name"] == upload_path.name
+            downloaded = await call("browser_download", {**browser_ids,
+                "snapshot_id": selected["snapshot_id"],
+                "target": {"role": "link", "name": "Get file"},
+                "path": str(tmp_path / "browser-downloaded.bin")})
+            assert downloaded["download"]["bytes"] == len(b"HTTP browser download 42\n")
+            assert (tmp_path / "browser-downloaded.bin").read_bytes() == (
+                b"HTTP browser download 42\n")
             assert (await call("browser_close", browser_ids))["state"] == "closed"
+            assert "decoder_available" in await call("media_status")
+            audio_preview = await call("media_audio_clip", {"path": str(upload_path)})
+            assert audio_preview["content"][0]["type"] == "audio"
+            assert "data" not in audio_preview["content"][0]
+            video_preview = await call("media_video_frames", {
+                "path": str(upload_path), "timestamps_seconds": [0]})
+            assert video_preview["content"][0]["type"] == "image"
+            assert "data" not in video_preview["content"][0]
             audio = await call("audio_status")
             assert audio["state"] in {"available", "unavailable", "unsupported"}
             assert audio["capture_started"] is False

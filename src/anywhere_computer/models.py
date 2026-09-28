@@ -269,14 +269,32 @@ class BrowserObserve(BrowserSession):
     ))
 
 
+class BrowserSource(BrowserSession):
+    selector: str | None = Field(default=None, min_length=1, max_length=1024, description=(
+        "Optional CSS selector to inspect one exact element instead of the document element."
+    ))
+
+
+class BrowserNetwork(BrowserSession):
+    after_id: int = Field(default=0, ge=0)
+    limit: int = Field(default=50, ge=1, le=100)
+
+
+class BrowserResearch(BrowserSession):
+    link_limit: int = Field(default=20, ge=1, le=30)
+
+
 class BrowserNavigate(BrowserSession):
     url: str = Field(min_length=1, max_length=4096)
 
 
+BrowserRole = Literal["button", "link", "textbox", "searchbox", "combobox", "checkbox",
+                      "radio", "switch", "tab", "menuitem", "option", "spinbutton"]
+
+
 class BrowserClick(BrowserSession):
     selector: str | None = Field(default=None, min_length=1, max_length=1024)
-    role: Literal["button", "link", "textbox", "searchbox", "combobox", "checkbox",
-                  "radio", "switch", "tab", "menuitem", "option", "spinbutton"] | None = None
+    role: BrowserRole | None = None
     name: str | None = Field(default=None, min_length=1, max_length=512)
     label: str | None = Field(default=None, min_length=1, max_length=512)
     snapshot_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
@@ -294,6 +312,47 @@ class BrowserClick(BrowserSession):
 
 class BrowserFill(BrowserClick):
     value: str = Field(max_length=100000)
+
+
+class BrowserKey(BrowserClick):
+    key: str = Field(min_length=1, max_length=80, description=(
+        "Playwright key or chord, such as Enter, Tab, Escape, or ControlOrMeta+A. "
+        "The key is sent to exactly one visible target; use selector='body' for "
+        "a page-level key."
+    ))
+
+
+class BrowserTarget(Contract):
+    selector: str | None = Field(default=None, min_length=1, max_length=1024)
+    role: BrowserRole | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=512)
+    label: str | None = Field(default=None, min_length=1, max_length=512)
+
+    @model_validator(mode="after")
+    def one_target(self) -> "BrowserTarget":
+        if sum(value is not None for value in (self.selector, self.role, self.label)) != 1:
+            raise ValueError("Choose exactly one browser selector, role, or label")
+        if self.name is not None and self.role is None:
+            raise ValueError("Browser name requires a role")
+        return self
+
+
+class BrowserDrag(BrowserSession):
+    source: BrowserTarget
+    target: BrowserTarget
+    snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class BrowserFileUpload(BrowserSession):
+    target: BrowserTarget
+    snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    path: str = Field(min_length=1, max_length=4096)
+
+
+class BrowserDownload(BrowserSession):
+    target: BrowserTarget
+    snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+    path: str = Field(min_length=1, max_length=4096)
 
 
 class SessionInput(SessionId):

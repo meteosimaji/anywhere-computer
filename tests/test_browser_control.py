@@ -2,6 +2,7 @@
 
 import asyncio
 import base64
+import hashlib
 import json
 import uuid
 
@@ -13,14 +14,23 @@ from anywhere_computer.browser_control import (
     BrowserControl,
     BrowserNavigationUnknown,
     BrowserStartupUnavailable,
+    _network_url,
 )
 from anywhere_computer.engine import Engine
 from anywhere_computer.models import (
     BrowserClick,
+    BrowserDownload,
+    BrowserDrag,
+    BrowserFileUpload,
     BrowserFill,
+    BrowserKey,
     BrowserNavigate,
+    BrowserNetwork,
     BrowserObserve,
+    BrowserResearch,
     BrowserSession,
+    BrowserSource,
+    BrowserTarget,
     Reply,
     Request,
 )
@@ -36,6 +46,13 @@ def test_isolated_browser_channel_uses_installed_windows_default(
 ):
     monkeypatch.setattr(browser_control_module.sys, "platform", platform)
     assert BrowserControl(channel=requested_channel).channel == expected_channel
+
+
+def test_network_url_omits_secrets_and_preserves_ipv6_authority():
+    result = _network_url("https://user:password@[::1]:8443/page?token=private&mode=fast#part")
+    assert result["route"] == "https://[::1]:8443/page"
+    assert result["query_keys"] == ["token", "mode"]
+    assert "private" not in str(result) and "password" not in str(result)
 
 
 async def test_missing_isolated_browser_reports_pre_dispatch_failure(tmp_path, monkeypatch):
@@ -120,6 +137,39 @@ async def local_page():
     server = await asyncio.start_server(serve, "127.0.0.1", 0)
     try:
         yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/fixture"
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.fixture
+async def file_site():
+    payload = b"browser download verified 42\n"
+
+    async def serve(reader, writer):
+        request = await reader.readuntil(b"\r\n\r\n")
+        if request.startswith(b"GET /payload "):
+            body = payload
+            headers = (b"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+                       b"Content-Disposition: attachment; filename=sample.bin\r\n")
+        else:
+            body = (b"<html><head><title>Source fixture</title>"
+                    b"<meta property='og:site_name' content='Example publisher'>"
+                    b"<meta property='article:published_time' content='2026-09-28'>"
+                    b"<link rel='canonical' href='/canonical'></head><body>"
+                    b"<h1>Verified page heading</h1><label for='file'>Choose file</label>"
+                    b"<input id='file' type='file' onchange=\"document.querySelector('#name')"
+                    b".textContent=this.files[0].name\"><p id='name'></p>"
+                    b"<a href='/payload'>Get file</a></body></html>")
+            headers = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+        writer.write(headers + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
+                     + body)
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    try:
+        yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/", payload
     finally:
         server.close()
         await server.wait_closed()
@@ -727,6 +777,137 @@ async def test_html_labels_and_rendered_viewport_reach_native_mcp_image(local_pa
         assert picture["data"] not in json.dumps(wire["structuredContent"])
         assert wire["structuredContent"]["data"]["content"][0]["bytes"] == (
             observed["visual"]["bytes"])
+    finally:
+        await control.close()
+
+
+async def test_current_dom_and_network_metadata_are_bounded_and_owner_scoped(local_page):
+    pytest.importorskip("playwright.async_api")
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="owner-a")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        await control.navigate(BrowserNavigate(**ids, url=local_page +
+            "?token=private-value&search=example"), owner="owner-a")
+        source = await control.source(BrowserSource(**ids), owner="owner-a")
+        assert source["source_kind"] == "current_dom_outer_html"
+        assert "<button" in source["html"]
+        assert source["truncated"] is False
+        button = await control.source(BrowserSource(**ids, selector="#go"), owner="owner-a")
+        assert button["html"].startswith("<button")
+        with pytest.raises(ValueError, match="exactly one"):
+            await control.source(BrowserSource(**ids, selector="p"), owner="owner-a")
+
+        network = await control.network(BrowserNetwork(**ids), owner="owner-a")
+        response = next(row for row in network["events"] if row["event"] == "response")
+        assert response["status"] == 200
+        assert response["route"].endswith("/fixture")
+        assert response["query_keys"] == ["token", "search"]
+        assert "private-value" not in json.dumps(network)
+        assert network["next_id"] == response["id"]
+        empty = await control.network(BrowserNetwork(**ids, after_id=network["latest_id"]),
+                                      owner="owner-a")
+        assert empty["events"] == []
+        with pytest.raises(ValueError, match="unavailable"):
+            await control.network(BrowserNetwork(**ids), owner="owner-b")
+    finally:
+        await control.close()
+
+
+async def test_key_and_drag_recheck_observation_and_target(local_page):
+    pytest.importorskip("playwright.async_api")
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="owner-a")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        observed = await control.navigate(BrowserNavigate(**ids, url=local_page), owner="owner-a")
+        entry = control.entries[ids["session_id"]]
+        await entry.page.evaluate("""() => {
+            const input = document.querySelector('#entry');
+            input.addEventListener('keydown', event => {
+                if (event.key === 'Enter') {
+                    document.querySelector('#result').textContent = 'entered';
+                }
+            });
+            const source = document.createElement('div');
+            source.id = 'source';
+            source.draggable = true;
+            source.textContent = 'Move';
+            source.addEventListener('dragstart', event => {
+                event.dataTransfer.setData('text/plain', 'moved');
+            });
+            const target = document.createElement('div');
+            target.id = 'target';
+            target.textContent = 'Drop';
+            target.addEventListener('dragover', event => event.preventDefault());
+            target.addEventListener('drop', event => {
+                event.preventDefault();
+                target.textContent = event.dataTransfer.getData('text/plain');
+            });
+            document.body.append(source, target);
+        }""")
+        keyed = await control.key(BrowserKey(**ids, role="textbox", key="Enter",
+                                             snapshot_id=observed["snapshot_id"]), owner="owner-a")
+        assert "entered" in keyed["text"]
+        with pytest.raises(ValueError, match="stale"):
+            await control.drag(BrowserDrag(**ids, snapshot_id=observed["snapshot_id"],
+                source=BrowserTarget(selector="#source"),
+                target=BrowserTarget(selector="#target")), owner="owner-a")
+        dragged = await control.drag(BrowserDrag(**ids, snapshot_id=keyed["snapshot_id"],
+            source=BrowserTarget(selector="#source"),
+            target=BrowserTarget(selector="#target")), owner="owner-a")
+        assert await entry.page.locator("#target").inner_text() == "moved"
+        assert dragged["snapshot_id"] != keyed["snapshot_id"]
+        with pytest.raises(ValueError, match="unavailable"):
+            await control.key(BrowserKey(**ids, selector="#entry", key="Tab"), owner="owner-b")
+    finally:
+        await control.close()
+
+
+async def test_file_input_and_download_are_bounded_and_do_not_replace(
+    tmp_path, file_site,
+):
+    pytest.importorskip("playwright.async_api")
+    url, payload = file_site
+    source = tmp_path / "upload.txt"
+    source.write_bytes(b"upload verified")
+    destination = tmp_path / "download.bin"
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="owner-a")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        observed = await control.navigate(BrowserNavigate(**ids, url=url), owner="owner-a")
+        research = await control.research(BrowserResearch(**ids), owner="owner-a")
+        assert research["publisher_claim"] == "Example publisher"
+        assert research["published_claim"] == "2026-09-28"
+        assert research["canonical"]["route"].endswith("/canonical")
+        assert research["links"][0]["destination"]["route"].endswith("/payload")
+        selected = await control.file_upload(BrowserFileUpload(
+            **ids, target=BrowserTarget(label="Choose file"),
+            snapshot_id=observed["snapshot_id"], path=str(source),
+        ), owner="owner-a")
+        assert selected["selected_file"] == {
+            "name": "upload.txt", "bytes": len(source.read_bytes()),
+            "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        }
+        assert "upload.txt" in selected["text"]
+        downloaded = await control.download(BrowserDownload(
+            **ids, target=BrowserTarget(role="link", name="Get file"),
+            snapshot_id=selected["snapshot_id"], path=str(destination),
+        ), owner="owner-a")
+        assert destination.read_bytes() == payload
+        assert downloaded["download"]["sha256"] == hashlib.sha256(payload).hexdigest()
+        assert downloaded["download"]["bytes"] == len(payload)
+        with pytest.raises(ValueError, match="unused path"):
+            await control.download(BrowserDownload(
+                **ids, target=BrowserTarget(selector="a"),
+                snapshot_id=downloaded["snapshot_id"], path=str(destination),
+            ), owner="owner-a")
+        with pytest.raises(ValueError, match="unavailable"):
+            await control.file_upload(BrowserFileUpload(
+                **ids, target=BrowserTarget(selector="#file"),
+                snapshot_id=downloaded["snapshot_id"], path=str(source),
+            ), owner="owner-b")
     finally:
         await control.close()
 

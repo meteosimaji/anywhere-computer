@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import logging
+import mimetypes
+import os
 import re
+import stat
 import sys
+import tempfile
 import time
 import uuid
+from collections import deque
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -16,10 +22,33 @@ from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
-from .models import BrowserClick, BrowserFill, BrowserNavigate, BrowserObserve, BrowserSession
+from .files import absolute_path, read_bytes, sha256
+from .models import (
+    BrowserClick,
+    BrowserDownload,
+    BrowserDrag,
+    BrowserFileUpload,
+    BrowserFill,
+    BrowserKey,
+    BrowserNavigate,
+    BrowserNetwork,
+    BrowserObserve,
+    BrowserResearch,
+    BrowserSession,
+    BrowserSource,
+    BrowserTarget,
+)
 
 if TYPE_CHECKING:
-    from playwright.async_api import Browser, BrowserContext, Page, Playwright
+    from playwright.async_api import (
+        Browser,
+        BrowserContext,
+        Locator,
+        Page,
+        Playwright,
+        Request,
+        Response,
+    )
 
 
 class BrowserNavigationUnknown(Exception):
@@ -37,6 +66,9 @@ class BrowserStartupUnavailable(Exception):
 _CLEANUP_WAIT_SECONDS = 5.0
 _LOG = logging.getLogger(__name__)
 _IMAGE_LIMIT = 1024 * 1024
+_SOURCE_LIMIT = 32768
+_NETWORK_LIMIT = 100
+_BROWSER_DOWNLOAD_LIMIT = 64 * 1024 * 1024
 _FORM_CONTROLS_SCRIPT = r"""() => {
     const clean = value => String(value || '').replace(/[\r\n\t\u2028\u2029\u00a0]/g, ' ')
         .replace(/\s+/gu, ' ').trim().slice(0, 256);
@@ -98,6 +130,58 @@ def _readable_lines(value: str) -> str:
     return re.sub(r"\n(?:[ \t]*\n){2,}", "\n\n", normalized)
 
 
+def _network_url(value: str) -> dict[str, JsonValue]:
+    """Expose a request route without URL credentials, fragments or query values."""
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            return {"scheme": parsed.scheme[:32] or "unknown", "route": None}
+        host = parsed.hostname[:253]
+        if ":" in host:
+            host = f"[{host}]"
+        port = f":{parsed.port}" if parsed.port is not None else ""
+        route = f"{parsed.scheme}://{host}{port}{parsed.path[:512]}"
+        keys: list[JsonValue] = [part.partition("=")[0][:64]
+                                 for part in parsed.query.split("&") if part]
+        return {"scheme": parsed.scheme, "route": route,
+                "route_truncated": len(parsed.path) > 512,
+                "query_keys": keys[:16], "query_keys_truncated": len(keys) > 16}
+    except ValueError:
+        return {"scheme": "invalid", "route": None}
+
+
+def _save_download(source_path: str, destination_path: str) -> tuple[int, str]:
+    """Copy a completed browser download to an unused destination, without replacement."""
+    destination = absolute_path(destination_path)
+    digest = hashlib.sha256()
+    copied = 0
+    temporary: str | None = None
+    try:
+        with open(source_path, "rb") as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > _BROWSER_DOWNLOAD_LIMIT:
+                raise ValueError("Browser download is not a regular file within the 64 MiB limit")
+            with tempfile.NamedTemporaryFile(
+                mode="wb", dir=destination.parent, prefix=".anywhere-browser-", delete=False
+            ) as output:
+                temporary = output.name
+                while block := source.read(262144):
+                    copied += len(block)
+                    if copied > _BROWSER_DOWNLOAD_LIMIT or copied > info.st_size:
+                        raise ValueError("Browser download changed or exceeded the 64 MiB limit")
+                    output.write(block)
+                    digest.update(block)
+                if copied != info.st_size or os.fstat(source.fileno()).st_size != info.st_size:
+                    raise ValueError("Browser download changed during copying")
+                output.flush()
+                os.fsync(output.fileno())
+        os.link(temporary, destination)
+        return copied, digest.hexdigest()
+    finally:
+        if temporary is not None:
+            os.unlink(temporary)
+
+
 def _cleanup_done(task: asyncio.Task[None]) -> None:
     try:
         task.result()
@@ -134,6 +218,12 @@ class _Navigation:
 
 
 @dataclass
+class _NetworkEvent:
+    id: int
+    data: dict[str, JsonValue]
+
+
+@dataclass
 class _Entry:
     owner: str | None
     session_id: str
@@ -147,6 +237,10 @@ class _Entry:
     snapshot_id: str | None = None
     snapshot_at: float = 0.0
     snapshot_url: str | None = None
+    network_events: deque[_NetworkEvent] = field(
+        default_factory=lambda: deque(maxlen=_NETWORK_LIMIT)
+    )
+    network_next_id: int = 0
 
 
 class BrowserControl:
@@ -190,6 +284,26 @@ class BrowserControl:
         if require_live and not self._live(entry):
             raise ValueError("Browser session ended; open a new isolated session")
         return entry
+
+    @staticmethod
+    def _record_response(entry: _Entry, response: Response) -> None:
+        request = response.request
+        entry.network_next_id += 1
+        entry.network_events.append(_NetworkEvent(entry.network_next_id, {
+            "id": entry.network_next_id, "event": "response",
+            "method": request.method[:16], "resource_type": request.resource_type[:32],
+            "status": response.status, **_network_url(response.url),
+        }))
+
+    @staticmethod
+    def _record_failure(entry: _Entry, request: Request) -> None:
+        entry.network_next_id += 1
+        entry.network_events.append(_NetworkEvent(entry.network_next_id, {
+            "id": entry.network_next_id, "event": "request_failed",
+            "method": request.method[:16], "resource_type": request.resource_type[:32],
+            "failure": str(request.failure or "network_error")[:128],
+            **_network_url(request.url),
+        }))
 
     async def open(self, *, owner: str | None) -> dict[str, JsonValue]:
         # Each session gets its own ephemeral browser process and context. No
@@ -237,7 +351,7 @@ class BrowserControl:
             browser = None
             try:
                 browser = await driver.chromium.launch(headless=True, channel=self.channel)
-                context = await browser.new_context(accept_downloads=False)
+                context = await browser.new_context(accept_downloads=True)
                 page = await context.new_page()
             except BaseException as error:
                 # Cancellation can arrive before the session is registered, so
@@ -260,8 +374,10 @@ class BrowserControl:
                 raise
             session_id = uuid.uuid4().hex
             tab_id = uuid.uuid4().hex
-            self.entries[session_id] = _Entry(owner, session_id, tab_id, driver, browser,
-                                              context, page)
+            entry = _Entry(owner, session_id, tab_id, driver, browser, context, page)
+            page.on("response", lambda response: self._record_response(entry, response))
+            page.on("requestfailed", lambda request: self._record_failure(entry, request))
+            self.entries[session_id] = entry
             return {"session_id": session_id, "tab_id": tab_id, "isolation": "ephemeral_context",
                     "url": page.url}
 
@@ -299,27 +415,129 @@ class BrowserControl:
                 entry, include_image=isinstance(args, BrowserObserve) and args.include_image
             )
 
-    async def _action(self, args: BrowserClick, *, owner: str | None,
-                      value: str | None = None) -> dict[str, JsonValue]:
+    async def source(self, args: BrowserSource, *, owner: str | None) -> dict[str, JsonValue]:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            if args.snapshot_id is not None:
-                if (args.snapshot_id != entry.snapshot_id
-                        or time.monotonic() - entry.snapshot_at > 60
-                        or entry.page.url != entry.snapshot_url):
-                    raise ValueError("Browser snapshot is stale; observe the tab again")
+            if args.selector is None:
+                result = await entry.page.evaluate("""limit => {
+                    const html = document.documentElement?.outerHTML || '';
+                    return {html: html.slice(0, limit), total_characters: html.length};
+                }""", _SOURCE_LIMIT)
+            else:
+                target = entry.page.locator("css=" + args.selector)
+                if await target.count() != 1:
+                    raise ValueError("Browser source selector must match exactly one element")
+                result = await target.evaluate("""(element, limit) => {
+                    const html = element.outerHTML;
+                    return {html: html.slice(0, limit), total_characters: html.length};
+                }""", _SOURCE_LIMIT)
+            return {"session_id": entry.session_id, "tab_id": entry.tab_id,
+                    "url": entry.page.url, "source_kind": "current_dom_outer_html",
+                    "selector": args.selector, "html": result["html"],
+                    "total_characters": result["total_characters"],
+                    "truncated": result["total_characters"] > _SOURCE_LIMIT}
+
+    async def network(self, args: BrowserNetwork, *, owner: str | None) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            rows = [event for event in entry.network_events if event.id > args.after_id]
+            first_id = entry.network_events[0].id if entry.network_events else None
+            next_id = rows[min(len(rows), args.limit) - 1].id if rows else args.after_id
+            events: list[JsonValue] = [event.data for event in rows[:args.limit]]
+            return {"session_id": entry.session_id, "tab_id": entry.tab_id,
+                    "events": events, "latest_id": entry.network_next_id,
+                    "next_id": next_id,
+                    "history_truncated": first_id is not None and args.after_id < first_id - 1,
+                    "page_url": _network_url(entry.page.url)}
+
+    async def research(self, args: BrowserResearch, *, owner: str | None
+                       ) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            result = await entry.page.evaluate("""limit => {
+                const clean = value => String(value || '').replace(/\\s+/gu, ' ')
+                    .trim().slice(0, 256);
+                const meta = (...names) => {
+                    for (const name of names) {
+                        const query = `meta[name="${name}"],meta[property="${name}"]`;
+                        const el = document.querySelector(query);
+                        if (el?.content) return clean(el.content);
+                    }
+                    return null;
+                };
+                const headings = Array.from(document.querySelectorAll('h1,h2'), el =>
+                    clean(el.innerText || el.textContent)).filter(Boolean).slice(0, 10);
+                const links = [];
+                let inspected = 0;
+                for (const anchor of document.querySelectorAll('a[href]')) {
+                    if (++inspected > 512 || links.length >= limit) break;
+                    if (anchor.getClientRects().length === 0) continue;
+                    try {
+                        const url = new URL(anchor.href, document.baseURI);
+                        if (!['http:', 'https:'].includes(url.protocol)) continue;
+                        const label = clean(anchor.innerText || anchor.getAttribute('aria-label')
+                            || anchor.title);
+                        links.push({label, href: url.href,
+                            external: url.origin !== location.origin});
+                    } catch (_) { /* Ignore malformed page links. */ }
+                }
+                return {
+                    title: clean(document.title),
+                    canonical: document.querySelector('link[rel="canonical"]')?.href || null,
+                    publisher: meta('og:site_name', 'publisher'),
+                    author: meta('author', 'article:author'),
+                    published: meta('article:published_time', 'datePublished', 'date'),
+                    description: meta('description', 'og:description'),
+                    headings, links,
+                    links_truncated: inspected > 512 || links.length >= limit,
+                };
+            }""", args.link_limit)
+            links = [{"label": item["label"], "destination": _network_url(item["href"]),
+                      "external": item["external"]} for item in result["links"]]
+            return {"session_id": entry.session_id, "tab_id": entry.tab_id,
+                    "source_kind": "current_dom_claims", "observed_at_unix": time.time(),
+                    "page_url": _network_url(entry.page.url), "title": result["title"],
+                    "canonical": (_network_url(result["canonical"])
+                                  if result["canonical"] else None),
+                    "publisher_claim": result["publisher"], "author_claim": result["author"],
+                    "published_claim": result["published"],
+                    "description_claim": result["description"],
+                    "headings": result["headings"], "links": links,
+                    "links_truncated": result["links_truncated"]}
+
+    @staticmethod
+    def _target_locator(entry: _Entry, args: BrowserClick | BrowserTarget) -> Locator:
+        if args.selector is not None:
+            return entry.page.locator("css=" + args.selector)
+        if args.role is not None:
+            return entry.page.get_by_role(args.role, name=args.name, exact=True)
+        assert args.label is not None
+        return entry.page.get_by_label(args.label, exact=True)
+
+    @staticmethod
+    def _check_snapshot(entry: _Entry, snapshot_id: str | None) -> None:
+        if snapshot_id is not None and (
+            snapshot_id != entry.snapshot_id
+            or time.monotonic() - entry.snapshot_at > 60
+            or entry.page.url != entry.snapshot_url
+        ):
+            raise ValueError("Browser snapshot is stale; observe the tab again")
+
+    async def _action(self, args: BrowserClick, *, owner: str | None,
+                      value: str | None = None,
+                      key: str | None = None) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            self._check_snapshot(entry, args.snapshot_id)
             # User-facing role/label locators can resolve the current DOM after a
             # framework rerender. Preserve the exact-one preflight and let Playwright
             # check actionability again at dispatch rather than pinning a stale handle.
             try:
-                if args.selector is not None:
-                    target = entry.page.locator("css=" + args.selector)
-                elif args.role is not None:
-                    target = entry.page.get_by_role(args.role, name=args.name, exact=True)
-                else:
-                    assert args.label is not None
-                    target = entry.page.get_by_label(args.label, exact=True)
+                target = self._target_locator(entry, args)
                 if await target.count() > 1:
                     raise ValueError("Browser target must match exactly one element")
                 await target.wait_for(state="visible", timeout=3000)
@@ -342,7 +560,9 @@ class BrowserControl:
                 raise ValueError("Browser target could not be resolved") from error
             entry.snapshot_id = None
             try:
-                if value is None:
+                if key is not None:
+                    await target.press(key, timeout=10000)
+                elif value is None:
                     await target.click(timeout=10000)
                 else:
                     await target.fill(value, timeout=10000)
@@ -363,6 +583,117 @@ class BrowserControl:
 
     async def fill(self, args: BrowserFill, *, owner: str | None) -> dict[str, JsonValue]:
         return await self._action(args, owner=owner, value=args.value)
+
+    async def key(self, args: BrowserKey, *, owner: str | None) -> dict[str, JsonValue]:
+        return await self._action(args, owner=owner, key=args.key)
+
+    async def drag(self, args: BrowserDrag, *, owner: str | None) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            self._check_snapshot(entry, args.snapshot_id)
+            try:
+                source = self._target_locator(entry, args.source)
+                target = self._target_locator(entry, args.target)
+                for locator in (source, target):
+                    if await locator.count() != 1:
+                        raise ValueError("Browser drag target must match exactly one element")
+                    if not await locator.is_visible():
+                        raise ValueError("Browser drag target is not visible")
+                if not await source.is_enabled():
+                    raise ValueError("Browser drag source is disabled")
+            except ValueError:
+                raise
+            except Exception as error:
+                raise ValueError("Browser drag target could not be resolved") from error
+            entry.snapshot_id = None
+            try:
+                await source.drag_to(target, timeout=10000)
+                return await self._snapshot(entry)
+            except Exception as error:
+                raise BrowserActionUnknown(
+                    "Browser drag outcome unconfirmed; observe the same tab before another action"
+                ) from error
+
+    async def file_upload(self, args: BrowserFileUpload, *, owner: str | None
+                          ) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            self._check_snapshot(entry, args.snapshot_id)
+            path = absolute_path(args.path)
+            content = await asyncio.to_thread(read_bytes, path)
+            try:
+                target = self._target_locator(entry, args.target)
+                if await target.count() != 1:
+                    raise ValueError("Browser file input must match exactly one element")
+                if not await target.evaluate(
+                    "el => el instanceof HTMLInputElement && el.type === 'file'"
+                ):
+                    raise ValueError("Browser target is not a file input")
+                if not await target.is_enabled():
+                    raise ValueError("Browser file input is disabled")
+            except ValueError:
+                raise
+            except Exception as error:
+                raise ValueError("Browser file input could not be resolved") from error
+            entry.snapshot_id = None
+            mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+            try:
+                await target.set_input_files(
+                    {"name": path.name, "mimeType": mime, "buffer": content}, timeout=10000
+                )
+                snapshot = await self._snapshot(entry)
+                snapshot["selected_file"] = {"name": path.name, "bytes": len(content),
+                                             "sha256": sha256(content)}
+                return snapshot
+            except Exception as error:
+                raise BrowserActionUnknown(
+                    "Browser file input outcome unconfirmed; observe the same tab before retrying"
+                ) from error
+
+    async def download(self, args: BrowserDownload, *, owner: str | None
+                       ) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.lock:
+            self._entry(args, owner)
+            self._check_snapshot(entry, args.snapshot_id)
+            destination = absolute_path(args.path)
+            if not destination.parent.is_dir() or os.path.lexists(destination):
+                raise ValueError(
+                    "Browser download requires an unused path in an existing directory"
+                )
+            try:
+                target = self._target_locator(entry, args.target)
+                if await target.count() != 1:
+                    raise ValueError("Browser download target must match exactly one element")
+                if not await target.is_visible() or not await target.is_enabled():
+                    raise ValueError("Browser download target is not visible and enabled")
+            except ValueError:
+                raise
+            except Exception as error:
+                raise ValueError("Browser download target could not be resolved") from error
+            entry.snapshot_id = None
+            try:
+                async with entry.page.expect_download(timeout=15000) as pending:
+                    await target.click(timeout=10000)
+                received = await pending.value
+                source = await received.path()
+                if source is None:
+                    raise ValueError("Browser download file is unavailable")
+                size, digest = await asyncio.to_thread(_save_download, str(source), args.path)
+                snapshot = await self._snapshot(entry)
+                snapshot["download"] = {
+                    "path": str(destination), "bytes": size, "sha256": digest,
+                    "suggested_filename": received.suggested_filename[:255],
+                    "url": _network_url(received.url),
+                }
+                return snapshot
+            except Exception as error:
+                raise BrowserActionUnknown(
+                    "Browser download outcome unconfirmed; inspect the tab and destination path "
+                    "before another action"
+                ) from error
 
     async def _snapshot(self, entry: _Entry, *, include_image: bool = False
                         ) -> dict[str, JsonValue]:
