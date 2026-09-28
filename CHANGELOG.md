@@ -3,6 +3,18 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b31 / Plugin 0.2.0-beta.31 — development prerelease (2026-09-28)
+
+- Stop waiting for ChatGPT's deferred resources after the document response
+  commits. Verify the actual composer and picker before preparing a Subchat
+  send, so an already usable page can proceed even when `DOMContentLoaded`
+  remains pending.
+- Preserve safe preparation failure reasons and return the saved operation ID
+  and provider receipt in failed send and status responses. Continue to reuse
+  the exact intent and request ID after a verified unsent failure.
+- Clarify when independent Subchats save work, how to run them while the parent
+  continues, and which context and tools ordinary Chat children actually get.
+
 ## 0.2.0b30 / Plugin 0.2.0-beta.30 — development prerelease (2026-09-28)
 
 - Add bounded console and page-error history to the isolated browser, with

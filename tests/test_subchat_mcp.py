@@ -3,7 +3,7 @@ from test_subchat_lifecycle import BrowserFixture
 
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
-from anywhere_computer.subchat import SubchatOutcomeUnknown, Subchats
+from anywhere_computer.subchat import SubchatOutcomeUnknown, SubchatPreparationFailed, Subchats
 from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatList, SubchatSubmissions
 
@@ -1037,7 +1037,11 @@ async def test_preparation_failure_is_unsent_and_same_request_can_retry(tmp_path
     try:
         failed = await server.execute(request)
         assert failed.state == 'failed'
-        assert failed.data == {'error_code': 'preparation_failed', 'dispatched': False}
+        assert failed.data['error_code'] == 'preparation_failed'
+        assert failed.data['dispatched'] is False
+        assert failed.data['submission_operation_id'] == request.operation_id
+        assert failed.data['provider_receipt'] == 'not_sent'
+        assert failed.data['conversation_url'] is None
         assert 'private' not in failed.model_dump_json()
         assert service.store.get(request.operation_id, owner=None).state == 'prepared'
         assert backend.sends == 0
@@ -1075,8 +1079,42 @@ async def test_preparation_failure_reports_only_a_known_local_reason(
             'prompt': 'work', 'model': 'model', 'effort': 'effort'})
         failed = await server.execute(request)
         assert failed.state == 'failed'
-        assert failed.data == {'error_code': 'preparation_failed',
-                               'dispatched': False, 'reason': reason}
+        assert failed.data['error_code'] == 'preparation_failed'
+        assert failed.data['dispatched'] is False
+        assert failed.data['reason'] == reason
+        assert failed.data['submission_operation_id'] == request.operation_id
+        assert failed.data['provider_receipt'] == 'not_sent'
+        assert backend.sends == 0
+    finally:
+        await server.close()
+        ledger.close()
+
+
+async def test_explicit_preparation_reason_survives_dispatch_and_status(tmp_path):
+    class TimedOutBrowser(BrowserFixture):
+        async def prepare(self, submission):
+            raise SubchatPreparationFailed('private navigation details',
+                                           reason='navigation_timeout')
+
+    ledger = Ledger(tmp_path)
+    backend = TimedOutBrowser()
+    server = session(Subchats(SubchatSubmissions(ledger.connection), backend))
+    operation = 'a' * 32
+    try:
+        sent = await server.execute(Request(operation_id=operation, tool='subchat_send',
+            arguments={'prompt': 'work', 'model': 'model', 'effort': 'effort'}))
+        assert sent.state == 'failed'
+        assert sent.data['reason'] == 'navigation_timeout'
+        assert sent.data['submission_operation_id'] == operation
+        assert sent.data['provider_receipt'] == 'not_sent'
+        assert sent.data['dispatched'] is False
+        assert 'private' not in sent.model_dump_json()
+        status = await server.execute(Request(operation_id='b' * 32, tool='subchat_status',
+            arguments={'operation_id': operation}))
+        assert status.state == 'failed'
+        assert status.data['reason'] == 'navigation_timeout'
+        assert status.data['submission_operation_id'] == operation
+        assert status.data['provider_receipt'] == 'not_sent'
         assert backend.sends == 0
     finally:
         await server.close()
@@ -1130,8 +1168,11 @@ async def test_late_preparation_failure_is_reported_by_reads_and_explicit_retry(
                 arguments={'operation_id': operation, **({'wait_ms': 100}
                            if tool == 'subchat_wait' else {})}))
             assert observed.state == 'failed'
-            assert observed.data == {'error_code': 'preparation_failed',
-                                     'dispatched': False, 'reason': 'composer_has_draft'}
+            assert observed.data['error_code'] == 'preparation_failed'
+            assert observed.data['dispatched'] is False
+            assert observed.data['reason'] == 'composer_has_draft'
+            assert observed.data['submission_operation_id'] == operation
+            assert observed.data['provider_receipt'] == 'not_sent'
         assert store.get(operation, owner=None).state == 'prepared'
         assert backend.sends == 0
         monkeypatch.setattr(subchat_mcp, 'SEND_ACK_TIMEOUT', .0001)

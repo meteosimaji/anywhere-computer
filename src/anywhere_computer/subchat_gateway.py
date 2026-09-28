@@ -744,7 +744,8 @@ class LazySubchatGateway:
             return Reply(operation_id=request_id, state="failed",
                          error="Subchat preparation failed; retry the same operation ID "
                                "after correcting the issue.",
-                         data={"error_code": "preparation_failed", "dispatched": False,
+                         data={**public_submission_data(result),
+                               "error_code": "preparation_failed", "dispatched": False,
                                "reason": failure_reason})
         data = public_submission_data(result)
         data["queue_revision"] = queue_revision

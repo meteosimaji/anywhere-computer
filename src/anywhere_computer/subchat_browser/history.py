@@ -333,7 +333,7 @@ async def observe_history(page: Page, submission: SubchatSubmission) -> Response
 
     async with page.expect_response(matches, timeout=15_000) as pending:
         await page.goto('https://chatgpt.com/c/' + str(submission.conversation_id),
-                        wait_until='domcontentloaded')
+                        wait_until='commit')
     response = await pending.value
     if response.status in (401, 403):
         raise SubchatAccessError(response.status)

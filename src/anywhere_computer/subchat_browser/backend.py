@@ -257,7 +257,7 @@ class BrowserSubchatBackend:
         page = await self._new_page()
         page.set_default_timeout(15_000)
         try:
-            response = await page.goto('https://chatgpt.com/', wait_until='domcontentloaded')
+            response = await page.goto('https://chatgpt.com/', wait_until='commit')
             if response is None or not response.ok or not await picker_ready(page):
                 return {'state': 'catalog_unavailable', 'submitted': False}
             return await collect_page(page, model, background_input=self._background_pages)
@@ -360,7 +360,7 @@ class BrowserSubchatBackend:
         page = await self._new_page()
         self.pages[submission.operation_id] = page
         await page.goto('https://chatgpt.com/c/' + submission.conversation_id,
-                        wait_until='domcontentloaded')
+                        wait_until='commit')
         return page
 
     def _url(self, submission: SubchatSubmission) -> str:
@@ -601,9 +601,16 @@ class BrowserSubchatBackend:
 
     async def _prepare_page(self, page: Page, submission: SubchatSubmission,
                             url: str, *, reused: bool, picker_label: str) -> tuple[str, ...]:
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
         page.set_default_timeout(15_000)
         if not reused:
-            response = await page.goto(url, wait_until='domcontentloaded')
+            try:
+                response = await page.goto(url, wait_until='commit')
+            except PlaywrightTimeoutError as error:
+                raise SubchatPreparationFailed(
+                    'Ordinary Chat navigation timed out before dispatch',
+                    reason='navigation_timeout') from error
             if response is None or not response.ok:
                 raise ConnectionError('Authenticated ordinary Chat is unavailable')
         if not await picker_ready(page):
@@ -611,7 +618,11 @@ class BrowserSubchatBackend:
         await self._wait_for_composer(page, submission)
         self._preparation_touched_pages.add(page)
         await self._click(page.locator(TRIGGER))
-        await page.get_by_role('menu').wait_for(state='visible', timeout=10_000)
+        try:
+            await page.get_by_role('menu').wait_for(state='visible', timeout=10_000)
+        except PlaywrightTimeoutError as error:
+            raise SubchatPreparationFailed('Model menu did not appear before dispatch',
+                                           reason='model_menu_timeout') from error
         observed = await self._open_model_list(page)
         models = observed.get('models')
         if not isinstance(models, list):

@@ -137,7 +137,7 @@ jobs:
           --ignore=tests/test_file_search_terminal_workflow.py
           --ignore=tests/test_owner_json_pipe.py
           --deselect=tests/test_workspace_ui.py::test_workspace_mutation_recovery_in_javascript
-          -n ${{ matrix.os == 'windows-latest' && 2 || 4 }}
+          -n ${{ matrix.os == 'ubuntu-latest' && 4 || 2 }}
           --dist loadfile --max-worker-restart=0
           --junitxml="${{ runner.temp }}/pytest-results.xml"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -239,7 +239,7 @@ async def test_windows_dedicated_inspection_uses_headed_offscreen_edge(
     class Page:
         async def goto(self, url, **options):
             assert url == 'https://chatgpt.com/'
-            assert options == {'wait_until': 'domcontentloaded'}
+            assert options == {'wait_until': 'commit'}
             launches.append('home')
             return SimpleNamespace(url=url, status=200)
 

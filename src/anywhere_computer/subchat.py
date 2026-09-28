@@ -217,8 +217,8 @@ class Subchats:
             baseline_identity_kind = (
                 identity_kind(submission) if identity_kind is not None else None)
         except (SubchatStaleTarget, SubchatBrowserClosed, SubchatAccessError,
-                SubchatAccountMismatch,
-                SubchatUnsupported, SubchatSelectionError):
+                SubchatAccountMismatch, SubchatUnsupported, SubchatSelectionError,
+                SubchatPreparationFailed):
             raise
         except Exception as error:
             raise SubchatPreparationFailed(str(error)) from error

@@ -1,4 +1,5 @@
 """Browser adapter integration against an offline, effectful Chat DOM fixture."""
+import asyncio
 import json
 from pathlib import Path
 
@@ -75,6 +76,58 @@ window.finish=()=>{
  new ClipboardItem({'text/plain':new Blob(['日本語 answer 42'],{type:'text/plain'})})]);
 };
 </script>'''
+
+
+@pytest.mark.parametrize('action', ['catalog', 'prepare'])
+async def test_ready_chat_does_not_wait_for_domcontentloaded(tmp_path, action):
+    """A deferred resource must not block an already usable Chat composer."""
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    release_script = asyncio.Event()
+    script_requested = asyncio.Event()
+    html = (HTML.replace('onclick="menu.hidden=false"',
+                         'aria-expanded="false" onclick="this.setAttribute(\'aria-expanded\','
+                         '\'true\');menu.hidden=false"')
+            .replace("if(event.key==='Escape')this.hidden=true",
+                     "if(event.key==='Escape'){this.hidden=true;"
+                     "document.querySelector('[data-composer-navigation-target]')"
+                     ".setAttribute('aria-expanded','false')}"))
+
+    async def respond(route):
+        if route.request.url.endswith('/hold.js'):
+            script_requested.set()
+            await release_script.wait()
+            await route.fulfill(content_type='application/javascript', body='')
+        else:
+            await route.fulfill(content_type='text/html; charset=utf-8',
+                                body=html + '<script defer src="/hold.js"></script>')
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            await context.route('https://chatgpt.com/**', respond)
+            backend = BrowserSubchatBackend(context)
+            if action == 'catalog':
+                observed = await asyncio.wait_for(backend.catalog(), timeout=6)
+                assert observed['state'] in {'catalog_observed', 'catalog_partial'}
+                assert observed['submitted'] is False
+            else:
+                store = SubchatSubmissions(ledger.connection)
+                submission = store.prepare('9' * 32, 'read only', 'Future model',
+                                           'Initial effort', owner=None)
+                assert await asyncio.wait_for(backend.prepare(submission), timeout=6) == ()
+                page = backend.pages[submission.operation_id]
+                assert await page.evaluate('document.readyState') in {'loading', 'interactive'}
+                assert await page.evaluate('window.sends') == 0
+                assert store.get(submission.operation_id, owner=None).state == 'prepared'
+            assert script_requested.is_set()
+        finally:
+            release_script.set()
+            ledger.close()
+            await browser.close()
 
 
 async def test_prepare_preserves_original_error_when_page_close_fails(monkeypatch):

@@ -134,7 +134,7 @@ async def _upload_on_page(page: Page, ledger: LibraryUploadLedger,
                           require_prepared: bool = False,
                           source_path: str | None = None) -> LibraryUpload:
     """Capture all browser responses before starting its automatic upload batch."""
-    home = await page.goto(_LIBRARY_HOME, wait_until='domcontentloaded')
+    home = await page.goto(_LIBRARY_HOME, wait_until='commit')
     parsed = urlsplit(page.url)
     if (home is None or home.status != 200 or parsed.scheme != 'https'
             or parsed.netloc != 'chatgpt.com' or parsed.path != '/library'):
