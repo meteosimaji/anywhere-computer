@@ -3,6 +3,19 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b29 / Plugin 0.2.0-beta.29 — development prerelease (2026-09-28)
+
+- Add bounded current-DOM source, redacted response/failure history and compact
+  source-claimed publication details and visible links to the isolated browser.
+- Add exact-target browser keys, drag and drop, local file input and exclusive
+  browser download with a SHA-256 receipt. Keep owner and observation bindings,
+  and preserve unknown-action recovery.
+- Forward bounded MCP audio items without duplicating base64 in model text.
+  An optional local FFmpeg decoder provides short WAV clips and selected video
+  frames as MCP media items; receiving-model perception needs separate proof.
+- Record verified competitor capabilities, current coverage and outstanding
+  native desktop, browser and media gaps in the GUI guide.
+
 ## 0.2.0b28 / Plugin 0.2.0-beta.28 — development prerelease (2026-09-28)
 
 - Add short, breadth-first macOS Accessibility observations and exact role,

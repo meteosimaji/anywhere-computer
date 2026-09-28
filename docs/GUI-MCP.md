@@ -87,6 +87,33 @@ macOSのAccessibility権限とmanifest検証済みのnative helperが必要で�
 この経路は新しい一時ブラウザを所有するもので、利用者が開いているタブの
 操作やCodex専用 `cua_repl` の実行環境には接続しません。
 
+`browser_source` は現在の DOM の outerHTML を最大32768文字返します。
+HTTP の元レスポンスとは限らず、指定した CSS 要素は一意でなければなりません。
+`browser_network` はこのタブの直近100件の応答・失敗したリクエストを
+`after_id` で順に返します。URL の認証情報・query の値・ヘッダー・本文は
+返しません。`browser_research` は現在のページから表題、見出し、
+canonical URL、サイト側が主張する発行者・著者・日付、可視リンクを短く返します。
+発行者や日付は検証済みの事実ではありません。検索結果の断片だけを読了証拠にせず、
+必要なページを開いて観測します。
+
+`browser_key` は一意の対象へ Playwright のキー名または組み合わせを送ります。
+ページ全体に対する Tab や Escape は `selector="body"` を指定します。
+`browser_drag` は観測 ID と二つの一意な対象を取り、CSS、role/name、label を
+各対象に使えます。`browser_file_upload` は最大16MiBのローカル通常ファイルを
+一意の file input に設定します。ページの change ハンドラーが直ちに送信する
+可能性があるため、接続先へのファイル開示を伴う操作として扱います。
+`browser_download` は対象をクリックして発生したダウンロードを最大64MiBまで
+未使用の絶対パスに保存し、長さと SHA-256 を返します。既存パスは上書きしません。
+いずれも操作 ID を保存し、結果不明ならタブと保存先を観測してから次へ進みます。
+
+`media_status` はローカル FFmpeg の有無を示します。存在する場合、
+`media_audio_clip` は最大10秒の単音声 WAV を MCP audio item として、
+`media_video_frames` は指定時刻付近の最大4枚の JPEG を MCP image item として
+返します。元ファイルは通常ファイル・最大512MiBです。画像・音声の base64 は
+本文に複製されません。動画は連続再生ではなくサンプリングした静止画です。
+モデルが audio item を聞き取れたこと、動画全体を理解したことはこの配送だけでは
+証明できません。クライアントと選択モデルで受け入れを確認してください。
+
 ## 外部MCP sessionの開始
 
 既存のMCP実行ファイルを `mcp_session_open` で選び、返された `session_id` を保持します。

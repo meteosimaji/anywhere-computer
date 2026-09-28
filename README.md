@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b28` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.28` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b29` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.29` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -243,6 +243,16 @@ its requested URL, confirmed or unconfirmed outcome, and latest observed URL.
 After an unconfirmed navigation, `browser_observe` reads the live tab without
 replaying the request. A matching observed URL does not prove the attempted
 navigation completed.
+The isolated tab also exposes bounded live DOM source, redacted network
+metadata, and compact source-claimed publication details and visible links for
+research. `browser_key`, `browser_drag`, `browser_file_upload`, and
+`browser_download` use exact targets and recoverable operation IDs. Downloads
+save to a new path and return a SHA-256 digest. A local FFmpeg installation adds
+`media_audio_clip` and `media_video_frames`; audio and image data are sent as
+native MCP media items when the client accepts them. See the
+[GUI guide](docs/GUI-MCP.md) for limits and the
+[comparison](docs/GUI-AUTOMATION-PLAN.md) for remaining gaps. The receiving
+Chat model's audio perception is a separate acceptance check.
 
 For explicit local agent-to-agent text delivery, `anywhere-peer --help` describes
 owner provisioning and its separate MCP stdio server. Give each local peer its
