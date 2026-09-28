@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b26` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.26` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b27` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.27` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -99,6 +99,8 @@ macOSでは`ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx`を選ぶ�
 両方の生成POSTがHTTPX `200 text/event-stream`となり、回答保存まで確認しました。
 別の画像生成Chatでは、送信操作に結び付いたPNG画像をMCP経由で取得できました。
 画像の取得と最終回答の確認は別の状態として返します。
+送信結果の `provider_receipt` は未送信・未確認・Chat側で一致する入力を確認済みの
+状態を分けます。`subchat_observe` は送信結果を照合しますが、待機中の追送は開始しません。
 30fpsの録画とフォーカス記録では専用Chromeの前面化はありませんでした。
 準備には背景Chromeが必要で、どの環境でも前面化しない保証ではありません。
 `ANYWHERE_SUBCHAT_CHROME_SOURCE_PROFILE`でプロファイルを選び、複数アカウントを
@@ -110,6 +112,9 @@ Macのパスを書くだけでアクセス権が増えるわけではなく、�
 `browser_fill`もあります。操作後の確認に失敗した場合は結果不明を返すので、
 同じ操作を繰り返す前にタブを観測してください。既存Chromeのプロファイルや
 タブへの接続は、この隔離ブラウザ機能には含まれません。
+観測には短いアクセシビリティ上の役割ツリーと `snapshot_id` も含まれます。
+`browser_click`・`browser_fill` は、その観測 ID と正確な役割・名前またはラベルで
+対象を選べます。古い観測や複数一致は入力前に拒否します。CSS 指定も引き続き使えます。
 隔離ブラウザの既定起動先はWindowsではインストール済みEdge、macOSとLinuxでは
 Chromeです。起動できない場合は送信前の`browser_startup_unavailable`を返します。
 

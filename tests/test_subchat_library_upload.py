@@ -29,6 +29,16 @@ FILE_ID = 'file_fixture'
 UPLOAD_URL = 'https://upload.example.test/object'
 
 
+async def test_library_mcp_annotations_describe_upload_and_saved_reconciliation():
+    from anywhere_computer.subchat_library_mcp import _catalog
+
+    catalog = {tool['name']: tool['annotations'] for tool in await _catalog()}
+    assert catalog['subchat_upload_library'] == {
+        'readOnlyHint': False, 'destructiveHint': True, 'openWorldHint': False}
+    assert catalog['subchat_upload_status'] == {
+        'readOnlyHint': False, 'destructiveHint': False, 'openWorldHint': False}
+
+
 @pytest.mark.asyncio
 @pytest.mark.skipif(sys.platform != 'darwin', reason='macOS-only Library upload')
 async def test_mcp_upload_requires_prepared_exact_file(tmp_path, monkeypatch):

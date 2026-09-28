@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sys
+import time
 import uuid
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
@@ -81,6 +82,9 @@ class _Entry:
     page: Page
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_navigation: _Navigation | None = None
+    snapshot_id: str | None = None
+    snapshot_at: float = 0.0
+    snapshot_url: str | None = None
 
 
 class BrowserControl:
@@ -211,6 +215,7 @@ class BrowserControl:
             # occur after the browser has already changed pages.
             navigation = _Navigation(requested_url=args.url)
             entry.last_navigation = navigation
+            entry.snapshot_id = None
             try:
                 response = await entry.page.goto(args.url, wait_until="domcontentloaded",
                                                  timeout=15000)
@@ -235,12 +240,23 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
+            if args.snapshot_id is not None:
+                if (args.snapshot_id != entry.snapshot_id
+                        or time.monotonic() - entry.snapshot_at > 60
+                        or entry.page.url != entry.snapshot_url):
+                    raise ValueError("Browser snapshot is stale; observe the tab again")
             # A retained element handle pins the element selected by the preflight.
             # A locator would resolve the selector again after the checks below.
             try:
-                target = entry.page.locator("css=" + args.selector)
+                if args.selector is not None:
+                    target = entry.page.locator("css=" + args.selector)
+                elif args.role is not None:
+                    target = entry.page.get_by_role(args.role, name=args.name, exact=True)
+                else:
+                    assert args.label is not None
+                    target = entry.page.get_by_label(args.label, exact=True)
                 if await target.count() != 1:
-                    raise ValueError("Browser selector must match exactly one element")
+                    raise ValueError("Browser target must match exactly one element")
                 element = await target.element_handle()
                 if (element is None or not await element.is_visible()
                         or not await element.is_enabled()):
@@ -258,6 +274,7 @@ class BrowserControl:
                 raise
             except Exception as error:
                 raise ValueError("Browser target could not be resolved") from error
+            entry.snapshot_id = None
             try:
                 if value is None:
                     await element.click(timeout=10000)
@@ -292,6 +309,19 @@ class BrowserControl:
             "url": observed_url, "title": title[:512],
             "text": text[:16384], "text_truncated": len(text) > 16384,
         }
+        try:
+            semantic_tree = await entry.page.locator("body").aria_snapshot(timeout=3000)
+        except Exception:
+            # Accessible structure is supplementary; URL, title and visible
+            # text still give a useful observation if the page has no body.
+            snapshot["semantic_tree_unavailable"] = True
+        else:
+            snapshot["semantic_tree"] = semantic_tree[:16384]
+            snapshot["semantic_tree_truncated"] = len(semantic_tree) > 16384
+        entry.snapshot_id = uuid.uuid4().hex
+        entry.snapshot_at = time.monotonic()
+        entry.snapshot_url = observed_url
+        snapshot["snapshot_id"] = entry.snapshot_id
         if entry.last_navigation is not None:
             entry.last_navigation.observed_url = observed_url
             snapshot["last_navigation"] = self._navigation_state(entry.last_navigation)

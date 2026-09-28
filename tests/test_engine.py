@@ -580,7 +580,10 @@ async def test_registry_schemas_validation_and_duplicate_guard(engine):
     document_edit = engine.tools["documents_edit_paragraph"]
     assert document_edit.destructive and not document_edit.read_only
     capture = engine.tools["audio_capture"]
-    assert capture.destructive and capture.open_world and not capture.read_only
+    assert not capture.destructive and not capture.open_world and not capture.read_only
+    assert not engine.tools["browser_open"].open_world
+    plugin_close = engine.tools["codex_plugin_session_close"]
+    assert not plugin_close.destructive and not plugin_close.open_world
     press = engine.tools["gui_native_press"]
     assert press.destructive and press.open_world and not press.read_only
     for name, tool in engine.tools.items():

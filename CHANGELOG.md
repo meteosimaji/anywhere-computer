@@ -3,6 +3,21 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b27 / Plugin 0.2.0-beta.27 — development prerelease (2026-09-28)
+
+- Show a separate provider receipt state and confirmed conversation link for
+  each saved Subchat send. Keep one durable intent key per intended child, with
+  no child count inferred from request wording.
+- Add `subchat_observe` to reconcile a saved send without dispatching a queued
+  follow-up. Mark send-capable recovery and waiting as potentially sending.
+- Add bounded browser accessibility snapshots and exact role/name or label
+  actions tied to a short-lived snapshot ID. Keep CSS actions available.
+- Correct published MCP risk hints for Subchat, Library upload, local browser
+  startup, audio capture, plugin-session close and bounded device discovery.
+  Generic external plugin calls retain the destructive hint.
+- Codex Computer Use remains unavailable through the direct plugin bridge
+  because its owning model-turn execution context cannot be supplied there.
+
 ## 0.2.0b26 / Plugin 0.2.0-beta.26 — development prerelease (2026-09-28)
 
 - Remove `pip`, `ensurepip` and C extension headers from portable application

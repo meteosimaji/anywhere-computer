@@ -37,6 +37,8 @@ from .subchat_state import (
     SubchatSelectionError,
     SubchatSubmissions,
     SubchatWorkContext,
+    confirmed_conversation_url,
+    provider_receipt_state,
 )
 
 if TYPE_CHECKING:
@@ -138,6 +140,9 @@ async def dispatch(service: Subchats,
                   if command.action == 'cancel'
                   else service.store.get(command.operation_id, owner=owner))
     data = result.model_dump(mode='json')
+    data['submission_operation_id'] = result.operation_id
+    data['provider_receipt'] = provider_receipt_state(result)
+    data['conversation_url'] = confirmed_conversation_url(result)
     progress = service.store.http_progress(result.operation_id, owner=owner)
     if progress is not None:
         data['http_progress'] = progress
@@ -502,7 +507,8 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'for login; HTTPX performs later reads. No generation or remote '
                         'mutation is exposed here. subchat_capabilities reports '
                         'generation_transport=unavailable. Use subchat_catalog source=http, '
-                        'subchat_list, subchat_status, subchat_recover and subchat_wait. '
+                        'subchat_list, subchat_status, subchat_observe, '
+                        'subchat_recover and subchat_wait. '
                         'subchat_download_file retrieves one exact saved final-answer sandbox '
                         'link as bounded base64 bytes without writing a local file. It does '
                         'not upload to another Chat or Library. '

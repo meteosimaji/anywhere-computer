@@ -178,7 +178,7 @@ class AuthorizedDeviceMCP:
                                    "Reuse the same request_id to observe pending work.",
                     "inputSchema": schema,
                     "annotations": {"readOnlyHint": False, "destructiveHint": True,
-                                    "openWorldHint": True},
+                                    "openWorldHint": False},
                 })
             if self.device_directory is None or not granted & ROUTER_TOOLS:
                 return [*await local_catalog(), *subchat]
@@ -336,8 +336,9 @@ class AuthorizedDeviceMCP:
             instructions += (
                 " For Subchat, choose the request_id before subchat_send or "
                 "subchat_message. Save that exact operation ID. A running or submitted "
-                "reply is not a final answer. Use subchat_status, subchat_recover, "
-                "or subchat_wait with the saved ID. Never resend an uncertain input. "
+                "reply is not a final answer. Use subchat_status or subchat_observe "
+                "with the saved ID; recover/wait can dispatch a queued follow-up. "
+                "Never resend an uncertain input. "
                 "The selected Chrome profile supplies browser preparation; generation "
                 "uses browser-prepared HTTPX, not independent provider authorization."
             )

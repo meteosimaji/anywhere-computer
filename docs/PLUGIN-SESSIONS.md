@@ -25,6 +25,20 @@ Subchat の送信・メッセージ・回収・待機・キュー監視はこの
 単なるファイル読取りだけで済むとは扱わない。個々の送信・購入・削除等には、その操作への
 ユーザーの依頼・承認が別途必要である。子サーバーからの対話的な承認要求は自動承認しない。
 
+公開パッケージのMCP注釈は操作の実際の効果に合わせる。`codex_plugin_call` と
+`mcp_call` は任意の外部ツールが削除・送信を行えるため、`destructiveHint=true` を維持する。
+`browser_open` は空の隔離タブの起動だけなので `openWorldHint=false`、
+`codex_plugin_session_close` は作業中の呼出しを拒否した上で一時環境を解放するだけなので
+`destructiveHint=false` とする。読み取りや一時環境の終了を一律に破壊的と表示しない。
+Subchat の `subchat_send` と送信可能な環境の `subchat_recover`・`subchat_wait` は、
+取り消せないメッセージ送信があり得るので `destructiveHint=true` とする。
+`subchat_observe` はキューを送らずに送信済み入力を照合する別の操作として
+`destructiveHint=false` とする。履歴の結果をローカル台帳へ保存し得るため
+`readOnlyHint=false` とする。
+保存済み状態の `subchat_status`・`subchat_list` は読み取りとして表示する。
+注釈はホストの安全確認に役立つ説明であり、OAuth scope、所有者確認、実行前検査を
+代替しない。ホストの拒否を別ツール経由で回避しない。
+
 ## ID の区別
 
 | 値 | 用途と寿命 |

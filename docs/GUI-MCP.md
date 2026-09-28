@@ -30,6 +30,18 @@ macOSのAccessibility権限とmanifest検証済みのnative helperが必要で�
 `capabilities.gui=false` だけで別登録の `gui_native_*` の可否を判断せず、
 稼働中のツール一覧、helper、権限、対象アプリを個別に確認してください。
 
+## 隔離ブラウザの役割・ラベル操作
+
+`browser_navigate` と `browser_observe` は、URL・本文に加えて短い
+`semantic_tree` と `snapshot_id` を返します。`browser_click`・`browser_fill` は
+従来の `selector` のほか、観測した `role` と正確な `name`、または `label` と
+`snapshot_id` を渡せます。役割・ラベル指定は1つだけにし、複数一致、非表示、
+無効、60秒を過ぎた観測、別ページへの遷移を入力前に拒否します。
+入力後は新しい観測 ID が返るので、次の操作にはその ID を使います。
+処理結果が不明なら同じタブを再観測し、確認前にクリックを繰り返しません。
+この経路は新しい一時ブラウザを所有するもので、利用者が開いているタブの
+操作やCodex専用 `cua_repl` の実行環境には接続しません。
+
 ## 外部MCP sessionの開始
 
 既存のMCP実行ファイルを `mcp_session_open` で選び、返された `session_id` を保持します。

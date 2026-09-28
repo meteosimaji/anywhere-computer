@@ -44,14 +44,16 @@ async def _catalog() -> list[JsonValue]:
                            'An interrupted upload is never automatically resent; inspect '
                            'the same operation with subchat_upload_status.',
             'inputSchema': upload_schema,
-            'annotations': {'readOnlyHint': False, 'openWorldHint': True},
+            'annotations': {'readOnlyHint': False, 'destructiveHint': True,
+                            'openWorldHint': False},
         },
         {
             'name': 'subchat_upload_status',
             'description': 'Read and reconcile one saved Library upload by its original '
                            'operation_id without reading or resending local file bytes.',
             'inputSchema': UploadStatus.model_json_schema(),
-            'annotations': {'readOnlyHint': True, 'openWorldHint': True},
+            'annotations': {'readOnlyHint': False, 'destructiveHint': False,
+                            'openWorldHint': False},
         },
     ]
 

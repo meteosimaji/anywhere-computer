@@ -2,7 +2,7 @@
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
 MAX_TOOL_SCOPES = 128
 
@@ -267,7 +267,22 @@ class BrowserNavigate(BrowserSession):
 
 
 class BrowserClick(BrowserSession):
-    selector: str = Field(min_length=1, max_length=1024)
+    selector: str | None = Field(default=None, min_length=1, max_length=1024)
+    role: Literal["button", "link", "textbox", "searchbox", "combobox", "checkbox",
+                  "radio", "switch", "tab", "menuitem", "option", "spinbutton"] | None = None
+    name: str | None = Field(default=None, min_length=1, max_length=512)
+    label: str | None = Field(default=None, min_length=1, max_length=512)
+    snapshot_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+
+    @model_validator(mode="after")
+    def one_target(self) -> "BrowserClick":
+        if sum(value is not None for value in (self.selector, self.role, self.label)) != 1:
+            raise ValueError("Choose exactly one browser selector, role, or label")
+        if self.name is not None and self.role is None:
+            raise ValueError("Browser name requires a role")
+        if (self.role is not None or self.label is not None) and self.snapshot_id is None:
+            raise ValueError("Semantic browser actions require an observed snapshot_id")
+        return self
 
 
 class BrowserFill(BrowserClick):

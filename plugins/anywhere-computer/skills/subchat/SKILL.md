@@ -61,14 +61,25 @@ receipt and final history confirm a send.
 Do not substitute another model or effort. Save a fresh 32-character lowercase
 hex request ID and one stable 32-character lowercase hex `intent_key` for each
 intended child Chat before direct `subchat_send`. A returned
-`submission_operation_id` is the ID for `subchat_recover` or `subchat_wait`;
+`submission_operation_id` is the ID for `subchat_observe`, `subchat_recover`,
+or `subchat_wait`;
 it can differ from a later transport request ID for the same intent. If a
 result is missing, blocked, or unknown, inspect `subchat_list` and the saved
 status before another send. Never invent a new intent key for the same child.
+There is no child count inferred from the wording of the request. Keep one
+stable intent key for each child the user actually intends, and reconcile each
+saved ID before deciding to create another.
 
 Treat `queued` as local acceptance, `sending` as unconfirmed dispatch, and
-`submitted` as a receipt. `completed` confirms a verified final turn; saved
-text is present only for a text-bearing answer. For an image-only result, check
+`submitted` as a receipt. `completed` confirms a verified final turn.
+`provider_receipt` is `not_sent`, `unconfirmed`, or `confirmed`. Only
+`confirmed` means the provider's matching user message was observed. An HTTP
+200, a conversation ID candidate, or a completed MCP call alone does not
+confirm it. `conversation_url` appears only with a confirmed receipt and a
+valid conversation ID. `subchat_list` returns the same receipt classification
+and the canonical `submission_operation_id` without prompt text by default.
+The saved receipt confirms delivery, not that the model finished answering;
+saved text is present only for a text-bearing answer. For an image-only result, check
 the saved answer type and use the optional `subchat_download_image` tool to
 inspect the image bytes. For multiple images in one turn, pass the zero-based
 `image_index` and verify the returned `image_count`. `subchat_wait` stops after
@@ -78,6 +89,9 @@ not stop Chat's generation. Its `elapsed_ms` is local call duration, and
 answer ETA. An interrupted reply requires inspecting the conversation before
 any follow-up. `reply_output_limit` means the provider ended at its output cap;
 the saved operation stays interrupted and its queued children remain unsent.
+Use `subchat_observe` to reconcile a sending or submitted operation without
+dispatching a queued follow-up. In send-capable sessions, `subchat_recover` and
+`subchat_wait` may deliver a queued follow-up when its parent is complete.
 When the catalog offers `subchat_preview`, call it only for a submitted input
 whose provisional text is useful. It returns the latest 512 characters from
 verified in-progress history, or no preview; it never replaces final recovery.

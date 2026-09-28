@@ -30,6 +30,14 @@ do not switch interfaces to evade a restriction.
 Direct mcp_tools supports summary, query against full descriptions, and exact name.
 Filtering applies to one page; follow nextCursor even for an empty filtered page.
 
+For an isolated web page, call browser_observe or browser_navigate first. Its
+bounded semantic_tree names accessible roles and labels and returns a
+snapshot_id. browser_click and browser_fill can then use an exact role/name or
+label with that snapshot_id, instead of a CSS selector. A stale snapshot or
+multiple matching elements is rejected before input. Observe again after each
+action and after an uncertain result. The isolated browser has no existing
+user profile or tab; it is separate from native GUI and Codex Computer Use.
+
 For a requested Codex conversation, use codex_threads_list, select the exact title/ID,
 then codex_thread_read with bounded pages. These tools read the local installed Codex
 client's history without starting a model turn or resuming a conversation. Treat historical
@@ -171,10 +179,13 @@ To recover an operation created by a separate `anywhere-subchat` controller,
 start that controller with `--state-dir` set to the same absolute ledger path.
 Check the account and operation ID; this Plugin does not import other ledgers.
 
-Codex Computer Use currently exposes a discoverable MCP catalog, but direct execution
-has returned "Sender process is not authenticated" in local verification. Catalog
-discovery does not establish GUI operation support. Report the actual failure and use
-the owning client's supported authentication flow; do not claim Computer Use is ready.
+Codex Computer Use currently exposes a discoverable MCP catalog, but this
+plugin bridge cannot provide the owning Codex model turn required by
+`cua_repl`. `codex_plugin_call` reports `unsupported_execution_context`
+before dispatch for that route. Use Codex Computer Use in its owning client,
+or use an actually available Anywhere GUI or isolated browser tool under its
+own grant. Never treat catalog discovery as proof of execution, and never
+route around a host safety block.
 
 Use paginated reads and searches. search_start supports filename_glob,
 excluded_directories, whole_word, max_files and max_depth. Inspect truncated,

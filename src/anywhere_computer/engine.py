@@ -348,23 +348,28 @@ class Engine:
 
         self.register("browser_open", "Open one isolated, ephemeral headless browser tab. "
                       "Returns owner-bound session and tab IDs; no existing profile is attached.",
-                      Empty, browser_open, open_world=True)
+                      Empty, browser_open)
         self.register("browser_navigate", "Navigate the exact owned tab to an HTTP or HTTPS "
                       "URL and return its observed URL, title and bounded visible text. "
                       "Navigation may have web side effects; never replay an unknown outcome.",
                       BrowserNavigate, browser_navigate, destructive=True, open_world=True)
         self.register("browser_observe", "Observe the exact owned tab without navigating. "
-                      "Returns URL, title, bounded visible text and the last explicit "
+                      "Returns URL, title, bounded visible text, an accessible role tree and "
+                      "a short-lived snapshot ID, plus the last explicit "
                       "navigation outcome when present. An unconfirmed outcome remains "
                       "unconfirmed even when the requested URL is observed.", BrowserSession,
                       browser_observe, read_only=True, open_world=True)
         self.register("browser_click", "Click one visible, enabled element matching an exact "
-                      "CSS selector in the owned tab. May have web side effects; inspect an "
+                      "CSS selector, observed role and name, or label in the owned tab. "
+                      "Role and label targets require the latest snapshot_id; stale snapshots "
+                      "are rejected before input. May have web side effects; inspect an "
                       "unknown outcome before another action.", BrowserClick, browser_click,
                       destructive=True, open_world=True)
         self.register("browser_fill", "Replace the value of one visible, enabled editable element "
-                      "matching an exact CSS selector in the owned tab. May have web side "
-                      "effects; inspect an unknown outcome before another action.", BrowserFill,
+                      "matching an exact CSS selector, observed role and name, or label in "
+                      "the owned tab. Role and label targets require the latest snapshot_id. "
+                      "May have web side effects; inspect an unknown outcome before another "
+                      "action.", BrowserFill,
                       browser_fill, destructive=True, open_world=True)
         self.register("browser_close", "Close the exact owned isolated browser session.",
                       BrowserSession, browser_close)
@@ -420,7 +425,7 @@ class Engine:
             "Never selects a microphone. Returns a CAF artifact and helper measurements, "
             "not proof of physical speaker output. Recover the original operation after "
             "response loss; never automatically repeat a recording.",
-            AudioCapture, capture_audio, destructive=True, open_world=True,
+            AudioCapture, capture_audio,
         )
 
         async def gui_observe(args: GUIObserve) -> Result:
@@ -601,7 +606,7 @@ class Engine:
             "codex_plugin_session_close", "Release your idle plugin context and its owned "
             "runtime. Refuses while a call is in progress; never retries an uncertain action. "
             "Closing cannot undo effects already committed by the plugin.",
-            PluginSessionId, plugin_session_close, destructive=True, open_world=True,
+            PluginSessionId, plugin_session_close,
         )
 
         async def codex_threads_list(args: CodexThreadPage) -> Result:
@@ -730,7 +735,6 @@ class Engine:
             UpdateSetting,
             settings_update,
             destructive=True,
-            open_world=True,
         )
 
         async def processes(args: ListProcesses) -> Result:
