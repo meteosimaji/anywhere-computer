@@ -98,12 +98,19 @@ async def test_chat_creates_runs_code_and_recovers_after_engine_restart(tmp_path
                     })
                     started = await call('terminal_start', run_args, run_id)
                     session = {'session_id': started['session_id']}
+                    cursor = 0
+                    stdout = ''
                     async with asyncio.timeout(20):
                         while True:
-                            output = await call('terminal_output', {**session, 'wait_ms': 100})
-                            if output['output_eof']:
+                            output = await call('terminal_output', {
+                                **session, 'cursor': cursor, 'wait_ms': 100,
+                            })
+                            assert output['dropped_bytes'] == 0
+                            stdout += output['text']
+                            cursor = output['next_cursor']
+                            if output['output_eof'] and output['exit_code'] is not None:
                                 break
-                    assert output['exit_code'] == 0 and output['text'].strip() == '3501'
+                    assert output['exit_code'] == 0 and stdout.strip() == '3501'
                     saved_output = await call('terminal_output', session, output_id)
                     assert saved_output['dropped_bytes'] == 0
                     await call('terminal_stop', session)
