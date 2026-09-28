@@ -96,6 +96,12 @@ def normalize_tool_result(result: dict[str, JsonValue]) -> dict[str, JsonValue]:
                 image_count += 1
             continue
         if item["type"] == "audio":
+            if not isinstance(item.get("mimeType"), str):
+                # Older providers may send opaque audio blocks that this bridge
+                # cannot safely identify. Preserve the former omit behavior.
+                unsupported += 1
+                truncated = True
+                continue
             if audio_count >= MAX_AUDIO_ITEMS:
                 omitted_audio += 1
                 truncated = True
