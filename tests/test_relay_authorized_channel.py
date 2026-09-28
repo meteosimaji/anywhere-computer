@@ -1,4 +1,5 @@
 import asyncio
+import uuid
 
 import pytest
 from test_relay_channels import channel_setup as channel_setup
@@ -31,29 +32,35 @@ async def test_signed_wss_write_lost_reply_and_refreshed_recovery(channel_setup,
             payload = await socket.recv()
             calls.append('write')
             result = Reply.model_validate_json(await pc.dispatch_frame(payload))
-            assert result.state == 'completed'
+            assert result.state in {'running', 'completed'}
             await socket.close()
         responder = asyncio.create_task(lose_reply())
         with pytest.raises(ChannelOutcomeUnknown):
             await relay.exchange_authorized(verifier, account, device_id, token, write)
         await responder
-    assert target.read_text(encoding='utf-8') == '中継 🚀'
     async with client(protocol=SIGNED_PC_PROTOCOL) as socket:
         await wait_connected(relay, device_id)
         async def recover():
             payload = await socket.recv()
             calls.append('lookup')
             await socket.send(await pc.dispatch_frame(payload))
-        responder = asyncio.create_task(recover())
-        result = await relay.exchange_authorized(
-            verifier, account, device_id,
-            sign({'device_id': device_id, 'exp': claims['exp'] + 60}),
-            Request(operation_id='7' * 32, tool='operations_get',
-                    arguments={'operation_id': write.operation_id}),
-        )
-        await responder
-        assert result.state == 'completed' and result.data['state'] == 'completed'
-    assert calls == ['write', 'lookup']
+        refreshed = sign({'device_id': device_id, 'exp': claims['exp'] + 60})
+        async with asyncio.timeout(20):
+            while True:
+                responder = asyncio.create_task(recover())
+                result = await relay.exchange_authorized(
+                    verifier, account, device_id, refreshed,
+                    Request(operation_id=uuid.uuid4().hex, tool='operations_get',
+                            arguments={'operation_id': write.operation_id}),
+                )
+                await responder
+                assert result.state == 'completed'
+                if result.data['state'] == 'completed':
+                    break
+                assert result.data['state'] == 'running'
+                await asyncio.sleep(.05)
+    assert target.read_text(encoding='utf-8') == '中継 🚀'
+    assert calls[0] == 'write' and all(call == 'lookup' for call in calls[1:])
 
 
 async def test_pc_rechecks_revocation_after_relay_dispatch(channel_setup, execution):
