@@ -11,6 +11,9 @@ private let maxWindows = 128
 private let maxTreeNodes = 128
 private let maxTreeDepth = 10
 private let maxChildrenPerElement = 32
+private let maxSelectorScanNodes = 1024
+private let maxSelectorScanDepth = 16
+private let maxSelectorChildrenPerElement = 256
 private let maxObservations = 128
 private let observationTTL: TimeInterval = 60
 private let axMessagingTimeout: Float = 0.25
@@ -79,6 +82,35 @@ private struct ObservedElement {
     let element: AXUIElement
     let valueDigest: Data?
     let pressIdentity: Data?
+    let target: SemanticTarget
+}
+
+private struct SemanticTarget {
+    let role: String?
+    let label: String?
+    let identifier: String?
+}
+
+private struct SemanticSelector {
+    let role: String
+    let label: String?
+    let identifier: String?
+
+    func matches(_ target: SemanticTarget) -> Bool {
+        target.role == role && (label == nil || target.label == label)
+            && (identifier == nil || target.identifier == identifier)
+    }
+}
+
+private func matchingElementRef(
+    _ elements: [String: ObservedElement], selector: SemanticSelector
+) throws -> String {
+    let matches = elements.filter { selector.matches($0.value.target) }
+    guard !matches.isEmpty else { throw helperError("target_not_found") }
+    guard matches.count == 1, let reference = matches.first?.key else {
+        throw helperError("target_ambiguous")
+    }
+    return reference
 }
 
 private func valueDigest(_ value: CFTypeRef?) -> Data? {
@@ -146,8 +178,10 @@ private func reserveNodeOutput(_ node: inout [String: Any],
     if state.outputBytes + size > 48 * 1024 {
         node["value"] = NSNull()
         node["label"] = NSNull()
+        node["identifier"] = NSNull()
         node["value_truncated"] = true
         node["label_truncated"] = true
+        node["identifier_truncated"] = true
         state.truncated = true
         size = try JSONSerialization.data(withJSONObject: node).count + 4
     }
@@ -311,6 +345,17 @@ private func stringAttribute(
                           attribute: diagnosticAttribute(name))
     }
     return string
+}
+
+private func identifierForElement(_ element: AXUIElement) -> (String?, Bool) {
+    var raw: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXIdentifierAttribute as CFString,
+                                        &raw) == .success,
+          let identifier = raw as? String, !identifier.isEmpty else {
+        return (nil, false)
+    }
+    guard identifier.count <= maxLabelCharacters else { return (nil, true) }
+    return (identifier, false)
 }
 
 private func boolAttribute(
@@ -582,13 +627,44 @@ private final class AXHelper {
         guard !result.1, result.0.count <= maxWindows else {
             throw helperError("window_limit_exceeded")
         }
-        for window in result.0 {
+        var windows = result.0
+        // Some macOS apps expose their visible window through AXFocusedWindow or
+        // AXMainWindow while AXWindows is an empty array. Use those app-owned
+        // references only in that case so a focused dialog remains observable.
+        if windows.isEmpty {
+            for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
+                try deadline.check()
+                var raw: CFTypeRef?
+                let status = AXUIElementCopyAttributeValue(application,
+                                                           attribute as CFString, &raw)
+                switch status {
+                case .success:
+                    guard let raw, CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+                        throw helperError("ax_error", stage: "attribute_type",
+                                          attribute: diagnosticAttribute(attribute as CFString))
+                    }
+                    let window = raw as! AXUIElement
+                    guard try stringAttribute(window, kAXRoleAttribute as CFString)
+                        == (kAXWindowRole as String) else { continue }
+                    if !windows.contains(where: { cfElementsEqual($0, window) }) {
+                        windows.append(window)
+                    }
+                case .attributeUnsupported, .noValue, .failure:
+                    continue
+                default:
+                    throw helperError("ax_error", stage: "copy_attribute",
+                                      attribute: diagnosticAttribute(attribute as CFString),
+                                      axStatus: status)
+                }
+            }
+        }
+        for window in windows {
             try deadline.check()
             guard try elementPID(window) == pid else {
                 throw helperError("ax_error", stage: "verify_pid")
             }
         }
-        return result.0
+        return windows
     }
 
     private func pruneState() {
@@ -718,19 +794,25 @@ private final class AXHelper {
         let observedValue = try observedValue(element)
         let press = try pressIdentity(element, readOnly: true)
         let digest = observedValue.comparable ? valueDigest(observedValue.value) : nil
-        refs[ref] = ObservedElement(element: element, valueDigest: digest,
-                                    pressIdentity: press)
         let value = jsonScalar(observedValue.value)
         try deadline.check()
         let enabled = try boolAttribute(element, kAXEnabledAttribute as CFString)
         try deadline.check()
         let settable = try observedValueIsSettable(element)
         try deadline.check()
+        let identifier: (String?, Bool)
+        if (press != nil && digest != nil) || settable {
+            identifier = identifierForElement(element)
+            try deadline.check()
+        } else {
+            identifier = (nil, false)
+        }
 
         var node: [String: Any] = [
             "element_ref": ref,
             "role": role ?? NSNull(),
             "label": label.0 ?? NSNull(),
+            "identifier": identifier.0 ?? NSNull(),
             "value": value.0,
             "enabled": enabled ?? NSNull(),
             "settable": settable,
@@ -738,12 +820,20 @@ private final class AXHelper {
             "children": [[String: Any]](),
         ]
         if label.1 { node["label_truncated"] = true }
+        if identifier.1 {
+            node["identifier_truncated"] = true
+        }
         if !label.2.isEmpty { node["label_diagnostics"] = label.2 }
         if value.1 { node["value_truncated"] = true }
         if try !reserveNodeOutput(&node, state: &state) {
-            refs.removeValue(forKey: ref)
             return nil
         }
+        refs[ref] = ObservedElement(
+            element: element, valueDigest: digest, pressIdentity: press,
+            target: SemanticTarget(role: node["role"] as? String,
+                                   label: label.1 ? nil : node["label"] as? String,
+                                   identifier: node["identifier"] as? String)
+        )
 
         if depth >= maxTreeDepth {
             var childCount: CFIndex = 0
@@ -790,22 +880,22 @@ private final class AXHelper {
         deadline: RequestDeadline
     ) throws -> LocatedElement {
         var visited: [AXUIElement] = []
-        var count = 0
         var limitExceeded = false
-
-        func visit(_ element: AXUIElement, depth: Int) throws -> AXUIElement? {
+        var queue: [(AXUIElement, Int)] = [(root, 0)]
+        var cursor = 0
+        while cursor < queue.count {
             try deadline.check()
-            if cfElementsEqual(element, target) { return element }
+            let (element, depth) = queue[cursor]
+            cursor += 1
+            if cfElementsEqual(element, target) { return .found(element) }
             if visited.contains(where: { cfElementsEqual($0, element) }) {
-                return nil
+                continue
             }
-            if count >= maxTreeNodes {
+            if visited.count >= maxTreeNodes {
                 limitExceeded = true
-                return nil
+                break
             }
             visited.append(element)
-            count += 1
-
             if depth >= maxTreeDepth {
                 var childCount: CFIndex = 0
                 let status = AXUIElementGetAttributeValueCount(
@@ -819,31 +909,84 @@ private final class AXHelper {
                     throw helperError("ax_error", stage: "count_attribute",
                                       attribute: "AXChildren", axStatus: status)
                 }
-                return nil
+                continue
             }
-
             let children = try elementArray(
                 element,
                 attribute: kAXChildrenAttribute as CFString,
                 maxCount: maxChildrenPerElement
             )
             if children.1 { limitExceeded = true }
-            for child in children.0 {
-                if let found = try visit(child, depth: depth + 1) {
-                    return found
-                }
-                if count >= maxTreeNodes {
-                    limitExceeded = true
-                    break
-                }
-            }
-            return nil
+            queue.append(contentsOf: children.0.map { ($0, depth + 1) })
         }
-
-        if let found = try visit(root, depth: 0) {
-            return .found(found)
-        }
+        if cursor < queue.count { limitExceeded = true }
         return limitExceeded ? .limitExceeded : .absent
+    }
+
+    private func verifyUniqueSelector(
+        root: AXUIElement, selected: AXUIElement,
+        selector: SemanticSelector, deadline: RequestDeadline
+    ) throws {
+        var visited: [AXUIElement] = []
+        var queue: [(AXUIElement, Int)] = [(root, 0)]
+        var cursor = 0
+        var match: AXUIElement?
+        while cursor < queue.count {
+            try deadline.check()
+            guard visited.count < maxSelectorScanNodes else {
+                throw helperError("tree_limit_exceeded")
+            }
+            let (element, depth) = queue[cursor]
+            cursor += 1
+            if visited.contains(where: { cfElementsEqual($0, element) }) { continue }
+            visited.append(element)
+            do {
+                let role = try stringAttribute(element, kAXRoleAttribute as CFString)
+                if role == selector.role {
+                    let label = try selector.label.map { _ in
+                        try labelForElement(element, deadline: deadline)
+                    }
+                    let identifier = selector.identifier == nil ? nil
+                        : identifierForElement(element).0
+                    let target = SemanticTarget(
+                        role: role, label: label?.1 == true ? nil : label?.0,
+                        identifier: identifier
+                    )
+                    if selector.matches(target) {
+                        if match != nil { throw helperError("target_ambiguous") }
+                        match = element
+                    }
+                }
+                if depth >= maxSelectorScanDepth {
+                    var count: CFIndex = 0
+                    let status = AXUIElementGetAttributeValueCount(
+                        element, kAXChildrenAttribute as CFString, &count
+                    )
+                    if status == .success && count > 0 {
+                        throw helperError("tree_limit_exceeded")
+                    }
+                    if status != .success && status != .attributeUnsupported
+                        && status != .noValue {
+                        throw helperError("ax_error", stage: "count_attribute",
+                                          attribute: "AXChildren", axStatus: status)
+                    }
+                    continue
+                }
+                let children = try elementArray(
+                    element, attribute: kAXChildrenAttribute as CFString,
+                    maxCount: maxSelectorChildrenPerElement
+                )
+                if children.1 { throw helperError("tree_limit_exceeded") }
+                queue.append(contentsOf: children.0.map { ($0, depth + 1) })
+            } catch let failure as HelperFailure where failure.code == "ax_error"
+                && failure.axStatus == Int(AXError.invalidUIElement.rawValue) {
+                // Recycled elements from dynamic lists cannot be action targets.
+                continue
+            }
+        }
+        guard let match, cfElementsEqual(match, selected) else {
+            throw helperError("target_changed")
+        }
     }
 
     private func windowsResult(app: String, deadline: RequestDeadline) throws -> [String: Any] {
@@ -910,6 +1053,135 @@ private final class AXHelper {
         ]
     }
 
+    private func observeTargetsResult(
+        app: String, windowID: Int, deadline: RequestDeadline
+    ) throws -> [String: Any] {
+        try deadline.check()
+        try requireAXPermission()
+        pruneState()
+        guard observations.count < maxObservations else {
+            throw helperError("observation_limit_exceeded")
+        }
+        let record = try windowRecord(windowID, app: app)
+        let window = try revalidateWindow(record, deadline: deadline)
+        var state = TraversalState()
+        var refs: [String: ObservedElement] = [:]
+        var targets: [[String: Any]] = []
+        var queue: [(AXUIElement, Int)] = [(window, 0)]
+        var cursor = 0
+        // Breadth-first traversal keeps toolbars and dialogs reachable even when
+        // a long list in the first child exhausts the bounded observation.
+        while cursor < queue.count && state.nodeCount < maxTreeNodes {
+            try deadline.check()
+            let (element, depth) = queue[cursor]
+            cursor += 1
+            if seen(element, in: state) { continue }
+            state.visited.append(element)
+            state.nodeCount += 1
+
+            do {
+                let press = try pressIdentity(element, readOnly: true)
+                let settable = try observedValueIsSettable(element)
+                if press != nil || settable {
+                    let value = try observedValue(element)
+                    let digest = value.comparable ? valueDigest(value.value) : nil
+                    let role = try stringAttribute(element, kAXRoleAttribute as CFString)
+                    let label = try labelForElement(element, deadline: deadline)
+                    let identifier = identifierForElement(element)
+                    let enabled = try boolAttribute(element, kAXEnabledAttribute as CFString)
+                    let ref = UUID().uuidString.lowercased()
+                    var target: [String: Any] = [
+                        "element_ref": ref,
+                        "role": role ?? NSNull(),
+                        "label": NSNull(),
+                        "identifier": NSNull(),
+                        "label_truncated": label.1,
+                        "identifier_truncated": identifier.1,
+                        "enabled": enabled ?? NSNull(),
+                        "pressable": press != nil && digest != nil,
+                        "settable": settable,
+                    ]
+                    if !label.1, let value = label.0 { target["label"] = value }
+                    if !identifier.1, let value = identifier.0 { target["identifier"] = value }
+                    let bytes = try JSONSerialization.data(withJSONObject: target).count + 4
+                    if state.outputBytes + bytes > 48 * 1024 {
+                        state.truncated = true
+                        break
+                    }
+                    state.outputBytes += bytes
+                    targets.append(target)
+                    refs[ref] = ObservedElement(
+                        element: element, valueDigest: digest, pressIdentity: press,
+                        target: SemanticTarget(role: role,
+                                               label: label.1 ? nil : label.0,
+                                               identifier: identifier.1 ? nil : identifier.0)
+                    )
+                }
+
+                if depth >= maxTreeDepth {
+                    var count: CFIndex = 0
+                    let status = AXUIElementGetAttributeValueCount(
+                        element, kAXChildrenAttribute as CFString, &count
+                    )
+                    if status == .success && count > 0 {
+                        state.truncated = true
+                    } else if status != .success && status != .attributeUnsupported
+                                && status != .noValue {
+                        throw helperError("ax_error", stage: "count_attribute",
+                                          attribute: "AXChildren", axStatus: status)
+                    }
+                    continue
+                }
+                let children = try elementArray(
+                    element, attribute: kAXChildrenAttribute as CFString,
+                    maxCount: maxChildrenPerElement
+                )
+                if children.1 { state.truncated = true }
+                queue.append(contentsOf: children.0.map { ($0, depth + 1) })
+            } catch let failure as HelperFailure where state.nodeCount > 1
+                && failure.code == "ax_error"
+                && failure.axStatus == Int(AXError.invalidUIElement.rawValue) {
+                // Dynamic lists can hand out AX children that have already been
+                // recycled. Skip those read-only nodes; they are never leased.
+                state.truncated = true
+                continue
+            }
+        }
+        if cursor < queue.count { state.truncated = true }
+        let observationID = UUID().uuidString.lowercased()
+        observations[observationID] = ObservationRecord(
+            id: observationID, app: app, windowID: windowID,
+            process: record.process, elements: refs,
+            expiresAtUptime: uptime() + observationTTL
+        )
+        return [
+            "observation_id": observationID,
+            "process_id": Int(record.process.pid),
+            "window_id": windowID,
+            "ttl_seconds": Int(observationTTL),
+            "visited_elements": state.nodeCount,
+            "truncated": state.truncated,
+            "targets": targets,
+            "tree_omitted": true,
+        ]
+    }
+
+    private func targetRef(
+        app: String, windowID: Int, observationID: String,
+        selector: SemanticSelector
+    ) throws -> String {
+        pruneState()
+        guard let observation = observations[observationID],
+              observation.expiresAtUptime > uptime() else {
+            observations.removeValue(forKey: observationID)
+            throw helperError("observation_unavailable")
+        }
+        guard observation.app == app, observation.windowID == windowID else {
+            throw helperError("observation_mismatch")
+        }
+        return try matchingElementRef(observation.elements, selector: selector)
+    }
+
     private func mutateResult(
         app: String,
         windowID: Int,
@@ -917,6 +1189,7 @@ private final class AXHelper {
         elementRef: String,
         rawValue: Any?,
         press: Bool = false,
+        selector: SemanticSelector? = nil,
         deadline: RequestDeadline
     ) throws -> [String: Any] {
         try deadline.check()
@@ -957,6 +1230,23 @@ private final class AXHelper {
         try deadline.check()
         guard try elementPID(currentElement) == record.process.pid else {
             throw helperError("element_unavailable")
+        }
+        if let selector {
+            let currentLabel = try selector.label.map { _ in
+                try labelForElement(currentElement, deadline: deadline)
+            }
+            let currentIdentifier = selector.identifier == nil ? nil
+                : identifierForElement(currentElement).0
+            let currentTarget = SemanticTarget(
+                role: try stringAttribute(currentElement, kAXRoleAttribute as CFString),
+                label: currentLabel?.1 == true ? nil : currentLabel?.0,
+                identifier: currentIdentifier
+            )
+            guard selector.matches(currentTarget) else {
+                throw helperError("target_changed")
+            }
+            try verifyUniqueSelector(root: window, selected: currentElement,
+                                     selector: selector, deadline: deadline)
         }
 
         // Recheck process and window identity immediately before the mutation without
@@ -1034,6 +1324,7 @@ private final class AXHelper {
         let deadline = RequestDeadline()
         let allowedKeys: Set<String> = [
             "id", "method", "app", "window_id", "observation_id", "element_ref", "value",
+            "role", "label", "identifier",
         ]
         guard Set(object.keys).isSubset(of: allowedKeys) else {
             throw helperError("invalid_input")
@@ -1045,20 +1336,31 @@ private final class AXHelper {
         switch method {
         case "windows":
             guard object["window_id"] == nil, object["observation_id"] == nil,
-                  object["element_ref"] == nil, object["value"] == nil else {
+                  object["element_ref"] == nil, object["value"] == nil,
+                  object["role"] == nil, object["label"] == nil,
+                  object["identifier"] == nil else {
                 throw helperError("invalid_input")
             }
             return try windowsResult(app: app, deadline: deadline)
 
-        case "observe":
+        case "observe", "observe_targets":
             guard object["observation_id"] == nil, object["element_ref"] == nil,
-                  object["value"] == nil else {
+                  object["value"] == nil, object["role"] == nil,
+                  object["label"] == nil, object["identifier"] == nil else {
                 throw helperError("invalid_input")
             }
             let windowID = try positiveInt(object["window_id"])
+            if method == "observe_targets" {
+                return try observeTargetsResult(app: app, windowID: windowID,
+                                                deadline: deadline)
+            }
             return try observeResult(app: app, windowID: windowID, deadline: deadline)
 
         case "set_value", "press":
+            guard object["role"] == nil, object["label"] == nil,
+                  object["identifier"] == nil else {
+                throw helperError("invalid_input")
+            }
             let windowID = try positiveInt(object["window_id"])
             let observationID = try nonEmptyString(object["observation_id"], maxBytes: 128)
             let elementRef = try nonEmptyString(object["element_ref"], maxBytes: 128)
@@ -1073,6 +1375,30 @@ private final class AXHelper {
                 rawValue: object["value"],
                 press: method == "press",
                 deadline: deadline
+            )
+
+        case "set_value_target", "press_target":
+            guard object["element_ref"] == nil,
+                  (method == "set_value_target") == object.keys.contains("value") else {
+                throw helperError("invalid_input")
+            }
+            let role = try nonEmptyString(object["role"], maxBytes: 128)
+            let label = try object["label"].map { try nonEmptyString($0, maxBytes: 2048) }
+            let identifier = try object["identifier"].map {
+                try nonEmptyString($0, maxBytes: 2048)
+            }
+            guard label != nil || identifier != nil else {
+                throw helperError("invalid_input")
+            }
+            let selector = SemanticSelector(role: role, label: label, identifier: identifier)
+            let windowID = try positiveInt(object["window_id"])
+            let observationID = try nonEmptyString(object["observation_id"], maxBytes: 128)
+            let elementRef = try targetRef(app: app, windowID: windowID,
+                                           observationID: observationID, selector: selector)
+            return try mutateResult(
+                app: app, windowID: windowID, observationID: observationID,
+                elementRef: elementRef, rawValue: object["value"],
+                press: method == "press_target", selector: selector, deadline: deadline
             )
 
         default:

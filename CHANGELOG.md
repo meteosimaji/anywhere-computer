@@ -3,6 +3,24 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b28 / Plugin 0.2.0-beta.28 — development prerelease (2026-09-28)
+
+- Add short, breadth-first macOS Accessibility observations and exact role,
+  label or identifier actions. Recheck app, window, value and full-window
+  selector uniqueness before input; reject changed or ambiguous targets.
+- Discover focused and main windows when an app exposes an empty AXWindows list.
+  A live Calculator check confirmed sidebar toggles in both directions,
+  including when its history exceeds the detailed tree's element limit.
+- Resolve isolated-browser role and label targets at action time so page
+  rerenders do not leave a stale element handle. Keep exact-one and
+  actionability checks before dispatch.
+- Include bounded, whitespace-normalized HTML form label metadata and
+  CSS-pixel element boxes in browser observations, with an optional rendered
+  JPEG viewport delivered as an MCP image item rather than base64 text.
+- Record the comparison with Computer Use, Peekaboo, Playwright MCP,
+  browser-use, Stagehand and Skyvern, plus the remaining GUI implementation
+  and acceptance work.
+
 ## 0.2.0b27 / Plugin 0.2.0-beta.27 — development prerelease (2026-09-28)
 
 - Show a separate provider receipt state and confirmed conversation link for

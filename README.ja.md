@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b27` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.27` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b28` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.28` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -115,6 +115,15 @@ Macのパスを書くだけでアクセス権が増えるわけではなく、�
 観測には短いアクセシビリティ上の役割ツリーと `snapshot_id` も含まれます。
 `browser_click`・`browser_fill` は、その観測 ID と正確な役割・名前またはラベルで
 対象を選べます。古い観測や複数一致は入力前に拒否します。CSS 指定も引き続き使えます。
+ページ内の再描画後は同じ役割・名前を再解決し、短い表示待機を行います。
+macOS のネイティブ Accessibility 経路は、`compact=true` で操作可能な
+役割・ラベル・識別子の短い一覧を返せます。新しい
+`gui_native_press_target` と `gui_native_set_value_target` は、観測内で
+一意の対象だけを操作し、入力直前にアプリとウィンドウを再確認します。
+隔離ブラウザの観測はHTMLラベルと表示領域内の位置を整理した `form_controls` も返します。
+`browser_observe(include_image=true)` では、レンダリングされた表示領域を
+MCPの画像として確認できます。画像と要素情報は順番に取得するため、動くページでは
+完全に同じ瞬間を表すとは限りません。
 隔離ブラウザの既定起動先はWindowsではインストール済みEdge、macOSとLinuxでは
 Chromeです。起動できない場合は送信前の`browser_startup_unavailable`を返します。
 

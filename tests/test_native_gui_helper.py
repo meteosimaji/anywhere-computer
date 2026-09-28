@@ -46,12 +46,25 @@ async def test_persistent_requests_and_recovery_after_invalid_input(native_gui_h
         request.update(method="observe", window_id=True)
         assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
             "invalid_input")
+        request.update(method="observe_targets")
+        assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
+            "invalid_input")
         request.update(method="press", window_id=1, observation_id="snapshot",
                        element_ref="button", value="must not be accepted")
         assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
             "invalid_input")
+        request.pop("element_ref")
+        request.pop("value")
+        request.update(method="press_target", role="AXButton")
+        assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
+            "invalid_input")
+        request.update(label="Save", element_ref="button")
+        assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
+            "invalid_input")
+        request.pop("label")
+        request.pop("role")
         for key in ("observation_id", "element_ref", "value"):
-            request.pop(key)
+            request.pop(key, None)
         request.update(method="unsupported")
         request.pop("window_id")
         # Split input is retained until the delimiter, without requiring EOF.
@@ -109,6 +122,58 @@ emit(["id": "value-identity", "result": [
 
     assert identity["result"] == dict.fromkeys(
         ["same", "changed", "typed", "empty", "unsupported"], True)
+
+
+def test_semantic_target_selection_in_real_swift_source(tmp_path):
+    source = Path(__file__).resolve().parents[1] / "native/macos/AXHelper.swift"
+    text = source.read_text()
+    entry = "\nrunJSONLines()\n"
+    assert text.endswith(entry)
+    program = tmp_path / "SemanticTarget.swift"
+    program.write_text(text.removesuffix(entry) + r'''
+let element = AXUIElementCreateApplication(getpid())
+private let targets: [String: ObservedElement] = [
+    "save": ObservedElement(element: element, valueDigest: nil,
+        pressIdentity: nil, target: SemanticTarget(
+            role: "AXButton", label: "Save", identifier: "save-primary")),
+    "save-copy": ObservedElement(element: element, valueDigest: nil,
+        pressIdentity: nil, target: SemanticTarget(
+            role: "AXButton", label: "Save", identifier: "save-copy")),
+    "field": ObservedElement(element: element, valueDigest: nil,
+        pressIdentity: nil, target: SemanticTarget(
+            role: "AXTextField", label: "Name", identifier: "name-field")),
+]
+func selected(_ role: String, _ label: String?, _ identifier: String?) -> String {
+    do {
+        return try matchingElementRef(targets, selector: SemanticSelector(
+            role: role, label: label, identifier: identifier))
+    } catch let failure as HelperFailure {
+        return failure.code
+    } catch {
+        return "unexpected"
+    }
+}
+emit(["id": "targets", "result": [
+    "exact_identifier": selected("AXButton", nil, "save-primary"),
+    "exact_label_and_identifier": selected("AXButton", "Save", "save-copy"),
+    "duplicate_label": selected("AXButton", "Save", nil),
+    "changed_role": selected("AXLink", "Save", "save-primary"),
+    "missing_identifier": selected("AXButton", nil, "missing"),
+    "field": selected("AXTextField", "Name", nil),
+]])
+''')
+    executable = tmp_path / "semantic-target"
+    subprocess.run(["swiftc", str(program), "-o", str(executable)],
+                   check=True, capture_output=True, timeout=90)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, timeout=5)
+    assert json.loads(result.stdout)["result"] == {
+        "exact_identifier": "save",
+        "exact_label_and_identifier": "save-copy",
+        "duplicate_label": "target_ambiguous",
+        "changed_role": "target_not_found",
+        "missing_identifier": "target_not_found",
+        "field": "field",
+    }
 
 
 def test_process_selection_and_start_identity_in_real_swift_source(tmp_path):

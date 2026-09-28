@@ -199,6 +199,7 @@ for line in sys.stdin:
                 "output_directory": str(tmp_path / "audio-recording")})
             assert recording["state"] == "captured" and not recording["microphone_used"]
             assert len(audio_helper) == 1
+            helper_process[0][0] = "semantic"
             native = await call("gui_native_windows", {"app": "fixture"})
             target = {"session_id": native["session_id"], "app": "fixture", "window_id": 1}
             snapshot = await call("gui_native_observe", target)
@@ -210,6 +211,19 @@ for line in sys.stdin:
             snapshot = await call("gui_native_observe", target)
             pressed = await call("gui_native_press", {
                 **target, "observation_id": snapshot["observation_id"], "element_ref": "button",
+            })
+            assert pressed["action_accepted"] and not pressed["postcondition_verified"]
+            snapshot = await call("gui_native_observe", {**target, "compact": True})
+            assert "tree" not in snapshot and len(snapshot["targets"]) == 2
+            written = await call("gui_native_set_value_target", {
+                **target, "observation_id": snapshot["observation_id"],
+                "role": "AXTextField", "label": "Name", "value": "named field",
+            })
+            assert written["value_verified"] and not written["persistence_verified"]
+            snapshot = await call("gui_native_observe", {**target, "compact": True})
+            pressed = await call("gui_native_press_target", {
+                **target, "observation_id": snapshot["observation_id"],
+                "role": "AXButton", "identifier": "save-primary",
             })
             assert pressed["action_accepted"] and not pressed["postcondition_verified"]
             await call("gui_native_close", {"session_id": native["session_id"]})

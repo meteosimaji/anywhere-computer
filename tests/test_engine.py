@@ -576,7 +576,7 @@ async def test_literal_search_pagination(engine, tmp_path):
 async def test_registry_schemas_validation_and_duplicate_guard(engine):
     from anywhere_computer.models import Empty
 
-    assert len(engine.tools) == 78
+    assert len(engine.tools) == 80
     document_edit = engine.tools["documents_edit_paragraph"]
     assert document_edit.destructive and not document_edit.read_only
     capture = engine.tools["audio_capture"]
@@ -586,6 +586,8 @@ async def test_registry_schemas_validation_and_duplicate_guard(engine):
     assert not plugin_close.destructive and not plugin_close.open_world
     press = engine.tools["gui_native_press"]
     assert press.destructive and press.open_world and not press.read_only
+    press_target = engine.tools["gui_native_press_target"]
+    assert press_target.destructive and press_target.open_world and not press_target.read_only
     for name, tool in engine.tools.items():
         assert name == tool.name
         assert tool.schema.model_json_schema()["additionalProperties"] is False

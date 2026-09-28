@@ -30,10 +30,26 @@ do not switch interfaces to evade a restriction.
 Direct mcp_tools supports summary, query against full descriptions, and exact name.
 Filtering applies to one page; follow nextCursor even for an empty filtered page.
 
+For the built-in macOS Accessibility route, use gui_native_windows with the exact
+app bundle ID, then gui_native_observe with its session_id and window_id. Prefer
+compact=true for a short list of actionable targets. Use gui_native_press_target
+or gui_native_set_value_target with that observation_id and an exact AX role plus
+observed label or identifier. Ambiguous, missing, changed and expired targets
+require a fresh observation; never guess an element reference. Use compact=false
+when the full AX tree is needed. Verify the effect with another observation and
+close the native session when finished. Existing grants need the new tool scopes
+before these actions appear to an HTTP client.
+
 For an isolated web page, call browser_observe or browser_navigate first. Its
-bounded semantic_tree names accessible roles and labels and returns a
-snapshot_id. browser_click and browser_fill can then use an exact role/name or
-label with that snapshot_id, instead of a CSS selector. A stale snapshot or
+bounded semantic_tree names accessible roles and labels, form_controls lists
+non-hidden HTML labels, their source, and CSS-pixel boxes, and the observation
+returns a snapshot_id. browser_click and browser_fill can then use an exact
+role/name or label with that snapshot_id, instead of a CSS selector. If visual
+context is useful, call browser_observe with include_image=true to receive a
+bounded rendered viewport image as a separate MCP image item. The structure
+and image are captured sequentially, so they may differ on a changing page.
+Do not infer a coordinate action from that image; this route is semantic only.
+A stale snapshot or
 multiple matching elements is rejected before input. Observe again after each
 action and after an uncertain result. The isolated browser has no existing
 user profile or tab; it is separate from native GUI and Codex Computer Use.

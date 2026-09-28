@@ -40,6 +40,7 @@ from .models import (
     BrowserClick,
     BrowserFill,
     BrowserNavigate,
+    BrowserObserve,
     BrowserSession,
     CodexPluginCall,
     CodexPluginPage,
@@ -98,8 +99,10 @@ from .native_gui import (
     NativeGUIOutcomeUnknown,
     NativeObserve,
     NativePress,
+    NativePressTarget,
     NativeSession,
     NativeSetValue,
+    NativeSetValueTarget,
     helper_error_code,
     installed_helper,
 )
@@ -334,7 +337,7 @@ class Engine:
         async def browser_navigate(args: BrowserNavigate) -> Result:
             return await self.browser.navigate(args, owner=self._plugin_owner.get())
 
-        async def browser_observe(args: BrowserSession) -> Result:
+        async def browser_observe(args: BrowserObserve) -> Result:
             return await self.browser.observe(args, owner=self._plugin_owner.get())
 
         async def browser_click(args: BrowserClick) -> Result:
@@ -354,10 +357,11 @@ class Engine:
                       "Navigation may have web side effects; never replay an unknown outcome.",
                       BrowserNavigate, browser_navigate, destructive=True, open_world=True)
         self.register("browser_observe", "Observe the exact owned tab without navigating. "
-                      "Returns URL, title, bounded visible text, an accessible role tree and "
-                      "a short-lived snapshot ID, plus the last explicit "
+                      "Returns URL, title, bounded visible text, HTML form labels, an accessible "
+                      "role tree and a short-lived snapshot ID. include_image=true also returns "
+                      "a bounded rendered viewport image. Returns the last explicit "
                       "navigation outcome when present. An unconfirmed outcome remains "
-                      "unconfirmed even when the requested URL is observed.", BrowserSession,
+                      "unconfirmed even when the requested URL is observed.", BrowserObserve,
                       browser_observe, read_only=True, open_world=True)
         self.register("browser_click", "Click one visible, enabled element matching an exact "
                       "CSS selector, observed role and name, or label in the owned tab. "
@@ -386,6 +390,12 @@ class Engine:
         async def native_press(args: NativePress) -> Result:
             return await self.native_gui.press(args, owner=self._plugin_owner.get())
 
+        async def native_set_target(args: NativeSetValueTarget) -> Result:
+            return await self.native_gui.set_value_target(args, owner=self._plugin_owner.get())
+
+        async def native_press_target(args: NativePressTarget) -> Result:
+            return await self.native_gui.press_target(args, owner=self._plugin_owner.get())
+
         async def native_close(args: NativeSession) -> Result:
             return await self.native_gui.stop(args, owner=self._plugin_owner.get())
 
@@ -395,7 +405,9 @@ class Engine:
                       "Close the session when done. Window handles belong to this session only.",
                       NativeApp, native_windows, read_only=True, open_world=True)
         self.register("gui_native_observe", "Observe a selected native window without focus. "
-                      "Returns a bounded AX tree and expiring references, not a screenshot.",
+                      "Returns a bounded AX tree and expiring references, not a screenshot. "
+                      "Use compact=true for a shorter list of actionable role/label/identifier "
+                      "targets; request the full tree when needed.",
                       NativeObserve, native_observe, read_only=True, open_world=True)
         self.register("gui_native_set_value", "Set AXValue of an observed element; this is not "
                       "keyboard typing. Invalidates all native observations. Returns exact "
@@ -407,6 +419,16 @@ class Engine:
                       "click or app activation. Action acceptance is not task completion. Observe "
                       "again to verify the effect; never replay an unknown outcome.",
                       NativePress, native_press, destructive=True, open_world=True)
+        self.register("gui_native_set_value_target", "Set AXValue on one unique observed "
+                      "element selected by exact AX role and label or identifier. Refuses "
+                      "missing, ambiguous or changed targets before input. Readback verifies "
+                      "the field value, not persistence; observe the window again.",
+                      NativeSetValueTarget, native_set_target, destructive=True, open_world=True)
+        self.register("gui_native_press_target", "Perform AXPress once on one unique observed "
+                      "element selected by exact AX role and label or identifier. Refuses "
+                      "missing, ambiguous or changed targets before input. Observe the "
+                      "window again to verify the effect; never replay an unknown outcome.",
+                      NativePressTarget, native_press_target, destructive=True, open_world=True)
         self.register("gui_native_close", "Close an owned native helper and its references. "
                       "Does not close the target application.", NativeSession, native_close)
 
@@ -1656,6 +1678,7 @@ class Engine:
                     operation_id=request.operation_id, state="failed",
                     error="Native GUI target changed since observation; input was not attempted",
                     data={"error_code": "native_gui_input_refused", "dispatched": False,
+                          "input_attempted": False,
                           "next_action": "Observe the target again before sending new input."},
                 )
             except Exception as error:
@@ -1680,7 +1703,15 @@ class Engine:
                         operation_id=request.operation_id, state="failed", error=str(error),
                         data={"error_code": native_code or helper_code
                               or "native_gui_helper_rejected",
+                              **({"input_attempted": False} if helper_code in {
+                                  "target_ambiguous", "target_not_found"} else {}),
                               "next_action": (
+                                  "Observe again and specify the exact identifier or "
+                                  "element_ref to distinguish matching targets."
+                                  if helper_code == "target_ambiguous" else
+                                  "Observe again and select a role, label or identifier "
+                                  "present in that window."
+                                  if helper_code == "target_not_found" else
                                   "Grant the Anywhere Computer native GUI helper "
                                   "Accessibility access in "
                                   "macOS System Settings > Privacy & Security > Accessibility, "

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import logging
+import re
 import sys
 import time
 import uuid
@@ -14,7 +16,7 @@ from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
-from .models import BrowserClick, BrowserFill, BrowserNavigate, BrowserSession
+from .models import BrowserClick, BrowserFill, BrowserNavigate, BrowserObserve, BrowserSession
 
 if TYPE_CHECKING:
     from playwright.async_api import Browser, BrowserContext, Page, Playwright
@@ -34,6 +36,66 @@ class BrowserStartupUnavailable(Exception):
 
 _CLEANUP_WAIT_SECONDS = 5.0
 _LOG = logging.getLogger(__name__)
+_IMAGE_LIMIT = 1024 * 1024
+_FORM_CONTROLS_SCRIPT = r"""() => {
+    const clean = value => String(value || '').replace(/[\r\n\t\u2028\u2029\u00a0]/g, ' ')
+        .replace(/\s+/gu, ' ').trim().slice(0, 256);
+    const controls = [];
+    let inspected = 0;
+    let truncated = false;
+    for (const element of document.querySelectorAll(
+        'input, textarea, select, button, [role="textbox"], [role="combobox"], [role="button"]'
+    )) {
+        if (++inspected > 512 || controls.length >= 50) { truncated = true; break; }
+        const style = getComputedStyle(element);
+        if (element.getAttribute('type') === 'hidden' || style.display === 'none'
+            || style.visibility === 'hidden' || element.getClientRects().length === 0
+            || element.closest('[aria-hidden="true"]')) continue;
+        const labels = Array.from(element.labels || [], label =>
+            clean(label.innerText || label.textContent)).filter(Boolean).slice(0, 4);
+        const ariaLabel = clean(element.getAttribute('aria-label'));
+        const labelledBy = clean((element.getAttribute('aria-labelledby') || '')
+            .split(/\s+/).map(id => {
+                const label = document.getElementById(id);
+                return label?.innerText || label?.textContent || '';
+            }).join(' '));
+        const tag = element.tagName.toLowerCase();
+        const buttonText = tag === 'button' || element.getAttribute('role') === 'button'
+            ? clean(element.innerText || element.textContent) : '';
+        const title = clean(element.getAttribute('title'));
+        const label = ariaLabel || labelledBy || labels.join(' ') || buttonText || title;
+        const source = ariaLabel ? 'aria-label' : labelledBy ? 'aria-labelledby'
+            : labels.length ? 'html-label' : buttonText ? 'button-text'
+            : title ? 'title' : null;
+        const item = {tag, label, label_source: source,
+            disabled: Boolean(element.disabled || element.getAttribute('aria-disabled') === 'true'),
+            required: Boolean(element.required
+                              || element.getAttribute('aria-required') === 'true')};
+        const rect = element.getBoundingClientRect();
+        const rounded = value => Math.round(value * 10) / 10;
+        item.box = {x: rounded(rect.x), y: rounded(rect.y),
+            width: rounded(rect.width), height: rounded(rect.height)};
+        item.in_viewport = rect.width > 0 && rect.height > 0 && rect.right > 0
+            && rect.bottom > 0 && rect.left < innerWidth && rect.top < innerHeight;
+        if (labels.length) item.html_labels = labels;
+        if (tag === 'input') item.input_type = clean(element.getAttribute('type') || 'text');
+        const role = clean(element.getAttribute('role'));
+        if (role) item.role_attribute = role;
+        const id = clean(element.id);
+        if (id) item.id = id.slice(0, 128);
+        const placeholder = clean(element.getAttribute('placeholder'));
+        if (placeholder) item.placeholder = placeholder;
+        controls.push(item);
+    }
+    return {controls, truncated};
+}"""
+
+
+def _readable_lines(value: str) -> str:
+    """Keep meaningful indentation while normalizing display-only line breaks."""
+    normalized = (value.replace("\r\n", "\n").replace("\r", "\n")
+                  .replace("\u2028", "\n").replace("\u2029", "\n"))
+    return re.sub(r"\n(?:[ \t]*\n){2,}", "\n\n", normalized)
 
 
 def _cleanup_done(task: asyncio.Task[None]) -> None:
@@ -233,7 +295,9 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            return await self._snapshot(entry)
+            return await self._snapshot(
+                entry, include_image=isinstance(args, BrowserObserve) and args.include_image
+            )
 
     async def _action(self, args: BrowserClick, *, owner: str | None,
                       value: str | None = None) -> dict[str, JsonValue]:
@@ -245,8 +309,9 @@ class BrowserControl:
                         or time.monotonic() - entry.snapshot_at > 60
                         or entry.page.url != entry.snapshot_url):
                     raise ValueError("Browser snapshot is stale; observe the tab again")
-            # A retained element handle pins the element selected by the preflight.
-            # A locator would resolve the selector again after the checks below.
+            # User-facing role/label locators can resolve the current DOM after a
+            # framework rerender. Preserve the exact-one preflight and let Playwright
+            # check actionability again at dispatch rather than pinning a stale handle.
             try:
                 if args.selector is not None:
                     target = entry.page.locator("css=" + args.selector)
@@ -255,14 +320,15 @@ class BrowserControl:
                 else:
                     assert args.label is not None
                     target = entry.page.get_by_label(args.label, exact=True)
+                if await target.count() > 1:
+                    raise ValueError("Browser target must match exactly one element")
+                await target.wait_for(state="visible", timeout=3000)
                 if await target.count() != 1:
                     raise ValueError("Browser target must match exactly one element")
-                element = await target.element_handle()
-                if (element is None or not await element.is_visible()
-                        or not await element.is_enabled()):
+                if not await target.is_enabled():
                     raise ValueError("Browser target is not visible and enabled")
                 if value is not None:
-                    editable = await element.evaluate("""el => el.isContentEditable ||
+                    editable = await target.evaluate("""el => el.isContentEditable ||
                         (el instanceof HTMLTextAreaElement && !el.readOnly) ||
                         (el instanceof HTMLInputElement && !el.readOnly &&
                          ['text', 'search', 'email', 'number', 'password', 'tel',
@@ -277,12 +343,12 @@ class BrowserControl:
             entry.snapshot_id = None
             try:
                 if value is None:
-                    await element.click(timeout=10000)
+                    await target.click(timeout=10000)
                 else:
-                    await element.fill(value, timeout=10000)
+                    await target.fill(value, timeout=10000)
                 snapshot = await self._snapshot(entry)
                 if value is not None:
-                    observed_value = await element.evaluate(
+                    observed_value = await target.evaluate(
                         "el => el.isContentEditable ? el.innerText : el.value"
                     )
                     snapshot["value_verified"] = observed_value == value
@@ -298,7 +364,8 @@ class BrowserControl:
     async def fill(self, args: BrowserFill, *, owner: str | None) -> dict[str, JsonValue]:
         return await self._action(args, owner=owner, value=args.value)
 
-    async def _snapshot(self, entry: _Entry) -> dict[str, JsonValue]:
+    async def _snapshot(self, entry: _Entry, *, include_image: bool = False
+                        ) -> dict[str, JsonValue]:
         title = await entry.page.title()
         text = await entry.page.evaluate(
             "limit => (document.body?.innerText || '').slice(0, limit + 1)", 16384
@@ -307,8 +374,37 @@ class BrowserControl:
         snapshot: dict[str, JsonValue] = {
             "session_id": entry.session_id, "tab_id": entry.tab_id,
             "url": observed_url, "title": title[:512],
-            "text": text[:16384], "text_truncated": len(text) > 16384,
+            "text": _readable_lines(text[:16384]), "text_truncated": len(text) > 16384,
         }
+        try:
+            form_controls = await entry.page.evaluate(_FORM_CONTROLS_SCRIPT)
+        except Exception:
+            snapshot["form_controls_unavailable"] = True
+        else:
+            snapshot["form_controls"] = form_controls["controls"]
+            snapshot["form_controls_truncated"] = form_controls["truncated"]
+        if include_image:
+            try:
+                picture = await entry.page.screenshot(type="jpeg", quality=65,
+                                                      full_page=False, scale="css",
+                                                      timeout=5000)
+                if len(picture) > _IMAGE_LIMIT:
+                    picture = await entry.page.screenshot(type="jpeg", quality=40,
+                                                          full_page=False, scale="css",
+                                                          timeout=5000)
+                if len(picture) > _IMAGE_LIMIT:
+                    snapshot["visual_unavailable"] = "image_too_large"
+                else:
+                    snapshot["content"] = [{"type": "image", "mimeType": "image/jpeg",
+                                            "data": base64.b64encode(picture).decode("ascii")}]
+                    viewport = entry.page.viewport_size
+                    snapshot["visual"] = {"kind": "rendered_viewport", "mime_type": "image/jpeg",
+                                          "bytes": len(picture), "coordinate_unit": "css_px",
+                                          "capture_mode": "sequential",
+                                          "width": viewport["width"] if viewport else None,
+                                          "height": viewport["height"] if viewport else None}
+            except Exception:
+                snapshot["visual_unavailable"] = "capture_failed"
         try:
             semantic_tree = await entry.page.locator("body").aria_snapshot(timeout=3000)
         except Exception:
@@ -316,7 +412,7 @@ class BrowserControl:
             # text still give a useful observation if the page has no body.
             snapshot["semantic_tree_unavailable"] = True
         else:
-            snapshot["semantic_tree"] = semantic_tree[:16384]
+            snapshot["semantic_tree"] = _readable_lines(semantic_tree[:16384])
             snapshot["semantic_tree_truncated"] = len(semantic_tree) > 16384
         entry.snapshot_id = uuid.uuid4().hex
         entry.snapshot_at = time.monotonic()

@@ -1,6 +1,8 @@
 """Real local browser navigation, session isolation and owner binding."""
 
 import asyncio
+import base64
+import json
 import uuid
 
 import pytest
@@ -17,6 +19,7 @@ from anywhere_computer.models import (
     BrowserClick,
     BrowserFill,
     BrowserNavigate,
+    BrowserObserve,
     BrowserSession,
     Reply,
     Request,
@@ -664,5 +667,90 @@ async def test_semantic_browser_targets_use_observed_snapshot_and_exact_role(loc
             snapshot_id=labeled["snapshot_id"], value="by label"), owner="owner-a")
         assert by_label["value_verified"] is True
         assert "by label" in by_label["text"]
+    finally:
+        await control.close()
+
+
+async def test_html_labels_and_rendered_viewport_reach_native_mcp_image(local_page):
+    pytest.importorskip("playwright.async_api")
+    from mcp.types import CallToolResult, ImageContent
+
+    from anywhere_computer.mcp_server import _reply_result
+
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="owner-a")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        await control.navigate(BrowserNavigate(**ids, url=local_page), owner="owner-a")
+        entry = control.entries[ids["session_id"]]
+        await entry.page.evaluate("""() => {
+            document.body.insertAdjacentHTML('beforeend', `
+                <label for="email">Contact<br>email</label><input id="email" type="email">
+                <span id="search-name">Search<br>the site</span>
+                <input id="search" aria-labelledby="search-name" placeholder="Find things">
+                <input id="direct" aria-label="Direct&#10;label">
+                <input id="secret" type="password" value="private-test-value">
+                <button>Send<br>now</button>
+            `);
+        }""")
+        observed = await control.observe(BrowserObserve(**ids, include_image=True),
+                                         owner="owner-a")
+        controls = observed["form_controls"]
+        assert isinstance(controls, list)
+        assert {row["id"]: row["label"] for row in controls if "id" in row}["email"] == (
+            "Contact email")
+        assert {row["id"]: row["label_source"] for row in controls if "id" in row}[
+            "email"] == "html-label"
+        assert {row["id"]: row["label"] for row in controls if "id" in row}["search"] == (
+            "Search the site")
+        assert {row["id"]: row["label"] for row in controls if "id" in row}["direct"] == (
+            "Direct label")
+        email = next(row for row in controls if row.get("id") == "email")
+        assert email["in_viewport"] is True
+        assert email["box"]["width"] > 0
+        assert 0 <= email["box"]["x"] < 1280
+        assert 0 <= email["box"]["y"] < 720
+        assert "private-test-value" not in json.dumps(controls)
+        assert observed["visual"]["kind"] == "rendered_viewport"
+        assert observed["visual"]["coordinate_unit"] == "css_px"
+        assert observed["visual"]["capture_mode"] == "sequential"
+        assert observed["visual"]["width"] == 1280
+        assert observed["visual"]["height"] == 720
+        picture = observed["content"][0]
+        assert picture["mimeType"] == "image/jpeg"
+        assert base64.b64decode(picture["data"]).startswith(b"\xff\xd8\xff")
+        reply = Reply(operation_id="f" * 32, state="completed", data=observed)
+        wire = _reply_result("browser_observe", reply)
+        validated = CallToolResult.model_validate(wire)
+        assert isinstance(validated.content[1], ImageContent)
+        assert picture["data"] not in validated.content[0].text
+        assert picture["data"] not in json.dumps(wire["structuredContent"])
+        assert wire["structuredContent"]["data"]["content"][0]["bytes"] == (
+            observed["visual"]["bytes"])
+    finally:
+        await control.close()
+
+
+async def test_semantic_click_waits_for_observed_target_after_rerender(local_page):
+    pytest.importorskip("playwright.async_api")
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="owner-a")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        observed = await control.navigate(BrowserNavigate(**ids, url=local_page), owner="owner-a")
+        assert 'button "Go"' in observed["semantic_tree"]
+        entry = control.entries[ids["session_id"]]
+        await entry.page.evaluate("""() => {
+            const button = document.querySelector('#go');
+            button.style.visibility = 'hidden';
+            setTimeout(() => {
+                const replacement = button.cloneNode(true);
+                replacement.style.visibility = 'visible';
+                button.replaceWith(replacement);
+            }, 150);
+        }""")
+        clicked = await control.click(BrowserClick(**ids, role="button", name="Go",
+            snapshot_id=observed["snapshot_id"]), owner="owner-a")
+        assert clicked["text"].count("clicked") == 1
     finally:
         await control.close()
