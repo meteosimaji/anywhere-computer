@@ -165,8 +165,9 @@ async def test_desktop_notice_cleanup_preserves_saved_event_and_cancellation(
     monkeypatch.setattr(subchat_mcp, '_DESKTOP_NOTICE_TIMEOUT', 1 if stop == 'cancel' else .01)
     monkeypatch.setattr(subchat_mcp, '_DESKTOP_NOTICE_CLEANUP_TIMEOUT', .01)
     monkeypatch.setattr(subchat_mcp.asyncio, 'create_subprocess_exec', launch)
-    monkeypatch.setattr(subchat_mcp.sys, 'platform', 'darwin')
     ledger = Ledger(tmp_path)
+    # Build the real host's state before simulating macOS notification support.
+    monkeypatch.setattr(subchat_mcp.sys, 'platform', 'darwin')
     store = SubchatSubmissions(ledger.connection)
     provider = Provider()
     service = Subchats(store, provider)
