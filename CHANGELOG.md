@@ -28,6 +28,14 @@
   Classify a rejected draft as unsent only when interception and confirmed
   closure of its owned page prove that no generation request escaped.
   Retain a page-specific request guard if rejected-page cleanup is unconfirmed.
+- Preserve literal paragraph boundaries when inserting Subchat drafts, including
+  terminal newlines and decorated URLs. Compare exact text after the editor's
+  queued mutation processing; do not trim input or retry a rejected insertion.
+- Reap media decoder processes when the caller is cancelled, as well as after
+  timeout. Keep actual media delivery and model perception as separate checks.
+- Separate desktop capability, resource, identity and device renderers. Display
+  browser/media/document-preview capabilities and describe helper manifest
+  verification accurately; retain cleanup blockers even when counts are absent.
 - Package the existing macOS system-audio helper in portable archives and
   verify it after relocation. A permission check does not prove recording or
   receiving-model audio perception.
