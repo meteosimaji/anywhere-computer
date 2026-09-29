@@ -127,6 +127,9 @@ jobs:
           tests/test_file_search_terminal_workflow.py
       - name: Check shared-agent recovery before parallel workers
         run: uv run pytest -v tests/test_shared_agent_reconnect.py --junitxml="${{ runner.temp }}/pytest-reconnect.xml"
+      - name: Measure Windows KDF and test-directory fixture costs separately
+        if: runner.os == 'Windows'
+        run: uv run python scripts/measure_test_costs.py --output "${{ runner.temp }}/pytest-costs.json"
       - name: Run remaining suite with bounded platform workers
         run: >-
           uv run pytest -ra --ignore=tests/test_startup_native.py --durations=20
@@ -144,7 +147,9 @@ jobs:
         if: always()
         with:
           name: pytest-results-${{ matrix.os }}
-          path: ${{ runner.temp }}/pytest-*.xml
+          path: |
+            ${{ runner.temp }}/pytest-*.xml
+            ${{ runner.temp }}/pytest-costs.json
           if-no-files-found: ignore
           retention-days: 14
       - run: uv run python scripts/verify_tunnel_pipe.py --download-for-test
