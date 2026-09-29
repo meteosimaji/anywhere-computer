@@ -54,7 +54,8 @@ def batch_transport(monkeypatch):
     from anywhere_computer.subchat_browser import background
 
     observed = SimpleNamespace(sessions=0, snapshots=0, uploads=[], fail=None,
-                               observed_account='account')
+                               observed_account='account', close_wait=False,
+                               failure_type=TimeoutError)
 
     @asynccontextmanager
     async def driver():
@@ -72,7 +73,10 @@ def batch_transport(monkeypatch):
 
     class Page:
         async def close(self):
-            pass
+            if observed.close_wait:
+                import asyncio
+
+                await asyncio.Event().wait()
 
     async def page(_context):
         return Page()
@@ -88,7 +92,7 @@ def batch_transport(monkeypatch):
             pytest.fail('A claimed upload reached the byte-sending boundary again')
         observed.uploads.append((identity, name, payload))
         if observed.fail == identity:
-            raise TimeoutError('Response lost after dispatch')
+            raise observed.failure_type('Response lost after dispatch')
         return ledger.checkpoint_file_id(identity, 'file_' + identity,
                                          owner=owner, account_id=account_id)
 
@@ -141,6 +145,45 @@ async def test_partial_handoff_receipts_distinguish_claimed_and_unsent(
     assert [item['provider_receipt'] for item in reply.data['uploads']] == [
         'unconfirmed', 'not_sent']
     assert [item['dispatch_claimed'] for item in reply.data['uploads']] == [True, False]
+
+
+@pytest.mark.parametrize('ready', [False, True])
+async def test_started_upload_manifest_must_keep_exact_approved_path(
+        batch_environment, batch_transport, monkeypatch, ready):
+    first = batch_environment.batch.files[0]
+    if ready:
+        await batches.run_local_batch(batch=batch_environment.batch)
+    else:
+        batch_environment.ledger.claim_ui_batch(
+            first.operation_id, owner=None, account_id='account',
+            require_prepared=True, source_path=first.path)
+    monkeypatch.setattr(batches, '_read_source', lambda _path: pytest.fail('Claimed bytes reread'))
+    changed_file = first.model_copy(update={'path': first.path + '.other'})
+    changed = batches.LibraryBatch(files=(changed_file,))
+    with pytest.raises(UploadPreflightError, match='path changed'):
+        await batches.run_local_batch(batch=changed)
+    observed = await batches.run_local_batch(status=batches.LibraryBatchStatus(
+        operation_ids=(first.operation_id,)))
+    assert observed.uploads[0].operation_id == first.operation_id
+
+
+@pytest.mark.parametrize('upload_fails', [False, True])
+async def test_file_page_cleanup_is_bounded_and_retains_saved_dispatch(
+        batch_environment, batch_transport, monkeypatch, upload_fails):
+    first = batch_environment.batch.files[0]
+    batch_transport.close_wait = True
+    if upload_fails:
+        batch_transport.fail = first.operation_id
+        batch_transport.failure_type = ValueError
+    monkeypatch.setattr(batches, '_PAGE_CLOSE_TIMEOUT', .01)
+    observed = await batches.run_local_batch(batch=batch_environment.batch)
+    assert observed.failed_operation_id == first.operation_id
+    assert observed.uploads[0].create_claimed
+    assert observed.uploads[0].file_id == (None if upload_fails else 'file_' + first.operation_id)
+    assert observed.error_code == ('verification_failed' if upload_fails
+                                   else 'transport_unverified')
+    assert observed.uploads[1].create_claimed is False
+    assert len(batch_transport.uploads) == 1
 
 
 async def test_all_files_checked_before_first_upload(batch_environment, batch_transport):

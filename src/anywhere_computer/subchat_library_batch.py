@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import sqlite3
 import sys
 import time
@@ -25,6 +27,8 @@ from .subchat_library_upload import (
 from .subchat_upload_state import LibraryUpload, LibraryUploadLedger
 
 MAX_BATCH_BYTES = 41_943_040
+_PAGE_CLOSE_TIMEOUT = 5
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -87,6 +91,8 @@ def _prepared_payloads(ledger: LibraryUploadLedger, batch: LibraryBatch, *,
     total = 0
     for item in batch.files:
         saved = ledger.get(item.operation_id, owner=owner, account_id=account_id)
+        if saved.mcp_source_path != item.path:
+            raise UploadPreflightError('Prepared Library upload path changed; use status by ID')
         total += saved.file_size
         if total > MAX_BATCH_BYTES:
             raise UploadPreflightError('Library upload batch exceeds 40 MiB')
@@ -179,14 +185,25 @@ async def run_local_batch(*, batch: LibraryBatch | None = None,
                                     assert batch is not None
                                     item = batch.files[index]
                                     page = await new_background_page(context)
+                                    upload_failed = False
                                     try:
                                         await _upload_on_page(
                                             page, ledger, old.operation_id, owner=owner,
                                             account_id=account_id, name=old.file_name,
                                             payload=payloads[old.operation_id],
                                             require_prepared=True, source_path=item.path)
+                                    except BaseException:
+                                        upload_failed = True
+                                        raise
                                     finally:
-                                        await page.close()
+                                        try:
+                                            async with asyncio.timeout(_PAGE_CLOSE_TIMEOUT):
+                                                await page.close()
+                                        except (BrowserError, TimeoutError):
+                                            if not upload_failed:
+                                                raise
+                                            logger.warning('Library page cleanup failed after '
+                                                           'upload failure; inspect saved ID')
                                     saved[index] = await _observe_ready_after_upload(
                                         client, session, ledger, old.operation_id,
                                         owner=owner, account_id=account_id)
