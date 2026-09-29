@@ -38,6 +38,13 @@ beforeunload handling and counted. Metadata text is bounded. Each tab has its ow
 frames, console/network cursors and dialog identity. Existing role/label/frame validation applies
 unchanged to every tab. Ended/stale/cross-session/wrong-owner IDs are rejected.
 
+If an excess popup cannot be closed, the adapter closes only its owning session.
+The session remains in the registry and blocks engine updates until browser/driver
+cleanup is confirmed. `browser_tabs` reports `state="closing"` and
+`cleanup_in_progress`; new input is refused while closing. A bounded caller wait
+does not cancel Playwright's shared driver-stop operation or falsely report that
+cleanup finished. Reinspect the same session after an uncertain close receipt.
+
 Snapshots list tabs so an action that opens a popup has a discoverable destination. A pending
 dialog returns `state="dialog_open"` with no usable snapshot ID; no DOM/image result is fabricated.
 Page work wakes when any dialog in that ephemeral context opens and also has a bounded wait.

@@ -24,6 +24,9 @@
   acceptance verified both contents and saved resource references.
 - Bound temporary history-tab cleanup and retry only the exact owned CDP
   target when Playwright's existing close promise cannot resend the command.
+- Expose late Subchat send-worker failures separately from provider receipts.
+  Classify a rejected draft as unsent only when interception and confirmed
+  closure of its owned page prove that no generation request escaped.
 - Package the existing macOS system-audio helper in portable archives and
   verify it after relocation. A permission check does not prove recording or
   receiving-model audio perception.
