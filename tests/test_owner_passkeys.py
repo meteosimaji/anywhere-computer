@@ -102,7 +102,7 @@ def test_passkey_password_checks_hold_reset_lock(setup, monkeypatch):
         passkeys.remove_with_password("absent", "owner-password")
 
 
-def test_password_change_invalidates_old_enrollment_ticket(tmp_path):
+def test_password_change_invalidates_old_enrollment_ticket(tmp_path, fast_owner_derivation):
     owner = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
     owner.initialize("old owner password")
     passkeys = OwnerPasskeys(owner, device="device")
@@ -270,11 +270,10 @@ async def test_registration_limit_has_owner_action_message(setup, monkeypatch):
 
 
 @pytest.fixture
-def setup(authority, tmp_path, monkeypatch):
+def setup(authority, tmp_path, fast_owner_derivation):
     vault = MemoryVault()
     owner = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=vault)
     owner.initialize("owner-password")
-    monkeypatch.setattr(owner, "verify", lambda password: password == "owner-password")
     browser = BrowserAuthorization(authority, owner, device="device")
     return browser, OwnerPasskeys(owner, device="device")
 
@@ -657,7 +656,7 @@ async def test_corrupt_optional_passkey_store_preserves_password_consent(setup):
 
 
 async def test_local_owner_reset_revokes_enrolled_passkeys_and_grants(
-    tmp_path, unused_tcp_port, monkeypatch,
+    tmp_path, unused_tcp_port, monkeypatch, fast_owner_derivation,
 ):
     config = await configure_http(
         tmp_path, resource=RESOURCE, owner="owner", client="native",
@@ -690,7 +689,7 @@ async def test_local_owner_reset_revokes_enrolled_passkeys_and_grants(
 
 
 async def test_failed_passkey_clear_blocks_owner_reset_reenable_until_retry(
-    tmp_path, unused_tcp_port, monkeypatch,
+    tmp_path, unused_tcp_port, monkeypatch, fast_owner_derivation,
 ):
     config = await configure_http(
         tmp_path, resource=RESOURCE, owner="owner", client="native",

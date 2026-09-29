@@ -1,3 +1,4 @@
+import hashlib
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -16,7 +17,7 @@ NEW_PASSWORD = "synthetic new owner password 日本語"
 
 
 @pytest.fixture
-def configured_owner(tmp_path):
+def configured_owner(tmp_path, fast_owner_derivation):
     owner = OwnerCredentials(
         tmp_path, resource="https://computer.example/mcp", owner="owner", vault=MemoryVault()
     )
@@ -114,7 +115,9 @@ def test_parallel_changes_authenticate_again_after_lock(configured_owner):
     assert owner.verify(accepted[0])
 
 
-def test_relative_owner_keeps_resolved_binding_after_cwd_changes(tmp_path, monkeypatch):
+def test_relative_owner_keeps_resolved_binding_after_cwd_changes(
+    tmp_path, monkeypatch, fast_owner_derivation,
+):
     monkeypatch.chdir(tmp_path)
     owner = OwnerCredentials(
         Path("state"), resource="https://computer.example/mcp", owner="owner", vault=MemoryVault()
@@ -134,8 +137,8 @@ def test_verification_waits_for_password_writer(configured_owner, monkeypatch):
     owner = configured_owner
     entered, release = threading.Event(), threading.Event()
     original = owner.vault.set_password
-    # Real scrypt derivations precede the write. Allow slow CI scheduling without
-    # changing the 100 ms assertion that verification stays blocked by the writer.
+    # Allow slow CI scheduling without changing the 100 ms assertion that
+    # verification stays blocked by the writer.
     deadline = 30
 
     def paused_write(*args):
@@ -157,6 +160,26 @@ def test_verification_waits_for_password_writer(configured_owner, monkeypatch):
         assert verification.result(timeout=deadline) is False
 
 
+def test_owner_password_uses_production_scrypt_parameters(monkeypatch):
+    original = hashlib.scrypt
+    calls = []
+
+    def observed(password, **parameters):
+        calls.append((password, parameters))
+        return original(password, **parameters)
+
+    monkeypatch.setattr(hashlib, "scrypt", observed)
+    password = "production work factor 日本語"
+    salt = "0123456789abcdef" * 4
+    assert OwnerCredentials._derive(password, salt) == (
+        "6e842dd877bd7bf08467dd39657223366750e5a0f1b29831759317301ad39113"
+    )
+    assert calls == [(password.encode("utf-8"), {
+        "salt": bytes.fromhex(salt), "n": 131072, "r": 8, "p": 1,
+        "maxmem": 256 * 1024 * 1024, "dklen": 32,
+    })]
+
+
 def test_owner_password_is_salted_and_never_written_to_files(tmp_path):
     vault = MemoryVault()
     password = "synthetic owner password"
@@ -168,8 +191,20 @@ def test_owner_password_is_salted_and_never_written_to_files(tmp_path):
     assert not owner.verify("incorrect password")
     assert not owner.verify("")
     raw = next(iter(vault.data.values()))
+    stored = json.loads(raw)
     assert password not in raw
-    assert len(json.loads(raw)["salt"]) == 64
+    assert len(stored["salt"]) == 64
+    assert stored["digest"] == hashlib.scrypt(
+        password.encode("utf-8"), salt=bytes.fromhex(stored["salt"]),
+        n=131072, r=8, p=1, maxmem=256 * 1024 * 1024, dklen=32,
+    ).hex()
+    another = OwnerCredentials(
+        tmp_path, resource=owner.resource, owner="another", vault=vault,
+    )
+    another.initialize(password)
+    other_stored = json.loads(vault.data[SERVICE, another.account])
+    assert stored["salt"] != other_stored["salt"]
+    assert stored["digest"] != other_stored["digest"]
     assert all(password.encode() not in p.read_bytes() for p in tmp_path.iterdir())
     with pytest.raises(ClientCredentialError, match="already exist"):
         owner.initialize("replacement password")
@@ -179,7 +214,7 @@ def test_owner_password_is_salted_and_never_written_to_files(tmp_path):
         owner.verify(password)
 
 
-def test_owner_password_accepts_eight_characters_and_rejects_seven(tmp_path):
+def test_owner_password_accepts_eight_characters_and_rejects_seven(tmp_path, fast_owner_derivation):
     owner = OwnerCredentials(
         tmp_path, resource="https://computer.example/mcp", owner="owner", vault=MemoryVault()
     )
@@ -250,7 +285,7 @@ def test_owner_change_hidden_confirmation_and_mismatch(configured_owner, monkeyp
     assert owner.verify(NEW_PASSWORD)
 
 
-def test_owner_setup_uses_hidden_confirmation(monkeypatch, tmp_path, capsys):
+def test_owner_setup_uses_hidden_confirmation(monkeypatch, tmp_path, capsys, fast_owner_derivation):
     vault = MemoryVault()
     owner = OwnerCredentials(
         tmp_path, resource="https://computer.example/mcp", owner="owner", vault=vault
