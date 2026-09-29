@@ -64,10 +64,16 @@ CHAT = re.compile(r'https://chatgpt\.com/c/'
                   r'([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\Z')
 logger = logging.getLogger(__name__)
 EXISTING_HISTORY_TIMEOUT_MS = 5_000
+_REJECTED_DRAFT_CLEANUP_TIMEOUT = 5.0
 
 
 class _DraftNotSubmitted(ValueError):
     """The guarded browser task refused input before its Send click."""
+
+
+async def _abort_rejected_draft_request(route: Route) -> None:
+    """Remain on an unclosed rejected page without retaining send credentials."""
+    await route.abort()
 
 
 def _stream_conversation_id(body: bytes) -> str | None:
@@ -715,10 +721,46 @@ class BrowserSubchatBackend:
         route_cleaned = False
 
         async def cleanup_route() -> None:
-            nonlocal route_cleaned
+            nonlocal route_cleaned, generation_client, generation_authorization
             if route_cleaned:
                 return
             route_cleaned = True
+            if draft_rejected:
+                # An unconfirmed page close is not permission to restore its
+                # network access. Install a small abort-only handler first;
+                # leave the original abort guard in place if installation fails.
+                # A closed page destroys these page-scoped routes naturally.
+                try:
+                    may_remove_original = page.is_closed()
+                    if route_installed and not may_remove_original:
+                        try:
+                            await asyncio.wait_for(page.route(
+                                pattern, _abort_rejected_draft_request),
+                                timeout=_REJECTED_DRAFT_CLEANUP_TIMEOUT)
+                            may_remove_original = True
+                        except Exception as error:
+                            logger.warning('Rejected draft abort guard retained '
+                                           'error_type=%s', type(error).__name__)
+                    if route_installed and may_remove_original:
+                        try:
+                            await asyncio.wait_for(page.unroute(pattern, augment),
+                                timeout=_REJECTED_DRAFT_CLEANUP_TIMEOUT)
+                        except Exception as error:
+                            logger.warning('Rejected draft route cleanup incomplete '
+                                           'error_type=%s', type(error).__name__)
+                finally:
+                    try:
+                        if generation_client is not None:
+                            try:
+                                await asyncio.wait_for(generation_client.aclose(),
+                                    timeout=_REJECTED_DRAFT_CLEANUP_TIMEOUT)
+                            except Exception as error:
+                                logger.warning('Rejected draft client cleanup incomplete '
+                                               'error_type=%s', type(error).__name__)
+                    finally:
+                        generation_client = None
+                        generation_authorization = None
+                return
             try:
                 if route_installed:
                     await page.unroute(pattern, augment)

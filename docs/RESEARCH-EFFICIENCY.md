@@ -204,6 +204,11 @@ The resulting fixes preserve exact text rather than trimming it:
   This applies to an insertion that failed its immediate text check. Later draft
   changes may be user edits: those pages remain open. Manual gestures and
   unconfirmed cleanup also retain an unknown outcome.
+  If a rejected page stays open, a page-scoped abort-only route remains until
+  it closes. The previous abort guard is retained if its replacement cannot be
+  confirmed; cleanup never restores that page's generation access. Replacement,
+  removal of the old route and HTTPX client cleanup each have a five-second
+  deadline, and the replacement handler does not capture the send credentials.
 - `subchat_status` and `subchat_wait` include `send_worker`, a session-local
   state (`running`, `failed`, `cancelled`, `finished`, or `not_owned`). A failed
   worker has a fixed reason code; no provider exception text is returned.
@@ -218,6 +223,11 @@ during cleanup, manual dispatch, later user edits, unconfirmed page closure, and
 failure followed by successful receipt recovery. The old implementation fails
 the missing-LF classification and late-worker visibility regressions. These
 tests verify the new failure handling, not provider acceptance of terminal LF.
+An additional real-Chrome regression reproduced a POST escaping to the provider
+mock after unconfirmed cleanup returned. It now stays blocked, including failed
+or stalled guard replacement, stalled route removal and stalled client cleanup.
+The same tests verify that the block does not affect another page after the
+rejected page is closed.
 
 No final Chat answer was obtained, so native web-search availability, tool traces,
 source-reading evidence and output quality are unmeasured. The parallel arm,
