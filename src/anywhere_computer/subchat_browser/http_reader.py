@@ -369,6 +369,12 @@ class ChatHTTPReader:
         else:
             assert context is not None
             request = context.request
+        # A concurrent read can reject access while the factory is awaiting.
+        # Recheck before any destructive request, just as _read does for GET.
+        if self._access_status is not None:
+            raise SubchatAccessError(self._access_status)
+        if not self._headers:
+            raise ValueError('Deletion needs an observed authenticated session')
         self._check_account(submission.provider_account_id)
         url = self._origin + '/backend-api/conversation/' + str(submission.conversation_id)
         headers = {**self._headers, 'content-type': 'application/json'}

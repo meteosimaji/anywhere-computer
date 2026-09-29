@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import logging
 import os
 import secrets
 import stat
@@ -18,6 +19,10 @@ import psutil
 
 if TYPE_CHECKING:
     from playwright.async_api import BrowserContext, Locator, Page, Playwright
+
+logger = logging.getLogger(__name__)
+_BROWSER_CLOSE_TIMEOUT = 5.0
+
 
 if sys.platform == 'win32':
     _NOFOLLOW = 0  # The protected profile path is only used on macOS.
@@ -220,7 +225,14 @@ async def background_chrome_context(
                 try:
                     try:
                         if browser is not None:
-                            await browser.close()
+                            try:
+                                await asyncio.wait_for(browser.close(),
+                                                       timeout=_BROWSER_CLOSE_TIMEOUT)
+                            except Exception as error:
+                                # CDP disconnect is not proof of process exit. The
+                                # exact profile/token cleanup below remains authoritative.
+                                logger.warning('Background Chrome close incomplete: '
+                                               'error_type=%s', type(error).__name__)
                     finally:
                         if launch_attempted:
                             await asyncio.to_thread(

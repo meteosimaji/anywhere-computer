@@ -3,6 +3,7 @@
 import asyncio
 import sys
 import threading
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -111,9 +112,12 @@ async def test_background_page_uses_real_persistent_chrome_context(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='macOS profile locking')
+@pytest.mark.parametrize('close_behavior', ['normal', 'stalled', 'failed'])
+@pytest.mark.parametrize('primary_failure', [False, True])
 async def test_background_launch_attaches_only_to_fresh_profile_and_cleans_up(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, caplog, close_behavior, primary_failure,
 ):
+    monkeypatch.setattr(background, '_BROWSER_CLOSE_TIMEOUT', .02)
     monkeypatch.setattr(background.sys, 'platform', 'darwin')
     monkeypatch.setattr(background, '_profile_processes', lambda _profile: [])
     monkeypatch.setattr(background, '_owned_processes', lambda _profile, _token: [object()])
@@ -143,6 +147,10 @@ async def test_background_launch_attaches_only_to_fresh_profile_and_cleans_up(
 
         async def close(self):
             closed.append(True)
+            if close_behavior == 'stalled':
+                await asyncio.Event().wait()
+            if close_behavior == 'failed':
+                raise RuntimeError('private CDP failure detail')
 
     async def connect(endpoint):
         assert endpoint == 'http://127.0.0.1:32001'
@@ -150,8 +158,12 @@ async def test_background_launch_attaches_only_to_fresh_profile_and_cleans_up(
 
     driver = SimpleNamespace(chromium=SimpleNamespace(connect_over_cdp=connect))
     for _ in range(2):
-        async with background.background_chrome_context(driver, tmp_path, []) as attached:
-            assert attached is context
+        with (pytest.raises(LookupError, match='original fixture failure')
+              if primary_failure else nullcontext()):
+            async with background.background_chrome_context(driver, tmp_path, []) as attached:
+                assert attached is context
+                if primary_failure:
+                    raise LookupError('original fixture failure')
         assert not (tmp_path / 'DevToolsActivePort').exists()
     assert '-g' in launched[0] and '-j' in launched[0] and '-n' in launched[0]
     assert '--remote-debugging-port=0' in launched[0]
@@ -159,6 +171,7 @@ async def test_background_launch_attaches_only_to_fresh_profile_and_cleans_up(
     assert any(arg.startswith('--anywhere-background-owner=') for arg in launched[0])
     assert '--no-startup-window' in launched[0]
     assert closed == [True, True]
+    assert 'private CDP failure detail' not in caplog.text
     assert len(stopped) == 2 and all(item[0] == tmp_path and item[2] is False
                                      for item in stopped)
     assert stopped[-1][1] == (tmp_path / '.anywhere-background.owner').read_text()
