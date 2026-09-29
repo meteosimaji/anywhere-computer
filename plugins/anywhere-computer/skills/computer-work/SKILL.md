@@ -58,6 +58,15 @@ multiple matching elements is rejected before input. Observe again after each
 action and after an uncertain result. The isolated browser has no existing
 user profile or tab; it is separate from native GUI and Codex Computer Use.
 
+The observation lists up to 32 child frames. Select its observed frame_id, call
+browser_observe for that frame, and use the returned snapshot_id with the same
+frame_id for actions, source or research. A main-document or sibling-frame snapshot
+does not authorize input in another frame. Detached frames and same-URL reloads
+invalidate previous observations. Open shadow-root labels are included; closed
+shadow roots are not exposed. Form-control boxes are in the selected frame's CSS
+viewport coordinates. An optional image always shows the whole tab viewport;
+do not mix those two coordinate spaces.
+
 Use browser_research for bounded source-claimed publisher/date and visible links,
 browser_source for current DOM HTML, and browser_network for redacted response and
 request-failure metadata. browser_console returns bounded console and page-error

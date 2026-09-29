@@ -48,6 +48,7 @@ if TYPE_CHECKING:
         Browser,
         BrowserContext,
         ConsoleMessage,
+        Frame,
         Locator,
         Page,
         Playwright,
@@ -74,6 +75,7 @@ _IMAGE_LIMIT = 1024 * 1024
 _SOURCE_LIMIT = 32768
 _NETWORK_LIMIT = 100
 _CONSOLE_LIMIT = 100
+_FRAME_LIMIT = 32
 _BROWSER_DOWNLOAD_LIMIT = 64 * 1024 * 1024
 _FORM_CONTROLS_SCRIPT = r"""() => {
     const clean = value => String(value || '').replace(/[\r\n\t\u2028\u2029\u00a0]/g, ' ')
@@ -81,10 +83,16 @@ _FORM_CONTROLS_SCRIPT = r"""() => {
     const controls = [];
     let inspected = 0;
     let truncated = false;
-    for (const element of document.querySelectorAll(
-        'input, textarea, select, button, [role="textbox"], [role="combobox"], [role="button"]'
-    )) {
-        if (++inspected > 512 || controls.length >= 50) { truncated = true; break; }
+    const roots = [document];
+    for (let index = 0; index < roots.length; index++) {
+      const root = roots[index];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+      let element;
+      while ((element = walker.nextNode())) {
+        if (++inspected > 4096 || controls.length >= 50) { truncated = true; break; }
+        if (element.shadowRoot) roots.push(element.shadowRoot);
+        if (!element.matches('input, textarea, select, button, [role="textbox"], '
+                             + '[role="combobox"], [role="button"]')) continue;
         const style = getComputedStyle(element);
         if (element.getAttribute('type') === 'hidden' || style.display === 'none'
             || style.visibility === 'hidden' || element.getClientRects().length === 0
@@ -94,7 +102,7 @@ _FORM_CONTROLS_SCRIPT = r"""() => {
         const ariaLabel = clean(element.getAttribute('aria-label'));
         const labelledBy = clean((element.getAttribute('aria-labelledby') || '')
             .split(/\s+/).map(id => {
-                const label = document.getElementById(id);
+                const label = root.getElementById(id);
                 return label?.innerText || label?.textContent || '';
             }).join(' '));
         const tag = element.tagName.toLowerCase();
@@ -106,6 +114,7 @@ _FORM_CONTROLS_SCRIPT = r"""() => {
             : labels.length ? 'html-label' : buttonText ? 'button-text'
             : title ? 'title' : null;
         const item = {tag, label, label_source: source,
+            in_shadow_dom: root !== document,
             disabled: Boolean(element.disabled || element.getAttribute('aria-disabled') === 'true'),
             required: Boolean(element.required
                               || element.getAttribute('aria-required') === 'true')};
@@ -124,6 +133,8 @@ _FORM_CONTROLS_SCRIPT = r"""() => {
         const placeholder = clean(element.getAttribute('placeholder'));
         if (placeholder) item.placeholder = placeholder;
         controls.push(item);
+      }
+      if (truncated) break;
     }
     return {controls, truncated};
 }"""
@@ -249,6 +260,10 @@ class _Entry:
     snapshot_id: str | None = None
     snapshot_at: float = 0.0
     snapshot_url: str | None = None
+    snapshot_frame_id: str | None = None
+    document_revision: int = 0
+    frame_revisions: dict[Frame, int] = field(default_factory=dict)
+    observed_frames: dict[str, Frame] = field(default_factory=dict)
     network_events: deque[_NetworkEvent] = field(
         default_factory=lambda: deque(maxlen=_NETWORK_LIMIT)
     )
@@ -345,6 +360,45 @@ class BrowserControl:
             "text_truncated": len(raw_text) > 1024,
         }))
 
+    @staticmethod
+    def _document_changed(entry: _Entry, frame: Frame) -> None:
+        # URL equality does not detect a reload or navigation to the same URL.
+        if frame is entry.page.main_frame:
+            entry.document_revision += 1
+            entry.snapshot_id = None
+        else:
+            entry.frame_revisions[frame] = entry.frame_revisions.get(frame, 0) + 1
+            if entry.observed_frames.get(entry.snapshot_frame_id or "") is frame:
+                entry.snapshot_id = None
+
+    @staticmethod
+    def _scope(entry: _Entry, frame_id: str | None) -> Frame:
+        if frame_id is None:
+            return entry.page.main_frame
+        frame = entry.observed_frames.get(frame_id)
+        if frame is None or frame.is_detached() or frame not in entry.page.frames:
+            raise ValueError("Browser frame unavailable; observe the tab again")
+        return frame
+
+    @staticmethod
+    def _frame_rows(entry: _Entry) -> tuple[list[JsonValue], bool]:
+        frames = [frame for frame in entry.page.frames if frame is not entry.page.main_frame]
+        previous = {frame: frame_id for frame_id, frame in entry.observed_frames.items()}
+        entry.observed_frames = {
+            previous.get(frame, uuid.uuid4().hex): frame for frame in frames[:_FRAME_LIMIT]
+        }
+        entry.frame_revisions = {
+            frame: revision for frame, revision in entry.frame_revisions.items() if frame in frames
+        }
+        identifiers = {frame: frame_id for frame_id, frame in entry.observed_frames.items()}
+        rows: list[JsonValue] = [{
+            "frame_id": frame_id, "name": frame.name[:256],
+            "url": _network_url(frame.url),
+            "parent_frame_id": (identifiers.get(frame.parent_frame)
+                                if frame.parent_frame is not None else None),
+        } for frame_id, frame in entry.observed_frames.items()]
+        return rows, len(frames) > _FRAME_LIMIT
+
     async def open(self, *, owner: str | None) -> dict[str, JsonValue]:
         # Each session gets its own ephemeral browser process and context. No
         # persistent profile or existing user tab is ever attached here.
@@ -419,6 +473,8 @@ class BrowserControl:
             page.on("requestfailed", lambda request: self._record_failure(entry, request))
             page.on("console", lambda message: self._record_console(entry, message))
             page.on("pageerror", lambda error: self._record_page_error(entry, error))
+            page.on("framenavigated", lambda frame: self._document_changed(entry, frame))
+            page.on("framedetached", lambda frame: self._document_changed(entry, frame))
             self.entries[session_id] = entry
             return {"session_id": session_id, "tab_id": tab_id, "isolation": "ephemeral_context",
                     "url": page.url}
@@ -454,20 +510,22 @@ class BrowserControl:
         async with entry.lock:
             self._entry(args, owner)
             return await self._snapshot(
-                entry, include_image=isinstance(args, BrowserObserve) and args.include_image
+                entry, include_image=isinstance(args, BrowserObserve) and args.include_image,
+                frame_id=args.frame_id if isinstance(args, BrowserObserve) else None,
             )
 
     async def source(self, args: BrowserSource, *, owner: str | None) -> dict[str, JsonValue]:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
+            scope = self._scope(entry, args.frame_id)
             if args.selector is None:
-                result = await entry.page.evaluate("""limit => {
+                result = await scope.evaluate("""limit => {
                     const html = document.documentElement?.outerHTML || '';
                     return {html: html.slice(0, limit), total_characters: html.length};
                 }""", _SOURCE_LIMIT)
             else:
-                target = entry.page.locator("css=" + args.selector)
+                target = scope.locator("css=" + args.selector)
                 if await target.count() != 1:
                     raise ValueError("Browser source selector must match exactly one element")
                 result = await target.evaluate("""(element, limit) => {
@@ -475,7 +533,8 @@ class BrowserControl:
                     return {html: html.slice(0, limit), total_characters: html.length};
                 }""", _SOURCE_LIMIT)
             return {"session_id": entry.session_id, "tab_id": entry.tab_id,
-                    "url": entry.page.url, "source_kind": "current_dom_outer_html",
+                    "url": scope.url, "frame_id": args.frame_id,
+                    "source_kind": "current_dom_outer_html",
                     "selector": args.selector, "html": result["html"],
                     "total_characters": result["total_characters"],
                     "truncated": result["total_characters"] > _SOURCE_LIMIT}
@@ -513,7 +572,8 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            result = await entry.page.evaluate("""limit => {
+            scope = self._scope(entry, args.frame_id)
+            result = await scope.evaluate("""limit => {
                 const clean = value => String(value || '').replace(/\\s+/gu, ' ')
                     .trim().slice(0, 256);
                 const meta = (...names) => {
@@ -555,7 +615,8 @@ class BrowserControl:
                       "external": item["external"]} for item in result["links"]]
             return {"session_id": entry.session_id, "tab_id": entry.tab_id,
                     "source_kind": "current_dom_claims", "observed_at_unix": time.time(),
-                    "page_url": _network_url(entry.page.url), "title": result["title"],
+                    "page_url": _network_url(scope.url), "frame_id": args.frame_id,
+                    "title": result["title"],
                     "canonical": (_network_url(result["canonical"])
                                   if result["canonical"] else None),
                     "publisher_claim": result["publisher"], "author_claim": result["author"],
@@ -564,29 +625,34 @@ class BrowserControl:
                     "headings": result["headings"], "links": links,
                     "links_truncated": result["links_truncated"]}
 
-    @staticmethod
-    def _target_locator(entry: _Entry, args: BrowserClick | BrowserTarget) -> Locator:
+    @classmethod
+    def _target_locator(cls, entry: _Entry, args: BrowserClick | BrowserTarget,
+                        frame_id: str | None = None) -> Locator:
+        scope = cls._scope(entry, frame_id)
         if args.selector is not None:
-            return entry.page.locator("css=" + args.selector)
+            return scope.locator("css=" + args.selector)
         if args.role is not None:
-            return entry.page.get_by_role(args.role, name=args.name, exact=True)
+            return scope.get_by_role(args.role, name=args.name, exact=True)
         assert args.label is not None
-        return entry.page.get_by_label(args.label, exact=True)
+        return scope.get_by_label(args.label, exact=True)
 
-    @staticmethod
-    def _check_snapshot(entry: _Entry, snapshot_id: str | None) -> None:
+    @classmethod
+    def _check_snapshot(cls, entry: _Entry, snapshot_id: str | None,
+                        frame_id: str | None = None) -> None:
+        scope = cls._scope(entry, frame_id)
         if snapshot_id is not None and (
             snapshot_id != entry.snapshot_id
             or time.monotonic() - entry.snapshot_at > 60
-            or entry.page.url != entry.snapshot_url
+            or scope.url != entry.snapshot_url
+            or frame_id != entry.snapshot_frame_id
         ):
             raise ValueError("Browser snapshot is stale; observe the tab again")
 
     @classmethod
     async def _unique_target(cls, entry: _Entry, target: BrowserTarget,
-                             *, enabled: bool = False) -> Locator:
+                             *, enabled: bool = False, frame_id: str | None = None) -> Locator:
         try:
-            locator = cls._target_locator(entry, target)
+            locator = cls._target_locator(entry, target, frame_id)
             if await locator.count() > 1:
                 raise ValueError("Browser target must match exactly one element")
             await locator.wait_for(state="visible", timeout=3000)
@@ -606,12 +672,12 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             # User-facing role/label locators can resolve the current DOM after a
             # framework rerender. Preserve the exact-one preflight and let Playwright
             # check actionability again at dispatch rather than pinning a stale handle.
             try:
-                target = self._target_locator(entry, args)
+                target = self._target_locator(entry, args, args.frame_id)
                 if await target.count() > 1:
                     raise ValueError("Browser target must match exactly one element")
                 await target.wait_for(state="visible", timeout=3000)
@@ -632,6 +698,7 @@ class BrowserControl:
                 raise
             except Exception as error:
                 raise ValueError("Browser target could not be resolved") from error
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
                 if key is not None:
@@ -640,7 +707,7 @@ class BrowserControl:
                     await target.click(timeout=10000)
                 else:
                     await target.fill(value, timeout=10000)
-                snapshot = await self._snapshot(entry)
+                snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 if value is not None:
                     observed_value = await target.evaluate(
                         "el => el.isContentEditable ? el.innerText : el.value"
@@ -665,10 +732,10 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             try:
-                source = self._target_locator(entry, args.source)
-                target = self._target_locator(entry, args.target)
+                source = self._target_locator(entry, args.source, args.frame_id)
+                target = self._target_locator(entry, args.target, args.frame_id)
                 for locator in (source, target):
                     if await locator.count() != 1:
                         raise ValueError("Browser drag target must match exactly one element")
@@ -680,10 +747,11 @@ class BrowserControl:
                 raise
             except Exception as error:
                 raise ValueError("Browser drag target could not be resolved") from error
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
                 await source.drag_to(target, timeout=10000)
-                return await self._snapshot(entry)
+                return await self._snapshot(entry, frame_id=args.frame_id)
             except Exception as error:
                 raise BrowserActionUnknown(
                     "Browser drag outcome unconfirmed; observe the same tab before another action"
@@ -693,12 +761,13 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
-            target = await self._unique_target(entry, args.target)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
+            target = await self._unique_target(entry, args.target, frame_id=args.frame_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
                 await target.hover(timeout=10000)
-                return await self._snapshot(entry)
+                return await self._snapshot(entry, frame_id=args.frame_id)
             except Exception as error:
                 raise BrowserActionUnknown(
                     "Browser hover outcome unconfirmed; observe the same tab before another action"
@@ -708,8 +777,10 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
-            target = await self._unique_target(entry, args.target, enabled=True)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
+            target = await self._unique_target(
+                entry, args.target, enabled=True, frame_id=args.frame_id,
+            )
             try:
                 matches = await target.evaluate("""(el, choice) => {
                     if (!(el instanceof HTMLSelectElement)) return null;
@@ -725,13 +796,14 @@ class BrowserControl:
                 raise ValueError("Browser target is not a select element")
             if len(matches) != 1:
                 raise ValueError("Browser option must match exactly one enabled option")
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
                 if args.value is not None:
                     selected = await target.select_option(value=args.value, timeout=10000)
                 else:
                     selected = await target.select_option(label=args.label, timeout=10000)
-                snapshot = await self._snapshot(entry)
+                snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 snapshot["selected_option"] = matches[0]
                 snapshot["selection_verified"] = selected == [matches[0]["value"]]
                 return snapshot
@@ -744,8 +816,9 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
-            target = await self._unique_target(entry, args.target)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
+            target = await self._unique_target(entry, args.target, frame_id=args.frame_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
                 offsets = await target.evaluate("""(el, delta) => {
@@ -756,7 +829,7 @@ class BrowserControl:
                                      behavior: 'instant'});
                     return {before, after: {x: scroller.scrollLeft, y: scroller.scrollTop}};
                 }""", {"x": args.delta_x, "y": args.delta_y})
-                snapshot = await self._snapshot(entry)
+                snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 snapshot["scroll"] = {**offsets,
                     "changed": offsets["before"] != offsets["after"]}
                 return snapshot
@@ -770,11 +843,11 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             path = absolute_path(args.path)
             content = await asyncio.to_thread(read_bytes, path)
             try:
-                target = self._target_locator(entry, args.target)
+                target = self._target_locator(entry, args.target, args.frame_id)
                 if await target.count() != 1:
                     raise ValueError("Browser file input must match exactly one element")
                 if not await target.evaluate(
@@ -787,13 +860,14 @@ class BrowserControl:
                 raise
             except Exception as error:
                 raise ValueError("Browser file input could not be resolved") from error
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             try:
                 await target.set_input_files(
                     {"name": path.name, "mimeType": mime, "buffer": content}, timeout=10000
                 )
-                snapshot = await self._snapshot(entry)
+                snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 snapshot["selected_file"] = {"name": path.name, "bytes": len(content),
                                              "sha256": sha256(content)}
                 return snapshot
@@ -807,14 +881,14 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             destination = absolute_path(args.path)
             if not destination.parent.is_dir() or os.path.lexists(destination):
                 raise ValueError(
                     "Browser download requires an unused path in an existing directory"
                 )
             try:
-                target = self._target_locator(entry, args.target)
+                target = self._target_locator(entry, args.target, args.frame_id)
                 if await target.count() != 1:
                     raise ValueError("Browser download target must match exactly one element")
                 if not await target.is_visible() or not await target.is_enabled():
@@ -823,6 +897,7 @@ class BrowserControl:
                 raise
             except Exception as error:
                 raise ValueError("Browser download target could not be resolved") from error
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
                 async with entry.page.expect_download(timeout=15000) as pending:
@@ -832,7 +907,7 @@ class BrowserControl:
                 if source is None:
                     raise ValueError("Browser download file is unavailable")
                 size, digest = await asyncio.to_thread(_save_download, str(source), args.path)
-                snapshot = await self._snapshot(entry)
+                snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 snapshot["download"] = {
                     "path": str(destination), "bytes": size, "sha256": digest,
                     "suggested_filename": received.suggested_filename[:255],
@@ -845,20 +920,27 @@ class BrowserControl:
                     "before another action"
                 ) from error
 
-    async def _snapshot(self, entry: _Entry, *, include_image: bool = False
+    async def _snapshot(self, entry: _Entry, *, include_image: bool = False,
+                        frame_id: str | None = None,
                         ) -> dict[str, JsonValue]:
-        title = await entry.page.title()
-        text = await entry.page.evaluate(
+        scope = self._scope(entry, frame_id)
+        revision = entry.document_revision
+        frame_revision = entry.frame_revisions.get(scope, 0)
+        frames, frames_truncated = self._frame_rows(entry)
+        title = await scope.title()
+        text = await scope.evaluate(
             "limit => (document.body?.innerText || '').slice(0, limit + 1)", 16384
         )
-        observed_url = entry.page.url
+        observed_url = scope.url
         snapshot: dict[str, JsonValue] = {
             "session_id": entry.session_id, "tab_id": entry.tab_id,
             "url": observed_url, "title": title[:512],
             "text": _readable_lines(text[:16384]), "text_truncated": len(text) > 16384,
+            "frame_id": frame_id, "frames": frames, "frames_truncated": frames_truncated,
+            "form_control_coordinate_space": "frame_viewport_css_pixels",
         }
         try:
-            form_controls = await entry.page.evaluate(_FORM_CONTROLS_SCRIPT)
+            form_controls = await scope.evaluate(_FORM_CONTROLS_SCRIPT)
         except Exception:
             snapshot["form_controls_unavailable"] = True
         else:
@@ -882,12 +964,13 @@ class BrowserControl:
                     snapshot["visual"] = {"kind": "rendered_viewport", "mime_type": "image/jpeg",
                                           "bytes": len(picture), "coordinate_unit": "css_px",
                                           "capture_mode": "sequential",
+                                          "scope": "tab_viewport",
                                           "width": viewport["width"] if viewport else None,
                                           "height": viewport["height"] if viewport else None}
             except Exception:
                 snapshot["visual_unavailable"] = "capture_failed"
         try:
-            semantic_tree = await entry.page.locator("body").aria_snapshot(timeout=3000)
+            semantic_tree = await scope.locator("body").aria_snapshot(timeout=3000)
         except Exception:
             # Accessible structure is supplementary; URL, title and visible
             # text still give a useful observation if the page has no body.
@@ -895,12 +978,16 @@ class BrowserControl:
         else:
             snapshot["semantic_tree"] = _readable_lines(semantic_tree[:16384])
             snapshot["semantic_tree_truncated"] = len(semantic_tree) > 16384
+        if (revision != entry.document_revision or scope.is_detached()
+                or frame_revision != entry.frame_revisions.get(scope, 0)):
+            raise ValueError("Browser document changed during observation; observe the tab again")
         entry.snapshot_id = uuid.uuid4().hex
         entry.snapshot_at = time.monotonic()
         entry.snapshot_url = observed_url
+        entry.snapshot_frame_id = frame_id
         snapshot["snapshot_id"] = entry.snapshot_id
         if entry.last_navigation is not None:
-            entry.last_navigation.observed_url = observed_url
+            entry.last_navigation.observed_url = entry.page.url
             snapshot["last_navigation"] = self._navigation_state(entry.last_navigation)
         return snapshot
 

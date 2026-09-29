@@ -262,14 +262,21 @@ class BrowserSession(Contract):
     tab_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
-class BrowserObserve(BrowserSession):
+class BrowserFrameSession(BrowserSession):
+    frame_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$", description=(
+        "Optional child frame ID returned by browser_observe. Omit for the main document. "
+        "Observe that frame before acting; a snapshot from another frame is rejected."
+    ))
+
+
+class BrowserObserve(BrowserFrameSession):
     include_image: bool = Field(default=False, description=(
         "Include a bounded rendered viewport image alongside the accessible page observation. "
         "The image is returned as an MCP image item, not embedded in model text."
     ))
 
 
-class BrowserSource(BrowserSession):
+class BrowserSource(BrowserFrameSession):
     selector: str | None = Field(default=None, min_length=1, max_length=1024, description=(
         "Optional CSS selector to inspect one exact element instead of the document element."
     ))
@@ -285,7 +292,7 @@ class BrowserConsole(BrowserSession):
     limit: int = Field(default=50, ge=1, le=100)
 
 
-class BrowserResearch(BrowserSession):
+class BrowserResearch(BrowserFrameSession):
     link_limit: int = Field(default=20, ge=1, le=30)
 
 
@@ -298,7 +305,7 @@ BrowserRole = Literal["button", "link", "textbox", "searchbox", "combobox", "che
                       "listbox", "region", "grid"]
 
 
-class BrowserClick(BrowserSession):
+class BrowserClick(BrowserFrameSession):
     selector: str | None = Field(default=None, min_length=1, max_length=1024)
     role: BrowserRole | None = None
     name: str | None = Field(default=None, min_length=1, max_length=512)
@@ -311,7 +318,8 @@ class BrowserClick(BrowserSession):
             raise ValueError("Choose exactly one browser selector, role, or label")
         if self.name is not None and self.role is None:
             raise ValueError("Browser name requires a role")
-        if (self.role is not None or self.label is not None) and self.snapshot_id is None:
+        if (self.role is not None or self.label is not None or self.frame_id is not None
+                ) and self.snapshot_id is None:
             raise ValueError("Semantic browser actions require an observed snapshot_id")
         return self
 
@@ -343,13 +351,13 @@ class BrowserTarget(Contract):
         return self
 
 
-class BrowserDrag(BrowserSession):
+class BrowserDrag(BrowserFrameSession):
     source: BrowserTarget
     target: BrowserTarget
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
-class BrowserHover(BrowserSession):
+class BrowserHover(BrowserFrameSession):
     target: BrowserTarget
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
@@ -376,13 +384,13 @@ class BrowserScroll(BrowserHover):
         return self
 
 
-class BrowserFileUpload(BrowserSession):
+class BrowserFileUpload(BrowserFrameSession):
     target: BrowserTarget
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     path: str = Field(min_length=1, max_length=4096)
 
 
-class BrowserDownload(BrowserSession):
+class BrowserDownload(BrowserFrameSession):
     target: BrowserTarget
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     path: str = Field(min_length=1, max_length=4096)

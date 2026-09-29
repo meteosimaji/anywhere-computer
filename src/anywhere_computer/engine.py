@@ -419,7 +419,11 @@ class Engine:
         self.register("browser_observe", "Observe the exact owned tab without navigating. "
                       "Returns URL, title, bounded visible text, HTML form labels, an accessible "
                       "role tree and a short-lived snapshot ID. include_image=true also returns "
-                      "a bounded rendered viewport image. Returns the last explicit "
+                      "a bounded rendered tab viewport image. Lists up to 32 child frames; "
+                      "pass an observed frame_id to inspect that frame before acting there. "
+                      "HTML labels include open shadow roots; closed shadow roots are unavailable. "
+                      "Frame control boxes use that frame's viewport, while images show the tab. "
+                      "Returns the last explicit "
                       "navigation outcome when present. An unconfirmed outcome remains "
                       "unconfirmed even when the requested URL is observed.", BrowserObserve,
                       browser_observe, read_only=True, open_world=True)
