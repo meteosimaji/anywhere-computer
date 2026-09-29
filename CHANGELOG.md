@@ -3,6 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b36 / Plugin 0.2.0-beta.36 — development prerelease (2026-09-30)
+
+- Clarify that native AX actions invalidate observations but keep the owned
+  session alive. Reuse that session to observe the same window after an action,
+  and close every session opened during the task.
+- Document ChatGPT's developer-plugin tool refresh after HTTP scope changes and
+  the beta.35 ordinary-Chat browser and native GUI acceptance results.
+
 ## 0.2.0b35 / Plugin 0.2.0-beta.35 — development prerelease (2026-09-30)
 
 - Report a detached iframe as an unavailable browser frame when Chromium

@@ -41,7 +41,10 @@ or gui_native_set_value_target with that observation_id and an exact AX role plu
 observed label or identifier. Ambiguous, missing, changed and expired targets
 require a fresh observation; never guess an element reference. Use compact=false
 when the full AX tree is needed. Verify the effect with another observation and
-close the native session when finished. Existing grants need the new tool scopes
+reuse the same session_id and window_id while that window remains available.
+An action invalidates the observation, not the native session. Do not open a
+second session merely to refresh its AX tree. Close every session you opened
+when finished. Existing grants need the new tool scopes
 before these actions appear to an HTTP client.
 Use include_image=true when the selected window's appearance matters. This returns
 an image only when its identity can be matched and revalidated; ambiguous windows

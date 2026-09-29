@@ -45,3 +45,26 @@
 現在の b31 配布物は audio helper を含まず、実エンジンも unavailable と報告した。
 既存の macOS 15+ system playback helper を配布工程へ組み込む修正を進める。
 permission check が成功しても、音を録音した・モデルが聞いたという証拠ではない。
+
+## 2026-09-30 b35 通常 Chat 実機追記
+
+GitHub の [v0.2.0b35](https://github.com/meteosimaji/anywhere-computer/releases/tag/v0.2.0b35)
+は main Quality、配布物のハッシュと provenance を確認した後に導入した。
+ChatGPT の開発用プラグインでは旧80ツールの保存済み定義が残ったため、管理画面の
+「ツールを更新」を実行した。新しいプラグインページは Write62・Read47 の
+109ツールを表示し、通常 Chat は追加されたスキーマを取得した。
+
+通常 Chat が b35 の認証済み HTTP エンジンで無害なローカルページを開き、
+`browser_observe(include_image=true)` の実画像から canvas にだけ描いた文字を
+読み、別に保存した期待値と一致した。HTMLラベルで入力してAXではなく
+browserの意味的なボタンを1回押し、再観測で `Applied: beta35-client-check` を
+確認した。通信一覧はGET/document/200を返し、ブラウザーsessionは終了した。
+同じ Chat はmacOS Calculatorの一意なAXボタン「7」を押して表示が7に変わることを
+再観測した。モデルは操作後の再観測前に余分なネイティブsessionを1件開いたが、
+所有元の Chat から両方を閉じ、最終 `active_sessions=0` を確認した。
+
+Chat のモデル選択UIには `Pro` と表示されたが、基盤モデルの実行IDは取得できない。
+これらはAnywhere独自のbrowser/AX経路の結果であり、Codex専用 Computer Use の
+直接実行成功を意味しない。[#221](https://github.com/meteosimaji/anywhere-computer/issues/221)
+の `unsupported_execution_context` は引き続き維持する。#219と#220は複数CI runと
+branch protectionの実観測で完了。#224の元CIでの自然発生原因はなお未確定。

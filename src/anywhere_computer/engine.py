@@ -562,10 +562,14 @@ class Engine:
         self.register("gui_native_windows", "Open an owner-scoped native GUI session and list "
                       "windows of an exact app bundle identifier. Requires the verified macOS "
                       "helper and existing Accessibility permission; no browser or app activation. "
-                      "Close the session when done. Window handles belong to this session only.",
+                      "Reuse its session_id and window_id while that window remains available; "
+                      "close every session you opened. An action invalidates observations but "
+                      "does not itself close the session.",
                       NativeApp, native_windows, read_only=True, open_world=True)
         self.register("gui_native_observe", "Observe a selected native window without focus. "
                       "Returns a bounded AX tree, actions, bounds and expiring references. "
+                      "After an action, observe the same window with the same session_id; "
+                      "do not open another session just to refresh its AX tree. "
                       "Use compact=true for a shorter list of actionable role/label/identifier "
                       "targets. Set include_image=true for an exact-window screenshot and pixel "
                       "mapping; existing Screen Recording permission is required. Capture and "
