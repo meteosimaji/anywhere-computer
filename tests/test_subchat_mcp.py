@@ -411,26 +411,33 @@ async def test_slow_send_returns_pending_and_same_id_recovers_final(tmp_path, mo
     send_request = Request(operation_id=operation, tool='subchat_send',
                            arguments={'prompt': 'work', 'model': 'model', 'effort': 'effort'})
     try:
-        first = await asyncio.wait_for(server.execute(send_request), .3)
-        await started.wait()
-        assert first.state == 'running' and first.data['send_in_progress'] is True
-        assert first.data['submission_operation_id'] == operation
-        assert backend.sends == 1
-        duplicate = await asyncio.wait_for(server.execute(send_request), .3)
-        assert duplicate.state == 'completed' and duplicate.data['state'] == 'sending'
-        for tool in ('subchat_status', 'subchat_recover'):
-            quick = await asyncio.wait_for(server.execute(Request(
-                operation_id='b' * 32, tool=tool,
-                arguments={'operation_id': operation})), .1)
-            assert quick.data['state'] == 'sending'
-        assert not server.sends[operation].done()
-        finish.set()
-        await asyncio.wait_for(server.sends[operation], .3)
-        final = await asyncio.wait_for(server.execute(Request(
-            operation_id='c' * 32, tool='subchat_recover',
-            arguments={'operation_id': operation})), .3)
-        assert final.data['state'] == 'completed' and final.data['answer'] == '42'
-        assert backend.sends == 1
+        # The closed backend event proves these calls finish before the send does.
+        # This guard bounds a deadlock; it is not an end-to-end latency assertion
+        # that also times durable SQLite writes and scheduling on a shared runner.
+        async with asyncio.timeout(10):
+            first = await server.execute(send_request)
+            await started.wait()
+            assert first.state == 'running' and first.data['send_in_progress'] is True
+            assert first.data['submission_operation_id'] == operation
+            assert backend.sends == 1
+            sending = server.sends[operation]
+            duplicate = await server.execute(send_request)
+            assert duplicate.state == 'completed' and duplicate.data['state'] == 'sending'
+            for tool in ('subchat_status', 'subchat_recover'):
+                quick = await server.execute(Request(
+                    operation_id='b' * 32, tool=tool,
+                    arguments={'operation_id': operation}))
+                assert quick.data['state'] == 'sending'
+            assert not finish.is_set()
+            assert not sending.done() and not sending.cancelled()
+            assert backend.sends == 1
+            finish.set()
+            await sending
+            final = await server.execute(Request(
+                operation_id='c' * 32, tool='subchat_recover',
+                arguments={'operation_id': operation}))
+            assert final.data['state'] == 'completed' and final.data['answer'] == '42'
+            assert backend.sends == 1
     finally:
         finish.set()
         await server.close()
