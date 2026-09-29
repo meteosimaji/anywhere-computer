@@ -102,6 +102,25 @@ instance IDが異なるのが正常です。同じalpha版の修正でもruntime
 共通エンジンが旧ビルドのまま残る場合は、実際の状態保存先に対して新しい
 インストールの `start` を実行し、両入口の応答で更新を確認してください。
 
+## HTTP の新しい操作を追加する
+
+バイナリの更新だけでは、古い HTTP 接続に新しいツールの権限は加わりません。
+ローカルの `computer_status` に新機能があっても、Chat の認可済みカタログに
+見えなければその接続からは呼べません。新しい GUI／ブラウザ／メディア機能を
+使用する場合は、所有者が追加対象を選んで、HTTP サービスの停止中に次を実行します。
+
+```sh
+uv run --locked anywhere http-add-tools --state-dir <既存のHTTP設定保存先> \
+  --scope gui_native_action --scope browser_click --scope media_audio_clip
+```
+
+これは追加対象の例です。既存設定・資格情報を保持し、以前の全ツールを許可していた
+有効な grant のみを通常ツールについて拡張します。制限付き・取消済み・期限切れの
+grant は拡張しません。Subchat、外部 MCP、Codex Plugin、端末ルーティングの
+追加には新しい同意が必要です。返された `new_consent_required` を確認し、
+HTTP サービスを再起動してから認証済みクライアントの一覧を再取得してください。
+クライアントが古い一覧を保持している場合は接続を更新します。
+
 ## stable向け更新コマンド
 
 以下は公開beta 1にも含まれます。alpha／betaのプレリリースは対象にせず、正式stable候補だけを対象にします。
