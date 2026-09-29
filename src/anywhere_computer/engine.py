@@ -173,7 +173,7 @@ _PREFLIGHT_FAILURES: dict[str, tuple[str, str]] = {
         "helper_unavailable", "Check the verified portable installation; no helper was run."
     ),
     "Native GUI helper does not match its portable manifest": (
-        "helper_integrity_failed", "Repair the signed portable installation before using GUI."
+        "helper_integrity_failed", "Repair the verified portable installation before using GUI."
     ),
     "Native GUI session unavailable": (
         "session_unavailable", "Use a session ID returned to this connection; no GUI action ran."
@@ -1216,8 +1216,8 @@ class Engine:
             "upload_begin",
             "Reserve an upload of up to 1 GiB to a new absolute destination. "
             "Supply a fresh 32-hex transfer_id, final length and SHA-256; "
-            "retain the ID for resume. Unavailable on Windows pending a "
-            "directory-handle-safe publication path.",
+            "retain the ID for resume. Publication requires supported directory identity "
+            "checks; Windows uses pinned handles.",
             BeginUpload,
             upload_begin,
         )
@@ -1241,7 +1241,7 @@ class Engine:
             "upload_commit",
             "Stream-verify the complete upload and publish exclusively at its "
             "new destination. Never overwrite. A lost publication outcome needs inspection. "
-            "Unavailable on Windows pending a directory-handle-safe publication path.",
+            "Windows publishes through pinned directory and file handles.",
             TransferId,
             upload_commit,
             destructive=True,
@@ -1268,8 +1268,8 @@ class Engine:
             "Resolve unknown publication without publishing again: "
             "confirm_published checks the destination; discard_staging frees database chunks "
             "without deleting the destination or leftover staging_path files. "
-            "On Windows, confirm_published is unavailable pending a "
-            "directory-handle-safe publication path; discard_staging remains available.",
+            "confirm_published verifies the original directory and exact file content; "
+            "Windows uses pinned handles.",
             ResolveUpload,
             upload_resolve,
             destructive=True,
@@ -1563,7 +1563,7 @@ class Engine:
             elif helper_status in {"unavailable", "verification_failed"}:
                 details["runtime_available"] = False
                 details["next_action"] = (
-                    "Check the signed portable installation and its helper manifest; this status "
+                    "Check the verified portable installation and its helper manifest; this status "
                     "check did not execute or replace the helper."
                 )
             else:

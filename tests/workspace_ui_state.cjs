@@ -136,6 +136,9 @@ function completed(packet,data) {
     [['mcp_session_open'],'1件（コマンド実行を含む）'],
     [['gui_click','gui_native_set_value'],'2件（アプリの操作を含む）'],
     [['browser_click','browser_fill'],'2件（Webページの操作を含む）'],
+    ...['browser_key','browser_drag','browser_hover','browser_select','browser_scroll',
+        'browser_file_upload','browser_download','browser_dialog_handle','browser_tab_close']
+      .map(scope=>[[scope],'1件（Webページの操作を含む）']),
     [['settings_update','processes_stop'],'2件（共有設定の変更・プロセスの停止を含む）'],
     [['terminal_stop','mcp_session_close'],'2件（プロセスの停止を含む）'],
     [['subchat_delete'],'1件（会話の非表示を含む）'],

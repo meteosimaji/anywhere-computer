@@ -324,19 +324,26 @@ BrowserRole = Literal["button", "link", "textbox", "searchbox", "combobox", "che
                       "listbox", "region", "grid"]
 
 
-class BrowserClick(BrowserFrameSession):
+class BrowserTarget(Contract):
     selector: str | None = Field(default=None, min_length=1, max_length=1024)
     role: BrowserRole | None = None
     name: str | None = Field(default=None, min_length=1, max_length=512)
     label: str | None = Field(default=None, min_length=1, max_length=512)
-    snapshot_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
 
     @model_validator(mode="after")
-    def one_target(self) -> "BrowserClick":
+    def one_target(self) -> "BrowserTarget":
         if sum(value is not None for value in (self.selector, self.role, self.label)) != 1:
             raise ValueError("Choose exactly one browser selector, role, or label")
         if self.name is not None and self.role is None:
             raise ValueError("Browser name requires a role")
+        return self
+
+
+class BrowserClick(BrowserFrameSession, BrowserTarget):
+    snapshot_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+
+    @model_validator(mode="after")
+    def require_observed_snapshot(self) -> "BrowserClick":
         if (self.role is not None or self.label is not None or self.frame_id is not None
                 ) and self.snapshot_id is None:
             raise ValueError("Semantic browser actions require an observed snapshot_id")
@@ -353,21 +360,6 @@ class BrowserKey(BrowserClick):
         "The key is sent to exactly one visible target; use selector='body' for "
         "a page-level key."
     ))
-
-
-class BrowserTarget(Contract):
-    selector: str | None = Field(default=None, min_length=1, max_length=1024)
-    role: BrowserRole | None = None
-    name: str | None = Field(default=None, min_length=1, max_length=512)
-    label: str | None = Field(default=None, min_length=1, max_length=512)
-
-    @model_validator(mode="after")
-    def one_target(self) -> "BrowserTarget":
-        if sum(value is not None for value in (self.selector, self.role, self.label)) != 1:
-            raise ValueError("Choose exactly one browser selector, role, or label")
-        if self.name is not None and self.role is None:
-            raise ValueError("Browser name requires a role")
-        return self
 
 
 class BrowserDrag(BrowserFrameSession):
