@@ -119,8 +119,16 @@ async function insertObservedSubchatDraft(document, text) {
   for (const type of ['click', 'submit', 'keydown'])
     document.defaultView.addEventListener(type, observe,
                                          {capture: true, signal: controller.signal});
+  const originalEditors = document.querySelectorAll(subchatEditorSelector);
+  const originalEditor = originalEditors.length === 1 ? originalEditors[0] : null;
   try {
     guard.draft = await insertSubchatDraft(document, text);
+    // Capture a refused insertion before the browser can run another user
+    // event. A later replacement draft is not ours to discard or close.
+    if (guard.draft.state !== 'draft_observed') {
+      guard.editor = originalEditor;
+      guard.draftHTML = guard.editor?.innerHTML;
+    }
     return guard;
   } catch (error) {
     guard.stop();
@@ -132,7 +140,12 @@ async function insertObservedSubchatDraft(document, text) {
 // normalize whitespace here: changed draft text must not pass as the input.
 function submitObservedSubchatDraft(document, guard, ...args) {
   if (guard.intervened) return 'intervened';
-  if (guard.draft.state !== 'draft_observed') return 'draft_rejected';
+  if (guard.draft.state !== 'draft_observed') {
+    const editors = document.querySelectorAll(subchatEditorSelector);
+    return guard.draft.input_dispatched === true && editors.length === 1 &&
+      editors[0] === guard.editor && editors[0].innerHTML === guard.draftHTML
+      ? 'draft_rejected' : 'submission_unconfirmed';
+  }
   // A later change can be a user's replacement draft. Preserve that page and
   // the unknown outcome instead of treating it as our rejected insertion.
   return submitSubchatDraft(document, ...args) ? 'submitted' : 'submission_unconfirmed';

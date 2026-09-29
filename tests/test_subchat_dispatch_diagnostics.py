@@ -94,7 +94,8 @@ async def test_late_dispatch_error_is_visible_without_blocking_receipt_recovery(
                                        'close_unconfirmed_guard_install_failed',
                                        'close_unconfirmed_guard_install_stalled',
                                        'close_unconfirmed_unroute_stalled',
-                                       'close_unconfirmed_client_close_stalled'])
+                                       'close_unconfirmed_client_close_stalled',
+                                       'request_timeout', 'cancelled_after_click'])
 async def test_browser_draft_rejection_requires_closed_page_and_no_dispatch(
         tmp_path, monkeypatch, condition, caplog):
     playwright = pytest.importorskip('playwright.async_api')
@@ -105,7 +106,8 @@ async def test_browser_draft_rejection_requires_closed_page_and_no_dispatch(
 
     clients = []
     stopped = asyncio.Event()
-    monkeypatch.setattr(backend_module, '_REJECTED_DRAFT_CLEANUP_TIMEOUT', .02)
+    monkeypatch.setattr(backend_module, '_UNCLAIMED_GENERATION_CLEANUP_TIMEOUT', .02)
+    monkeypatch.setattr(backend_module, '_GENERATION_REQUEST_TIMEOUT', .02)
 
     async def auth(_context, client, **_kwargs):
         clients.append(client)
@@ -135,21 +137,20 @@ async def test_browser_draft_rejection_requires_closed_page_and_no_dispatch(
             context = await browser.new_context()
             original = await context.new_page()
             await original.set_content('<title>Original page</title>Keep this page')
-            # Simulate the observed provider editor normalization. Ordinary
-            # contenteditable itself preserves this LF; this fixture removes it.
+            # Simulate a changed provider draft independent of whether native
+            # insertion currently uses inline BRs or paragraph boundaries.
             normalize = '''<script>
               document.querySelector('[role=textbox]').addEventListener('input', event => {
                 const editor=event.currentTarget;
-                const breaks=editor.querySelectorAll('br');
-                if (breaks.length) breaks[breaks.length-1].remove();
+                editor.textContent=editor.innerText.replace(/\\n+$/, '');
               });
             </script>'''
             if condition == 'manual_gesture':
                 normalize = normalize.replace(
-                    'if (breaks.length)',
+                    'editor.textContent=',
                     "document.querySelector('#send').dispatchEvent(new MouseEvent("
-                    "'click',{bubbles:true})); if (breaks.length)")
-            elif condition == 'later_edit':
+                    "'click',{bubbles:true})); editor.textContent=")
+            elif condition in {'later_edit', 'request_timeout', 'cancelled_after_click'}:
                 normalize = ''
             async def serve(route):
                 if '/backend-api/f/conversation' in route.request.url:
@@ -161,6 +162,12 @@ async def test_browser_draft_rejection_requires_closed_page_and_no_dispatch(
             await context.route('https://chatgpt.com/**', serve)
 
             class PreparedBackend(BrowserSubchatBackend):
+                async def _send(self, submission):
+                    result = await super()._send(submission)
+                    if condition == 'cancelled_after_click':
+                        asyncio.current_task().cancel()
+                    return result
+
                 async def prepare(self, submission):
                     page = await context.new_page()
                     self.pages[submission.operation_id] = page
@@ -185,6 +192,10 @@ async def test_browser_draft_rejection_requires_closed_page_and_no_dispatch(
                         async def stalled_unroute(*_args):
                             await stopped.wait()
                         monkeypatch.setattr(page, 'unroute', stalled_unroute)
+                    if condition == 'request_timeout':
+                        async def failed_page_close():
+                            raise RuntimeError('fixture page close failure')
+                        monkeypatch.setattr(page, 'close', failed_page_close)
                     if condition == 'later_edit':
                         evaluate_handle = page.evaluate_handle
 
@@ -199,7 +210,7 @@ async def test_browser_draft_rejection_requires_closed_page_and_no_dispatch(
             backend = PreparedBackend(context, http_read=True, httpx_generation=True,
                 store=store, record_preflight_failure=lambda operation_id:
                     store.fail_http_before_dispatch(operation_id, owner=None))
-            if condition.startswith('close_unconfirmed'):
+            if condition.startswith('close_unconfirmed') or condition == 'request_timeout':
                 async def failed_close(_page):
                     return None
                 monkeypatch.setattr(backend._http_reader, 'close_owned_page', failed_close)
@@ -219,8 +230,12 @@ async def test_browser_draft_rejection_requires_closed_page_and_no_dispatch(
             proven_unsent = condition in {'removed_lf', 'delayed_fetch'}
             expected = (SubchatPreflightFailed if proven_unsent
                         else SubchatOutcomeUnknown)
+            if condition == 'cancelled_after_click':
+                expected = asyncio.CancelledError
+            prompt = ('fixture' if condition in {'request_timeout', 'cancelled_after_click'}
+                      else 'https://example.com/docs\n')
             with pytest.raises(expected):
-                await asyncio.wait_for(service.send(operation, 'https://example.com/docs\n',
+                await asyncio.wait_for(service.send(operation, prompt,
                     'Future model', 'Initial effort', owner=None, http_selection=SELECTION), 5)
             saved = store.get(operation, owner=None)
             page = backend.pages[operation]
@@ -229,20 +244,22 @@ async def test_browser_draft_rejection_requires_closed_page_and_no_dispatch(
             assert page.is_closed() is proven_unsent
             assert not original.is_closed()
             assert await original.title() == 'Original page'
-            if condition not in {'manual_gesture', 'later_edit'}:
+            if condition not in {'manual_gesture', 'later_edit',
+                                 'request_timeout', 'cancelled_after_click'}:
                 assert store.http_progress(operation, owner=None)['stage'] == 'draft_rejected'
             else:
                 assert store.http_progress(operation, owner=None) is None
             if condition == 'later_edit':
                 assert await page.get_by_role('textbox').inner_text() == 'user replacement'
             # The final refusal cannot be re-entered as a fresh send.
-            repeated = await service.send(operation, 'https://example.com/docs\n',
+            repeated = await service.send(operation, prompt,
                 'Future model', 'Initial effort', owner=None, http_selection=SELECTION)
             assert repeated.state == saved.state
             assert len(context.pages) == (1 if proven_unsent else 2)
             assert len(clients) == 1 and clients[0].is_closed
             assert 'private route failure detail' not in caplog.text
-            if condition.startswith('close_unconfirmed'):
+            if condition.startswith('close_unconfirmed') or condition in {
+                    'manual_gesture', 'later_edit', 'request_timeout', 'cancelled_after_click'}:
                 late_result = await page.evaluate('''async () => {
                   try { await fetch('/backend-api/f/conversation', {
                     method:'POST', body:'{}'}); return 'escaped'; }

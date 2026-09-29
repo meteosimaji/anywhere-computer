@@ -64,15 +64,16 @@ CHAT = re.compile(r'https://chatgpt\.com/c/'
                   r'([0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12})\Z')
 logger = logging.getLogger(__name__)
 EXISTING_HISTORY_TIMEOUT_MS = 5_000
-_REJECTED_DRAFT_CLEANUP_TIMEOUT = 5.0
+_UNCLAIMED_GENERATION_CLEANUP_TIMEOUT = 5.0
+_GENERATION_REQUEST_TIMEOUT = 120.0
 
 
 class _DraftNotSubmitted(ValueError):
     """The guarded browser task refused input before its Send click."""
 
 
-async def _abort_rejected_draft_request(route: Route) -> None:
-    """Remain on an unclosed rejected page without retaining send credentials."""
+async def _abort_unclaimed_generation_request(route: Route) -> None:
+    """Block an unclaimed page request without retaining send credentials."""
     await route.abort()
 
 
@@ -711,7 +712,7 @@ class BrowserSubchatBackend:
         dispatched: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         request_started: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         claimed = False
-        draft_rejected = False
+        block_unclaimed_generation = False
         pattern = re.compile(r'^https://chatgpt\.com/backend-api/f/conversation(?:\?.*)?$')
 
         generation_client: httpx.AsyncClient | None = None
@@ -725,7 +726,7 @@ class BrowserSubchatBackend:
             if route_cleaned:
                 return
             route_cleaned = True
-            if draft_rejected:
+            if block_unclaimed_generation:
                 # An unconfirmed page close is not permission to restore its
                 # network access. Install a small abort-only handler first;
                 # leave the original abort guard in place if installation fails.
@@ -735,27 +736,27 @@ class BrowserSubchatBackend:
                     if route_installed and not may_remove_original:
                         try:
                             await asyncio.wait_for(page.route(
-                                pattern, _abort_rejected_draft_request),
-                                timeout=_REJECTED_DRAFT_CLEANUP_TIMEOUT)
+                                pattern, _abort_unclaimed_generation_request),
+                                timeout=_UNCLAIMED_GENERATION_CLEANUP_TIMEOUT)
                             may_remove_original = True
                         except Exception as error:
-                            logger.warning('Rejected draft abort guard retained '
+                            logger.warning('Unclaimed generation abort guard retained '
                                            'error_type=%s', type(error).__name__)
                     if route_installed and may_remove_original:
                         try:
                             await asyncio.wait_for(page.unroute(pattern, augment),
-                                timeout=_REJECTED_DRAFT_CLEANUP_TIMEOUT)
+                                timeout=_UNCLAIMED_GENERATION_CLEANUP_TIMEOUT)
                         except Exception as error:
-                            logger.warning('Rejected draft route cleanup incomplete '
+                            logger.warning('Unclaimed generation route cleanup incomplete '
                                            'error_type=%s', type(error).__name__)
                 finally:
                     try:
                         if generation_client is not None:
                             try:
                                 await asyncio.wait_for(generation_client.aclose(),
-                                    timeout=_REJECTED_DRAFT_CLEANUP_TIMEOUT)
+                                    timeout=_UNCLAIMED_GENERATION_CLEANUP_TIMEOUT)
                             except Exception as error:
-                                logger.warning('Rejected draft client cleanup incomplete '
+                                logger.warning('Unclaimed generation client cleanup incomplete '
                                                'error_type=%s', type(error).__name__)
                     finally:
                         generation_client = None
@@ -787,7 +788,7 @@ class BrowserSubchatBackend:
 
         async def augment(route: Route) -> None:
             nonlocal claimed
-            if draft_rejected or claimed or route.request.method != 'POST':
+            if block_unclaimed_generation or claimed or route.request.method != 'POST':
                 await route.abort()
                 return
             claimed = True
@@ -973,7 +974,7 @@ class BrowserSubchatBackend:
             except _DraftNotSubmitted:
                 # Block a delayed fetch before yielding for page cleanup. Only
                 # this intercepted HTTPX path can prove no generation escaped.
-                draft_rejected = True
+                block_unclaimed_generation = True
                 if (self._httpx_generation and not claimed
                         and self._record_preflight_failure is not None):
                     self._unreusable_pages.add(page)
@@ -985,12 +986,13 @@ class BrowserSubchatBackend:
                         self._record_preflight_failure(submission.operation_id)
                 raise
             try:
-                await asyncio.wait_for(asyncio.shield(request_started), 120)
+                await asyncio.wait_for(asyncio.shield(request_started), _GENERATION_REQUEST_TIMEOUT)
             except TimeoutError:
                 # The click may have scheduled a later fetch. Close its page
                 # before removing interception so it cannot send unobserved.
+                block_unclaimed_generation = True
                 self._unreusable_pages.add(page)
-                await page.close()
+                await self._http_reader.close_owned_page(page)
                 raise
             # HTTPX acknowledges a valid SSE response at headers; its owned
             # route callback continues delivery after this input lock is free.
@@ -999,6 +1001,11 @@ class BrowserSubchatBackend:
             return receipt
         finally:
             if not self._httpx_generation or not claimed:
+                # An uncertain click, cancellation, or changed draft can still
+                # schedule a later fetch. Retain its page-scoped abort guard
+                # before releasing credentials; never resume a delayed POST.
+                if route_installed and not claimed:
+                    block_unclaimed_generation = True
                 await cleanup_route()
 
     async def _send(self, submission: SubchatSubmission) -> SubchatReceipt | None:

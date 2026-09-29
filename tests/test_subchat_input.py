@@ -303,7 +303,9 @@ async def test_pending_literal_input_preserves_intervention_and_cleanup(interfer
             else:
                 assert result['inputs'] == (0 if interference in {'reject', 'no_mutation'} else 1)
                 assert result['draft'] == {'state': 'draft_unconfirmed', 'input_dispatched': True}
-                assert result['outcome'] == 'draft_rejected'
+                assert result['outcome'] == (
+                    'submission_unconfirmed' if interference in {'remove', 'replace'}
+                    else 'draft_rejected')
             assert await page.evaluate('window.sends || 0') == 0
             assert await page.evaluate('window.remainingListeners') == 0
         finally:
