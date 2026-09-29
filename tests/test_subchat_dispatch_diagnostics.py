@@ -235,8 +235,11 @@ async def test_browser_draft_rejection_requires_closed_page_and_no_dispatch(
             prompt = ('fixture' if condition in {'request_timeout', 'cancelled_after_click'}
                       else 'https://example.com/docs\n')
             with pytest.raises(expected):
+                # The inner dispatch and cleanup deadlines remain short. This
+                # outer bound also covers Chrome startup/action scheduling on
+                # a loaded Windows CI worker, which can exceed five seconds.
                 await asyncio.wait_for(service.send(operation, prompt,
-                    'Future model', 'Initial effort', owner=None, http_selection=SELECTION), 5)
+                    'Future model', 'Initial effort', owner=None, http_selection=SELECTION), 15)
             saved = store.get(operation, owner=None)
             page = backend.pages[operation]
             assert saved.state == ('preflight_failed' if proven_unsent else 'sending')

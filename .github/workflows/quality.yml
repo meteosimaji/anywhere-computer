@@ -250,11 +250,19 @@ jobs:
           tests/test_file_search_terminal_workflow.py
       - name: Check shared-agent recovery before parallel workers
         run: uv run pytest -v tests/test_shared_agent_reconnect.py --junitxml="${{ runner.temp }}/pytest-reconnect.xml"
-      - name: Check browser and Subchat ownership before parallel workers
+      - name: Check browser control before parallel workers
+        timeout-minutes: 12
         run: >-
           uv run pytest -ra -x -vv -o faulthandler_timeout=300
           -o faulthandler_exit_on_timeout=true
-          tests/test_browser_control.py tests/test_subchat_browser_backend.py
+          tests/test_browser_control.py
+          --junitxml="${{ runner.temp }}/pytest-browser-control.xml"
+      - name: Check Subchat browser ownership before parallel workers
+        timeout-minutes: 12
+        run: >-
+          uv run pytest -ra -x -vv -o faulthandler_timeout=300
+          -o faulthandler_exit_on_timeout=true
+          tests/test_subchat_browser_backend.py
           --junitxml="${{ runner.temp }}/pytest-browser-subchat.xml"
       - name: Run remaining suite with bounded platform workers
         run: >-
