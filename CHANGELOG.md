@@ -3,6 +3,34 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b32 / Plugin 0.2.0-beta.32 — development prerelease (2026-09-30)
+
+- Add observed frame IDs, frame-scoped semantic browser actions and open-shadow
+  form labels. Reject stale observations after same-URL reloads and frame detach.
+  Keep frame element coordinates distinct from the full-tab screenshot.
+- Include exact-window native macOS screenshots alongside Accessibility data,
+  and permit explicitly observed secondary AX actions such as increment and
+  page scroll. Revalidate the target before input and require reobservation
+  to confirm its effect. Existing Screen Recording permission is required.
+- Restore validated MCP images and audio across HTTP, SSH and device routing.
+  Match MIME, byte count and SHA-256, preserve original operation recovery, and
+  keep media bytes out of the JSON text presented to models.
+- Prepare up to ten Library attachments in one bounded browser session, with
+  immutable per-file request bindings, durable receipts, complete preflight
+  and no further dispatch after an uncertain upload. A real two-file, one-Chat
+  acceptance verified both contents and saved resource references.
+- Bound temporary history-tab cleanup and retry only the exact owned CDP
+  target when Playwright's existing close promise cannot resend the command.
+- Package the existing macOS system-audio helper in portable archives and
+  verify it after relocation. A permission check does not prove recording or
+  receiving-model audio perception.
+- Add a read-only measurement harness for one Chat versus parallel Subchats,
+  and document primary-source competitor comparisons and unverified gates.
+  No usage reduction or comparison win is claimed without measured evidence.
+- Reduce explicit credential state-test KDF cost while retaining real
+  production-work-factor tests. Separate Windows KDF and ACL measurements;
+  full Windows CI remains slow and needs further diagnosis.
+
 ## 0.2.0b31 / Plugin 0.2.0-beta.31 — development prerelease (2026-09-28)
 
 - Stop waiting for ChatGPT's deferred resources after the document response
