@@ -92,6 +92,12 @@ Treat `queued` as local acceptance, `sending` as unconfirmed dispatch, and
 confirm it. `conversation_url` appears only with a confirmed receipt and a
 valid conversation ID. `subchat_list` returns the same receipt classification
 and the canonical `submission_operation_id` without prompt text by default.
+`send_worker` describes the local dispatch worker independently of that receipt.
+A failed or finished worker is not proof that the provider did not receive input;
+`not_owned` means the current controller has no worker for that saved operation.
+Inspect `http_progress` and recover the original operation ID. Do not keep waiting
+for a failed worker to resume, and do not replace an unconfirmed send with a new
+ID or intent key. Only an explicit verified `not_sent` result establishes no send.
 The saved receipt confirms delivery, not that the model finished answering;
 saved text is present only for a text-bearing answer. For an image-only result, check
 the saved answer type and use the optional `subchat_download_image` tool to
