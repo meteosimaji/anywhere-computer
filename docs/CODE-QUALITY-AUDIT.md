@@ -2,7 +2,7 @@
 
 The full-file review began at source commit `c9e1885` on 2026-09-30. The
 subsequent CI repairs changed browser shutdown code and tests. The beta.33
-wheel is built from the clean source commit recorded in its release manifest. The
+wheel is built from clean source commit `df1d8d3`, recorded in its release manifest. The
 [file inventory](code-quality-audit.json) records the current SHA-256, area,
 line count, review outcome and short finding for every included file. It is a
 review record, not a claim that testing can prove the absence of defects.
@@ -65,14 +65,15 @@ those hypotheses.
 | `uv run --locked ruff check src tests scripts` | Passed |
 | `uv run --locked mypy` | Passed, 159 source files |
 | Serial timing-sensitive pytest group | 45 passed, 17 OS skips |
-| Remaining pytest suite with four workers | 2,777 passed, 35 skips; 109.87 seconds |
-| Plugin/release candidate tests | 16 passed |
+| Remaining pytest suite with four workers | 2,778 passed, 35 skips; 110.69 seconds |
+| Browser control and tab/dialog suites | 51 passed; the delayed-close regression failed before its repair |
+| Plugin/release candidate tests | 21 passed against the rebuilt beta.33 wheel |
 | README references, release tag availability, diff check, ZIP integrity | Passed |
 | Subchat final related suite | 953 passed, 1 OS skip |
 | Document image path | 43 Python tests plus Workspace UI tests passed after integration; the expanded source fixture also passed real renderer and HTTP/SSH image tests |
 
 The serial and four-worker groups exclude each other, except that the separate
-16 plugin/release tests repeat cases from the broader group. Test process
+21 plugin/release tests repeat cases from the broader group. Test process
 counts are therefore not added together as a unique-case total. The full suite
 checks local behavior; GitHub macOS/Windows/Linux CI and installed-client
 acceptance are separate gates. The first PR Windows smoke run exposed a test
@@ -82,8 +83,11 @@ the ledger first; its 31 local tests and the next Windows smoke job passed.
 That run then exposed an iframe test race: `page.frame(name)` can be absent
 while the second iframe attaches. The test now waits for each frame's body
 through Playwright's `FrameLocator` before asserting ownership and stale
-snapshot behavior. Its targeted local run passed; the Windows shard rerun is
-required to confirm the correction.
+snapshot behavior. The next Windows smoke and all four test shards passed. A
+subsequent macOS run exposed a browser-close deadline that matched the caller's
+receipt deadline. The delayed-close regression failed before the repair and
+passed afterward. The beta.33 PR Quality run is required to confirm the final
+combined candidate on all three operating systems.
 
 ## Remaining product and operational gates
 

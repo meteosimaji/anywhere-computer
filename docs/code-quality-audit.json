@@ -1,5 +1,5 @@
 {
-  "as_of_commit": "c9e18850362e629d95b190f8784562c9cc13341a",
+  "as_of_commit": "df1d8d3a865a7ebf9542a4c94c81c7d57251e080",
   "method": "Full-file review by area, source-to-test/consumer trace, targeted regression and integrated-suite checks; each current SHA-256 matched a review record.",
   "included_file_count": 432,
   "areas": {
@@ -128,34 +128,34 @@
     {
       "path": "plugins/anywhere-computer/.claude-mcp.json",
       "area": "release_runtime",
-      "sha256": "cbac917f50991d3ea06d157b0a99b835242483604884e2a6cb6ba81880c1ad8a",
+      "sha256": "f6363e1bf7e3d8e893077e59c304786315f1c5781ab0f4d80d02a64d272f272c",
       "lines": 47,
       "review": "changed",
-      "finding": "Reviewed generated beta.32 wheel path for all three Claude MCP servers."
+      "finding": "Reviewed generated beta.33 wheel path for all three Claude MCP servers."
     },
     {
       "path": "plugins/anywhere-computer/.claude-plugin/plugin.json",
       "area": "release_runtime",
-      "sha256": "5b8edb4491327da2121f4601ad775af59a79206fd27acfe95f802225a8735add",
+      "sha256": "ea01abdd5c0a3d2c1b861ee0c2dca17534cb03063f151a7f9bcd47b2ac587262",
       "lines": 12,
       "review": "changed",
-      "finding": "Reviewed generated beta.32 Claude plugin version."
+      "finding": "Reviewed generated beta.33 Claude plugin version."
     },
     {
       "path": "plugins/anywhere-computer/.codex-plugin/plugin.json",
       "area": "release_runtime",
-      "sha256": "48ffb0fd6cc631552fd6075ea7e113935016573a42f23dcc3eee00dfca0c0c9a",
+      "sha256": "2627e60ae533cd4233bcd85570780f0378c60495c1293def1209a1343006e9c6",
       "lines": 28,
       "review": "changed",
-      "finding": "Reviewed generated beta.32 Codex plugin version."
+      "finding": "Reviewed generated beta.33 Codex plugin version."
     },
     {
       "path": "plugins/anywhere-computer/.mcp.json",
       "area": "release_runtime",
-      "sha256": "ddca266c24cf280bab9ab5c1736aee9d8fc84a32c58cd0259b3a9f38091e4a15",
+      "sha256": "81eb3929a9805e40974aebdaab7867a052a1447454ba7aaa23721279f1927f5c",
       "lines": 50,
       "review": "changed",
-      "finding": "Reviewed generated beta.32 wheel path for all three Codex MCP servers."
+      "finding": "Reviewed generated beta.33 wheel path for all three Codex MCP servers."
     },
     {
       "path": "pyproject.toml",
