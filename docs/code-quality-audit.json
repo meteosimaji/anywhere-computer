@@ -128,34 +128,34 @@
     {
       "path": "plugins/anywhere-computer/.claude-mcp.json",
       "area": "release_runtime",
-      "sha256": "db456f5c200005a754ac1c320389b66ce3439660d2d14bf98bc209fa3a18ff3e",
+      "sha256": "8285faeabe4db2d6c7c3aa90efad400a518b699b9b3e6a130e5ad08baf62444f",
       "lines": 47,
       "review": "changed",
-      "finding": "Reviewed generated beta.34 wheel path for all three Claude MCP servers."
+      "finding": "Reviewed generated beta.35 wheel path for all three Claude MCP servers."
     },
     {
       "path": "plugins/anywhere-computer/.claude-plugin/plugin.json",
       "area": "release_runtime",
-      "sha256": "53257c5ebae163db86b68a161e116da53c74b7f87e157e7d6e5ce443f9bddbdc",
+      "sha256": "9cd657f046efc50caf57a133da13910e5a1e355b973d6f383daec2c9b376d174",
       "lines": 12,
       "review": "changed",
-      "finding": "Reviewed generated beta.34 Claude plugin version."
+      "finding": "Reviewed generated beta.35 Claude plugin version."
     },
     {
       "path": "plugins/anywhere-computer/.codex-plugin/plugin.json",
       "area": "release_runtime",
-      "sha256": "c496ad63cde3c333d3cb6a81646a7e011938c9faccc86c84ca3092760139deb6",
+      "sha256": "adbce8d1168648ee6079ec77e756bba0bd07f0ee5b0e54a936005d917d422d4b",
       "lines": 28,
       "review": "changed",
-      "finding": "Reviewed generated beta.34 Codex plugin version."
+      "finding": "Reviewed generated beta.35 Codex plugin version."
     },
     {
       "path": "plugins/anywhere-computer/.mcp.json",
       "area": "release_runtime",
-      "sha256": "947a102a32fb91af4ac06bd3b0ba24775ce444b3cce2ac1f4a2767e99946bfc4",
+      "sha256": "65ef8c0e071b6fff3b69ae204c78dbee0c8b2cf03e9c5bc0720aea0eac1e9252",
       "lines": 50,
       "review": "changed",
-      "finding": "Reviewed generated beta.34 wheel path for all three Codex MCP servers."
+      "finding": "Reviewed generated beta.35 wheel path for all three Codex MCP servers."
     },
     {
       "path": "pyproject.toml",
@@ -432,10 +432,10 @@
     {
       "path": "src/anywhere_computer/__init__.py",
       "area": "network_security",
-      "sha256": "40c9b87d4867847e2d47f4bbdb6f4480cabdb1b2034557e74f72dad190c18058",
+      "sha256": "f3e1d34daaa3cf2726082142c8227ce77b4e03650567964b1ff600c85d937f66",
       "lines": 3,
       "review": "version_bump",
-      "finding": "Single release constant advanced to beta.34 because the owner-consent correction changes the immutable wheel."
+      "finding": "Single release constant advanced to beta.35 because the frame-detach correction changes the immutable wheel."
     },
     {
       "path": "src/anywhere_computer/__main__.py",
@@ -504,10 +504,10 @@
     {
       "path": "src/anywhere_computer/browser_control.py",
       "area": "core_ui",
-      "sha256": "5f14be9a6aa5d2cc8c453630ac081cc68d89244813bc6c3ce011003b71a9cfdd",
-      "lines": 1357,
+      "sha256": "7c1745368c98c929c6ad3bcb1e1aafae42b43e0ea90b9a6c0a033a6b23485d45",
+      "lines": 1366,
       "review": "fixed_ci_cleanup",
-      "finding": "Read owner-scoped browser lifecycle end to end. macOS CI reproduced a five-second browser.close timeout at the same deadline as the caller receipt. The internal owned-browser close is now bounded at three times the caller deadline; the caller still returns unknown after five seconds and retains its blocker until task success. A delayed-close regression was first red, then green."
+      "finding": "Reviewed owner-scoped browser lifecycle and beta.35 frame-detach race correction. When an in-flight frame read raises TargetClosedError while the tab and browser remain live, observation reports the frame unavailable; closed sessions retain the original error."
     },
     {
       "path": "src/anywhere_computer/capability_contract.py",
