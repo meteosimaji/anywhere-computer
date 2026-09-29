@@ -3,6 +3,16 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b37 / Plugin 0.2.0-beta.37 — development prerelease (2026-09-30)
+
+- Add optional bounded local audio transcription with an explicitly installed
+  OpenAI Whisper checkpoint. Return text and model identity to ordinary Chat
+  when its client cannot interpret an MCP audio item. Never fetch a model or
+  upload the clip during a tool call.
+- Reap the local transcriber on timeout or cancellation and limit the source,
+  clip, checkpoint, result and temporary-file exposure. Keep audio item delivery
+  as a separate capability.
+
 ## 0.2.0b36 / Plugin 0.2.0-beta.36 — development prerelease (2026-09-30)
 
 - Clarify that native AX actions invalidate observations but keep the owned

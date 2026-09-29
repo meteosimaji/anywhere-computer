@@ -100,10 +100,14 @@ snapshot_id current. An uploaded file may be sent by site JavaScript immediately
 check that the user intended disclosure to that site. Never replay an unknown
 click, key, drag, upload or download with a new operation ID.
 
-media_status reports optional FFmpeg availability. media_audio_clip yields a short
-WAV audio item; media_video_frames yields up to four still images from a local
-video. The receiving model's ability to hear audio must be checked in that client.
-These tools do not claim full video playback or transcription.
+media_status reports optional FFmpeg and local Whisper CLI availability.
+media_audio_clip yields a short WAV audio item; media_video_frames yields up to
+four still images from a local video. Check whether this Chat can actually hear
+the audio item. If it cannot, media_transcribe can return text from a short clip
+using an explicitly installed, trusted local .pt checkpoint passed as
+model_path. It never downloads a model. Identify the checkpoint and treat the
+text as uncertain model output, not as evidence that Chat heard the sound.
+Still images do not establish understanding of a whole video.
 
 For a requested Codex conversation, use codex_threads_list, select the exact title/ID,
 then codex_thread_read with bounded pages. These tools read the local installed Codex

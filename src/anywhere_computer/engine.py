@@ -34,7 +34,15 @@ from .downloads import Downloads
 from .files import Files, absolute_path, inspect_file
 from .gui_mcp import GUIMCP, GUIAction, GUIClick, GUIKey, GUIObserve, GUIType
 from .mcp_results import normalize_tool_result
-from .media import MediaAudioClip, MediaVideoFrames, audio_clip, media_status, video_frames
+from .media import (
+    MediaAudioClip,
+    MediaTranscribe,
+    MediaVideoFrames,
+    audio_clip,
+    media_status,
+    transcribe,
+    video_frames,
+)
 from .models import (
     BeginDownload,
     BeginUpload,
@@ -360,6 +368,12 @@ class Engine:
                       "file into a bounded mono WAV MCP audio item. Requires local FFmpeg; "
                       "does not transcribe or claim the receiving model heard it.",
                       MediaAudioClip, audio_clip, read_only=True, open_world=True)
+        self.register("media_transcribe", "Transcribe up to ten seconds of local audio or video "
+                      "with an explicitly installed, trusted OpenAI Whisper .pt checkpoint. "
+                      "Requires local FFmpeg and Whisper CLI. The model path must already exist; "
+                      "this tool never downloads a model or uploads audio. Returns text for Chat "
+                      "clients that cannot interpret MCP audio items; review uncertain speech.",
+                      MediaTranscribe, transcribe, read_only=True, open_world=True)
         self.register("media_video_frames", "Decode one to four bounded JPEG frames near "
                       "selected timestamps of a local video file. Requires local FFmpeg. "
                       "Frames are separate MCP image items, not a continuous video.",
@@ -1550,6 +1564,22 @@ class Engine:
             "connection_authorization": "not_observed",
             "helper": "available" if decoder_available else "unavailable",
             "os_permission": "not_required", "acceptance": "not_verified",
+        }
+        transcriber_available = media_status()["local_transcriber_available"]
+        capability_diagnostics["media_transcription"] = {
+            "running_implementation": (
+                "present" if all(tool in self.tools for tool in
+                                 CAPABILITY_TOOLS["media_transcription"]) else "absent"
+            ),
+            "runtime_available": (
+                "unknown" if decoder_available and transcriber_available else False
+            ),
+            "connection_authorization": "not_observed",
+            "helper": "available" if transcriber_available else "unavailable",
+            "os_permission": "not_required", "acceptance": "not_verified",
+            "next_action": (
+                "Provide a trusted local Whisper checkpoint path; no model is downloaded."
+            ),
         }
         for capability, check in (
             ("audio_capture", verified_audio_helper), ("gui_native", installed_helper),

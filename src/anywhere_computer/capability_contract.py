@@ -19,6 +19,7 @@ CAPABILITY_TOOLS: dict[str, frozenset[str]] = {
     "audio_capture": frozenset({"audio_status", "audio_capture"}),
     "media_preview": frozenset({"media_status", "media_audio_clip",
                                 "media_video_frames"}),
+    "media_transcription": frozenset({"media_transcribe"}),
     "gui_native": frozenset({"gui_native_windows", "gui_native_observe", "gui_native_close",
                              "gui_native_set_value", "gui_native_press", "gui_native_action",
                              "gui_native_set_value_target", "gui_native_press_target"}),
