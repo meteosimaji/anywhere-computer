@@ -594,11 +594,11 @@ async def test_slow_browser_close_finishes_after_caller_timeout(monkeypatch):
     try:
         ids = tab_args(await control.open(owner="owner-a"))
         entry = control.entries[ids["session_id"]]
-        original_close = entry.browser.close
+        # Keep real process teardown outside the tiny synthetic deadline.
+        await entry.browser.close()
 
         async def held_close():
             await release.wait()
-            await original_close()
 
         with monkeypatch.context() as patch:
             patch.setattr(browser_module, "_CLEANUP_WAIT_SECONDS", 0.2)

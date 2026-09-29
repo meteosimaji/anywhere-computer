@@ -1896,10 +1896,10 @@
     {
       "path": "tests/test_browser_tabs_dialogs.py",
       "area": "core_ui",
-      "sha256": "ac3f820e3e0cd2b822de4b0046b8f5dde8bc1b563f9b9fa97eb5bbef018d0729",
+      "sha256": "d0b886c427e5cbf35e678a5d49ba364f5bd6fe1e9934381e838ea837cc3d0e4a",
       "lines": 617,
       "review": "added_regression",
-      "finding": "Reviewed popup, dialog, and close-task tests. Added a delayed real-browser close case that asserts caller timeout, retained owner, then confirmed cleanup. It failed under the original shared deadline and passed after the internal deadline change."
+      "finding": "Reviewed popup, dialog, and close-task tests. Added a delayed browser-close acknowledgement case with real process teardown outside the synthetic short deadline. It asserts caller timeout, retained owner, then confirmed cleanup. The initial form failed under the original shared deadline; the deterministic form passes after the internal deadline change."
     },
     {
       "path": "tests/test_chat_shape_compare.py",
