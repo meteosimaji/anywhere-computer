@@ -1888,10 +1888,10 @@
     {
       "path": "tests/test_browser_control.py",
       "area": "core_ui",
-      "sha256": "dbf82bedda32ca10675bff6baf220ce01de0a9aa10fd9159ea271c9b1ed4d361",
+      "sha256": "96a50c84912666cf9d125b3302c5fa7886eb9b99bf00de25322c97455fe73acc",
       "lines": 1150,
-      "review": "no_change",
-      "finding": "Read all 1150 lines: owned real-browser navigation, cancellation/resource cleanup, DOM/network redaction, semantic/visual/frame interaction and download tests. Root owns download deadline regression; no separate new defect."
+      "review": "fixed_test_race",
+      "finding": "Read all frame ownership and navigation tests. Windows CI reproduced a test race: page.frame(name) could be None before iframe attachment. The fixture now waits for each frame body through a Playwright FrameLocator before asserting scoped behavior; local targeted test passed."
     },
     {
       "path": "tests/test_browser_tabs_dialogs.py",

@@ -2,7 +2,7 @@
 
 Reviewed against current code commit `c9e1885` on 2026-09-30. The beta.32
 wheel was built from the earlier clean source commit `e3ac79a`; the subsequent
-Windows repair changed only a test. The
+Windows repairs changed only tests. The
 [file inventory](code-quality-audit.json) records the current SHA-256, area,
 line count, review outcome and short finding for every included file. It is a
 review record, not a claim that testing can prove the absence of defects.
@@ -74,8 +74,12 @@ checks local behavior; GitHub macOS/Windows/Linux CI and installed-client
 acceptance are separate gates. The first PR Windows smoke run exposed a test
 setup error: the synthetic macOS notification test changed global
 `sys.platform` before constructing a Windows ledger. Commit `c9e1885` creates
-the ledger first; its 31 local tests passed. The Windows rerun is required to
-confirm that correction.
+the ledger first; its 31 local tests and the next Windows smoke job passed.
+That run then exposed an iframe test race: `page.frame(name)` can be absent
+while the second iframe attaches. The test now waits for each frame's body
+through Playwright's `FrameLocator` before asserting ownership and stale
+snapshot behavior. Its targeted local run passed; the Windows shard rerun is
+required to confirm the correction.
 
 ## Remaining product and operational gates
 

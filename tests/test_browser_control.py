@@ -1052,10 +1052,10 @@ async def test_frame_scope_is_owned_observed_and_invalidated_on_same_url_reload(
             ))
 
         await page.route("http://**/*", serve)
-        main = await control.navigate(BrowserNavigate(**ids, url="http://parent.test/"),
-                                      owner="frame-owner")
-        await page.frame(name="editor").wait_for_load_state()
-        await page.frame(name="second").wait_for_load_state()
+        await control.navigate(BrowserNavigate(**ids, url="http://parent.test/"),
+                               owner="frame-owner")
+        for name in ("editor", "second"):
+            await page.frame_locator(f'iframe[name="{name}"]').locator("p").wait_for()
         main = await control.observe(BrowserObserve(**ids), owner="frame-owner")
         frame_id = next(row["frame_id"] for row in main["frames"] if row["name"] == "editor")
         scoped = {**ids, "frame_id": frame_id}
