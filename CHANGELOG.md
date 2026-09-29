@@ -27,6 +27,7 @@
 - Expose late Subchat send-worker failures separately from provider receipts.
   Classify a rejected draft as unsent only when interception and confirmed
   closure of its owned page prove that no generation request escaped.
+  Retain a page-specific request guard if rejected-page cleanup is unconfirmed.
 - Package the existing macOS system-audio helper in portable archives and
   verify it after relocation. A permission check does not prove recording or
   receiving-model audio perception.
@@ -35,7 +36,9 @@
   No usage reduction or comparison win is claimed without measured evidence.
 - Reduce explicit credential state-test KDF cost while retaining real
   production-work-factor tests. Separate Windows KDF and ACL measurements;
-  full Windows CI remains slow and needs further diagnosis.
+  distribute remaining Windows tests across four VMs with two workers each,
+  and verify collected and finished test IDs before the existing required gate.
+  Actual CI stability, elapsed time and total VM time need separate measurement.
 
 ## 0.2.0b31 / Plugin 0.2.0-beta.31 — development prerelease (2026-09-28)
 
