@@ -62,7 +62,11 @@ and their callers, contracts and tests, then inspected later integrated diffs.
   remained in test execution well beyond their prior durations, while the
   equivalent local macOS suite passed. Shared-runtime and parallel Windows
   shards now log each test name and dump/exit a test that runs beyond five
-  minutes. This is a diagnostic bound; the underlying cause remains unconfirmed.
+  minutes. Verbose macOS logs identified a browser cookie test failure in one
+  worker while a manual Subchat send test hung in the other. The 70 tests in
+  those two files now run serially before the remaining parallel suite. The
+  collection count still covers every test once. This isolates the observed
+  overlap; the underlying cause remains unconfirmed until CI reruns it.
 
 The [changelog](../CHANGELOG.md) lists the beta.33 feature work as well as
 these repairs. No confirmed, unpatched defect remained in the reviewed files
@@ -101,10 +105,12 @@ receipt deadline. The delayed-close regression failed before the repair and
 passed afterward. A later Windows shard run timed out in native Task Scheduler
 validation; the serial preflight change passed on Windows in 0.30 seconds. A
 macOS run stayed in the suite for over 30 minutes. A subsequent run and Windows
-shard 4 also remained in test execution well beyond earlier durations, so the
-next run adds per-test traceback and exit bounds. The beta.33 PR Quality run
-is required to confirm the final combined candidate on all three operating
-systems.
+shard 4 also remained in test execution well beyond earlier durations. The
+bounded diagnostic run passed all Windows shards but exposed a cookie test
+failure and concurrent Subchat test hang on macOS. Serial browser/Subchat
+preflight and the remaining parallel suite await a new macOS CI result. The
+beta.33 PR Quality run is required to confirm the final combined candidate on
+all three operating systems.
 
 ## Remaining product and operational gates
 

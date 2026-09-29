@@ -1,5 +1,5 @@
 {
-  "as_of_commit": "2ab9479cd8245b26ffda50f6891e4f2be3314cba",
+  "as_of_commit": "27f253a8bcb02c3e0d0814de0436d29794fa1673",
   "method": "Full-file review by area, source-to-test/consumer trace, targeted regression and integrated-suite checks; each current SHA-256 matched a review record.",
   "included_file_count": 432,
   "areas": {
@@ -32,10 +32,10 @@
     {
       "path": ".github/workflows/quality.yml",
       "area": "release_runtime",
-      "sha256": "1f963fc1952c888456669aa881edb0484683785356548c1d265d06e8c61d6408",
-      "lines": 500,
+      "sha256": "4c14fb3a81ad0e5e7583659c008cb5ac5bf0c263b844c6682795cfd991185d5d",
+      "lines": 508,
       "review": "changed",
-      "finding": "Read full job graph, 6 required contexts, fail-closed Windows composite and release provenance gates. Shared-runtime fails on the first failure and dumps/exits a test after five minutes; verbose names expose the stalled test."
+      "finding": "Read full job graph, 6 required contexts, fail-closed Windows composite and release provenance gates. Shared-runtime fails on the first failure and logs test names. Browser control and Subchat integration files run serially before parallel workers after a macOS concurrency failure and hang; all collected tests remain covered."
     },
     {
       "path": "desktop/Cargo.toml",
