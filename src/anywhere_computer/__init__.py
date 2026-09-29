@@ -1,3 +1,3 @@
 """Anywhere Computer: independently implemented computer tools."""
 
-__version__ = "0.2.0b35"
+__version__ = "0.2.0b36"

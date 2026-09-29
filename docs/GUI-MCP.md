@@ -18,6 +18,11 @@ sessionは不要です。
 `gui_native_observe(session_id, app, window_id)` に渡します。観測した要素に対して、
 次を使用できます。
 
+同じウィンドウが残る間は、`gui_native_windows` が返したsessionを再利用します。
+AX操作で失効するのは観測IDであり、操作自体はsessionを終了しません。
+操作後は同じsessionとwindow IDを `gui_native_observe` で再観測します。
+新しいsessionを開いた場合は、その全てを所有元のChatで終了します。
+
 通常は `gui_native_observe(..., compact=true)` で、操作可能な要素の
 `role`、`label`、`identifier`、有効状態、`actions`、取得できる座標範囲を受け取れます。内蔵ヘルパーが
 幅優先で対象を探索するため、先頭の長いリストが上限に達してもツールバーなどを
