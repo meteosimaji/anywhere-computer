@@ -328,6 +328,12 @@ for line in sys.stdin:
                 "role": "AXButton", "identifier": "save-primary",
             })
             assert pressed["action_accepted"] and not pressed["postcondition_verified"]
+            snapshot = await call("gui_native_observe", target)
+            action = await call("gui_native_action", {
+                **target, "observation_id": snapshot["observation_id"],
+                "element_ref": "button", "action": "AXPress",
+            })
+            assert action["action_accepted"] and not action["postcondition_verified"]
             await call("gui_native_close", {"session_id": native["session_id"]})
             await call("workspace_open", {"path": str(tmp_path)})
             await call("settings_get")

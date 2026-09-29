@@ -8,6 +8,9 @@
 - Add observed frame IDs, frame-scoped semantic browser actions and open-shadow
   form labels. Reject stale observations after same-URL reloads and frame detach.
   Keep frame element coordinates distinct from the full-tab screenshot.
+- Manage owned tabs and popups in one isolated browser context, and expose
+  observed JavaScript dialogs with explicit accept/dismiss responses. Modal
+  dialogs in another owned tab wake blocked observations without autoaccepting.
 - Include exact-window native macOS screenshots alongside Accessibility data,
   and permit explicitly observed secondary AX actions such as increment and
   page scroll. Revalidate the target before input and require reobservation
