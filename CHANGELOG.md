@@ -10,8 +10,10 @@
   keeping generation-abort closes immediate. Retain the original tab and the
   read result or exception across bounded cleanup.
 - Separate serial macOS browser-control and Subchat-browser CI processes with
-  bounded step durations. Give a loaded Windows browser fixture enough outer
-  scheduling time while retaining its short internal dispatch/cleanup limits.
+  bounded step durations. Close incomplete local HTTP fixture connections at
+  teardown so Python 3.12's server wait cannot stall indefinitely. Give a
+  loaded Windows browser fixture enough outer scheduling time while retaining
+  its short internal dispatch/cleanup limits.
 
 ## 0.2.0b37 / Plugin 0.2.0-beta.37 — unpublished candidate (2026-09-30)
 

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import uuid
+from collections.abc import Awaitable, Callable
 
 import pytest
 
@@ -38,6 +39,54 @@ from anywhere_computer.models import (
     Reply,
     Request,
 )
+
+
+async def _tracked_fixture_client(
+    handler: Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]],
+    reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+    clients: set[asyncio.StreamWriter],
+) -> None:
+    clients.add(writer)
+    try:
+        await handler(reader, writer)
+    except asyncio.IncompleteReadError:
+        # Chrome can open a connection without sending complete request headers.
+        pass
+    finally:
+        clients.discard(writer)
+        writer.close()
+
+
+async def _close_fixture_server(
+    server: asyncio.Server, clients: set[asyncio.StreamWriter],
+) -> None:
+    server.close()
+    for writer in tuple(clients):
+        writer.close()
+    await asyncio.wait_for(server.wait_closed(), 10)
+
+
+async def test_fixture_server_closes_idle_accepted_client():
+    clients: set[asyncio.StreamWriter] = set()
+    started = asyncio.Event()
+
+    async def read_headers(reader: asyncio.StreamReader, _writer: asyncio.StreamWriter) -> None:
+        started.set()
+        await reader.readuntil(b"\r\n\r\n")
+
+    server = await asyncio.start_server(
+        lambda reader, writer: _tracked_fixture_client(read_headers, reader, writer, clients),
+        "127.0.0.1", 0)
+    _reader, writer = await asyncio.open_connection(
+        "127.0.0.1", server.sockets[0].getsockname()[1])
+    try:
+        await asyncio.wait_for(started.wait(), 1)
+        assert clients  # The handler is blocked on an incomplete request.
+        await asyncio.wait_for(_close_fixture_server(server, clients), 1)
+        assert not clients
+    finally:
+        writer.close()
+        await writer.wait_closed()
 
 
 @pytest.mark.parametrize(
@@ -120,6 +169,8 @@ async def test_missing_playwright_driver_reports_pre_dispatch_failure(tmp_path, 
 
 @pytest.fixture
 async def local_page():
+    clients: set[asyncio.StreamWriter] = set()
+
     async def serve(reader, writer):
         request = await reader.readuntil(b"\r\n\r\n")
         cookie = next((line for line in request.split(b"\r\n")
@@ -138,16 +189,18 @@ async def local_page():
         await writer.drain()
         writer.close()
 
-    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    server = await asyncio.start_server(
+        lambda reader, writer: _tracked_fixture_client(serve, reader, writer, clients),
+        "127.0.0.1", 0)
     try:
         yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/fixture"
     finally:
-        server.close()
-        await server.wait_closed()
+        await _close_fixture_server(server, clients)
 
 
 @pytest.fixture
 async def file_site():
+    clients: set[asyncio.StreamWriter] = set()
     payload = b"browser download verified 42\n"
 
     async def serve(reader, writer):
@@ -171,16 +224,18 @@ async def file_site():
         await writer.drain()
         writer.close()
 
-    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    server = await asyncio.start_server(
+        lambda reader, writer: _tracked_fixture_client(serve, reader, writer, clients),
+        "127.0.0.1", 0)
     try:
         yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}/", payload
     finally:
-        server.close()
-        await server.wait_closed()
+        await _close_fixture_server(server, clients)
 
 
 @pytest.fixture
 async def navigation_site():
+    clients: set[asyncio.StreamWriter] = set()
     requests = []
 
     async def serve(reader, writer):
@@ -204,12 +259,13 @@ async def navigation_site():
         await writer.drain()
         writer.close()
 
-    server = await asyncio.start_server(serve, "127.0.0.1", 0)
+    server = await asyncio.start_server(
+        lambda reader, writer: _tracked_fixture_client(serve, reader, writer, clients),
+        "127.0.0.1", 0)
     try:
         yield f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}", requests
     finally:
-        server.close()
-        await server.wait_closed()
+        await _close_fixture_server(server, clients)
 
 
 async def test_browser_navigation_continuity_across_documents_and_spa(navigation_site):
