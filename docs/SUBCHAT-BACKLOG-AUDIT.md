@@ -11,7 +11,7 @@ they are not automatically acceptance of the next release.
 | Saved discovery | `SubchatSubmissions.list` scopes records to their owner, omits prompts by default, optionally returns 160 characters, and preserves absent legacy creation timestamps. `test_subchat_state.py` and `test_subchat_mcp.py` cover it. | Reconfirm the packaged catalog and selected account after release. |
 | One model choice | HTTP catalog `choice_id` resolves the exact model, effort and HTTP selection. Model/version mismatches fail before dispatch. | A catalog entry still needs an available UI preparation row; no listed model is automatically a successful live send. |
 | Named accounts and doctor | `subchat_setup.py` saves named selections, checks the expected account on switching and supplies a no-send doctor. | Selected Chrome-profile inspection and these account setup paths remain macOS-specific. A second physical account is needed to accept a real switch. |
-| Local files and Library | Single-file upload has exact path/byte/account preparation, durable stage claims and ready attachment descriptors. New `subchat_upload_library_batch` validates all unsent files first and shares one browser session. `subchat_upload_batch_status` only reconciles saved IDs. | A real two-file batch and a Chat answer that uses both files must be checked for the new source and installed package. The batch returns resources for an explicit subsequent Chat send; it does not silently create a Chat. |
+| Local files and Library | Single-file upload has exact path/byte/account preparation, durable stage claims and ready attachment descriptors. New `subchat_upload_library_batch` validates all unsent files first and shares one browser session. `subchat_upload_batch_status` only reconciles saved IDs. A real source two-file batch and one Chat answer reading both files passed on macOS; see the receipt below. | Repeat acceptance for the newly installed package. The batch returns resources for an explicit subsequent Chat send; it does not silently create a Chat. |
 | Image selection, file ranges and direct save | `subchat_http_image.py`, `subchat_http_download.py`, `subchat_device_save.py` bind downloads to verified final answers and direct saves to explicit device/path permissions. | Existing live local/loopback evidence does not verify a physically remote device. |
 | Queued changes and reattachment | Local and HTTPS tools implement model/resource changes with revision checks and immutable mutation receipts. HTTPS tools require separate OAuth scopes; HTTP model changes use a fresh choice ID. | Browser preparation must still validate the changed choice and references before dispatch. |
 | Stop, steer and interrupted recovery | Capabilities accurately return `provider_stop=false`, `native_steer=false`. Cancel affects only unsent local rows. Unknown sends retain their original operation ID; interrupted output is not marked completed and its queued children do not dispatch. | Provider stop/steer and a reviewed continuation in the same conversation are not implemented. No stable provider contract or fresh UI stop acceptance establishes them. Do not unlock unknown sends by editing ledger state. |
@@ -68,3 +68,30 @@ change the exact local approval and durable dispatch checks.
 
 Use the published, newly installed package for the final package acceptance. Source
 execution and deterministic transport fixtures establish different evidence.
+
+## Source acceptance on 2026-09-29
+
+A real stdio Library MCP process uploaded exactly two small synthetic text files
+prepared under distinct stable IDs in the selected macOS account. Both reached
+`ready` with `provider_receipt=confirmed`. The call and process cleanup took
+26.083 seconds. A process observer saw one new background Chrome owner during
+that call and none left afterward. A fresh Library MCP process recovered the same
+two ready attachment descriptors in 0.177 seconds without starting a browser.
+
+A fresh authenticated HTTP catalog offered `GPT-5.6 Sol` / `Instant` with version
+`5.6`. One explicitly intended Subchat send attached the returned resources.
+Its first response was `prepared/not_sent`; original-ID waiting observed
+`sending/unconfirmed`, then `completed/confirmed`. The final answer contained both
+distinct file markers, which were absent from the prompt. Send, waits and process
+cleanup took 16.859 seconds. The selected model labels and the final reported
+`gpt-5-6` slug with null effort are distinct observed settings.
+
+The saved intent had exactly one row and one matching submission, against one
+requested Chat slot. A fresh Subchat MCP process returned the same completed
+answer in 0.177 seconds without opening a browser. All acceptance processes
+exited and their background browser owners were gone. No unknown operation was
+resent and no model was substituted. These timings are one observation, not a
+benchmark or a measured speedup against direct composer attachment. Visible
+attachment cards were not separately inspected. Private IDs, account bindings,
+file markers and full results are retained only in a local acceptance artifact;
+this receipt does not establish installed-package or remote-device acceptance.
