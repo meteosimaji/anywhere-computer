@@ -42,6 +42,9 @@
 - Keep the rejected-page send guard when page cleanup is unconfirmed, bound
   background browser shutdown, and recheck authorization after HTTP client
   construction before issuing a delete request.
+- Show the same session-local send-worker diagnostics over local MCP and HTTPS.
+  Reap an owned desktop notification process on cancellation or timeout without
+  changing its durable queue event.
 - Reap media decoder processes when the caller is cancelled, as well as after
   timeout. Keep actual media delivery and model perception as separate checks.
 - Separate desktop capability, resource, identity and device renderers. Display
