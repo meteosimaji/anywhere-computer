@@ -1,11 +1,11 @@
-# beta.33 code-quality audit
+# beta.34 code-quality audit
 
 The full-file review began at source commit `c9e1885` on 2026-09-30. The
 subsequent CI repairs changed browser shutdown code, Windows test scheduling
-and tests. The beta.33 wheel is built from clean source commit `df1d8d3`,
+and tests. The beta.34 wheel is built from clean source commit `e4170cf`,
 recorded in its release manifest. The [file inventory](code-quality-audit.json)
-records the current SHA-256, area,
-line count, review outcome and short finding for every included file. It is a
+records the current SHA-256, area, line count, review outcome and short finding
+for every included file. It is a
 review record, not a claim that testing can prove the absence of defects.
 
 ## Scope and method
@@ -66,10 +66,16 @@ and their callers, contracts and tests, then inspected later integrated diffs.
   worker while a manual Subchat send test hung in the other. The 70 tests in
   those two files now run serially before the remaining parallel suite. The
   collection count still covers every test once. This isolates the observed
-  overlap; the underlying cause remains unconfirmed until CI reruns it.
+  overlap. The [beta.33 PR Quality run](https://github.com/meteosimaji/anywhere-computer/actions/runs/36614256168)
+  then passed on macOS, Windows and Ubuntu. This is one successful run after
+  several intermittent failures; their underlying cause is not fully proven.
+- The PR review found that a grant containing only `browser_tab_close` showed
+  the generic consent warning. The owner-consent ability summary now identifies
+  that scope as website interaction. A dedicated regression covers the
+  single-scope case; beta.34 includes the resulting source change.
 
-The [changelog](../CHANGELOG.md) lists the beta.33 feature work as well as
-these repairs. No confirmed, unpatched defect remained in the reviewed files
+The [changelog](../CHANGELOG.md) lists the beta.33 feature work, beta.34 review
+repair and CI changes. No confirmed, unpatched defect remained in the reviewed files
 at the audit cutoff. The review record retains hypotheses that lacked a
 reproduction or an upstream contract; it does not change behavior to satisfy
 those hypotheses.
@@ -81,15 +87,15 @@ those hypotheses.
 | `uv run --locked ruff check src tests scripts` | Passed |
 | `uv run --locked mypy` | Passed, 159 source files |
 | Serial timing-sensitive pytest group | 45 passed, 17 OS skips |
-| Remaining pytest suite with four workers | 2,778 passed, 35 skips; 110.69 seconds |
+| Remaining pytest suite with four workers, beta.34 | 2,779 passed, 35 skips; 110.89 seconds |
 | Browser control and tab/dialog suites | 51 passed; the delayed-close regression failed before its repair |
-| Plugin/release candidate tests | 21 passed against the rebuilt beta.33 wheel |
+| Consent, plugin and release candidate tests, beta.34 | 41 passed against the rebuilt beta.34 wheel |
 | README references, release tag availability, diff check, ZIP integrity | Passed |
 | Subchat final related suite | 953 passed, 1 OS skip |
 | Document image path | 43 Python tests plus Workspace UI tests passed after integration; the expanded source fixture also passed real renderer and HTTP/SSH image tests |
 
 The serial and four-worker groups exclude each other, except that the separate
-21 plugin/release tests repeat cases from the broader group. Test process
+41 consent/plugin/release tests repeat cases from the broader group. Test process
 counts are therefore not added together as a unique-case total. The full suite
 checks local behavior; GitHub macOS/Windows/Linux CI and installed-client
 acceptance are separate gates. The first PR Windows smoke run exposed a test
@@ -108,9 +114,10 @@ macOS run stayed in the suite for over 30 minutes. A subsequent run and Windows
 shard 4 also remained in test execution well beyond earlier durations. The
 bounded diagnostic run passed all Windows shards but exposed a cookie test
 failure and concurrent Subchat test hang on macOS. Serial browser/Subchat
-preflight and the remaining parallel suite await a new macOS CI result. The
-beta.33 PR Quality run is required to confirm the final combined candidate on
-all three operating systems.
+preflight and the remaining parallel suite then passed on macOS; all Windows
+and Ubuntu jobs passed in the same beta.33 PR Quality run. The PR remained
+blocked by an unresolved consent-warning review comment. The consent code and
+beta.34 package now address that finding; beta.34 Quality is a separate gate.
 
 ## Remaining product and operational gates
 
@@ -121,7 +128,7 @@ all three operating systems.
 | [#185](https://github.com/meteosimaji/anywhere-computer/issues/185) | Confirm the full save path on a physically remote device and remaining Windows/Linux account/browser and stop/steer behavior. |
 | [#198](https://github.com/meteosimaji/anywhere-computer/issues/198) | Physical/platform authenticator registration and public HTTPS consent require owner presence. The owner requested debugging work while asleep. |
 | [#219](https://github.com/meteosimaji/anywhere-computer/issues/219) | Measure repeated Windows CI stability and elapsed time against the 998-second baseline. Local tests alone cannot satisfy this. |
-| [#220](https://github.com/meteosimaji/anywhere-computer/issues/220) | Six required PR Quality checks are configured. Observe this candidate held until checks pass, then verify the protected `main` release and attestations. |
+| [#220](https://github.com/meteosimaji/anywhere-computer/issues/220) | Six required PR Quality checks are configured. Beta.33 passed all checks but a review conversation kept the PR blocked. Verify beta.34 checks and review resolution before the protected `main` release and attestations. |
 | [#221](https://github.com/meteosimaji/anywhere-computer/issues/221) | The direct Codex Computer Use call still reports `unsupported_execution_context` without an owning Codex turn. A supported cross-client execution API and a model-identified ordinary-Chat action have not been shown. Anywhere's own GUI/browser tools use separate grants. |
 | [#222](https://github.com/meteosimaji/anywhere-computer/issues/222) | Native Chat search remains the public-search entry. The first fixed-task Subchat benchmark has one unconfirmed baseline send and no valid usage comparison; do not infer savings or replace that unknown send. |
 | [#224](https://github.com/meteosimaji/anywhere-computer/issues/224) | The bounded owned-tab cleanup repair has local regression coverage. Repeat the macOS browser/history CI run before claiming the intermittent failure resolved. |

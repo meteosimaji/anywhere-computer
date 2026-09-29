@@ -1,5 +1,5 @@
 {
-  "as_of_commit": "27f253a8bcb02c3e0d0814de0436d29794fa1673",
+  "as_of_commit": "1c07207960a3f5bc04e6f3026ed6c3573e4247cb",
   "method": "Full-file review by area, source-to-test/consumer trace, targeted regression and integrated-suite checks; each current SHA-256 matched a review record.",
   "included_file_count": 432,
   "areas": {
@@ -128,34 +128,34 @@
     {
       "path": "plugins/anywhere-computer/.claude-mcp.json",
       "area": "release_runtime",
-      "sha256": "f6363e1bf7e3d8e893077e59c304786315f1c5781ab0f4d80d02a64d272f272c",
+      "sha256": "db456f5c200005a754ac1c320389b66ce3439660d2d14bf98bc209fa3a18ff3e",
       "lines": 47,
       "review": "changed",
-      "finding": "Reviewed generated beta.33 wheel path for all three Claude MCP servers."
+      "finding": "Reviewed generated beta.34 wheel path for all three Claude MCP servers."
     },
     {
       "path": "plugins/anywhere-computer/.claude-plugin/plugin.json",
       "area": "release_runtime",
-      "sha256": "ea01abdd5c0a3d2c1b861ee0c2dca17534cb03063f151a7f9bcd47b2ac587262",
+      "sha256": "53257c5ebae163db86b68a161e116da53c74b7f87e157e7d6e5ce443f9bddbdc",
       "lines": 12,
       "review": "changed",
-      "finding": "Reviewed generated beta.33 Claude plugin version."
+      "finding": "Reviewed generated beta.34 Claude plugin version."
     },
     {
       "path": "plugins/anywhere-computer/.codex-plugin/plugin.json",
       "area": "release_runtime",
-      "sha256": "2627e60ae533cd4233bcd85570780f0378c60495c1293def1209a1343006e9c6",
+      "sha256": "c496ad63cde3c333d3cb6a81646a7e011938c9faccc86c84ca3092760139deb6",
       "lines": 28,
       "review": "changed",
-      "finding": "Reviewed generated beta.33 Codex plugin version."
+      "finding": "Reviewed generated beta.34 Codex plugin version."
     },
     {
       "path": "plugins/anywhere-computer/.mcp.json",
       "area": "release_runtime",
-      "sha256": "81eb3929a9805e40974aebdaab7867a052a1447454ba7aaa23721279f1927f5c",
+      "sha256": "947a102a32fb91af4ac06bd3b0ba24775ce444b3cce2ac1f4a2767e99946bfc4",
       "lines": 50,
       "review": "changed",
-      "finding": "Reviewed generated beta.33 wheel path for all three Codex MCP servers."
+      "finding": "Reviewed generated beta.34 wheel path for all three Codex MCP servers."
     },
     {
       "path": "pyproject.toml",
@@ -432,10 +432,10 @@
     {
       "path": "src/anywhere_computer/__init__.py",
       "area": "network_security",
-      "sha256": "625e10c687b80bf70ee9f4fb030561864c81c3f9b2e9007f81b68096cb6da268",
+      "sha256": "40c9b87d4867847e2d47f4bbdb6f4480cabdb1b2034557e74f72dad190c18058",
       "lines": 3,
       "review": "version_bump",
-      "finding": "Single release constant advanced to beta.33 because the browser shutdown change modifies the wheel after the unpublished beta.32 candidate; same-version wheel replacement is rejected by the packager."
+      "finding": "Single release constant advanced to beta.34 because the owner-consent correction changes the immutable wheel."
     },
     {
       "path": "src/anywhere_computer/__main__.py",
@@ -496,10 +496,10 @@
     {
       "path": "src/anywhere_computer/browser_authorization.py",
       "area": "network_security",
-      "sha256": "6bd9552216fc1d6de9ccbdf9438831ea5e1d5dc47378524d26ff59c312533819",
+      "sha256": "166e3d8fa9dbc77e0a729310e6eeb4b814fb77d92da51d1b881874412c63b266",
       "lines": 816,
-      "review": "no_change",
-      "finding": "Reviewed full consent/passkey browser flow, strict CSRF/origin/cookie binding, generation recheck and asynchronous password slots."
+      "review": "changed",
+      "finding": "Consent ability summary now classifies browser_tab_close as website interaction; reviewed origin, CSRF, cookie and callback boundaries."
     },
     {
       "path": "src/anywhere_computer/browser_control.py",
@@ -1880,10 +1880,10 @@
     {
       "path": "tests/test_browser_authorization.py",
       "area": "network_security",
-      "sha256": "6b7ad5f5704e2d85bc7f5f9fae402dca6e72157a95d74ca9230302b950c0b371",
-      "lines": 343,
-      "review": "no_change",
-      "finding": "Reviewed request consumption race, consent scopes, generation revocation, callback CSP and password-slot tests."
+      "sha256": "9e9487a090b7e1f548897b82d57fd2453348570cedf218bd41358642a35a0fd9",
+      "lines": 344,
+      "review": "changed",
+      "finding": "Added browser_tab_close-only consent regression alongside scope, generation, callback CSP and password-slot tests."
     },
     {
       "path": "tests/test_browser_control.py",
