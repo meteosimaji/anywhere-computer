@@ -3,6 +3,12 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b35 / Plugin 0.2.0-beta.35 — development prerelease (2026-09-30)
+
+- Report a detached iframe as an unavailable browser frame when Chromium
+  rejects an in-flight observation before Playwright delivers its detach event.
+  Keep a closed tab or browser distinguishable from a missing frame.
+
 ## 0.2.0b34 / Plugin 0.2.0-beta.34 — development prerelease (2026-09-30)
 
 - Describe browser tab closure as website interaction on the OAuth consent
