@@ -59,9 +59,15 @@ async def _decode(arguments: list[str]) -> bytes:
     try:
         output, _ = await asyncio.wait_for(process.communicate(), _DECODER_TIMEOUT)
     except TimeoutError as error:
-        process.kill()
-        await process.wait()
         raise ValueError("Media decoding exceeded the 12-second limit") from error
+    finally:
+        # Cancellation must release the decoder too, including daemon shutdown.
+        if process.returncode is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        await process.wait()
     if process.returncode != 0 or not output:
         raise ValueError("Media decoder could not read the requested clip or frame")
     return output
