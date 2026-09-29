@@ -3,6 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b39 / Plugin 0.2.0-beta.39 — development prerelease (2026-09-30)
+
+- Report how many active HTTP grants still lack the tools requested by
+  `http-add-tools`, including deliberately restricted grants. Mark fresh
+  consent as required in that case without expanding or replacing those grants.
+- Explain that updating a ChatGPT developer plugin's tool list does not change
+  the connected account's OAuth grant; the owner must review any new consent.
+
 ## 0.2.0b38 / Plugin 0.2.0-beta.38 — development prerelease (2026-09-30)
 
 - Prepare an exact temporary Chat tab CDP target before closing read-only

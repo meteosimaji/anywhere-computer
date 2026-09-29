@@ -75,6 +75,7 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
             if not store.device_enabled(owner=config.owner, device=config.device):
                 raise ValueError("Disabled HTTP devices cannot be upgraded")
             changed = 0
+            missing_requested = 0
             with store.db:
                 store.db.execute("BEGIN IMMEDIATE")
                 candidates = store.db.execute(
@@ -84,13 +85,17 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
                 ).fetchall()
                 encoded = json.dumps(sorted(expanded.scopes))
                 for grant_id, raw in candidates:
+                    granted = frozenset(json.loads(raw))
                     if (not new_consent_required
-                            and frozenset(json.loads(raw)) == config.scopes
+                            and granted == config.scopes
                             and config.scopes != expanded.scopes):
                         store.db.execute(
                             "UPDATE grants SET tools=? WHERE id=?", (encoded, grant_id)
                         )
                         changed += 1
+                        granted = expanded.scopes
+                    if not tools <= granted:
+                        missing_requested += 1
                 store.db.execute(
                     "UPDATE authorized_devices SET tools=? WHERE id=?",
                     (encoded, config.device),
@@ -109,7 +114,8 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
             return {
                 "added_tools": sorted(expanded.scopes - config.scopes),
                 "expanded_full_access_grants": changed,
-                "new_consent_required": new_consent_required,
+                "active_grants_missing_requested_tools": missing_requested,
+                "new_consent_required": new_consent_required or missing_requested > 0,
                 "credentials_replaced": False,
                 "restart_required": True,
             }

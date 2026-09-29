@@ -57,6 +57,8 @@ async def test_upgrade_preserves_token_and_adds_direct_tools_over_real_http(
                 await add_http_tools(tmp_path, added_tools)
         result = await add_http_tools(tmp_path, added_tools)
         assert result["expanded_full_access_grants"] == 1
+        assert result["active_grants_missing_requested_tools"] == 0
+        assert result["new_consent_required"] is False
         assert result["credentials_replaced"] is False
         async with http_service(tmp_path, credentials=owner):
             headers = await initialize(http, token)
@@ -110,9 +112,10 @@ async def test_upgrade_does_not_expand_restricted_revoked_or_expired_grants(
         before = store.db.execute("SELECT id,tools,expires,revoked FROM grants").fetchall()
     finally:
         store.close()
-    assert (await add_http_tools(tmp_path, frozenset({"computer_status"})))[
-        "expanded_full_access_grants"
-    ] == 0
+    result = await add_http_tools(tmp_path, frozenset({"computer_status"}))
+    assert result["expanded_full_access_grants"] == 0
+    assert result["active_grants_missing_requested_tools"] == 1
+    assert result["new_consent_required"] is True
     store = AuthorizationStore(
         tmp_path / "http-server/authorization",
         resource=RESOURCE,
@@ -141,6 +144,7 @@ async def test_delegation_upgrade_requires_new_consent_without_expanding_existin
         result = await add_http_tools(tmp_path, added_tools)
         assert result["new_consent_required"] is True
         assert result["expanded_full_access_grants"] == 0
+        assert result["active_grants_missing_requested_tools"] == 1
         async with http_service(tmp_path, credentials=owner):
             headers = await initialize(http, token)
             response = await http.post(
