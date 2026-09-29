@@ -244,11 +244,15 @@ same behavior on every macOS/Chrome combination or after provider changes.
 Do not resend an operation whose outcome is uncertain; recover it by operation ID.
 
 An unsent queued follow-up can change its model through `subchat_queue_model_change` in
-the local Subchat controller. Read `queue_revision` with `subchat_status`, then pass the
+the local Subchat controller or the separately scoped HTTPS gateway. Read
+`queue_revision` with `subchat_status`, then pass the
 same operation ID and `expected_revision`. For an HTTP-selected queue pass a current
 `choice_id` from the selected account's HTTP catalog; for a UI-selected queue pass
 `model` and `effort`. The controller checks the HTTP choice on change and again during
-send preparation. A stale revision or a `sending` checkpoint rejects the change, and
+send preparation. The HTTPS variant accepts only the HTTP `choice_id` and requires
+its own OAuth scope. `subchat_queue_resources_change` likewise has a separate
+HTTPS scope and replaces explicit attachment/plugin references under the same revision.
+A stale revision or a `sending` checkpoint rejects the change, and
 neither this tool nor same-ID status/recover sends a second copy. A running automatic
 queue may reserve the input first; inspect status after any rejection.
 
@@ -527,10 +531,37 @@ the caller attaches it to a Chat. A `ready` MCP result includes an
 `attachment` object with the saved file ID, Library item ID, filename, MIME
 type, and exact byte count for an explicit `subchat_send` resource. It is
 `null` until ready; do not guess these fields from a local path or file name.
-This is a multi-step alternative to attaching a PDF directly in the visible
-Chat composer. For several files, prepare and upload each one with its own
-operation ID, then include each returned `attachment` in one explicit
-`subchat_send` call. The local path alone and the Library upload alone do not
+For several files, save a bounded JSON manifest, for example:
+
+```json
+{"files":[
+  {"operation_id":"11111111111111111111111111111111","path":"/absolute/first.pdf"},
+  {"operation_id":"22222222222222222222222222222222","path":"/absolute/second.pdf"}
+]}
+```
+
+Use fresh IDs for an explicitly intended new upload, then prepare the exact
+manifest locally with `anywhere-subchat-upload --batch /absolute/manifest.json --prepare`.
+Pass the same `files` array to `subchat_upload_library_batch`. The tool verifies
+all unsent paths, bytes, account bindings and approvals before opening a browser.
+It shares one account/profile/browser session while retaining one durable
+upload record per file. Batches are limited to ten files and 40 MiB total.
+An uncertain item stops new uploads in the batch. The response includes each
+saved ID and whether its provider dispatch was claimed; it returns grouped
+`resources.attachments` only when every file is ready and has validated metadata.
+`provider_receipt` distinguishes `not_sent`, `unconfirmed`, and `confirmed`;
+a durable dispatch claim alone does not prove that the provider received bytes.
+Use those resources in one separate explicit `subchat_send` call.
+
+After a lost response, call `subchat_upload_batch_status` with the original
+`operation_ids`. Status never reads source files or starts an upload. A later
+explicit batch request using the same IDs can start still-prepared files;
+claimed files are only reconciled, including after approval expiry or removal
+of the source. Per-file `subchat_upload_status` remains available. A response
+with `error_code` also identifies the affected `failed_upload_operation_id`;
+`transport_unverified` never authorizes a new upload ID.
+
+The local path alone and the Library upload alone do not
 attach anything to that conversation. The current schema permits up to ten
 attachments of at most 20 MiB each; check the selected account's actual
 acceptance before relying on a particular file type.

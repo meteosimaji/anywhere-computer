@@ -131,8 +131,9 @@ the model before dispatch, read `queue_revision` from
 `subchat_status` and call `subchat_queue_model_change` with that revision and
 either a current HTTP `choice_id` or exact UI model and effort labels. A
 revision conflict means another controller changed or reserved the queue;
-inspect status before deciding what to do. The HTTPS gateway does not expose
-this model-change tool. `mode=steer` is unsupported. Check the actual tool catalog before relying
+inspect status before deciding what to do. The HTTPS gateway exposes model and
+resource changes under separate OAuth scopes; its model change accepts only a
+fresh HTTP `choice_id`. `mode=steer` is unsupported. Check the actual tool catalog before relying
 on optional delete, download, queue watch, or authentication tools. Deletion
 changes provider visibility and an unknown deletion outcome must not be
 repeated automatically.
@@ -161,3 +162,17 @@ as an already-uploaded resource in a separate, explicit Chat send. Copy the
 `attachment` object from the ready Library result into the Chat send's
 `resources.attachments`; it carries the saved byte count and IDs. Do not
 invent attachment metadata.
+
+For several files, prefer `subchat_upload_library_batch` when available. Save
+one operation ID per file in a JSON manifest with `files` entries containing
+`operation_id` and absolute `path`. Locally run
+`anywhere-subchat-upload --batch /absolute/manifest.json --prepare`, then pass
+those same entries to the batch tool. It permits at most ten files and 40 MiB
+total and shares one selected-account browser session. Every unsent file must
+match its local approval before any upload begins. A partially completed batch
+returns each file's saved ID and `dispatch_claimed`; it stops new uploads
+after an uncertain file. Use `subchat_upload_batch_status` with the original
+`operation_ids` after a missing response, without reading or sending bytes.
+Only a fully ready batch returns a grouped `resources` object for a separate,
+explicit Chat send. Retain every ID; a later explicit batch call can start
+still-prepared files but only observes files already claimed for upload.

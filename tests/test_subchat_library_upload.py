@@ -34,7 +34,8 @@ async def test_library_mcp_annotations_describe_upload_and_saved_reconciliation(
 
     catalog = {tool['name']: tool['annotations'] for tool in await _catalog()}
     assert catalog['subchat_upload_library'] == {
-        'readOnlyHint': False, 'destructiveHint': True, 'openWorldHint': False}
+        'readOnlyHint': False, 'destructiveHint': False, 'openWorldHint': True}
+    assert catalog['subchat_upload_library_batch'] == catalog['subchat_upload_library']
     assert catalog['subchat_upload_status'] == {
         'readOnlyHint': False, 'destructiveHint': False, 'openWorldHint': False}
 

@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from .mcp_server import REQUEST_ID_SCHEMA, MCPSession, rpc_error, serve_stdio
 from .models import Reply, Request
 from .subchat_content import SubchatAttachment
+from .subchat_library_batch import LibraryBatch, LibraryBatchStatus, run_local_batch
 from .subchat_library_upload import (
     UploadPreflightError,
     status_local_upload,
@@ -44,7 +45,30 @@ async def _catalog() -> list[JsonValue]:
                            'An interrupted upload is never automatically resent; inspect '
                            'the same operation with subchat_upload_status.',
             'inputSchema': upload_schema,
-            'annotations': {'readOnlyHint': False, 'destructiveHint': True,
+            'annotations': {'readOnlyHint': False, 'destructiveHint': False,
+                            'openWorldHint': True},
+        },
+        {
+            'name': 'subchat_upload_library_batch',
+            'description': 'Upload up to ten locally prepared files (40 MiB total) in one '
+                           'selected-account browser session. Keep the original operation_id '
+                           'for every file. All unsent files need local --prepare approval; '
+                           'claimed uploads are only reconciled. Stops new uploads on an '
+                           'uncertain item. Returns resources only when every item is ready; '
+                           'never creates or sends a Chat. Recover all saved IDs with '
+                           'subchat_upload_batch_status after a lost response.',
+            'inputSchema': LibraryBatch.model_json_schema(),
+            'annotations': {'readOnlyHint': False, 'destructiveHint': False,
+                            'openWorldHint': True},
+        },
+        {
+            'name': 'subchat_upload_batch_status',
+            'description': 'Read and reconcile up to ten original Library upload IDs in '
+                           'one selected-account session. Never reads source files or sends '
+                           'upload bytes. Returns grouped attachment resources only when all '
+                           'items are verified ready.',
+            'inputSchema': LibraryBatchStatus.model_json_schema(),
+            'annotations': {'readOnlyHint': False, 'destructiveHint': False,
                             'openWorldHint': False},
         },
         {
@@ -97,6 +121,37 @@ def _attachment(saved: object) -> dict[str, JsonValue] | None:
 
 async def _execute(request: Request) -> Reply:
     try:
+        if request.tool in {'subchat_upload_library_batch', 'subchat_upload_batch_status'}:
+            outcome = await run_local_batch(
+                batch=(LibraryBatch.model_validate(request.arguments)
+                       if request.tool == 'subchat_upload_library_batch' else None),
+                status=(LibraryBatchStatus.model_validate(request.arguments)
+                        if request.tool == 'subchat_upload_batch_status' else None))
+            items = outcome.uploads
+            attachments: list[JsonValue] = [_attachment(item) for item in items]
+            ready = all(item.state == 'ready' for item in items)
+            return Reply(operation_id=request.operation_id,
+                         state='completed' if ready else 'unknown',
+                         error=None if ready else 'Some files are not ready. Recover the same '
+                         'upload IDs with subchat_upload_batch_status before another decision.',
+                         data={
+                             'uploads': [{
+                                 'upload_operation_id': item.operation_id,
+                                 'state': item.state,
+                                 'dispatch_claimed': item.create_claimed,
+                                 'provider_receipt': ('confirmed' if item.state == 'ready'
+                                                      else 'unconfirmed' if item.create_claimed
+                                                      else 'not_sent'),
+                                 'file_id': item.file_id,
+                                 'library_item_id': item.library_item_id,
+                                 'attachment': attachment,
+                             } for item, attachment in zip(items, attachments, strict=True)],
+                             'resources': {'attachments': attachments}
+                             if ready and all(attachments) else None,
+                             'automatic_retry': False,
+                             'failed_upload_operation_id': outcome.failed_operation_id,
+                             'error_code': outcome.error_code,
+                         })
         if request.tool == 'subchat_upload_library':
             upload_arguments = UploadFile.model_validate(request.arguments)
             saved = await upload_local_file(
@@ -115,15 +170,21 @@ async def _execute(request: Request) -> Reply:
         return Reply(operation_id=request.operation_id, state='failed',
                      data={'dispatched': False}, error=str(error))
     except ValueError as error:
-        if request.tool == 'subchat_upload_library':
+        if request.tool in {'subchat_upload_library', 'subchat_upload_library_batch'}:
+            recovery_tool = ('subchat_upload_batch_status'
+                             if request.tool == 'subchat_upload_library_batch'
+                             else 'subchat_upload_status')
             return Reply(operation_id=request.operation_id, state='unknown',
-                         error=str(error) + '. Inspect the original operation_id with '
-                               'subchat_upload_status before another upload decision.')
+                         error=str(error) + '. Inspect the original upload IDs with '
+                               f'{recovery_tool} before another upload decision.')
         return Reply(operation_id=request.operation_id, state='failed', error=str(error))
     except (httpx.HTTPError, OSError, TimeoutError):
+        recovery_tool = ('subchat_upload_batch_status' if request.tool in {
+            'subchat_upload_library_batch', 'subchat_upload_batch_status'}
+            else 'subchat_upload_status')
         return Reply(operation_id=request.operation_id, state='unknown',
                      error='Library upload outcome is unverified. Inspect the original '
-                           'operation_id with subchat_upload_status; do not upload again.')
+                           f'upload IDs with {recovery_tool}; do not upload again.')
     return Reply(operation_id=request.operation_id,
                  state='completed' if saved.state == 'ready' else 'unknown',
                  error=None if saved.state == 'ready' else (
@@ -148,6 +209,11 @@ def main() -> None:
         'Choose and retain one request_id per intended upload. If a response is '
         'missing or an outcome is unknown, use subchat_upload_status with the '
         'original operation ID. Never create another ID to retry an uncertain upload.'
+        ' For several files, prepare the bounded --batch JSON manifest locally, then use '
+        'subchat_upload_library_batch with its exact per-file paths and IDs. It shares one '
+        'account/browser session and returns a resources object after all uploads are ready. '
+        'A separate explicit Chat send attaches those resources. Use '
+        'subchat_upload_batch_status to recover every original ID without source bytes.'
     ))
     asyncio.run(serve_stdio(server, sys.stdin.buffer, sys.stdout.buffer))
 
