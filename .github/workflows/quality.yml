@@ -57,7 +57,10 @@ jobs:
               gui = Path('dist/anywhere-gui').resolve()
               gui.parent.mkdir(exist_ok=True)
               subprocess.run(['swiftc', 'native/macos/AXHelper.swift', '-o', str(gui)], check=True)
-              helpers = ['--gui-helper', str(gui)]
+              audio = Path('dist/anywhere-audio').resolve()
+              subprocess.run(['swiftc', '-parse-as-library', 'scripts/probe_audio_capture.swift',
+                              '-o', str(audio)], check=True)
+              helpers = ['--gui-helper', str(gui), '--audio-helper', str(audio)]
           subprocess.run([sys.executable, 'scripts/build_portable.py',
                           '--allow-downloads', '--manager', str(native),
                           '--output', str(archive), *helpers], check=True)
@@ -160,8 +163,10 @@ jobs:
           if [[ "$RUNNER_OS" == "macOS" ]]; then
             mkdir -p dist
             swiftc native/macos/AXHelper.swift -o dist/anywhere-gui
+            swiftc -parse-as-library scripts/probe_audio_capture.swift -o dist/anywhere-audio
             uv run python scripts/build_portable.py --allow-downloads \
               --gui-helper "$(pwd)/dist/anywhere-gui" \
+              --audio-helper "$(pwd)/dist/anywhere-audio" \
               --output dist/portable-${{ matrix.os }}.zip
           else
             uv run python scripts/build_portable.py --allow-downloads \
@@ -188,6 +193,8 @@ jobs:
             uv run python scripts/verify_portable.py 'dist/relocation 日本語/Anywhere Computer' --runtime-only
             if [[ "$RUNNER_OS" == "macOS" ]]; then
               test -x 'dist/relocation 日本語/Anywhere Computer/native/anywhere-gui'
+              test -x 'dist/relocation 日本語/Anywhere Computer/native/anywhere-audio'
+              'dist/relocation 日本語/Anywhere Computer/native/anywhere-audio' --check
             fi
           fi
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

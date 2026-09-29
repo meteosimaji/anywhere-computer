@@ -110,6 +110,20 @@ CodexのMCPツール呼び出しに `_meta` 欄があっても、それだけで
 用意する経路は、対応するCodex版の公式APIと実操作で確認する必要がある。
 架空のsession_id/turn_idの注入やturn/startによる回避は行わない。
 
+2026-09-29 に導入済み b31 の実カタログを再確認した。`cua_repl` は
+`runtime_status=connected`、3 tools だが、直接ブリッジでの
+`availability=unsupported_execution_context`、`turn_context=not_provided` のままである。
+接続できたことを操作可能の証拠にはしない。
+[公式 Computer Use 文書](https://learn.chatgpt.com/docs/computer-use) は
+ChatGPT Work と Codex の対応を説明する。これは普通の Chat から別プロセスを経由して
+実行文脈を発行する API の説明ではない。
+[公式 App Server 文書](https://developers.openai.com/codex/app-server/) には
+`mcpServer/tool/call` があるが、この調査では Computer Use の文脈を普通の Chat から
+モデル起動なしで発行する公式契約を確認できなかった。将来の API 不在を断定しない。
+現時点の通常 Chat 向け経路は、本エンジンの `browser_*` と `gui_native_*` を
+認可済み MCP 接続から直接呼ぶ構成である。新しいツールは、その接続の scope と
+クライアント再読み込み、実操作を別々に検証する。正式な Codex ターンへは委譲しない。
+
 自己呼び出し検査は、サーバー名に加え、anywhere_computer.tool、
 anywhere-computer.tool、mcp__anywhere_computer__tool などの提供元成分を
 大文字小文字・ハイフン表記を正規化して調べる。一覧生成、正確な選択、単発・セッション
