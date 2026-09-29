@@ -385,3 +385,185 @@ async def test_confirmed_dialog_receipt_survives_unavailable_post_observation(
         assert observed["last_dialog_response"]["outcome"] == "confirmed"
     finally:
         await control.close()
+
+
+async def test_final_tab_cleanup_remains_an_update_blocker_until_driver_stops(
+    tmp_path, monkeypatch,
+):
+    pytest.importorskip("playwright.async_api")
+    engine = Engine(tmp_path / "state")
+    engine.browser.channel = "chrome"
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    closing = None
+    try:
+        ids = tab_args(await engine.browser.open(owner="owner-a"))
+        entry = engine.browser.entries[ids["session_id"]]
+        original_stop = entry.playwright.stop
+
+        async def held_stop():
+            entered.set()
+            await release.wait()
+            await original_stop()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(entry.playwright, "stop", held_stop)
+            closing = asyncio.create_task(engine.browser.tab_close(BrowserSession(**ids),
+                                                                   owner="owner-a"))
+            await asyncio.wait_for(entered.wait(), 3)
+            status = engine.status(owner="owner-a")
+            assert status["active_sessions"] == 1
+            assert status["update_blocker_details"][0]["stop_available"] is False
+            listed = await engine.browser.tabs(BrowserSessionId(session_id=ids["session_id"]),
+                                                owner="owner-a")
+            assert listed["state"] == "closing" and listed["cleanup_in_progress"]
+            with pytest.raises(ValueError, match="unavailable"):
+                await engine.browser.tab_open(BrowserSessionId(session_id=ids["session_id"]),
+                                              owner="owner-a")
+            release.set()
+            assert (await asyncio.wait_for(closing, 3))["session_closed"] is True
+        assert engine.status(owner="owner-a")["active_sessions"] == 0
+    finally:
+        release.set()
+        if closing is not None:
+            await asyncio.gather(closing, return_exceptions=True)
+        await engine.close()
+
+
+async def test_failed_excess_popup_cleanup_closes_only_its_owned_session(
+    dialog_site, monkeypatch,
+):
+    pytest.importorskip("playwright.async_api")
+    from playwright.async_api import Page
+
+    control = BrowserControl(channel="chrome")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    try:
+        ids = tab_args(await control.open(owner="owner-a"))
+        other = tab_args(await control.open(owner="owner-b"))
+        session = BrowserSessionId(session_id=ids["session_id"])
+        entry = control.entries[ids["session_id"]]
+        for _ in range(7):
+            await control.tab_open(session, owner="owner-a")
+        await control.navigate(BrowserNavigate(**ids, url=dialog_site), owner="owner-a")
+        page_close = Page.close
+        browser_close = entry.browser.close
+        failures = []
+
+        async def fail_excess(page, *args, **kwargs):
+            if page.context is entry.context and all(
+                page is not owned.page for owned in entry.tabs.entries.values()
+            ):
+                failures.append(True)
+                raise TimeoutError("synthetic excess page cleanup failure")
+            return await page_close(page, *args, **kwargs)
+
+        async def held_browser_close():
+            entered.set()
+            await release.wait()
+            await browser_close()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Page, "close", fail_excess)
+            patch.setattr(entry.browser, "close", held_browser_close)
+            # Closing this context can interrupt the triggering click's snapshot.
+            click = asyncio.create_task(control.click(BrowserClick(**ids, selector="#popup"),
+                                                       owner="owner-a"))
+            await asyncio.wait_for(entered.wait(), 3)
+            assert failures == [True]
+            assert ids["session_id"] in control.entries
+            listed = await control.tabs(session, owner="owner-a")
+            assert listed["state"] == "closing" and listed["cleanup_in_progress"]
+            with pytest.raises(ValueError, match="unavailable"):
+                await control.tab_open(session, owner="owner-a")
+            assert (await control.observe(BrowserObserve(**other), owner="owner-b"))["tab_id"] == (
+                other["tab_id"])
+            release.set()
+            await asyncio.wait_for(asyncio.gather(*entry.tabs.cleanup_tasks), 3)
+            await asyncio.gather(click, return_exceptions=True)
+        assert ids["session_id"] not in control.entries
+        assert not entry.browser.is_connected()
+        assert other["session_id"] in control.entries
+        assert not entry.tabs.rejected_pages
+    finally:
+        release.set()
+        await control.close()
+
+
+async def test_cleanup_timeout_is_unknown_and_retains_retryable_owner_blocker(monkeypatch):
+    pytest.importorskip("playwright.async_api")
+    import anywhere_computer.browser_control as browser_module
+
+    control = BrowserControl(channel="chrome")
+    try:
+        ids = tab_args(await control.open(owner="owner-a"))
+        entry = control.entries[ids["session_id"]]
+        calls = []
+
+        async def never_close():
+            calls.append(True)
+            await asyncio.Future()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(browser_module, "_CLEANUP_WAIT_SECONDS", 0.03)
+            patch.setattr(entry.browser, "close", never_close)
+            with pytest.raises(BrowserActionUnknown, match="cleanup unconfirmed"):
+                await asyncio.wait_for(control.stop(BrowserSession(**ids), owner="owner-a"), 1)
+            assert ids["session_id"] in control.entries
+            await asyncio.gather(entry.tabs.close_task, return_exceptions=True)
+            assert calls == [True]
+            assert entry.tabs.close_task.done()
+            listed = await control.tabs(BrowserSessionId(session_id=ids["session_id"]),
+                                        owner="owner-a")
+            assert listed["state"] == "closing" and not listed["cleanup_in_progress"]
+            with pytest.raises(ValueError, match="unavailable"):
+                await control.stop(BrowserSession(**ids), owner="owner-b")
+        # An explicit close after observing the original failure can finish cleanup.
+        assert (await control.stop(BrowserSession(**ids), owner="owner-a"))["state"] == "closed"
+        assert not control.entries
+        assert calls == [True]
+    finally:
+        await control.close()
+
+
+async def test_cleanup_caller_timeout_preserves_the_original_driver_stop(monkeypatch):
+    pytest.importorskip("playwright.async_api")
+    import anywhere_computer.browser_control as browser_module
+
+    control = BrowserControl(channel="chrome")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    try:
+        ids = tab_args(await control.open(owner="owner-a"))
+        entry = control.entries[ids["session_id"]]
+        original_stop = entry.playwright.stop
+        # Isolate driver-stop timing from variable real browser shutdown latency.
+        await entry.browser.close()
+        calls = []
+
+        async def held_stop():
+            calls.append(True)
+            entered.set()
+            await release.wait()
+            await original_stop()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(browser_module, "_CLEANUP_WAIT_SECONDS", 0.2)
+            patch.setattr(entry.playwright, "stop", held_stop)
+            first = asyncio.create_task(control.stop(BrowserSession(**ids), owner="owner-a"))
+            await asyncio.wait_for(entered.wait(), 3)
+            with pytest.raises(BrowserActionUnknown, match="cleanup unconfirmed"):
+                await first
+            cleanup = entry.tabs.close_task
+            assert not cleanup.done()
+            assert ids["session_id"] in control.entries
+            assert not entry.tabs.lock.locked()
+            assert control.busy(entry)
+            release.set()
+            await asyncio.wait_for(asyncio.shield(cleanup), 3)
+        assert calls == [True]
+        assert ids["session_id"] not in control.entries
+    finally:
+        release.set()
+        await control.close()

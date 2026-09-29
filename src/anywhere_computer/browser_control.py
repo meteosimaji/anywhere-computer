@@ -276,6 +276,8 @@ class _Tabs:
     entries: dict[str, _Entry] = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     closing: bool = False
+    close_task: asyncio.Task[None] | None = None
+    rejected_pages: set[Page] = field(default_factory=set)
     rejected_popups: int = 0
     dialog_opened: asyncio.Event = field(default_factory=asyncio.Event)
     cleanup_tasks: set[asyncio.Task[None]] = field(default_factory=set)
@@ -332,39 +334,36 @@ class BrowserControl:
 
     async def _reap_dead(self) -> None:
         """Release ended sessions before enforcing the isolated-browser limit."""
-        for session_id, entry in list(self.entries.items()):
+        for entry in list(self.entries.values()):
             if self._live(entry) or self.busy(entry):
                 continue
-            async with entry.lock:
-                if self._live(entry) or self.entries.get(session_id) is not entry:
+            async with entry.tabs.lock:
+                if self._live(entry) or self.entries.get(entry.session_id) is not entry:
                     continue
-                del self.entries[session_id]
                 try:
-                    await entry.browser.close()
-                except Exception:
-                    pass  # The browser may already have exited.
-                try:
-                    await entry.playwright.stop()
-                except Exception:
-                    pass  # A dead driver must not exhaust session capacity.
+                    await self._request_close(entry)
+                except BrowserActionUnknown:
+                    pass  # Keep its update/capacity blocker until cleanup is confirmed.
 
     @staticmethod
     def busy(entry: _Entry) -> bool:
-        return entry.tabs.lock.locked() or any(
-            tab.lock.locked() or tab.dialog_lock.locked()
-            for tab in entry.tabs.entries.values()
-        )
+        return (entry.tabs.lock.locked()
+                or (entry.tabs.close_task is not None and not entry.tabs.close_task.done())
+                or any(tab.lock.locked() or tab.dialog_lock.locked()
+                       for tab in entry.tabs.entries.values()))
 
-    def _session(self, args: BrowserSessionId, owner: str | None) -> _Entry:
+    def _session(self, args: BrowserSessionId, owner: str | None, *,
+                 allow_closing: bool = False) -> _Entry:
         entry = self.entries.get(args.session_id)
-        if entry is None or entry.owner != owner or entry.tabs.closing:
+        if (entry is None or entry.owner != owner
+                or (entry.tabs.closing and not allow_closing)):
             raise ValueError("Browser session unavailable for this connection")
         return entry
 
     def _entry(
         self, args: BrowserSession, owner: str | None, *, require_live: bool = True,
     ) -> _Entry:
-        session = self._session(args, owner)
+        session = self._session(args, owner, allow_closing=not require_live)
         entry = session.tabs.entries.get(args.tab_id)
         if entry is None:
             raise ValueError("Browser session or tab unavailable for this connection")
@@ -563,17 +562,33 @@ class BrowserControl:
         for existing in session.tabs.entries.values():
             if existing.page is page:
                 return existing
-        if session.tabs.closing or len(session.tabs.entries) >= _TAB_LIMIT:
+        if session.tabs.closing:
+            return None  # The owned context already has a retained cleanup task.
+        if len(session.tabs.entries) >= _TAB_LIMIT:
+            if page in session.tabs.rejected_pages:
+                return None
             session.tabs.rejected_popups += 1
+            session.tabs.rejected_pages.add(page)
 
             async def close_excess() -> None:
-                # Do not run beforeunload handlers or accept page requests on cleanup.
-                await asyncio.wait_for(page.close(run_before_unload=False), _CLEANUP_WAIT_SECONDS)
+                try:
+                    # Do not run beforeunload handlers or accept page requests on cleanup.
+                    await asyncio.wait_for(page.close(run_before_unload=False),
+                                           _CLEANUP_WAIT_SECONDS)
+                except Exception:
+                    # An unregistered live page must not evade capacity/ownership checks.
+                    # Shut down this owned context and retain its blocker until confirmed.
+                    await self._request_close(session)
+                finally:
+                    session.tabs.rejected_pages.discard(page)
 
             task = asyncio.create_task(close_excess())
             session.tabs.cleanup_tasks.add(task)
             task.add_done_callback(session.tabs.cleanup_tasks.discard)
             task.add_done_callback(_cleanup_done)
+            if len(session.tabs.rejected_pages) >= _TAB_LIMIT:
+                # Bound in-flight excess-page cleanup even if a page opens a popup storm.
+                self._begin_close(session)
             return None
         entry = _Entry(session.owner, session.session_id, uuid.uuid4().hex,
                        session.playwright, session.browser, session.context, page,
@@ -609,8 +624,11 @@ class BrowserControl:
                 for tab in entry.tabs.entries.values()]
 
     async def tabs(self, args: BrowserSessionId, *, owner: str | None) -> dict[str, JsonValue]:
-        entry = self._session(args, owner)
+        entry = self._session(args, owner, allow_closing=True)
         return {"session_id": entry.session_id, "tabs": self._tab_rows(entry),
+                "state": "closing" if entry.tabs.closing else "open",
+                "cleanup_in_progress": (entry.tabs.close_task is not None
+                                        and not entry.tabs.close_task.done()),
                 "tab_limit": _TAB_LIMIT, "rejected_popups": entry.tabs.rejected_popups}
 
     async def tab_open(self, args: BrowserSessionId, *, owner: str | None
@@ -653,8 +671,7 @@ class BrowserControl:
             else:
                 # Claim final-session cleanup before releasing the tab registry lock,
                 # so a concurrent open cannot create a tab that this close then kills.
-                del self.entries[entry.session_id]
-                await self._close_session(entry)
+                await self._request_close(entry)
         return {"session_id": entry.session_id, "tab_id": entry.tab_id, "state": "closed",
                 "session_closed": not remaining}
 
@@ -1287,28 +1304,50 @@ class BrowserControl:
                 "outcome": navigation.outcome,
                 "observed_url": navigation.observed_url}
 
-    async def _close_session(self, entry: _Entry) -> None:
-        entry.tabs.closing = True
+    def _begin_close(self, entry: _Entry) -> asyncio.Task[None]:
+        task = entry.tabs.close_task
+        if task is None or (task.done() and (task.cancelled() or task.exception() is not None)):
+            entry.tabs.closing = True
+            task = asyncio.create_task(self._close_session(entry))
+            entry.tabs.close_task = task
+            task.add_done_callback(_cleanup_done)
+        return task
+
+    async def _request_close(self, entry: _Entry) -> None:
+        task = self._begin_close(entry)
         try:
-            await entry.browser.close()
+            await asyncio.wait_for(asyncio.shield(task), _CLEANUP_WAIT_SECONDS)
+        except Exception as error:
+            raise BrowserActionUnknown(
+                "Browser session cleanup unconfirmed; inspect the same session before another close"
+            ) from error
+
+    async def _close_session(self, entry: _Entry) -> None:
+        try:
+            await asyncio.wait_for(entry.browser.close(), _CLEANUP_WAIT_SECONDS)
         finally:
+            # Canceling Playwright 1.58 stop() corrupts its shared transport-stopped
+            # future. The retained close task is shielded by the caller's bounded
+            # wait; an unfinished driver remains visible as a busy update blocker.
             await entry.playwright.stop()
-            if entry.tabs.cleanup_tasks:
-                await asyncio.gather(*entry.tabs.cleanup_tasks, return_exceptions=True)
+        # The update guard continues to see this owned session throughout cleanup.
+        current = self.entries.get(entry.session_id)
+        if current is not None and current.tabs is entry.tabs:
+            del self.entries[entry.session_id]
 
     async def stop(self, args: BrowserSession, *, owner: str | None) -> dict[str, JsonValue]:
         async with self._lock:
             entry = self._entry(args, owner, require_live=False)
             async with entry.tabs.lock:
                 self._entry(args, owner, require_live=False)
-                del self.entries[args.session_id]
-                await self._close_session(entry)
+                await self._request_close(entry)
         return {"session_id": args.session_id, "tab_id": args.tab_id, "state": "closed"}
 
     async def close(self) -> None:
         async with self._lock:
             entries = list(self.entries.values())
-            self.entries.clear()
-        for entry in entries:
-            async with entry.tabs.lock:
-                await self._close_session(entry)
+        results = await asyncio.gather(*(self._request_close(entry) for entry in entries),
+                                       return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result
