@@ -18,6 +18,9 @@ SHARDS = 4
 SERIAL_GROUPS = {
     'workspace': ['tests/test_workspace_ui.py::test_workspace_mutation_recovery_in_javascript'],
     'native': ['tests/test_startup_native.py'],
+    'task-scheduler': [
+        'tests/test_autostart.py::test_windows_task_passes_native_in_memory_validation',
+    ],
     'owner-pipe': ['tests/test_owner_json_pipe.py'],
     'terminal': ['tests/test_terminal_children.py', 'tests/test_terminal_pty.py',
                  'tests/test_terminal_conpty.py', 'tests/test_file_search_terminal_workflow.py'],
