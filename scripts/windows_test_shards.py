@@ -175,7 +175,9 @@ def run_group(root: Path, plan: dict[str, Any], name: str, output: Path) -> int:
         test_args = ['-ra', '--durations=20', *arguments,
                      '--junitxml=' + str(output / f'pytest-windows-{group}.xml')]
         if group.startswith('shard-'):
-            test_args.extend(['-n', '2', '--dist', 'loadfile', '--max-worker-restart=0'])
+            test_args.extend(['-n', '2', '--dist', 'loadfile', '--max-worker-restart=0',
+                              '-vv', '-o', 'faulthandler_timeout=300',
+                              '-o', 'faulthandler_exit_on_timeout=true'])
         started = time.monotonic()
         result = subprocess.run([sys.executable, __file__, '_pytest', '--output', str(report_path),
                                  '--', *test_args], cwd=root, check=False)
