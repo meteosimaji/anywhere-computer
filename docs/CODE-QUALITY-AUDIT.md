@@ -1,6 +1,8 @@
 # beta.32 code-quality audit
 
-Reviewed against source and packaged commit `8049bd4` on 2026-09-30. The
+Reviewed against current code commit `c9e1885` on 2026-09-30. The beta.32
+wheel was built from the earlier clean source commit `e3ac79a`; the subsequent
+Windows repair changed only a test. The
 [file inventory](code-quality-audit.json) records the current SHA-256, area,
 line count, review outcome and short finding for every included file. It is a
 review record, not a claim that testing can prove the absence of defects.
@@ -69,7 +71,11 @@ The serial and four-worker groups exclude each other, except that the separate
 16 plugin/release tests repeat cases from the broader group. Test process
 counts are therefore not added together as a unique-case total. The full suite
 checks local behavior; GitHub macOS/Windows/Linux CI and installed-client
-acceptance are separate gates.
+acceptance are separate gates. The first PR Windows smoke run exposed a test
+setup error: the synthetic macOS notification test changed global
+`sys.platform` before constructing a Windows ledger. Commit `c9e1885` creates
+the ledger first; its 31 local tests passed. The Windows rerun is required to
+confirm that correction.
 
 ## Remaining product and operational gates
 
