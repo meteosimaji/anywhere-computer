@@ -583,3 +583,35 @@ async def test_cleanup_caller_timeout_preserves_the_original_driver_stop(monkeyp
     finally:
         release.set()
         await control.close()
+
+
+async def test_slow_browser_close_finishes_after_caller_timeout(monkeypatch):
+    pytest.importorskip("playwright.async_api")
+    import anywhere_computer.browser_control as browser_module
+
+    control = BrowserControl(channel="chrome")
+    release = asyncio.Event()
+    try:
+        ids = tab_args(await control.open(owner="owner-a"))
+        entry = control.entries[ids["session_id"]]
+        original_close = entry.browser.close
+
+        async def held_close():
+            await release.wait()
+            await original_close()
+
+        with monkeypatch.context() as patch:
+            patch.setattr(browser_module, "_CLEANUP_WAIT_SECONDS", 0.2)
+            patch.setattr(entry.browser, "close", held_close)
+            with pytest.raises(BrowserActionUnknown, match="cleanup unconfirmed"):
+                await control.stop(BrowserSession(**ids), owner="owner-a")
+            cleanup = entry.tabs.close_task
+            assert cleanup is not None and not cleanup.done()
+            assert ids["session_id"] in control.entries
+            await asyncio.sleep(0.05)
+            release.set()
+            await asyncio.wait_for(asyncio.shield(cleanup), 3)
+        assert ids["session_id"] not in control.entries
+    finally:
+        release.set()
+        await control.close()

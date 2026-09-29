@@ -3,7 +3,7 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0b32 / Plugin 0.2.0-beta.32 — development prerelease (2026-09-30)
+## 0.2.0b33 / Plugin 0.2.0-beta.33 — development prerelease (2026-09-30)
 
 - Add observed frame IDs, frame-scoped semantic browser actions and open-shadow
   form labels. Reject stale observations after same-URL reloads and frame detach.
@@ -32,6 +32,9 @@
   guarded engine update cannot discard a live input session. Close admitted
   SSH file workers before their delegation stores close, and reject nonfinite
   or overnested owner-pipe JSON as a protocol error.
+- Let an already-owned browser shutdown continue beyond the five-second caller
+  receipt deadline, with a bounded internal close attempt. This permits slow
+  Chrome shutdown to release capacity after an initially unknown receipt.
 - Expose late Subchat send-worker failures separately from provider receipts.
   Classify a rejected draft as unsent only when interception and confirmed
   closure of its owned page prove that no generation request escaped.

@@ -43,7 +43,10 @@ The session remains in the registry and blocks engine updates until browser/driv
 cleanup is confirmed. `browser_tabs` reports `state="closing"` and
 `cleanup_in_progress`; new input is refused while closing. A bounded caller wait
 does not cancel Playwright's shared driver-stop operation or falsely report that
-cleanup finished. Reinspect the same session after an uncertain close receipt.
+cleanup finished. The underlying browser close may continue for up to fifteen
+seconds while its owner and update blocker remain recorded; a five-second caller
+timeout is an unknown receipt, not proof of failure. Reinspect the same session
+after an uncertain close receipt.
 
 Snapshots list tabs so an action that opens a popup has a discoverable destination. A pending
 dialog returns `state="dialog_open"` with no usable snapshot ID; no DOM/image result is fabricated.

@@ -209,7 +209,7 @@ def _cleanup_done(task: asyncio.Task[None]) -> None:
     try:
         task.result()
     except BaseException:
-        _LOG.warning("Browser startup cleanup did not complete successfully")
+        _LOG.warning("Browser cleanup did not complete successfully")
 
 
 async def _finish_cleanup(cleanup: Coroutine[Any, Any, None]) -> None:
@@ -1324,7 +1324,11 @@ class BrowserControl:
 
     async def _close_session(self, entry: _Entry) -> None:
         try:
-            await asyncio.wait_for(entry.browser.close(), _CLEANUP_WAIT_SECONDS)
+            # The caller has a short, shielded receipt deadline. Give the
+            # already-owned browser longer to finish its actual shutdown;
+            # cancelling it at the receipt deadline can leave a closed
+            # transport with an unconfirmed capacity/update blocker.
+            await asyncio.wait_for(entry.browser.close(), 3 * _CLEANUP_WAIT_SECONDS)
         finally:
             # Canceling Playwright 1.58 stop() corrupts its shared transport-stopped
             # future. The retained close task is shielded by the caller's bounded

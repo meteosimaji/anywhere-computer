@@ -1,8 +1,8 @@
-# beta.32 code-quality audit
+# beta.33 code-quality audit
 
-Reviewed against current code commit `c9e1885` on 2026-09-30. The beta.32
-wheel was built from the earlier clean source commit `e3ac79a`; the subsequent
-Windows repairs changed only tests. The
+The full-file review began at source commit `c9e1885` on 2026-09-30. The
+subsequent CI repairs changed browser shutdown code and tests. The beta.33
+wheel is built from the clean source commit recorded in its release manifest. The
 [file inventory](code-quality-audit.json) records the current SHA-256, area,
 line count, review outcome and short finding for every included file. It is a
 review record, not a claim that testing can prove the absence of defects.
@@ -31,6 +31,10 @@ and their callers, contracts and tests, then inspected later integrated diffs.
 - Browser and native GUI cleanup now retain owned resources and update blockers
   until process termination is confirmed. Cua and Peekaboo contract discovery
   share bounded catalog pagination and reject duplicate or repeated pages.
+- A macOS CI run exposed that a five-second browser close deadline matched the
+  caller's five-second receipt deadline. The internal owned-browser close now
+  has a longer bound, while the caller still returns an unknown receipt after
+  five seconds and retains the resource until cleanup actually finishes.
 - Subchat protects unclaimed sends after uncertain page cleanup, preserves later
   human edits, reports worker failures separately from provider receipts, and
   reaps an owned notification subprocess when its controller is cancelled.
@@ -48,7 +52,7 @@ and their callers, contracts and tests, then inspected later integrated diffs.
   corrected. The distributed guest test bundle now includes its dependent
   fixtures. Windows test sharding checks selected and finished test IDs.
 
-The [changelog](../CHANGELOG.md) lists the beta.32 feature work as well as
+The [changelog](../CHANGELOG.md) lists the beta.33 feature work as well as
 these repairs. No confirmed, unpatched defect remained in the reviewed files
 at the audit cutoff. The review record retains hypotheses that lacked a
 reproduction or an upstream contract; it does not change behavior to satisfy

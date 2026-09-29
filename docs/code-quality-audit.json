@@ -432,10 +432,10 @@
     {
       "path": "src/anywhere_computer/__init__.py",
       "area": "network_security",
-      "sha256": "e1fccdd829b3954d23997d0ad8a85dbf31cee40465237e12c149fa0ed3d968f5",
+      "sha256": "625e10c687b80bf70ee9f4fb030561864c81c3f9b2e9007f81b68096cb6da268",
       "lines": 3,
-      "review": "no_change",
-      "finding": "Version module has a single release constant; no unrelated initialization."
+      "review": "version_bump",
+      "finding": "Single release constant advanced to beta.33 because the browser shutdown change modifies the wheel after the unpublished beta.32 candidate; same-version wheel replacement is rejected by the packager."
     },
     {
       "path": "src/anywhere_computer/__main__.py",
@@ -504,10 +504,10 @@
     {
       "path": "src/anywhere_computer/browser_control.py",
       "area": "core_ui",
-      "sha256": "8b60d2db3f9d774ef4d84e9f4863c032ca31a329d8dff53a9e0c23bb7d6599aa",
-      "lines": 1353,
-      "review": "no_change",
-      "finding": "Full file reviewed: isolated owner/session/tab control, exact frame/role actions, non-replayed unknown effects, guarded cleanup, screenshot/source/network/readable text limits. A stalled transfer before Playwright download receipt remains an unknown action and owner blocker."
+      "sha256": "5f14be9a6aa5d2cc8c453630ac081cc68d89244813bc6c3ce011003b71a9cfdd",
+      "lines": 1357,
+      "review": "fixed_ci_cleanup",
+      "finding": "Read owner-scoped browser lifecycle end to end. macOS CI reproduced a five-second browser.close timeout at the same deadline as the caller receipt. The internal owned-browser close is now bounded at three times the caller deadline; the caller still returns unknown after five seconds and retains its blocker until task success. A delayed-close regression was first red, then green."
     },
     {
       "path": "src/anywhere_computer/capability_contract.py",
@@ -1896,10 +1896,10 @@
     {
       "path": "tests/test_browser_tabs_dialogs.py",
       "area": "core_ui",
-      "sha256": "451b79b357b97da3bc244f9b0444b354dbca0a512cc524bf8ebcc05c00f328f8",
-      "lines": 585,
-      "review": "changed",
-      "finding": "Reviewed bounded browser cleanup and retained blocker regressions from cc04c8f/291ca56."
+      "sha256": "ac3f820e3e0cd2b822de4b0046b8f5dde8bc1b563f9b9fa97eb5bbef018d0729",
+      "lines": 617,
+      "review": "added_regression",
+      "finding": "Reviewed popup, dialog, and close-task tests. Added a delayed real-browser close case that asserts caller timeout, retained owner, then confirmed cleanup. It failed under the original shared deadline and passed after the internal deadline change."
     },
     {
       "path": "tests/test_chat_shape_compare.py",
