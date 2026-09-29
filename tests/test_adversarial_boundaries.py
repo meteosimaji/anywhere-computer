@@ -11,10 +11,10 @@ from test_owner_passkeys import setup as setup
 
 
 @pytest.mark.asyncio
-async def test_owner_reset_between_ticket_consumption_and_registration(
+async def test_atomic_registration_does_not_use_split_ticket_consumption(
     setup, monkeypatch,
 ):
-    """A consumed ticket must not recreate an owner credential after reset."""
+    """Detect reintroduction of the split path, including its owner reset gap."""
     browser, passkeys = setup
     ticket = passkeys.issue_local_ticket("owner-password")
     status, page, response_headers = await browser.owner_passkey(
@@ -31,8 +31,11 @@ async def test_owner_reset_between_ticket_consumption_and_registration(
         "cookie": response_headers["Set-Cookie"].split(";", 1)[0],
     }
     original = passkeys.consume_ticket
+    split_calls = 0
 
     def reset_after_consume(value):
+        nonlocal split_calls
+        split_calls += 1
         consumed = original(value)
         if consumed:
             passkeys.clear()
@@ -50,6 +53,7 @@ async def test_owner_reset_between_ticket_consumption_and_registration(
     # after reset. Atomic enrollment never enters that gap.
     assert result[0] == 200
     assert len(passkeys.list()) == 1
+    assert split_calls == 0
 
 
 @pytest.mark.asyncio
