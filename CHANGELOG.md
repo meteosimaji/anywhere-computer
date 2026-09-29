@@ -18,12 +18,20 @@
 - Restore validated MCP images and audio across HTTP, SSH and device routing.
   Match MIME, byte count and SHA-256, preserve original operation recovery, and
   keep media bytes out of the JSON text presented to models.
+- Return rendered document previews as native MCP images, including through
+  device routing and operation recovery. Check the image receipt in Workspace
+  before displaying it; direct consumers of the former `data_base64` field
+  must read the new image content.
 - Prepare up to ten Library attachments in one bounded browser session, with
   immutable per-file request bindings, durable receipts, complete preflight
   and no further dispatch after an uncertain upload. A real two-file, one-Chat
   acceptance verified both contents and saved resource references.
 - Bound temporary history-tab cleanup and retry only the exact owned CDP
   target when Playwright's existing close promise cannot resend the command.
+- Keep browser and native GUI ownership while shutdown is unconfirmed, so a
+  guarded engine update cannot discard a live input session. Close admitted
+  SSH file workers before their delegation stores close, and reject nonfinite
+  or overnested owner-pipe JSON as a protocol error.
 - Expose late Subchat send-worker failures separately from provider receipts.
   Classify a rejected draft as unsent only when interception and confirmed
   closure of its owned page prove that no generation request escaped.
@@ -31,6 +39,9 @@
 - Preserve literal paragraph boundaries when inserting Subchat drafts, including
   terminal newlines and decorated URLs. Compare exact text after the editor's
   queued mutation processing; do not trim input or retry a rejected insertion.
+- Keep the rejected-page send guard when page cleanup is unconfirmed, bound
+  background browser shutdown, and recheck authorization after HTTP client
+  construction before issuing a delete request.
 - Reap media decoder processes when the caller is cancelled, as well as after
   timeout. Keep actual media delivery and model perception as separate checks.
 - Separate desktop capability, resource, identity and device renderers. Display
