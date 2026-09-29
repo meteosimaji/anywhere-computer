@@ -272,7 +272,8 @@ class BrowserAuthorization:
                            "gui_native_set_value", "gui_native_press_target",
                            "gui_native_set_value_target", "gui_native_action"}:
             abilities.append("control apps")
-        if record.tools & {"browser_navigate", "browser_click", "browser_fill"}:
+        if record.tools & {"browser_navigate", "browser_click", "browser_fill",
+                           "browser_dialog_handle"}:
             abilities.append("interact with websites")
         if "devices_call" in record.tools:
             abilities.append("operate registered computers")

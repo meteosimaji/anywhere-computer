@@ -257,9 +257,28 @@ class SessionId(Contract):
     session_id: str
 
 
-class BrowserSession(Contract):
+class BrowserSessionId(Contract):
     session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class BrowserSession(BrowserSessionId):
     tab_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class BrowserDialogHandle(BrowserSession):
+    dialog_id: str = Field(pattern=r"^[0-9a-f]{32}$", description=(
+        "Exact pending dialog ID returned by browser_dialogs or browser_observe."
+    ))
+    action: Literal["accept", "dismiss"]
+    prompt_text: str | None = Field(default=None, max_length=4096, description=(
+        "Optional response for accepting an observed prompt. Invalid for other dialog types."
+    ))
+
+    @model_validator(mode="after")
+    def validate_prompt_action(self) -> "BrowserDialogHandle":
+        if self.prompt_text is not None and self.action != "accept":
+            raise ValueError("prompt_text requires action=accept")
+        return self
 
 
 class BrowserFrameSession(BrowserSession):

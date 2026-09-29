@@ -90,16 +90,22 @@ ANYWHERE_NATIVE_GUI_ACCEPTANCE=1 uv run --locked pytest -q \
 `semantic_tree`、HTMLフォーム要素の `form_controls` と `snapshot_id` を返します。
 `form_controls` は非表示でない入力・選択・ボタンについて、`<label>` の対応、
 `aria-label`、`aria-labelledby`、プレースホルダーなどを別の項目に整理します。
-この一覧はメイン文書を対象とし、iframe や shadow DOM 内の要素はまだ列挙しません。
-各要素の `box` は表示領域を基準にした CSS pixel 単位で、`in_viewport` は
+初回はメイン文書を観測し、最大32件の子フレームを `frames` に列挙します。
+観測済みの `frame_id` を指定すると、そのフレームの本文・ラベル・役割ツリーを取得し、
+同じフレームの新しい `snapshot_id` で操作できます。別フレームの観測 ID や
+切り離されたフレームを拒否します。フォーム一覧と役割・ラベルによる操作は
+open shadow root 内も対象にします。closed shadow root は対象外です。
+各要素の `box` は選択フレームの表示領域を基準にした CSS pixel 単位で、`in_viewport` は
 その枠が表示領域と交差するかを示します。重なりや操作可能性の保証ではありません。
 ラベルの改行や連続空白は読みやすい空白に整え、入力値はこの一覧に含めません。
 正確なアクセシブル名は `semantic_tree` も参照してください。表示用の本文と
 ツリーでは改行コードと余分な空行を正規化します。
 
 `browser_observe(..., include_image=true)` は同じ隔離タブの表示領域を
-最大1MiBの JPEG 画像として追加します。画像は CSS pixel の大きさで撮り、
-`form_controls` の `box` と見比べられます。MCP では画像 item として配送し、
+最大1MiBの JPEG 画像として追加します。画像はタブ全体の表示領域を CSS pixel の
+大きさで撮ります。`frame_id` を指定した場合も画像はタブ全体、`form_controls` の
+`box` は選択フレーム内の座標なので、同じ座標として扱いません。
+MCP では画像 item として配送し、
 テキスト結果には画像のバイト数・ダイジェストだけを記載します。DOM観測と
 画像取得は順番に実行されるため同一時刻の状態とは限りません。画像の座標を
 入力に使う API はまだありません。
@@ -114,6 +120,32 @@ ANYWHERE_NATIVE_GUI_ACCEPTANCE=1 uv run --locked pytest -q \
 処理結果が不明なら同じタブを再観測し、確認前にクリックを繰り返しません。
 この経路は新しい一時ブラウザを所有するもので、利用者が開いているタブの
 操作やCodex専用 `cua_repl` の実行環境には接続しません。
+
+### 追加タブとページのダイアログ
+
+`browser_tabs(session_id)` は所有する一時セッション内のタブ ID と保留中の
+ページダイアログを列挙します。`browser_tab_open(session_id)` は同じ Cookie を共有する
+空のタブを1件作ります。ページが開いたポップアップも自動的に ID が付いて列挙されます。
+別セッションとは Cookie を共有せず、既存ブラウザやプロファイルには接続しません。
+前面タブという指定はなく、操作には正確な `session_id` と `tab_id` が必要です。
+タブは1セッション最大8件で、超過ポップアップを閉じ、`rejected_popups` に記録します。
+`browser_tab_close` は指定タブだけを終了し、最後のタブならセッションも解放します。
+`browser_close` はそのセッション全体を終了します。終了はページの未保存状態を破棄します。
+
+`alert`、`confirm`、`prompt`、`beforeunload` をページが出した場合、自動承認・
+自動回答を行いません。`browser_dialogs(session_id, tab_id)` は `dialog_id`、型、
+本文、既定値、状態を返します。本文と既定値は各4096文字までの信頼できないページデータです。
+`browser_dialog_handle(..., dialog_id, action="accept" または "dismiss")` で明示的に回答します。
+`prompt_text` は観測した prompt を accept する場合だけ指定できます。
+
+ダイアログが操作中に開いて操作完了を確認できなければ結果は不明として記録し、
+観測・一覧・回答が操作ロックで停止し続けないようにします。ポップアップの
+ダイアログが元のタブも止める場合、元のタブの観測は `tabs` から正確な回答先を示します。保留中の観測は `state="dialog_open"` と
+ダイアログ情報を返し、使用可能な `snapshot_id` は発行しません。入力・クリックを
+再送せず、ダイアログを確認して回答したあと、返された新しい観測で変化を確認します。
+応答が失われたダイアログ ID は再回答できません。再観測でモーダルが閉じたと確認できても
+`last_dialog_response.outcome="unconfirmed"` は残し、承認結果を推定しません。
+詳細と実ブラウザ検証範囲は [BROWSER-TABS-DIALOGS.md](BROWSER-TABS-DIALOGS.md) を参照してください。
 
 `browser_source` は現在の DOM の outerHTML を最大32768文字返します。
 HTTP の元レスポンスとは限らず、指定した CSS 要素は一意でなければなりません。
