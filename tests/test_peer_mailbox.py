@@ -596,3 +596,48 @@ def test_migration_preserves_existing_messages_and_legacy_tombstones(tmp_path):
         assert [message.delivery_id for message in reopened.inbox(recipient_token)] == [
             "old-id", saved.delivery_id,
         ]
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+def test_interrupted_schema_creation_rolls_back_and_can_retry(tmp_path, monkeypatch, legacy):
+    from contextlib import closing
+
+    database = tmp_path / 'peer_mailbox.sqlite3'
+    connect = sqlite3.connect
+    with closing(connect(database)) as connection, connection:
+        if legacy:
+            connection.execute(
+                'CREATE TABLE peer_messages (delivery_id TEXT PRIMARY KEY, '
+                'sender TEXT NOT NULL, recipient TEXT NOT NULL, text TEXT NOT NULL, '
+                'sent_at REAL NOT NULL, acknowledged_at REAL)')
+            connection.execute('INSERT INTO peer_messages VALUES (?,?,?,?,?,?)',
+                               ('saved-id', 'sender', 'recipient', 'retained', 123.0, None))
+        before = connection.execute(
+            "SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
+
+    class InterruptedConnection(sqlite3.Connection):
+        def execute(self, statement, *args, **kwargs):
+            if statement.startswith('INSERT INTO peer_messages_scoped' if legacy else
+                                    'CREATE TABLE IF NOT EXISTS peer_presentations'):
+                raise sqlite3.OperationalError('injected schema interruption')
+            return super().execute(statement, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(peer_mailbox.sqlite3, 'connect',
+                      lambda *args, **kwargs: connect(
+                          *args, **kwargs, factory=InterruptedConnection))
+        with pytest.raises(sqlite3.OperationalError, match='injected schema interruption'):
+            PeerMailbox(tmp_path)
+    with closing(connect(database)) as connection:
+        assert connection.execute(
+            "SELECT name,sql FROM sqlite_master WHERE type='table' ORDER BY name"
+        ).fetchall() == before
+        if legacy:
+            assert connection.execute('SELECT text FROM peer_messages').fetchall() == [
+                ('retained',)]
+    with PeerMailbox(tmp_path) as recovered:
+        assert recovered.connection.execute('PRAGMA foreign_keys').fetchone() == (1,)
+        if legacy:
+            assert recovered.connection.execute(
+                'SELECT delivery_id,text FROM peer_messages'
+            ).fetchall() == [('saved-id', 'retained')]
