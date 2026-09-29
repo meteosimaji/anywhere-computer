@@ -282,3 +282,56 @@ async def test_browser_draft_rejection_requires_closed_page_and_no_dispatch(
         finally:
             await browser.close()
             ledger.close()
+
+
+@pytest.mark.parametrize('worker_state', ['running', 'failed', 'cancelled'])
+async def test_local_https_status_reports_owned_send_worker_without_browser(tmp_path, worker_state):
+    from anywhere_computer.subchat_gateway import (
+        LazySubchatGateway,
+        SubchatGateway,
+        SubchatGatewayConfig,
+    )
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    operation = '7' * 32
+    store.prepare(operation, 'fixture', 'model', 'effort', owner='peer')
+    store.begin_send(operation, owner='peer')
+    backend = BrowserFixture()
+    core = session(Subchats(store, backend), owner='peer')
+    direct = SubchatGateway(lambda _owner: core, owner='operator')
+    direct.cores['peer'] = core
+    lazy = LazySubchatGateway(SubchatGatewayConfig(
+        profile=str(tmp_path / 'unused-profile'), ledger=str(tmp_path),
+        account_id='account', consent='ordinary-chat-browser-control-approved'), owner='operator')
+    lazy._gateway = direct
+    entered = asyncio.Event()
+
+    async def worker():
+        entered.set()
+        if worker_state == 'failed':
+            raise ConnectionError('private provider failure')
+        await asyncio.Event().wait()
+
+    task = asyncio.create_task(worker())
+    core.sends[operation] = task
+    try:
+        await entered.wait()
+        if worker_state != 'running':
+            if worker_state == 'cancelled':
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        request = Request(operation_id='8' * 32, tool='subchat_status',
+                          arguments={'operation_id': operation})
+        actual = await lazy.execute('peer', request, frozenset({'subchat_status'}))
+        expected = await core.execute(request)
+        assert actual == expected
+        assert actual.data['send_worker'] == ({'state': 'failed', 'reason': 'connection_failed'}
+                                             if worker_state == 'failed'
+                                             else {'state': worker_state})
+        assert backend.sends == 0
+        assert 'private provider failure' not in actual.model_dump_json()
+    finally:
+        await lazy.close()
+        await direct.close()
+        ledger.close()

@@ -168,6 +168,8 @@ class ChatImage(OperationId):
 
 QUEUE_WATCH_INTERVAL = 5.0
 SEND_ACK_TIMEOUT = 2.0
+_DESKTOP_NOTICE_TIMEOUT = 5.0
+_DESKTOP_NOTICE_CLEANUP_TIMEOUT = 1.0
 WAIT_POLL_INTERVAL_MS = 10_000
 READ_ONLY_TOOLS = frozenset({
     'subchat_capabilities', 'subchat_activity', 'subchat_catalog', 'subchat_list',
@@ -528,6 +530,26 @@ class SubchatSession(MCPSession):
         self.queue_watch_deadlines.clear()
 
 
+def send_worker_status(task: asyncio.Task[SubchatSubmission] | None) -> dict[str, JsonValue]:
+    """Session-local diagnostics, independent of provider receipt state."""
+    if task is None:
+        return {'state': 'not_owned'}
+    if not task.done():
+        return {'state': 'running'}
+    if task.cancelled():
+        return {'state': 'cancelled'}
+    error = task.exception()
+    if error is None:
+        return {'state': 'finished'}
+    cause = error.__cause__ or error
+    reason = ('timeout' if isinstance(cause, TimeoutError) else
+              'connection_failed' if isinstance(cause, ConnectionError) else
+              'preflight_failed' if isinstance(error, SubchatPreflightFailed) else
+              'dispatch_outcome_unknown' if isinstance(error, SubchatOutcomeUnknown) else
+              'worker_failed')
+    return {'state': 'failed', 'reason': reason}
+
+
 def session(service: Subchats, *,
             observe_catalog: Callable[[str | None], Awaitable[dict[str, object]]] | None = None,
             observe_http_catalog: Callable[[], Awaitable[dict[str, object]]] | None = None,
@@ -544,24 +566,7 @@ def session(service: Subchats, *,
     sends: dict[str, asyncio.Task[SubchatSubmission]] = {}
 
     def send_worker(operation_id: str) -> dict[str, JsonValue]:
-        """Session-local diagnostics, independent of provider receipt state."""
-        task = sends.get(operation_id)
-        if task is None:
-            return {'state': 'not_owned'}
-        if not task.done():
-            return {'state': 'running'}
-        if task.cancelled():
-            return {'state': 'cancelled'}
-        error = task.exception()
-        if error is None:
-            return {'state': 'finished'}
-        cause = error.__cause__ or error
-        reason = ('timeout' if isinstance(cause, TimeoutError) else
-                  'connection_failed' if isinstance(cause, ConnectionError) else
-                  'preflight_failed' if isinstance(error, SubchatPreflightFailed) else
-                  'dispatch_outcome_unknown' if isinstance(error, SubchatOutcomeUnknown) else
-                  'worker_failed')
-        return {'state': 'failed', 'reason': reason}
+        return send_worker_status(sends.get(operation_id))
 
     def save_preparation_failure(operation_id: str, error: BaseException) -> None:
         if isinstance(error, SubchatSelectionError):
@@ -654,10 +659,25 @@ def session(service: Subchats, *,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL)
                 try:
-                    await asyncio.wait_for(process.wait(), timeout=5)
-                except TimeoutError:
-                    process.kill()
-                    await process.wait()
+                    await asyncio.wait_for(process.wait(), timeout=_DESKTOP_NOTICE_TIMEOUT)
+                finally:
+                    # Controller shutdown can cancel the notification after the
+                    # durable event is saved. Reap only this owned child and keep
+                    # cancellation propagating, even if process cleanup stalls.
+                    if process.returncode is None:
+                        try:
+                            process.kill()
+                        except ProcessLookupError:
+                            pass
+                        except OSError as error:
+                            logger.warning('Subchat notification stop failed error_type=%s',
+                                           type(error).__name__)
+                        try:
+                            await asyncio.wait_for(process.wait(),
+                                                   timeout=_DESKTOP_NOTICE_CLEANUP_TIMEOUT)
+                        except (OSError, TimeoutError) as error:
+                            logger.warning('Subchat notification cleanup failed error_type=%s',
+                                           type(error).__name__)
             except (OSError, TimeoutError):
                 pass  # The durable event is still available.
 

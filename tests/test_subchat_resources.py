@@ -201,7 +201,7 @@ async def test_browser_dispatches_resources_without_enter_or_clipboard(
     send.onclick=async()=>{
       window.sends++;
       const body={action:'next',model:'observed',messages:[{id:'user',author:{role:'user'},
-        content:{content_type:'text',parts:[document.querySelector('[role=textbox]').innerText]},
+        content:{content_type:'text',parts:[window.fixtureDraftText()]},
         metadata:{}}]};
       const post=()=>fetch('/backend-api/f/conversation',
         {method:'POST',headers:{'chatgpt-account-id':'fixture-account'},
