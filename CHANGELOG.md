@@ -3,7 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0b37 / Plugin 0.2.0-beta.37 — development prerelease (2026-09-30)
+## 0.2.0b38 / Plugin 0.2.0-beta.38 — development prerelease (2026-09-30)
+
+- Prepare an exact temporary Chat tab CDP target before closing read-only
+  bootstrap tabs. Reuse that connection if Playwright's close stalls, while
+  keeping generation-abort closes immediate. Retain the original tab and the
+  read result or exception across bounded cleanup.
+
+## 0.2.0b37 / Plugin 0.2.0-beta.37 — unpublished candidate (2026-09-30)
 
 - Add optional bounded local audio transcription with an explicitly installed
   OpenAI Whisper checkpoint. Return text and model identity to ordinary Chat
