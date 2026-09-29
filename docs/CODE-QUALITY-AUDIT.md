@@ -55,6 +55,10 @@ and their callers, contracts and tests, then inspected later integrated diffs.
   native Task Scheduler XML check runs in a serial preflight group after it
   reached its 30-second bound under the two-worker shard load. The partition
   still includes this test exactly once.
+- The macOS shared-runtime suite remained in its test step for over 30 minutes
+  after earlier runs had reported failures before completion. The suite now
+  stops after the first failure so CI can expose its traceback. Successful
+  runs still execute the full collected suite.
 
 The [changelog](../CHANGELOG.md) lists the beta.33 feature work as well as
 these repairs. No confirmed, unpatched defect remained in the reviewed files
@@ -91,9 +95,10 @@ snapshot behavior. The next Windows smoke and all four test shards passed. A
 subsequent macOS run exposed a browser-close deadline that matched the caller's
 receipt deadline. The delayed-close regression failed before the repair and
 passed afterward. A later Windows shard run timed out in native Task Scheduler
-validation; the serial preflight change awaits a new CI run. The beta.33 PR
-Quality run is required to confirm the final combined candidate on all three
-operating systems.
+validation; the serial preflight change awaits a new CI run. A macOS run stayed
+in the suite for over 30 minutes, so the next run will stop at the first failure
+to preserve its traceback. The beta.33 PR Quality run is required to confirm
+the final combined candidate on all three operating systems.
 
 ## Remaining product and operational gates
 

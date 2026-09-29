@@ -1,5 +1,5 @@
 {
-  "as_of_commit": "ef1944e1612c9b9bbdb7a8aa194f77c5eea0a4d1",
+  "as_of_commit": "0bf09f71bae0753dc8de41d3e1043966c89ee30b",
   "method": "Full-file review by area, source-to-test/consumer trace, targeted regression and integrated-suite checks; each current SHA-256 matched a review record.",
   "included_file_count": 432,
   "areas": {
@@ -32,10 +32,10 @@
     {
       "path": ".github/workflows/quality.yml",
       "area": "release_runtime",
-      "sha256": "b922178d69578ea77b8eff40bc7b926dfe1aeeafd1a27c8426dc76d5a81f381a",
+      "sha256": "fe7347c269f1012f7f48195ca802bbc13a64169549a148e0d429cd5c54220fe1",
       "lines": 498,
-      "review": "no_change",
-      "finding": "Read full job graph, 6 required contexts, fail-closed Windows composite and release provenance gates; no changes."
+      "review": "changed",
+      "finding": "Read full job graph, 6 required contexts, fail-closed Windows composite and release provenance gates. The shared-runtime suite now stops on its first failure so CI exposes its traceback without waiting behind a later stalled test."
     },
     {
       "path": "desktop/Cargo.toml",
