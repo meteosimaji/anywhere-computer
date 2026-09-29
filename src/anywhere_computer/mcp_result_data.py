@@ -6,7 +6,8 @@ from pydantic import JsonValue
 
 MEDIA_TOOLS = frozenset({
     "codex_plugin_call", "mcp_call", "gui_observe", "gui_type", "gui_click", "gui_key",
-    "browser_observe", "gui_native_observe", "media_audio_clip", "media_video_frames",
+    "browser_observe", "documents_preview", "gui_native_observe",
+    "media_audio_clip", "media_video_frames",
 })
 
 

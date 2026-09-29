@@ -56,13 +56,20 @@ async def media_peer(request, http_remote, tmp_path, monkeypatch):
                     'structuredContent': {'preview': image()}}
 
         monkeypatch.setattr(engine.direct_mcp_sessions, 'call', call)
+
+        def preview(args):
+            invoked.append('preview')
+            return {'content': [image()], 'rendered': True, 'mime_type': 'image/png',
+                    'page': args.page, 'pages': 1, 'sha256': args.expected_sha256}
+
+        monkeypatch.setattr('anywhere_computer.engine.preview_document', preview)
         wire = backend.wire
         fault = SimpleNamespace(value='')
 
         def faulty_wire(resource, method, packet, headers):
             response = wire(resource, method, packet, headers)
             if packet and packet.get('method') == 'tools/call' and (
-                    packet['params']['name'] == 'mcp_call'):
+                    packet['params']['name'] in {'mcp_call', 'documents_preview'}):
                 corrupt(response.packet['result'], fault.value)
             return response
 
@@ -84,6 +91,7 @@ async def media_peer(request, http_remote, tmp_path, monkeypatch):
     program = tmp_path / 'media-peer.py'
     program.write_text('''import asyncio, copy, json, sys
 from pathlib import Path
+import anywhere_computer.engine as engine_module
 from anywhere_computer.engine import Engine
 from anywhere_computer.mcp_server import MCPSession, serve_stdio
 sys.path.insert(0, sys.argv[2])
@@ -98,6 +106,12 @@ async def main():
         return {'content': copy.deepcopy(media), 'isError': True,
                 'structuredContent': {'preview': copy.deepcopy(media[0])}}
     engine.direct_mcp_sessions.call = call
+    def preview(args):
+        with (root / 'invocations.txt').open('a') as log:
+            log.write('preview\\n')
+        return {'content': [copy.deepcopy(media[0])], 'rendered': True, 'mime_type': 'image/png',
+                'page': args.page, 'pages': 1, 'sha256': args.expected_sha256}
+    engine_module.preview_document = preview
     async def catalog():
         return engine.catalog()
     class Session(MCPSession):
@@ -107,7 +121,7 @@ async def main():
                 name = packet['params']['name']
                 with (root / 'calls.txt').open('a') as log:
                     log.write(name + '\\n')
-                if name == 'mcp_call':
+                if name in {'mcp_call', 'documents_preview'}:
                     corrupt(result['result'], (root / 'fault.txt').read_text())
             return result
     try:
@@ -292,3 +306,100 @@ async def test_router_keeps_invalid_media_unknown_and_recovers_without_reexecuti
         assert media_peer.calls() == ['mcp_call', 'operations_get']
     finally:
         router.close()
+
+
+@pytest.mark.parametrize('http_remote', [frozenset({'documents_preview', 'operations_get'})],
+                         indirect=True)
+@pytest.mark.parametrize('media_peer', ['http', 'ssh'], indirect=True)
+@pytest.mark.parametrize('routed', [False, True], ids=['direct', 'device'])
+async def test_document_preview_native_image_and_recovery_cross_real_wire(
+    media_peer, tmp_path, routed,
+):
+    import httpx
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamable_http_client
+    from mcp.types import ImageContent
+
+    from anywhere_computer.device_router import DeviceRouter
+    from anywhere_computer.http_mcp import HTTPMCP
+    from anywhere_computer.mcp_server import MCPSession
+
+    async def no_local_catalog():
+        return []
+
+    async def unexpected_local(_request):
+        raise AssertionError('A remote document must not render in the gateway')
+
+    router = DeviceRouter(tmp_path / 'document-gateway', no_local_catalog, unexpected_local,
+                          backend_factory=lambda device: media_peer.backend)
+    target = router.store.add('Document fixture', 'fixture')['device_id']
+    backend = router if routed else media_peer.backend
+
+    async def authenticate(token):
+        return 'fixture-owner' if token == 'fixture-document-token' else None
+
+    adapter = HTTPMCP(authenticate, lambda owner: MCPSession(backend.catalog, backend.execute))
+    port = await adapter.start()
+    request_id = uuid.uuid4().hex
+    preview_args = {'path': str(tmp_path / 'document.docx'), 'expected_sha256': 'a' * 64, 'page': 1}
+    try:
+        async with httpx.AsyncClient(headers={'Authorization': 'Bearer fixture-document-token'},
+                                     trust_env=False) as http:
+            async with streamable_http_client(
+                f'http://127.0.0.1:{port}/mcp', http_client=http,
+            ) as (reader, writer, _):
+                async with ClientSession(reader, writer) as client:
+                    await client.initialize()
+                    for name, args, identity in [
+                        ('documents_preview', preview_args, request_id),
+                        ('operations_get', {'operation_id': request_id}, uuid.uuid4().hex),
+                    ]:
+                        arguments = ({'device_id': target, 'tool': name, 'arguments': args}
+                                     if routed else args)
+                        result = await client.call_tool('devices_call' if routed else name,
+                                                        {**arguments, 'request_id': identity})
+                        assert not result.isError
+                        images = [item for item in result.content if isinstance(item, ImageContent)]
+                        assert len(images) == 1 and images[0].data == image()['data']
+                        data = result.structuredContent['data']
+                        if routed:
+                            assert data['device_id'] == target and data['tool'] == name
+                            data = data['result']
+                        if name == 'operations_get':
+                            assert data['operation_id'] == request_id
+                            assert data['state'] == 'completed'
+                            data = data['data']
+                        assert data['sha256'] == preview_args['expected_sha256']
+                        assert data['page'] == data['pages'] == 1
+                        assert 'data_base64' not in data
+                        assert image()['data'] not in json.dumps(result.structuredContent)
+                        assert image()['data'] not in result.content[0].text
+        assert media_peer.invoked() == 1
+        assert media_peer.calls() == ['documents_preview', 'operations_get']
+    finally:
+        await adapter.close()
+        router.close()
+
+
+@pytest.mark.parametrize('http_remote', [frozenset({'documents_preview', 'operations_get'})],
+                         indirect=True)
+@pytest.mark.parametrize('media_peer', ['http', 'ssh'], indirect=True)
+@pytest.mark.parametrize('fault', ['missing', 'tampered'])
+async def test_document_preview_corrupt_wire_recovers_without_rendering_again(
+    media_peer, tmp_path, fault,
+):
+    media_peer.fault.value = fault
+    request = operation('documents_preview', path=str(tmp_path / 'document.docx'),
+                        expected_sha256='a' * 64)
+    if isinstance(media_peer.backend, SSHBackend):
+        with pytest.raises(ValueError, match='media'):
+            await media_peer.backend.execute(request)
+    else:
+        reply = await media_peer.backend.execute(request)
+        assert reply.state == 'unknown' and reply.operation_id == request.operation_id
+    recovered = await media_peer.backend.execute(operation(
+        'operations_get', operation_id=request.operation_id))
+    assert recovered.state == 'completed' and recovered.data['state'] == 'completed'
+    assert recovered.data['data']['content'] == [image()]
+    assert media_peer.invoked() == 1
+    assert media_peer.calls() == ['documents_preview', 'operations_get']

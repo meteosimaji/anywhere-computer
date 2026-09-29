@@ -14,6 +14,7 @@ import zipfile
 
 import psutil
 import pytest
+from mcp.types import CallToolResult, ImageContent
 
 from anywhere_computer.document_preview import _run, _safe_ooxml, _sandbox_policy, preview_document
 from anywhere_computer.document_writer import (
@@ -123,8 +124,8 @@ def test_formatted_multipage_docx_renders_distinct_pages_without_changing_source
     assert first["pages"] == second["pages"] == 2
     assert first["rendered"] is second["rendered"] is True
     assert first["mime_type"] == second["mime_type"] == "image/png"
-    png_one = base64.b64decode(first["data_base64"])
-    png_two = base64.b64decode(second["data_base64"])
+    png_one = base64.b64decode(first["content"][0]["data"])
+    png_two = base64.b64decode(second["content"][0]["data"])
     assert png_one.startswith(b"\x89PNG\r\n\x1a\n") and png_two != png_one
     assert path.read_bytes() == before
 
@@ -148,7 +149,7 @@ def test_generated_japanese_docx_remains_visible_after_paragraph_edit(
         expected_text="元の日本語段落", new_text="更新済み：日本語の段落"))
     result = preview_document(args(path))
     assert result["rendered"] is True and result["pages"] == 1
-    assert ink_pixels(base64.b64decode(result["data_base64"]), tmp_path) > 0
+    assert ink_pixels(base64.b64decode(result["content"][0]["data"]), tmp_path) > 0
 
 
 @pytest.mark.parametrize("format_name", ["xlsx", "pptx"])
@@ -166,7 +167,7 @@ def test_spreadsheet_and_presentation_render_without_changing_source(tmp_path, f
     assert result["format"] == format_name
     assert result["rendered"] is True
     assert result["pages"] >= 1
-    assert base64.b64decode(result["data_base64"]).startswith(b"\x89PNG\r\n\x1a\n")
+    assert base64.b64decode(result["content"][0]["data"]).startswith(b"\x89PNG\r\n\x1a\n")
     assert path.read_bytes() == before
 
 
@@ -198,8 +199,15 @@ async def test_rendered_preview_reaches_mcp_result_with_bounded_image(tmp_path):
         assert packet["result"]["structuredContent"]["state"] == "completed"
         result = packet["result"]["structuredContent"]["data"]
         assert result["page"] == 1
-        assert base64.b64decode(result["data_base64"])
-        assert len(json.dumps(packet).encode()) < 8 * 1024 * 1024
+        wire = CallToolResult.model_validate(packet["result"])
+        images = [item for item in wire.content if isinstance(item, ImageContent)]
+        assert len(images) == 1 and images[0].mimeType == "image/png"
+        png = base64.b64decode(images[0].data, validate=True)
+        assert png.startswith(b"\x89PNG\r\n\x1a\n")
+        assert result["content"][0]["sha256"] == sha256(png)
+        assert images[0].data not in json.dumps(wire.structuredContent)
+        assert images[0].data not in wire.content[0].text
+        assert len(json.dumps(packet).encode()) < 4 * 1024 * 1024
     finally:
         await engine.close()
 

@@ -3,7 +3,7 @@ process.stderr.write('workspace fixture: node entered\n');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const {webcrypto} = require('node:crypto');
+const {webcrypto,createHash} = require('node:crypto');
 const html = fs.readFileSync(process.argv[2], 'utf8');
 let script = html.split('<script>')[1].split('</script>')[0];
 script = script.replace('  controls();\n  if(window.parent',
@@ -34,7 +34,7 @@ const documentStub = {body, activeElement:body, getElementById(id) {
     return elements.get(id);
   },querySelectorAll:()=>[],createElement:()=>({append(){},setAttribute(){},replaceChildren(){}}),createTextNode:text=>({textContent:text})};
 const context = vm.createContext({
-  crypto:webcrypto, TextEncoder, setTimeout, clearTimeout,
+  crypto:webcrypto, TextEncoder, setTimeout, clearTimeout, atob, btoa, Blob, URL,
   document:documentStub,
   window:{parent,addEventListener:(_, callback)=>{listener=callback;}}
 });
@@ -200,6 +200,54 @@ function completed(packet,data) {
     assert.match(elements.get('document').textContent,/Document text/);
     assert.match(elements.get('notice').textContent,/抽出した文字情報を表示しています/);
     assert.equal(elements.get('notice').dataset.error,'false');
+  }
+  const png=Buffer.from([137,80,78,71,13,10,26,10,1]);
+  const image={type:'image',mimeType:'image/png',data:png.toString('base64')};
+  const imageSummary={type:'image',mimeType:'image/png',bytes:png.length,sha256:createHash('sha256').update(png).digest('hex')};
+  function previewResponse(packet,routed=false) {
+    const page={sha256:'a'.repeat(64),page:1,pages:1,mime_type:'image/png',rendered:true,content:[{...imageSummary}]};
+    return {...completed(packet,routed?{device_id:'remote',tool:'documents_preview',result:page}:page),content:[{type:'text',text:'preview metadata'},{...image}]};
+  }
+  for(const target of ['local','remote']) {
+    ui.state.target=target;
+    responder=packet=>previewResponse(packet,target==='remote');
+    const page=await ui.call('documents_preview',{path:'/fixture.docx'});
+    assert.equal(page.data_base64,image.data,'Workspace restores the same native PNG');
+    for(const change of [
+      result=>result.content.pop(),
+      result=>{const data=target==='local'?result.structuredContent.data:result.structuredContent.data.result;data.content=null;data.data_base64=image.data;},
+      result=>result.content.push({...image}),
+      result=>result.content[1].data=Buffer.from('not a PNG').toString('base64'),
+      result=>result.content[1].data+='\n',
+      result=>result.content[1].mimeType='image/jpeg',
+      result=>{const data=target==='local'?result.structuredContent.data:result.structuredContent.data.result;data.content[0].sha256='0'.repeat(64);},
+      result=>{const data=target==='local'?result.structuredContent.data:result.structuredContent.data.result;data.content[0].bytes++;},
+      result=>{const data=target==='local'?result.structuredContent.data:result.structuredContent.data.result;data.content[0].extra='untrusted';},
+      result=>result.structuredContent.operation_id='wrong',
+      ...(target==='remote'?[
+        result=>result.structuredContent.data.device_id='other',
+        result=>result.structuredContent.data.tool='files_read',
+      ]:[]),
+    ]) {
+      responder=packet=>{const result=previewResponse(packet,target==='remote');change(result);return result;};
+      await assert.rejects(ui.call('documents_preview',{path:'/fixture.docx'}));
+    }
+  }
+  ui.state.target='local';
+  for(const legacy of [false,true]) {
+    responder=packet=>{
+      if(packet.params.name==='files_info') return completed(packet,{directory:false,size:100});
+      if(packet.params.name==='documents_read') return completed(packet,{sha256:'a'.repeat(64),offset:0,next_offset:null,truncated:false,entries:[{text:'Kept text'}]});
+      const result=previewResponse(packet);
+      if(legacy){delete result.structuredContent.data.content;result.structuredContent.data.data_base64=image.data;result.content=[];}
+      return result;
+    };
+    await ui.openPath('/fixture.docx');
+    assert.equal(elements.get('image').hidden,false,'Native and older engines both display preview');
+    assert.ok(elements.get('image').src.startsWith('blob:'));
+    assert.equal(elements.get('image').alt,'文書の1ページ目');
+    assert.match(elements.get('document').textContent,/Kept text/);
+    assert.equal(elements.get('more-preview').hidden,true);
   }
   assert.match(html,/<dialog id="discard" aria-labelledby="discard-title" aria-describedby="discard-description">/);
   assert.match(html,/<h2 id="discard-title">編集中の内容があります<\/h2><p id="discard-description">/);

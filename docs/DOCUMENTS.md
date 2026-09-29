@@ -64,8 +64,15 @@ be installed locally. A partial bundled renderer is reported unavailable instead
 of mixing bundled programs with host programs. Supply
 the absolute `path`, the exact `expected_sha256` from `documents_read`, and a
 one-based `page` (default 1). Results include the same hash, total page count,
-`rendered: true`, `mime_type: image/png`, and base64 PNG data. The workspace UI
-uses this for page previews of all three formats and leaves extracted text below the image.
+`rendered: true`, `mime_type: image/png`, and a `content` image item. MCP clients receive
+that PNG as a native `ImageContent`, including through device routing and operation
+recovery. JSON and text contain only its MIME type, byte count and SHA-256; they do
+not repeat the image bytes. The former `data_base64` result field is replaced by
+this image item. The workspace UI verifies the received image against that summary
+and displays all three formats while leaving extracted text below the image.
+It also accepts the former field when connected to an older engine. Native image
+receipt has been tested through the MCP SDK; a host's visual-model use of that
+image is a separate client capability.
 If any renderer component is absent, the tool reports an explicit unavailable
 error. It does not silently substitute text extraction for a rendered image.
 
