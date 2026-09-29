@@ -98,13 +98,130 @@ jobs:
           tests/test_subchat_queue_auto.py tests/test_subchat_setup.py
           tests/test_subchat_upload_state.py tests/test_uploads_windows.py
           tests/test_engine_selection.py
+  windows-preflight:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.10.8"
+      - run: uv sync --locked --managed-python --python 3.12
+      - name: Record selected runtime
+        run: uv run python -c "import sys; print(sys.executable); print(sys.base_prefix)"
+      - name: Check generated README references and local links
+        run: uv run python scripts/update_readme.py --check
+      - run: uv run ruff check src tests scripts
+      - run: uv run mypy
+      - run: openssl version
+      - run: node --version
+      - name: Prove full Windows collection partitions without overlap or omission
+        run: uv run --locked python scripts/windows_test_shards.py plan --output "${{ runner.temp }}/windows-test-plan.json"
+      - name: Run timing-sensitive groups serially in their original separate processes
+        run: >-
+          uv run --locked python scripts/windows_test_shards.py run
+          --plan "${{ runner.temp }}/windows-test-plan.json"
+          --group serial --results "${{ runner.temp }}"
+      - name: Measure Windows KDF and test-directory fixture costs separately
+        run: uv run python scripts/measure_test_costs.py --output "${{ runner.temp }}/pytest-costs.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: pytest-windows-preflight
+          path: |
+            ${{ runner.temp }}/windows-test-plan.json
+            ${{ runner.temp }}/windows-serial-*-run.json
+            ${{ runner.temp }}/pytest-windows-serial-*.xml
+            ${{ runner.temp }}/pytest-costs.json
+          if-no-files-found: error
+          retention-days: 14
+  windows-test-shards:
+    needs: windows-preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.10.8"
+      - run: uv sync --locked --managed-python --python 3.12
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pytest-windows-preflight
+          path: ${{ runner.temp }}/windows-plan
+      - name: Validate and run one file shard with two workers
+        run: >-
+          uv run --locked python scripts/windows_test_shards.py run
+          --plan "${{ runner.temp }}/windows-plan/windows-test-plan.json"
+          --group shard-${{ matrix.shard }} --results "${{ runner.temp }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: pytest-windows-shard-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/windows-shard-${{ matrix.shard }}-run.json
+            ${{ runner.temp }}/pytest-windows-shard-${{ matrix.shard }}.xml
+          if-no-files-found: error
+          retention-days: 14
+  windows-shared-runtime:
+    name: shared-runtime (windows-latest)
+    needs: [windows-preflight, windows-test-shards]
+    if: always()
+    runs-on: windows-latest
+    steps:
+      - name: Require every Windows dependency to succeed
+        env:
+          PREFLIGHT_RESULT: ${{ needs.windows-preflight.result }}
+          SHARDS_RESULT: ${{ needs.windows-test-shards.result }}
+        run: |
+          if ($env:PREFLIGHT_RESULT -ne 'success' -or $env:SHARDS_RESULT -ne 'success') {
+            throw 'Windows preflight or one of its four shards did not succeed'
+          }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          version: "0.10.8"
+      - run: uv sync --locked --managed-python --python 3.12
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: pytest-windows-*
+          merge-multiple: true
+          path: ${{ runner.temp }}/windows-results
+      - name: Verify every collected Windows test actually finished exactly once
+        run: >-
+          uv run --locked python scripts/windows_test_shards.py verify
+          --plan "${{ runner.temp }}/windows-results/windows-test-plan.json"
+          --results "${{ runner.temp }}/windows-results"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: pytest-results-windows-latest
+          path: ${{ runner.temp }}/windows-results/*
+          if-no-files-found: ignore
+          retention-days: 14
+      - run: uv run python scripts/verify_tunnel_pipe.py --download-for-test
+      - run: uv build
+      - name: Build portable distribution
+        run: uv run python scripts/build_portable.py --allow-downloads --output dist/portable-windows-latest.zip
+      - name: Extract and verify relocated portable runtime
+        run: |
+          uv run python -c "import zipfile; zipfile.ZipFile('dist/portable-windows-latest.zip').extractall('dist/relocation 日本語')"
+          uv run python scripts/verify_portable.py 'dist/relocation 日本語/Anywhere Computer'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: portable-windows-latest
+          path: dist/portable-windows-latest.zip
+          if-no-files-found: error
+          retention-days: 14
   shared-runtime:
     permissions:
       contents: read
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -133,9 +250,6 @@ jobs:
           tests/test_file_search_terminal_workflow.py
       - name: Check shared-agent recovery before parallel workers
         run: uv run pytest -v tests/test_shared_agent_reconnect.py --junitxml="${{ runner.temp }}/pytest-reconnect.xml"
-      - name: Measure Windows KDF and test-directory fixture costs separately
-        if: runner.os == 'Windows'
-        run: uv run python scripts/measure_test_costs.py --output "${{ runner.temp }}/pytest-costs.json"
       - name: Run remaining suite with bounded platform workers
         run: >-
           uv run pytest -ra --ignore=tests/test_startup_native.py --durations=20
@@ -208,7 +322,7 @@ jobs:
           retention-days: 14
   attest-portable:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: shared-runtime
+    needs: [shared-runtime, windows-shared-runtime]
     permissions:
       contents: read
       id-token: write
@@ -272,7 +386,7 @@ jobs:
           --deny-self-hosted-runners
   publish-release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [management-preview, windows-feature-smoke, shared-runtime,
+    needs: [management-preview, windows-feature-smoke, shared-runtime, windows-shared-runtime,
             attest-portable, attest-managed-portable]
     runs-on: ubuntu-latest
     permissions:

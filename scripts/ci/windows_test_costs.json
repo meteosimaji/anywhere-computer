@@ -1,0 +1,783 @@
+{
+  "format_version": 1,
+  "source_run": "https://github.com/meteosimaji/anywhere-computer/actions/runs/36583627634",
+  "remaining_step_seconds": 1092,
+  "files": {
+    "tests/test_adversarial_boundaries.py": {
+      "tests": 2,
+      "seconds": 0.686
+    },
+    "tests/test_assemble_release_assets.py": {
+      "tests": 5,
+      "seconds": 0.164
+    },
+    "tests/test_audio_capture.py": {
+      "tests": 14,
+      "seconds": 2.092
+    },
+    "tests/test_audio_probe.py": {
+      "tests": 3,
+      "seconds": 0.0
+    },
+    "tests/test_audio_status.py": {
+      "tests": 5,
+      "seconds": 3.802
+    },
+    "tests/test_audit_edge_cases_20260913.py": {
+      "tests": 4,
+      "seconds": 0.97
+    },
+    "tests/test_audit_regressions_20260913.py": {
+      "tests": 7,
+      "seconds": 1.469
+    },
+    "tests/test_authorization.py": {
+      "tests": 27,
+      "seconds": 227.868
+    },
+    "tests/test_authorized_http.py": {
+      "tests": 3,
+      "seconds": 12.933
+    },
+    "tests/test_autostart.py": {
+      "tests": 38,
+      "seconds": 0.877
+    },
+    "tests/test_binary_files.py": {
+      "tests": 15,
+      "seconds": 13.192
+    },
+    "tests/test_bounded_mcp_stdio.py": {
+      "tests": 5,
+      "seconds": 2.15
+    },
+    "tests/test_browser_authorization.py": {
+      "tests": 22,
+      "seconds": 2.415
+    },
+    "tests/test_browser_control.py": {
+      "tests": 30,
+      "seconds": 65.033
+    },
+    "tests/test_chat_shape_compare.py": {
+      "tests": 25,
+      "seconds": 0.126
+    },
+    "tests/test_cli_setup.py": {
+      "tests": 8,
+      "seconds": 0.052
+    },
+    "tests/test_cli_skills.py": {
+      "tests": 3,
+      "seconds": 2.976
+    },
+    "tests/test_client_tokens.py": {
+      "tests": 14,
+      "seconds": 13.726
+    },
+    "tests/test_cloudflare_tunnel.py": {
+      "tests": 19,
+      "seconds": 5.496
+    },
+    "tests/test_codex_context.py": {
+      "tests": 6,
+      "seconds": 0.024
+    },
+    "tests/test_codex_independence.py": {
+      "tests": 1,
+      "seconds": 1.251
+    },
+    "tests/test_codex_plugin_probe.py": {
+      "tests": 3,
+      "seconds": 0.025
+    },
+    "tests/test_codex_plugins.py": {
+      "tests": 85,
+      "seconds": 4.363
+    },
+    "tests/test_common_skills.py": {
+      "tests": 18,
+      "seconds": 0.699
+    },
+    "tests/test_connection.py": {
+      "tests": 11,
+      "seconds": 3.905
+    },
+    "tests/test_context_integration.py": {
+      "tests": 3,
+      "seconds": 4.837
+    },
+    "tests/test_credentials.py": {
+      "tests": 4,
+      "seconds": 0.025
+    },
+    "tests/test_delegated_files.py": {
+      "tests": 12,
+      "seconds": 0.179
+    },
+    "tests/test_delegated_routes.py": {
+      "tests": 6,
+      "seconds": 1.453
+    },
+    "tests/test_delegated_tasks.py": {
+      "tests": 9,
+      "seconds": 36.953
+    },
+    "tests/test_desktop_enrollment_ui.py": {
+      "tests": 2,
+      "seconds": 6.366
+    },
+    "tests/test_development_http_workflow.py": {
+      "tests": 1,
+      "seconds": 3.214
+    },
+    "tests/test_device_authorization.py": {
+      "tests": 40,
+      "seconds": 25.998
+    },
+    "tests/test_device_polling.py": {
+      "tests": 14,
+      "seconds": 0.001
+    },
+    "tests/test_device_router.py": {
+      "tests": 12,
+      "seconds": 15.929
+    },
+    "tests/test_devices.py": {
+      "tests": 12,
+      "seconds": 7.311
+    },
+    "tests/test_diagnostics.py": {
+      "tests": 17,
+      "seconds": 1.041
+    },
+    "tests/test_direct_mcp.py": {
+      "tests": 8,
+      "seconds": 1.98
+    },
+    "tests/test_direct_mcp_sessions.py": {
+      "tests": 20,
+      "seconds": 7.287
+    },
+    "tests/test_document_preview.py": {
+      "tests": 17,
+      "seconds": 0.43
+    },
+    "tests/test_document_writer.py": {
+      "tests": 21,
+      "seconds": 1.689
+    },
+    "tests/test_documents.py": {
+      "tests": 15,
+      "seconds": 0.099
+    },
+    "tests/test_downloads.py": {
+      "tests": 8,
+      "seconds": 13.829
+    },
+    "tests/test_engine.py": {
+      "tests": 30,
+      "seconds": 14.441
+    },
+    "tests/test_engine_migration.py": {
+      "tests": 9,
+      "seconds": 74.634
+    },
+    "tests/test_engine_selection.py": {
+      "tests": 6,
+      "seconds": 1.141
+    },
+    "tests/test_enrollment_credentials.py": {
+      "tests": 24,
+      "seconds": 0.107
+    },
+    "tests/test_enrollment_worker.py": {
+      "tests": 9,
+      "seconds": 2.355
+    },
+    "tests/test_execution_environment.py": {
+      "tests": 6,
+      "seconds": 0.513
+    },
+    "tests/test_file_info.py": {
+      "tests": 5,
+      "seconds": 0.836
+    },
+    "tests/test_github_releases.py": {
+      "tests": 18,
+      "seconds": 0.055
+    },
+    "tests/test_guest_bundle.py": {
+      "tests": 1,
+      "seconds": 0.148
+    },
+    "tests/test_gui_cua.py": {
+      "tests": 25,
+      "seconds": 0.029
+    },
+    "tests/test_gui_mcp.py": {
+      "tests": 28,
+      "seconds": 0.495
+    },
+    "tests/test_gui_wire_results.py": {
+      "tests": 12,
+      "seconds": 0.254
+    },
+    "tests/test_history_filters.py": {
+      "tests": 4,
+      "seconds": 1.35
+    },
+    "tests/test_http_capability_acceptance.py": {
+      "tests": 1,
+      "seconds": 0.0
+    },
+    "tests/test_http_client.py": {
+      "tests": 17,
+      "seconds": 25.407
+    },
+    "tests/test_http_device_routing.py": {
+      "tests": 3,
+      "seconds": 32.692
+    },
+    "tests/test_http_diagnostics.py": {
+      "tests": 20,
+      "seconds": 33.638
+    },
+    "tests/test_http_mcp.py": {
+      "tests": 16,
+      "seconds": 48.503
+    },
+    "tests/test_http_request_context.py": {
+      "tests": 1,
+      "seconds": 0.002
+    },
+    "tests/test_http_service.py": {
+      "tests": 23,
+      "seconds": 102.293
+    },
+    "tests/test_http_supervisor.py": {
+      "tests": 10,
+      "seconds": 0.711
+    },
+    "tests/test_http_tool_upgrade.py": {
+      "tests": 9,
+      "seconds": 45.825
+    },
+    "tests/test_internet_probe.py": {
+      "tests": 11,
+      "seconds": 4.625
+    },
+    "tests/test_ledger_migration.py": {
+      "tests": 6,
+      "seconds": 2.026
+    },
+    "tests/test_local_supervisor.py": {
+      "tests": 3,
+      "seconds": 0.911
+    },
+    "tests/test_locking.py": {
+      "tests": 2,
+      "seconds": 0.115
+    },
+    "tests/test_management.py": {
+      "tests": 16,
+      "seconds": 7.408
+    },
+    "tests/test_mcp_notifications.py": {
+      "tests": 2,
+      "seconds": 0.044
+    },
+    "tests/test_mcp_outcome_diagnostics.py": {
+      "tests": 3,
+      "seconds": 0.0
+    },
+    "tests/test_mcp_plugin_errors.py": {
+      "tests": 15,
+      "seconds": 0.015
+    },
+    "tests/test_mcp_protocol.py": {
+      "tests": 3,
+      "seconds": 1.691
+    },
+    "tests/test_media.py": {
+      "tests": 2,
+      "seconds": 0.0
+    },
+    "tests/test_metadata_http_error.py": {
+      "tests": 1,
+      "seconds": 0.002
+    },
+    "tests/test_move_native.py": {
+      "tests": 3,
+      "seconds": 0.077
+    },
+    "tests/test_native_credentials.py": {
+      "tests": 2,
+      "seconds": 0.0
+    },
+    "tests/test_native_gui.py": {
+      "tests": 23,
+      "seconds": 6.778
+    },
+    "tests/test_native_gui_helper.py": {
+      "tests": 5,
+      "seconds": 0.0
+    },
+    "tests/test_native_login.py": {
+      "tests": 22,
+      "seconds": 22.695
+    },
+    "tests/test_oauth_endpoints.py": {
+      "tests": 10,
+      "seconds": 5.347
+    },
+    "tests/test_operation_acceptance.py": {
+      "tests": 5,
+      "seconds": 2.413
+    },
+    "tests/test_owner_credentials.py": {
+      "tests": 20,
+      "seconds": 10.365
+    },
+    "tests/test_owner_passkeys.py": {
+      "tests": 34,
+      "seconds": 13.405
+    },
+    "tests/test_owner_passkeys_browser.py": {
+      "tests": 1,
+      "seconds": 5.538
+    },
+    "tests/test_owner_pipe_contract.py": {
+      "tests": 1,
+      "seconds": 0.006
+    },
+    "tests/test_parent_liveness.py": {
+      "tests": 5,
+      "seconds": 0.26
+    },
+    "tests/test_peer_mailbox.py": {
+      "tests": 24,
+      "seconds": 12.791
+    },
+    "tests/test_peer_mcp.py": {
+      "tests": 8,
+      "seconds": 5.395
+    },
+    "tests/test_persistent_watch.py": {
+      "tests": 10,
+      "seconds": 2.165
+    },
+    "tests/test_plugin_diagnostics.py": {
+      "tests": 6,
+      "seconds": 0.002
+    },
+    "tests/test_plugin_image_results.py": {
+      "tests": 26,
+      "seconds": 0.262
+    },
+    "tests/test_plugin_package.py": {
+      "tests": 6,
+      "seconds": 0.138
+    },
+    "tests/test_plugin_sessions.py": {
+      "tests": 38,
+      "seconds": 4.527
+    },
+    "tests/test_portable_archive.py": {
+      "tests": 20,
+      "seconds": 0.25
+    },
+    "tests/test_portable_build.py": {
+      "tests": 24,
+      "seconds": 0.143
+    },
+    "tests/test_portable_verification.py": {
+      "tests": 6,
+      "seconds": 0.73
+    },
+    "tests/test_private_directory.py": {
+      "tests": 17,
+      "seconds": 6.893
+    },
+    "tests/test_processes.py": {
+      "tests": 1,
+      "seconds": 0.057
+    },
+    "tests/test_regex_worker.py": {
+      "tests": 7,
+      "seconds": 2.737
+    },
+    "tests/test_registration_client.py": {
+      "tests": 25,
+      "seconds": 2.946
+    },
+    "tests/test_relay_authorized_channel.py": {
+      "tests": 7,
+      "seconds": 21.284
+    },
+    "tests/test_relay_channel_enrollment.py": {
+      "tests": 5,
+      "seconds": 20.047
+    },
+    "tests/test_relay_channels.py": {
+      "tests": 9,
+      "seconds": 31.615
+    },
+    "tests/test_relay_client.py": {
+      "tests": 5,
+      "seconds": 21.694
+    },
+    "tests/test_relay_enrollment.py": {
+      "tests": 26,
+      "seconds": 2.141
+    },
+    "tests/test_relay_grants.py": {
+      "tests": 22,
+      "seconds": 26.522
+    },
+    "tests/test_relay_http.py": {
+      "tests": 10,
+      "seconds": 1.27
+    },
+    "tests/test_relay_mcp.py": {
+      "tests": 3,
+      "seconds": 12.202
+    },
+    "tests/test_relay_registry.py": {
+      "tests": 14,
+      "seconds": 0.898
+    },
+    "tests/test_release_activation.py": {
+      "tests": 13,
+      "seconds": 0.118
+    },
+    "tests/test_release_preparation.py": {
+      "tests": 19,
+      "seconds": 0.054
+    },
+    "tests/test_release_record.py": {
+      "tests": 5,
+      "seconds": 0.128
+    },
+    "tests/test_release_supervisor.py": {
+      "tests": 8,
+      "seconds": 0.093
+    },
+    "tests/test_release_update.py": {
+      "tests": 12,
+      "seconds": 0.142
+    },
+    "tests/test_remote_health.py": {
+      "tests": 10,
+      "seconds": 4.897
+    },
+    "tests/test_remote_lifecycle.py": {
+      "tests": 2,
+      "seconds": 24.823
+    },
+    "tests/test_remote_service.py": {
+      "tests": 18,
+      "seconds": 94.107
+    },
+    "tests/test_remote_setup.py": {
+      "tests": 19,
+      "seconds": 36.944
+    },
+    "tests/test_remote_startup.py": {
+      "tests": 18,
+      "seconds": 30.849
+    },
+    "tests/test_remote_transport.py": {
+      "tests": 17,
+      "seconds": 24.952
+    },
+    "tests/test_renderer_location.py": {
+      "tests": 1,
+      "seconds": 0.006
+    },
+    "tests/test_runtime_identity.py": {
+      "tests": 10,
+      "seconds": 0.193
+    },
+    "tests/test_runtime_provenance.py": {
+      "tests": 1,
+      "seconds": 0.09
+    },
+    "tests/test_runtime_selection.py": {
+      "tests": 15,
+      "seconds": 0.226
+    },
+    "tests/test_runtime_settings.py": {
+      "tests": 2,
+      "seconds": 2.991
+    },
+    "tests/test_search.py": {
+      "tests": 23,
+      "seconds": 0.679
+    },
+    "tests/test_secret_pipe.py": {
+      "tests": 6,
+      "seconds": 0.161
+    },
+    "tests/test_setup_connector.py": {
+      "tests": 13,
+      "seconds": 1.975
+    },
+    "tests/test_setup_controller.py": {
+      "tests": 4,
+      "seconds": 7.048
+    },
+    "tests/test_skills_context.py": {
+      "tests": 3,
+      "seconds": 0.026
+    },
+    "tests/test_ssh_client.py": {
+      "tests": 5,
+      "seconds": 3.733
+    },
+    "tests/test_ssh_transport.py": {
+      "tests": 7,
+      "seconds": 0.0
+    },
+    "tests/test_startup_recovery_native.py": {
+      "tests": 10,
+      "seconds": 0.04
+    },
+    "tests/test_startup_service.py": {
+      "tests": 24,
+      "seconds": 2.006
+    },
+    "tests/test_state_migration.py": {
+      "tests": 9,
+      "seconds": 36.867
+    },
+    "tests/test_subchat_asset_encoding.py": {
+      "tests": 1,
+      "seconds": 0.005
+    },
+    "tests/test_subchat_browser_backend.py": {
+      "tests": 37,
+      "seconds": 112.196
+    },
+    "tests/test_subchat_browser_background.py": {
+      "tests": 18,
+      "seconds": 3.976
+    },
+    "tests/test_subchat_browser_httpx_generation.py": {
+      "tests": 15,
+      "seconds": 20.33
+    },
+    "tests/test_subchat_browser_request_content.py": {
+      "tests": 6,
+      "seconds": 0.012
+    },
+    "tests/test_subchat_browser_specs.py": {
+      "tests": 2,
+      "seconds": 0.0
+    },
+    "tests/test_subchat_chrome_login.py": {
+      "tests": 9,
+      "seconds": 0.014
+    },
+    "tests/test_subchat_chrome_profile.py": {
+      "tests": 5,
+      "seconds": 2.582
+    },
+    "tests/test_subchat_cli.py": {
+      "tests": 11,
+      "seconds": 1.926
+    },
+    "tests/test_subchat_copy.py": {
+      "tests": 2,
+      "seconds": 4.271
+    },
+    "tests/test_subchat_delete.py": {
+      "tests": 10,
+      "seconds": 6.954
+    },
+    "tests/test_subchat_delivery.py": {
+      "tests": 13,
+      "seconds": 1.379
+    },
+    "tests/test_subchat_device_save.py": {
+      "tests": 22,
+      "seconds": 35.53
+    },
+    "tests/test_subchat_efforts.py": {
+      "tests": 17,
+      "seconds": 2.007
+    },
+    "tests/test_subchat_gateway.py": {
+      "tests": 27,
+      "seconds": 14.361
+    },
+    "tests/test_subchat_gateway_model_change.py": {
+      "tests": 1,
+      "seconds": 2.916
+    },
+    "tests/test_subchat_gateway_resources_change.py": {
+      "tests": 1,
+      "seconds": 2.882
+    },
+    "tests/test_subchat_http_catalog.py": {
+      "tests": 45,
+      "seconds": 14.379
+    },
+    "tests/test_subchat_http_download.py": {
+      "tests": 21,
+      "seconds": 5.535
+    },
+    "tests/test_subchat_http_generation.py": {
+      "tests": 72,
+      "seconds": 52.425
+    },
+    "tests/test_subchat_http_history.py": {
+      "tests": 101,
+      "seconds": 76.187
+    },
+    "tests/test_subchat_http_image.py": {
+      "tests": 28,
+      "seconds": 218.359
+    },
+    "tests/test_subchat_http_library.py": {
+      "tests": 6,
+      "seconds": 2.383
+    },
+    "tests/test_subchat_http_only.py": {
+      "tests": 43,
+      "seconds": 2.696
+    },
+    "tests/test_subchat_http_only_cli.py": {
+      "tests": 21,
+      "seconds": 4.665
+    },
+    "tests/test_subchat_http_sender.py": {
+      "tests": 14,
+      "seconds": 1.277
+    },
+    "tests/test_subchat_http_workflow.py": {
+      "tests": 2,
+      "seconds": 8.764
+    },
+    "tests/test_subchat_input.py": {
+      "tests": 3,
+      "seconds": 8.249
+    },
+    "tests/test_subchat_library_mcp.py": {
+      "tests": 5,
+      "seconds": 0.026
+    },
+    "tests/test_subchat_library_upload.py": {
+      "tests": 17,
+      "seconds": 6.733
+    },
+    "tests/test_subchat_lifecycle.py": {
+      "tests": 14,
+      "seconds": 1.138
+    },
+    "tests/test_subchat_mcp.py": {
+      "tests": 29,
+      "seconds": 12.594
+    },
+    "tests/test_subchat_model_menu.py": {
+      "tests": 13,
+      "seconds": 20.79
+    },
+    "tests/test_subchat_mutation_receipts.py": {
+      "tests": 6,
+      "seconds": 5.969
+    },
+    "tests/test_subchat_plugin.py": {
+      "tests": 35,
+      "seconds": 2.855
+    },
+    "tests/test_subchat_probe.py": {
+      "tests": 30,
+      "seconds": 0.148
+    },
+    "tests/test_subchat_queue_auto.py": {
+      "tests": 25,
+      "seconds": 11.488
+    },
+    "tests/test_subchat_queue_resources_change.py": {
+      "tests": 2,
+      "seconds": 1.376
+    },
+    "tests/test_subchat_queue_watch.py": {
+      "tests": 12,
+      "seconds": 4.495
+    },
+    "tests/test_subchat_resources.py": {
+      "tests": 30,
+      "seconds": 28.559
+    },
+    "tests/test_subchat_setup.py": {
+      "tests": 27,
+      "seconds": 1.118
+    },
+    "tests/test_subchat_sse.py": {
+      "tests": 12,
+      "seconds": 0.076
+    },
+    "tests/test_subchat_state.py": {
+      "tests": 32,
+      "seconds": 8.995
+    },
+    "tests/test_subchat_stream.py": {
+      "tests": 2,
+      "seconds": 4.17
+    },
+    "tests/test_subchat_submission.py": {
+      "tests": 1,
+      "seconds": 1.668
+    },
+    "tests/test_subchat_transport_probe.py": {
+      "tests": 7,
+      "seconds": 3.505
+    },
+    "tests/test_subchat_upload_state.py": {
+      "tests": 16,
+      "seconds": 15.232
+    },
+    "tests/test_subchat_wait_lifetime.py": {
+      "tests": 16,
+      "seconds": 3.199
+    },
+    "tests/test_subchat_work_context.py": {
+      "tests": 2,
+      "seconds": 1.195
+    },
+    "tests/test_terminal_interaction.py": {
+      "tests": 6,
+      "seconds": 0.883
+    },
+    "tests/test_terminal_output.py": {
+      "tests": 3,
+      "seconds": 0.264
+    },
+    "tests/test_transfer_admin.py": {
+      "tests": 6,
+      "seconds": 2.313
+    },
+    "tests/test_uploads.py": {
+      "tests": 18,
+      "seconds": 0.001
+    },
+    "tests/test_uploads_windows.py": {
+      "tests": 7,
+      "seconds": 4.49
+    },
+    "tests/test_verify_tunnel_pipe.py": {
+      "tests": 2,
+      "seconds": 0.003
+    },
+    "tests/test_watch_status.py": {
+      "tests": 2,
+      "seconds": 0.081
+    },
+    "tests/test_workspace_ui.py": {
+      "tests": 4,
+      "seconds": 2.99
+    }
+  }
+}
