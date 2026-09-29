@@ -95,3 +95,36 @@ benchmark or a measured speedup against direct composer attachment. Visible
 attachment cards were not separately inspected. Private IDs, account bindings,
 file markers and full results are retained only in a local acceptance artifact;
 this receipt does not establish installed-package or remote-device acceptance.
+
+## Literal draft acceptance on 2026-09-30
+
+A draft-only comparison used fresh owned background pages in the current ordinary
+Chat editor. Every browser request with a mutating HTTP method was intercepted
+and aborted before navigation began. The pages had no Chat service-worker
+controller or registration. No send function or send gesture was invoked, and
+no existing conversation or unknown operation was changed.
+
+The previous `insertHTML` span/BR input lost one trailing newline after the
+editor decorated a URL. `insertText` preserved it as an empty paragraph, but the
+previous reader counted its `ProseMirror-trailingBreak` editing filler as another
+newline. The native intermediate DOM initially has an unclassified BR; one
+microtask gives the existing editor MutationObserver its normal processing
+opportunity. This requires no new observer, timer, or repeated input.
+
+The candidate uses literal `insertText`, then reads only the observed paragraph
+and inline shapes. Only a sole, exactly marked filler BR in a direct, explicitly
+empty paragraph contributes zero characters. Paragraph boundaries and ordinary
+BRs retain their newlines. URL destinations and labels still have to agree, and
+the final send guard still compares the exact prompt without trimming spaces.
+The filler is an editing-view detail, consistent with the
+[ProseMirror maintainer's explanation](https://discuss.prosemirror.net/t/where-can-i-read-about-prosemirror-trailingbreak/6665).
+
+Seven candidate cases passed the initial guard and three subsequent exact draft
+observations: a URL with one or two trailing newlines, a URL between lines,
+ordinary text with a final or internal newline, Japanese/emoji/code fences/HTML
+characters, and leading/consecutive/trailing blank lines with spaces and a tab.
+All seven retained zero user turns and zero observed manual-send gestures. Every
+owned page closed, and each owned browser process was absent after cleanup.
+Private account details, IDs and editor artifacts remain outside the repository.
+This establishes real editor input behavior; provider wire serialization and a
+completed model response remain separate, untested gates for these drafts.

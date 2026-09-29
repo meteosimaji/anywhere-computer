@@ -7,10 +7,12 @@ const subchatEditorSelector =
 
 function subchatDraftMatches(editor, text) {
   if (editor.innerText === text &&
-      !editor.querySelector('[data-rich-text-generated-autolink], a')) return true;
-  // Generated URL icons can add layout-only newlines to innerText. Read only
-  // the observed paragraph/inline contract; never trim or collapse user text.
+      !editor.querySelector('[data-rich-text-generated-autolink], a, p, ' +
+                            'br.ProseMirror-trailingBreak')) return true;
+  // Paragraphs and generated URL icons add layout-only newlines to innerText.
+  // Read the observed paragraph/inline contract; never trim or collapse text.
   let autolink = false;
+  let paragraphs = false;
   function read(node, root = false) {
     if (node.nodeType === 3) return node.nodeValue;
     if (node.nodeType !== 1) throw new Error('Unrecognized draft node');
@@ -29,7 +31,21 @@ function subchatDraftMatches(editor, text) {
       autolink = true;
       return href;
     }
-    if (!root && node.tagName === 'BR') return '\n';
+    if (!root && node.tagName === 'BR') {
+      if (node.classList.contains('ProseMirror-trailingBreak')) {
+        const paragraph = node.parentElement;
+        if (node.attributes.length !== 1 ||
+            node.getAttribute('class') !== 'ProseMirror-trailingBreak' ||
+            paragraph?.tagName !== 'P' || paragraph.parentElement !== editor ||
+            paragraph.getAttribute('data-empty-paragraph') !== 'true' ||
+            paragraph.childNodes.length !== 1)
+          throw new Error('Unrecognized trailing break');
+        // This exact empty-paragraph filler only keeps the caret visible.
+        // Its paragraph boundary, below, contributes the actual newline.
+        return '';
+      }
+      return '\n';
+    }
     if (!root && !['P', 'SPAN'].includes(node.tagName))
       throw new Error('Unrecognized draft markup');
     if (!root && (node.getAttribute('contenteditable') === 'false' ||
@@ -39,15 +55,16 @@ function subchatDraftMatches(editor, text) {
     if (children.some(child => child.nodeType === 1 && child.tagName === 'P')) {
       if (!root || children.some(child => child.nodeType !== 1 || child.tagName !== 'P'))
         throw new Error('Unrecognized paragraphs');
+      paragraphs = true;
       return children.map(child => read(child)).join('\n');
     }
     return children.map(child => read(child)).join('');
   }
-  try { return read(editor, true) === text && autolink; }
+  try { return read(editor, true) === text && (autolink || paragraphs); }
   catch { return false; }
 }
 
-function insertSubchatDraft(document, text) {
+async function insertSubchatDraft(document, text) {
   if (typeof text !== 'string' || text.length === 0 || text.includes('\r')) {
     return {state: 'invalid_input', input_dispatched: false};
   }
@@ -66,16 +83,15 @@ function insertSubchatDraft(document, text) {
   if (!selection || !selection.isCollapsed || !editor.contains(selection.anchorNode)) {
     return {state: 'selection_unconfirmed', input_dispatched: false};
   }
-  const literal = document.createElement('span');
-  literal.setAttribute('data-prompt-literal-paste', '');
-  const lines = text.split('\n');
-  for (let index = 0; index < lines.length; index++) {
-    if (index) literal.appendChild(document.createElement('br'));
-    literal.appendChild(document.createTextNode(lines[index]));
-  }
-  const accepted = document.execCommand('insertHTML', false, literal.outerHTML);
+  const accepted = document.execCommand('insertText', false, text);
+  // Flush the already queued editor MutationObserver once. Native insertion
+  // creates temporary paragraph BRs before ProseMirror marks its view fillers.
+  // No timer, new observer, retry, or second input is installed here.
+  await Promise.resolve();
   // A rejected or changed edit must be inspected, never retried automatically.
-  if (!accepted || !editor.isConnected || !subchatDraftMatches(editor, text)) {
+  const current = document.querySelectorAll(subchatEditorSelector);
+  if (!accepted || !editor.isConnected || current.length !== 1 || current[0] !== editor ||
+      !subchatDraftMatches(editor, text)) {
     return {state: 'draft_unconfirmed', input_dispatched: true};
   }
   return {state: 'draft_observed', input_dispatched: true, submitted: false};
@@ -84,7 +100,7 @@ function insertSubchatDraft(document, text) {
 // Watch dispatch gestures before exposing text. A provider may acknowledge a
 // manual send asynchronously, leaving all final DOM checks unchanged meanwhile.
 // This records uncertainty; it never suppresses or claims a successful user send.
-function insertObservedSubchatDraft(document, text) {
+async function insertObservedSubchatDraft(document, text) {
   const controller = new AbortController();
   const guard = {intervened: false, stop: () => controller.abort()};
   const observe = event => {
@@ -104,7 +120,7 @@ function insertObservedSubchatDraft(document, text) {
     document.defaultView.addEventListener(type, observe,
                                          {capture: true, signal: controller.signal});
   try {
-    guard.draft = insertSubchatDraft(document, text);
+    guard.draft = await insertSubchatDraft(document, text);
     return guard;
   } catch (error) {
     guard.stop();
