@@ -65,10 +65,50 @@ async def test_catalog_is_connector_only_and_routes_explicitly(routed):
     result = await router.execute(request('devices_call', device_id=first,
                                          tool='computer_status', arguments={}))
     assert result.state == 'completed' and result.data['device_id'] == first
+    assert result.data['tool'] == 'computer_status'
     assert len(sent) == 1
     assert (await router.execute(request('devices_call', tool='computer_status'))).state == 'failed'
     assert (await router.execute(request('devices_call', device_id='missing',
                                         tool='computer_status'))).state == 'failed'
+
+
+@pytest.mark.parametrize('recovered', [False, True])
+async def test_routed_mcp_image_and_original_id_recovery(routed, monkeypatch, tmp_path, recovered):
+    from test_plugin_image_results import PNG, image
+
+    from anywhere_computer import codex_plugins
+    from anywhere_computer.mcp_server import MCPSession
+
+    router, _, remote, sent, device_id, _ = routed
+
+    async def synthetic_capture(**_):
+        return {'content': [image()], 'is_error': False}
+
+    monkeypatch.setattr(codex_plugins, 'call_codex_plugin_tool', synthetic_capture)
+    session = MCPSession(router.catalog, router.execute)
+    session.initialized = session.ready = True
+    identity = uuid.uuid4().hex
+    operation = request('devices_call', identity, device_id=device_id,
+                        tool='codex_plugin_call', arguments={
+                            'cwd': str(tmp_path), 'server': 'fixture',
+                            'tool': 'capture', 'catalog_sha256': 'a' * 64,
+                        })
+    if recovered:
+        assert (await router.execute(operation)).state == 'completed'
+        operation = request('devices_call', device_id=device_id, tool='operations_get',
+                            arguments={'operation_id': identity})
+    response = await session.handle({
+        'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {
+            'name': 'devices_call', 'arguments': {
+                **operation.arguments, 'request_id': operation.operation_id,
+            },
+        },
+    })
+    result = response['result']
+    assert result['content'][1:] == [image()]
+    assert PNG not in result['content'][0]['text']
+    assert remote.ledger.get(identity).data['content'] == [image()]
+    assert sum(item.tool == 'codex_plugin_call' for item in sent) == 1
 
 
 async def test_probe_checks_registered_device_now_without_running_target_tool(

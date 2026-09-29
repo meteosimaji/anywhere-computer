@@ -14,6 +14,7 @@ from pydantic import JsonValue
 
 from . import __version__
 from .connection import WIRE_LIMIT, ensure_agent, exchange
+from .mcp_result_data import media_result_data
 from .models import Reply, Request
 from .plugin_audio import audio_summary
 from .plugin_images import image_summary
@@ -69,19 +70,8 @@ def rpc_error(identity: JsonValue, code: int, message: str) -> dict[str, JsonVal
 def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
     structured = cast(dict[str, JsonValue], reply.model_dump(mode="json"))
     media: list[JsonValue] = []
-    data = cast(dict[str, JsonValue], structured["data"])
-    provider_result = name in {
-        "codex_plugin_call", "mcp_call", "gui_observe", "gui_type", "gui_click", "gui_key",
-        "browser_observe", "gui_native_observe", "media_audio_clip", "media_video_frames",
-    }
-    project = provider_result and reply.state == "completed"
-    if name == "operations_get" and reply.state == "completed":
-        # operations_get returns the original Reply. Project its typed content using
-        # the same path; the outer recovery status and inner execution status differ.
-        if data.get("state") == "completed" and isinstance(data.get("data"), dict):
-            data = cast(dict[str, JsonValue], data["data"])
-            project = True
-    if project:
+    data, recovered = media_result_data(name, structured)
+    if data is not None:
         content = data.get("content")
         if isinstance(content, list):
             projected: list[JsonValue] = []
@@ -118,7 +108,7 @@ def _reply_result(name: str, reply: Reply) -> dict[str, JsonValue]:
         "structuredContent": structured,
         "isError": (
             reply.state not in {"completed", "running"}
-            or (provider_result and reply.data.get("is_error") is True)
+            or (not recovered and data is not None and data.get("is_error") is True)
         ),
     }
 
