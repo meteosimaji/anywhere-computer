@@ -58,7 +58,11 @@ and their callers, contracts and tests, then inspected later integrated diffs.
 - The macOS shared-runtime suite remained in its test step for over 30 minutes
   after earlier runs had reported failures before completion. The suite now
   stops after the first failure so CI can expose its traceback. Successful
-  runs still execute the full collected suite.
+  runs still execute the full collected suite. Another run and Windows shard 4
+  remained in test execution well beyond their prior durations, while the
+  equivalent local macOS suite passed. Shared-runtime and parallel Windows
+  shards now log each test name and dump/exit a test that runs beyond five
+  minutes. This is a diagnostic bound; the underlying cause remains unconfirmed.
 
 The [changelog](../CHANGELOG.md) lists the beta.33 feature work as well as
 these repairs. No confirmed, unpatched defect remained in the reviewed files
@@ -95,10 +99,12 @@ snapshot behavior. The next Windows smoke and all four test shards passed. A
 subsequent macOS run exposed a browser-close deadline that matched the caller's
 receipt deadline. The delayed-close regression failed before the repair and
 passed afterward. A later Windows shard run timed out in native Task Scheduler
-validation; the serial preflight change awaits a new CI run. A macOS run stayed
-in the suite for over 30 minutes, so the next run will stop at the first failure
-to preserve its traceback. The beta.33 PR Quality run is required to confirm
-the final combined candidate on all three operating systems.
+validation; the serial preflight change passed on Windows in 0.30 seconds. A
+macOS run stayed in the suite for over 30 minutes. A subsequent run and Windows
+shard 4 also remained in test execution well beyond earlier durations, so the
+next run adds per-test traceback and exit bounds. The beta.33 PR Quality run
+is required to confirm the final combined candidate on all three operating
+systems.
 
 ## Remaining product and operational gates
 

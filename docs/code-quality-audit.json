@@ -1,5 +1,5 @@
 {
-  "as_of_commit": "0bf09f71bae0753dc8de41d3e1043966c89ee30b",
+  "as_of_commit": "2ab9479cd8245b26ffda50f6891e4f2be3314cba",
   "method": "Full-file review by area, source-to-test/consumer trace, targeted regression and integrated-suite checks; each current SHA-256 matched a review record.",
   "included_file_count": 432,
   "areas": {
@@ -32,10 +32,10 @@
     {
       "path": ".github/workflows/quality.yml",
       "area": "release_runtime",
-      "sha256": "fe7347c269f1012f7f48195ca802bbc13a64169549a148e0d429cd5c54220fe1",
-      "lines": 498,
+      "sha256": "1f963fc1952c888456669aa881edb0484683785356548c1d265d06e8c61d6408",
+      "lines": 500,
       "review": "changed",
-      "finding": "Read full job graph, 6 required contexts, fail-closed Windows composite and release provenance gates. The shared-runtime suite now stops on its first failure so CI exposes its traceback without waiting behind a later stalled test."
+      "finding": "Read full job graph, 6 required contexts, fail-closed Windows composite and release provenance gates. Shared-runtime fails on the first failure and dumps/exits a test after five minutes; verbose names expose the stalled test."
     },
     {
       "path": "desktop/Cargo.toml",
@@ -424,10 +424,10 @@
     {
       "path": "scripts/windows_test_shards.py",
       "area": "release_runtime",
-      "sha256": "74417790a325837d94764162f7bc04b6fb168cee6506406a3c68c13eb5e91566",
-      "lines": 257,
+      "sha256": "da3334650054a1b276d4f828f3f0b057c1f3b726cb5d26cf47c9cecf54903477",
+      "lines": 259,
       "review": "changed",
-      "finding": "Read full deterministic file partition, collection proof and outcome receipts. Moved native Task Scheduler validation into a dedicated serial preflight group after its 30-second timeout under shard load; coverage remains exactly once."
+      "finding": "Read full deterministic file partition, collection proof and outcome receipts. Native Task Scheduler validation runs in serial preflight. Parallel shards dump/exits a test after five minutes with verbose node IDs; coverage remains exactly once."
     },
     {
       "path": "src/anywhere_computer/__init__.py",
