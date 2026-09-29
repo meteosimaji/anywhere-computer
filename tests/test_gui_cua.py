@@ -131,6 +131,47 @@ def observation(**kwargs):
     return GUIObserve(session_id=SID, provider="cua", pid=123, window_id=42, app="Editor", **kwargs)
 
 
+@pytest.mark.parametrize("catalog", ["later", "duplicate", "repeated", "endless", "incompatible"])
+async def test_cua_contract_discovery_consumes_bounded_catalog_pages(catalog):
+    class PaginatedPeer(CuaPeer):
+        def __init__(self):
+            super().__init__()
+            self.pages = []
+
+        async def tools(self, session_id, *, owner, name=None, cursor=None):
+            self.pages.append((name, cursor))
+            page = await super().tools(session_id, owner=owner, name=name)
+            if catalog == "endless":
+                return {"tools": [], "nextCursor": str(len(self.pages))}
+            if cursor is None:
+                return {"tools": page["tools"] if catalog == "duplicate" else [],
+                        "nextCursor": "remaining"}
+            if catalog == "repeated":
+                return {"tools": [], "nextCursor": "remaining"}
+            if catalog == "incompatible":
+                page["tools"][0]["inputSchema"]["properties"].pop("window_id")
+            return page
+
+    peer = PaginatedPeer()
+    gui = GUIMCP(peer)
+    if catalog == "later":
+        result = await gui.observe(observation(), owner="owner")
+        assert result["action_ready"] is True
+        assert len(peer.pages) == 10  # Five contracts, each after an empty first page.
+        assert len(peer.calls) == 1
+    else:
+        reason, count = {
+            "duplicate": ("Duplicate get_window_state contract", 2),
+            "repeated": ("cursor repeated", 2),
+            "endless": ("exceeded pagination limit", 16),
+            "incompatible": ("contract incompatible", 2),
+        }[catalog]
+        with pytest.raises(ValueError, match=reason):
+            await gui.observe(observation(), owner="owner")
+        assert len(peer.pages) == count
+        assert not peer.calls and not gui.observations
+
+
 async def test_scoped_structured_observation_excludes_global_menus():
     peer = CuaPeer()
     gui = GUIMCP(peer)

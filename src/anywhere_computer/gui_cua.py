@@ -31,12 +31,12 @@ _CONTRACTS = {
 
 async def _require_contracts(sessions: 'DirectMCPSessions', session_id: str,
                              owner: str | None) -> None:
+    from .gui_mcp import tool_contract
+
     for name, fields in _CONTRACTS.items():
-        page = await sessions.tools(session_id, owner=owner, name=name)
-        rows = page.get('tools')
-        if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+        row = await tool_contract(sessions, session_id, owner=owner, name=name)
+        if row is None:
             raise ValueError(f'Cua {name} contract unavailable')
-        row = rows[0]
         schema = row.get('inputSchema')
         properties = schema.get('properties') if isinstance(schema, dict) else None
         if row.get('name') != name or not isinstance(properties, dict) or any(

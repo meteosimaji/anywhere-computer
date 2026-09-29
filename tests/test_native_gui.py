@@ -13,6 +13,9 @@ import base64, json, sys
 from pathlib import Path
 counter = Path(sys.argv[1])
 mode = sys.argv[2]
+if mode == 'ignore_terminate':
+    import signal
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
 for line in sys.stdin:
     req = json.loads(line)
     method = req['method']
@@ -123,6 +126,60 @@ def helper_process(monkeypatch, tmp_path):
     return mode, counter, children
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows termination cannot be ignored")
+@pytest.mark.parametrize("interruption", ["cancel", "timeout"])
+async def test_unconfirmed_close_retains_owner_and_blocks_input(
+        helper_process, monkeypatch, interruption):
+    helper_process[0][0] = "ignore_terminate"
+    monkeypatch.setattr(native_gui, "CLEANUP_TIMEOUT", 0.1)
+    gui = native_gui.NativeGUI()
+    opened = await gui.windows(native_gui.NativeApp(app="test"), owner="one")
+    session = native_gui.NativeSession(session_id=opened["session_id"])
+    observe = native_gui.NativeObserve(**session.model_dump(), app="test", window_id=1)
+    await gui.observe(observe, owner="one")
+    process = helper_process[2][0]
+    terminate, kill = process.terminate, process.kill
+    terminated = asyncio.Event()
+
+    def terminate_and_signal():
+        terminate()
+        terminated.set()
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(process, "terminate", terminate_and_signal)
+            if interruption == "cancel":
+                closing = asyncio.create_task(gui.stop(session, owner="one"))
+                await asyncio.wait_for(terminated.wait(), 1)
+                closing.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await closing
+            else:
+                # Model an OS termination that did not complete: the real owned
+                # helper stays alive, and both bounded waits must finish.
+                patch.setattr(process, "kill", lambda: None)
+                with pytest.raises(RuntimeError, match="cleanup is unconfirmed"):
+                    await asyncio.wait_for(gui.stop(session, owner="one"), 2)
+                with pytest.raises(RuntimeError, match="cleanup is unconfirmed"):
+                    await asyncio.wait_for(gui.close(), 2)
+            assert process.returncode is None
+            entry = gui.entries[session.session_id]
+            assert entry.owner == "one" and not entry.observations
+            with pytest.raises(ValueError, match="session unavailable"):
+                await gui.stop(session, owner="two")
+            with pytest.raises(ValueError, match="session is closing"):
+                await gui.observe(observe, owner="one")
+            assert not helper_process[1].exists()
+        assert await gui.stop(session, owner="one") == {"state": "closed"}
+        assert process.returncode is not None and not gui.entries
+    finally:
+        # Also reap the fixture when testing the original ownership-loss defect.
+        if process.returncode is None:
+            kill()
+        await process.wait()
+        await gui.close()
+
+
 async def test_owner_binding_and_cross_session_snapshot_invalidation(helper_process):
     gui = native_gui.NativeGUI()
     try:
@@ -145,6 +202,53 @@ async def test_owner_binding_and_cross_session_snapshot_invalidation(helper_proc
     finally:
         await gui.close()
     assert all(p.returncode is not None for p in helper_process[2])
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows termination cannot be ignored")
+async def test_native_cleanup_unknown_retains_update_blocker_and_does_not_replay(
+        tmp_path, helper_process, monkeypatch):
+    helper_process[0][0] = "ignore_terminate"
+    monkeypatch.setattr(native_gui, "CLEANUP_TIMEOUT", 0.1)
+    engine = Engine(tmp_path / "state")
+    try:
+        opened = await engine.execute(Request(operation_id="1" * 32,
+            tool="gui_native_windows", arguments={"app": "test"}), peer="one")
+        sid = opened.data["session_id"]
+        process = helper_process[2][0]
+        close = Request(operation_id="2" * 32, tool="gui_native_close",
+                        arguments={"session_id": sid})
+        attempts = []
+        with monkeypatch.context() as patch:
+            patch.setattr(process, "kill", lambda: attempts.append(True))
+            result = await engine.execute(close, peer="one")
+            assert result.state == "unknown"
+            assert result.data["error_code"] == "native_gui_cleanup_unconfirmed"
+            assert result.data["cleanup_confirmed"] is False
+            assert "dispatched" not in result.data
+            assert (await engine.execute(close, peer="one")).model_dump() == result.model_dump()
+            assert attempts == [True]
+            status = engine.status(owner="one")
+            assert status["active_resources"]["native_gui_sessions"] == 1
+            assert status["update_blocked"] is True
+            assert status["update_blocker_details"] == [{
+                "resource": "native_gui_session", "id": sid, "state": "closing",
+                "stop_tool": "gui_native_close", "stop_available": True,
+            }]
+            assert engine.status(owner="two")["active_resources"]["native_gui_sessions"] == 0
+            observed = await engine.execute(Request(operation_id="3" * 32,
+                tool="gui_native_observe", arguments={"session_id": sid, "app": "test",
+                                                     "window_id": 1}), peer="one")
+            assert observed.state == "failed"
+            assert observed.data["error_code"] == "session_closing"
+            assert observed.data["dispatched"] is False
+            assert not helper_process[1].exists()
+        closed = await engine.execute(close.model_copy(update={"operation_id": "4" * 32}),
+                                      peer="one")
+        assert closed.state == "completed" and closed.data == {"state": "closed"}
+        assert process.returncode is not None
+        assert not engine.status(owner="one")["update_blocked"]
+    finally:
+        await engine.close()
 
 
 async def test_compact_semantic_targets_and_exact_native_actions(helper_process):

@@ -110,6 +110,7 @@ from .native_gui import (
     NativeAction,
     NativeApp,
     NativeGUI,
+    NativeGUICleanupUnconfirmed,
     NativeGUIInputRefused,
     NativeGUIOutcomeUnknown,
     NativeObserve,
@@ -177,6 +178,9 @@ _PREFLIGHT_FAILURES: dict[str, tuple[str, str]] = {
     ),
     "Native GUI session unavailable": (
         "session_unavailable", "Use a session ID returned to this connection; no GUI action ran."
+    ),
+    "Native GUI session is closing; close the same session again": (
+        "session_closing", "Close the same native GUI session before opening a new one."
     ),
     "Close a native GUI session before opening another": (
         "session_capacity", "Review this connection's sessions and explicitly close an idle one."
@@ -1630,6 +1634,7 @@ class Engine:
                 blocker_details.append({
                     "resource": "native_gui_session", "id": session_id,
                     "state": ("exited" if gui_entry.process.returncode is not None
+                              else "closing" if gui_entry.closing
                               else "busy" if busy else "running"),
                     "stop_tool": "gui_native_close",
                     "stop_available": not busy and gui_entry.owner == owner,
@@ -1849,6 +1854,15 @@ class Engine:
                                   "upload_status and the destination; do not automatically "
                                   "publish again.",
                               })
+            except NativeGUICleanupUnconfirmed:
+                reply = Reply(
+                    operation_id=request.operation_id, state="unknown",
+                    error="Native GUI helper cleanup is unconfirmed.",
+                    data={"error_code": "native_gui_cleanup_unconfirmed",
+                          "cleanup_confirmed": False,
+                          "next_action": "Inspect computer_status and explicitly close the same "
+                          "native GUI session again if cleanup is still blocked."},
+                )
             except NativeGUIInputRefused:
                 reply = Reply(
                     operation_id=request.operation_id, state="failed",

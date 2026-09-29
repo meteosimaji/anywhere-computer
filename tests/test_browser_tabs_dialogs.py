@@ -7,6 +7,7 @@ import uuid
 import pytest
 from pydantic import ValidationError
 
+from anywhere_computer import engine as engine_module
 from anywhere_computer.browser_control import BrowserActionUnknown, BrowserControl
 from anywhere_computer.engine import Engine
 from anywhere_computer.models import (
@@ -17,6 +18,7 @@ from anywhere_computer.models import (
     BrowserSession,
     BrowserSessionId,
     BrowserSource,
+    Reply,
     Request,
 )
 
@@ -215,27 +217,41 @@ def test_dialog_contract_rejects_prompt_on_dismiss():
                             action="dismiss", prompt_text="invalid")
 
 
+@pytest.mark.parametrize("force_running", [False, True])
 async def test_engine_dialog_unknown_is_not_replayed_and_tabs_are_owner_bound(
-    tmp_path, dialog_site,
+    tmp_path, dialog_site, monkeypatch, force_running,
 ):
     pytest.importorskip("playwright.async_api")
     engine = Engine(tmp_path / "state")
     engine.browser.channel = "chrome"
+    running = []
 
     async def execute(tool, arguments, *, operation_id=None, peer="owner-a"):
         request = Request(operation_id=operation_id or uuid.uuid4().hex,
                           tool=tool, arguments=arguments)
-        reply = await engine.execute(request, peer=peer)
-        while reply.state == "pending":
-            await asyncio.sleep(0.02)
-            reply = await engine.execute(Request(operation_id=uuid.uuid4().hex,
-                                                tool="operations_get",
-                                                arguments={"operation_id": request.operation_id}),
-                                         peer=peer)
+        with monkeypatch.context() as patch:
+            if force_running:
+                patch.setattr(engine_module, "OBSERVER_WAIT_SECONDS", 0)
+            reply = await engine.execute(request, peer=peer)
+        async with asyncio.timeout(90):
+            while reply.state == "running":
+                running.append(request.operation_id)
+                recovered = await engine.execute(Request(operation_id=uuid.uuid4().hex,
+                    tool="operations_get", arguments={"operation_id": request.operation_id}),
+                    peer=peer)
+                if recovered.state == "running":
+                    await asyncio.sleep(0.02)
+                    continue
+                assert recovered.state == "completed", recovered
+                reply = Reply.model_validate(recovered.data)
+                if reply.state == "running":
+                    await asyncio.sleep(0.02)
         return reply
 
     try:
         opened = await execute("browser_open", {})
+        if force_running:
+            assert running
         ids = tab_args(opened.data)
         await execute("browser_navigate", {**ids, "url": dialog_site})
         request_id = uuid.uuid4().hex

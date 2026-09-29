@@ -18,6 +18,7 @@ from .plugin_images import IMAGE_LIMIT, bounded_image
 LIMIT = 64 * 1024
 VISUAL_LIMIT = 4 * 1024 * 1024
 TIMEOUT = 5.0
+CLEANUP_TIMEOUT = 1.0
 JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 HELPER_ERROR_CODES = frozenset({
     "accessibility_required", "ambiguous_process", "ax_error", "deadline_exceeded",
@@ -149,6 +150,10 @@ class NativeGUIInputRefused(ValueError):
     pass
 
 
+class NativeGUICleanupUnconfirmed(RuntimeError):
+    pass
+
+
 def installed_helper() -> Path:
     if sys.platform != "darwin":
         raise ValueError("Native GUI requires macOS")
@@ -171,6 +176,7 @@ class NativeEntry:
     owner: str | None
     process: asyncio.subprocess.Process
     observations: set[str] = field(default_factory=set)
+    closing: bool = False
 
 
 class NativeGUI:
@@ -185,28 +191,42 @@ class NativeGUI:
             raise ValueError("Native GUI session unavailable")
         return entry
 
-    async def _retire(self, session_id: str) -> None:
-        entry = self.entries.pop(session_id, None)
+    async def _retire(self, session_id: str) -> bool:
+        entry = self.entries.get(session_id)
         if entry is None:
-            return
+            return True
+        # Keep ownership and resource accounting until exit is confirmed, including
+        # when this waiter is cancelled. A later owner close can finish cleanup.
+        entry.closing = True
+        entry.observations.clear()
         process = entry.process
-        if process.returncode is None:
-            try:
-                process.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), 1)
-            except TimeoutError:
+        try:
+            if process.returncode is None:
                 try:
-                    process.kill()
+                    process.terminate()
                 except ProcessLookupError:
                     pass
-                await process.wait()
+                try:
+                    await asyncio.wait_for(process.wait(), CLEANUP_TIMEOUT)
+                except TimeoutError:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        await asyncio.wait_for(process.wait(), CLEANUP_TIMEOUT)
+                    except TimeoutError:
+                        return False
+            return True
+        finally:
+            if process.returncode is not None:
+                self.entries.pop(session_id, None)
 
     async def _call(self, session_id: str, request: dict[str, JsonValue], *,
                     mutation: bool = False) -> dict[str, JsonValue]:
         entry = self.entries[session_id]
+        if entry.closing:
+            raise ValueError("Native GUI session is closing; close the same session again")
         process = entry.process
         request_id = uuid.uuid4().hex
         wire = json.dumps({**request, "id": request_id}, ensure_ascii=False).encode() + b"\n"
@@ -373,10 +393,14 @@ class NativeGUI:
     async def stop(self, args: NativeSession, *, owner: str | None) -> dict[str, JsonValue]:
         async with self.lock:
             self._entry(args.session_id, owner)
-            await self._retire(args.session_id)
+            if not await self._retire(args.session_id):
+                raise NativeGUICleanupUnconfirmed(
+                    "Native GUI helper cleanup is unconfirmed; close the same session again")
             return {"state": "closed"}
 
     async def close(self) -> None:
         async with self.lock:
             for session_id in list(self.entries):
                 await self._retire(session_id)
+            if self.entries:
+                raise NativeGUICleanupUnconfirmed("Native GUI helper cleanup is unconfirmed")
