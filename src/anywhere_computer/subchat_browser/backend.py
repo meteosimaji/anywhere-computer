@@ -66,6 +66,10 @@ logger = logging.getLogger(__name__)
 EXISTING_HISTORY_TIMEOUT_MS = 5_000
 
 
+class _DraftNotSubmitted(ValueError):
+    """The guarded browser task refused input before its Send click."""
+
+
 def _stream_conversation_id(body: bytes) -> str | None:
     """Extract a root SSE identity from an already bounded generation response."""
     for frame in re.split(rb'\r?\n\r?\n', body):
@@ -701,6 +705,7 @@ class BrowserSubchatBackend:
         dispatched: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         request_started: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
         claimed = False
+        draft_rejected = False
         pattern = re.compile(r'^https://chatgpt\.com/backend-api/f/conversation(?:\?.*)?$')
 
         generation_client: httpx.AsyncClient | None = None
@@ -740,7 +745,7 @@ class BrowserSubchatBackend:
 
         async def augment(route: Route) -> None:
             nonlocal claimed
-            if claimed or route.request.method != 'POST':
+            if draft_rejected or claimed or route.request.method != 'POST':
                 await route.abort()
                 return
             claimed = True
@@ -921,7 +926,22 @@ class BrowserSubchatBackend:
 
             await page.route(pattern, augment)
             route_installed = True
-            receipt = await self._send(submission)
+            try:
+                receipt = await self._send(submission)
+            except _DraftNotSubmitted:
+                # Block a delayed fetch before yielding for page cleanup. Only
+                # this intercepted HTTPX path can prove no generation escaped.
+                draft_rejected = True
+                if (self._httpx_generation and not claimed
+                        and self._record_preflight_failure is not None):
+                    self._unreusable_pages.add(page)
+                    if self._store is not None:
+                        self._store.record_http_event(
+                            submission.operation_id, 'draft_rejected', owner=self._owner)
+                    await self._http_reader.close_owned_page(page)
+                    if page.is_closed() and not claimed:
+                        self._record_preflight_failure(submission.operation_id)
+                raise
             try:
                 await asyncio.wait_for(asyncio.shield(request_started), 120)
             except TimeoutError:
@@ -974,8 +994,7 @@ class BrowserSubchatBackend:
             INPUT + '\ntext=>insertObservedSubchatDraft(document,text)', submission.prompt)
         try:
             sent = await guard.evaluate(
-                INPUT + '\n(guard,args)=>guard.draft.state === "draft_observed" && '
-                '!guard.intervened && submitSubchatDraft(document,...args)',
+                INPUT + '\n(guard,args)=>submitObservedSubchatDraft(document,guard,...args)',
                 [self._url(submission), submission.prompt, list(submission.baseline_message_ids)])
         finally:
             try:
@@ -983,7 +1002,9 @@ class BrowserSubchatBackend:
                     await guard.evaluate('guard=>guard.stop()')
             finally:
                 await guard.dispose()
-        if not sent:
+        if sent == 'draft_rejected':
+            raise _DraftNotSubmitted('Draft validation refused the Send click')
+        if sent != 'submitted':
             raise ValueError('Draft or conversation changed before dispatch; '
                              'recover without replay')
         if (submission.resources is None and self._record_request is None

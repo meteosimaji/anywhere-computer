@@ -159,3 +159,69 @@ requires checking the exact cited primary page. Combine child findings into the
 same final answer format as the baseline, then capture the final observer time.
 Record any missing search capability, overlapping work, extra Chat or recovery
 cost instead of silently replacing an unsuccessful arm.
+
+## Real diagnostic run, 2026-09-29 to 2026-09-30
+
+The first authorized pair did not produce a valid speed or quality comparison.
+The fresh catalog offered GPT-5.6 Sol / Instant, with the exact HTTP selection
+`version_id=5.6`, `preset_id=0`, `model_slug=gpt-5-6-instant` and
+`thinking_effort=null`. Four request IDs and four intent keys were saved locally
+before execution. The combined baseline was invoked once; the three independent
+workers remained unsent after the baseline did not progress.
+
+| Arm | Planned workers | Attempted sends | Receipt | Actual new-Chat count |
+| --- | ---: | ---: | --- | --- |
+| Combined baseline | 1 | 1 | Unconfirmed | Unknown; confirmed lower bound 0 |
+| Independent parallel workers | 3 | 0 | Not attempted | 0 dispatched by this benchmark |
+
+The baseline's initial ACK was `running/prepared`; later observations remained
+`sending/unconfirmed`. Forty bounded waits and the one send call occupied a
+483-second controller session, including startup and shutdown. No provider user
+message or conversation identity was saved. The confirmed new-Chat count is
+therefore a lower bound of zero, not proof of zero provider effects. The original
+operation stays unknown and was not resent or retrospectively changed to
+`not_sent`. After controller shutdown, zero owned background Chrome processes
+remained. Raw prompts, DOM, account data and operation IDs remain private.
+
+The exact owned page retained the inserted draft and a Send button on the Chat
+root page. A read-only DOM capture succeeded; the screenshot attempt raced the
+bounded controller shutdown and failed with `TargetClosedError`. An isolated
+render of the extracted editor was inspected, but is not a screenshot of the
+live provider page. Re-evaluating the current draft comparator against that
+saved editor reproduced refusal: the expected input had 664 characters and
+the canonical DOM had 663, with only its terminal line feed missing. Ordinary
+isolated Chrome contenteditable insertion preserved terminal line feeds in a
+separate check. This demonstrates a rejected draft shape after the provider's
+editor processing; it does not recover the original worker exception or prove
+which editor step removed the character.
+
+The resulting fixes preserve exact text rather than trimming it:
+
+- The guarded browser task distinguishes a refusal before its Send click from
+  an observed manual dispatch gesture. Only the HTTPX interception path with
+  no claimed generation request, blocked delayed requests, and a verified close
+  of that exact owned page can become terminal `preflight_failed` / `not_sent`.
+  This applies to an insertion that failed its immediate text check. Later draft
+  changes may be user edits: those pages remain open. Manual gestures and
+  unconfirmed cleanup also retain an unknown outcome.
+- `subchat_status` and `subchat_wait` include `send_worker`, a session-local
+  state (`running`, `failed`, `cancelled`, `finished`, or `not_owned`). A failed
+  worker has a fixed reason code; no provider exception text is returned.
+  `subchat_activity.failed_send_workers` distinguishes failed workers from active
+  ones. `not_owned` after restart does not imply that the provider never received
+  the message. Durable `draft_rejected` and `send_worker_failed` checkpoints keep
+  only a fixed stage and timestamp. Receipt recovery remains available even
+  after the local worker failed.
+
+Synthetic regressions cover the observed missing-LF shape, a delayed request
+during cleanup, manual dispatch, later user edits, unconfirmed page closure, and late worker
+failure followed by successful receipt recovery. The old implementation fails
+the missing-LF classification and late-worker visibility regressions. These
+tests verify the new failure handling, not provider acceptance of terminal LF.
+
+No final Chat answer was obtained, so native web-search availability, tool traces,
+source-reading evidence and output quality are unmeasured. The parallel arm,
+generation overlap and attributable Chat-token or Codex-run usage counters are also unavailable. There
+is no measured speedup or Codex-usage saving. A new paired run needs explicit
+authorization and a fresh predefined input; these old identities must not be
+reused as replacement sends.

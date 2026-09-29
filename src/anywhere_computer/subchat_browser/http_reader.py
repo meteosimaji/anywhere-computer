@@ -129,7 +129,8 @@ class ChatHTTPReader:
                     logger.warning('Temporary Chat tab cleanup detach failed: error_type=%s',
                                    type(error).__name__)
 
-    async def _close_page(self, page: Page) -> None:
+    async def close_owned_page(self, page: Page) -> None:
+        """Bound cleanup of a caller-owned page; caller verifies is_closed()."""
         if page.is_closed():
             return
         try:
@@ -215,7 +216,7 @@ class ChatHTTPReader:
                 # Wait for bounded cleanup before returning normal results. If
                 # the caller cancels, retain the task until that same bound; no
                 # close failure may replace the read result or original error.
-                task = asyncio.create_task(self._close_page(page))
+                task = asyncio.create_task(self.close_owned_page(page))
                 self._pending_closes.add(task)
                 task.add_done_callback(self._pending_closes.discard)
                 await asyncio.shield(task)

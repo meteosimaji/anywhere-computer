@@ -112,6 +112,16 @@ function insertObservedSubchatDraft(document, text) {
   }
 }
 
+// Distinguish a local refusal from an observed manual dispatch gesture. Never
+// normalize whitespace here: changed draft text must not pass as the input.
+function submitObservedSubchatDraft(document, guard, ...args) {
+  if (guard.intervened) return 'intervened';
+  if (guard.draft.state !== 'draft_observed') return 'draft_rejected';
+  // A later change can be a user's replacement draft. Preserve that page and
+  // the unknown outcome instead of treating it as our rejected insertion.
+  return submitSubchatDraft(document, ...args) ? 'submitted' : 'submission_unconfirmed';
+}
+
 // Final comparison and click share one browser task. Do not overwrite a user
 // edit or click again after a manual send changed the conversation or composer.
 function submitSubchatDraft(document, expectedUrl, text, previousIds) {
