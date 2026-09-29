@@ -3,6 +3,7 @@
 import asyncio
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -125,6 +126,7 @@ def _wav(samples: bytes) -> bytes:
     return output.getvalue()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable fixture")
 async def test_local_transcription_returns_text_without_downloading_model(
     tmp_path, monkeypatch,
 ):
@@ -214,6 +216,7 @@ def test_transcription_rejects_unbounded_clips_and_invalid_languages(tmp_path):
                         model_path=str(tmp_path / "trusted.pt"), language="en; rm")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX executable fixture")
 async def test_transcription_failure_does_not_return_backend_stderr(tmp_path, monkeypatch):
     from anywhere_computer import media
 
