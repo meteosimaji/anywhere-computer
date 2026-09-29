@@ -177,7 +177,7 @@ def test_oversized_image_does_not_hide_subsequent_text(monkeypatch):
     assert result["omitted_image_items"] == 1
 
 
-@pytest.mark.parametrize('name', ['codex_plugin_call', 'mcp_call'])
+@pytest.mark.parametrize('name', ['codex_plugin_call', 'mcp_call', 'gui_native_observe'])
 def test_native_image_result_matches_official_sdk_schema(name):
     from mcp.types import CallToolResult, ImageContent
 

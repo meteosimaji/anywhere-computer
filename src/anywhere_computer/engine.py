@@ -105,6 +105,7 @@ from .models import (
     WriteFile,
 )
 from .native_gui import (
+    NativeAction,
     NativeApp,
     NativeGUI,
     NativeGUIInputRefused,
@@ -504,6 +505,9 @@ class Engine:
         async def native_press(args: NativePress) -> Result:
             return await self.native_gui.press(args, owner=self._plugin_owner.get())
 
+        async def native_action(args: NativeAction) -> Result:
+            return await self.native_gui.action(args, owner=self._plugin_owner.get())
+
         async def native_set_target(args: NativeSetValueTarget) -> Result:
             return await self.native_gui.set_value_target(args, owner=self._plugin_owner.get())
 
@@ -519,9 +523,11 @@ class Engine:
                       "Close the session when done. Window handles belong to this session only.",
                       NativeApp, native_windows, read_only=True, open_world=True)
         self.register("gui_native_observe", "Observe a selected native window without focus. "
-                      "Returns a bounded AX tree and expiring references, not a screenshot. "
+                      "Returns a bounded AX tree, actions, bounds and expiring references. "
                       "Use compact=true for a shorter list of actionable role/label/identifier "
-                      "targets; request the full tree when needed.",
+                      "targets. Set include_image=true for an exact-window screenshot and pixel "
+                      "mapping; existing Screen Recording permission is required. Capture and "
+                      "AX observations are sequential, and visual_unavailable explains failure.",
                       NativeObserve, native_observe, read_only=True, open_world=True)
         self.register("gui_native_set_value", "Set AXValue of an observed element; this is not "
                       "keyboard typing. Invalidates all native observations. Returns exact "
@@ -533,6 +539,12 @@ class Engine:
                       "click or app activation. Action acceptance is not task completion. Observe "
                       "again to verify the effect; never replay an unknown outcome.",
                       NativePress, native_press, destructive=True, open_world=True)
+        self.register("gui_native_action", "Perform one supported AX action copied from an "
+                      "observed element's actions list, such as increment, menu or page scroll. "
+                      "Revalidates process/window/element identity and value, then invalidates "
+                      "native observations. No global keyboard or pointer events. Acceptance "
+                      "does not verify the effect; observe again. Never replay an unknown outcome.",
+                      NativeAction, native_action, destructive=True, open_world=True)
         self.register("gui_native_set_value_target", "Set AXValue on one unique observed "
                       "element selected by exact AX role and label or identifier. Refuses "
                       "missing, ambiguous or changed targets before input. Readback verifies "
@@ -1830,8 +1842,12 @@ class Engine:
                         data={"error_code": native_code or helper_code
                               or "native_gui_helper_rejected",
                               **({"input_attempted": False} if helper_code in {
-                                  "target_ambiguous", "target_not_found"} else {}),
+                                  "target_ambiguous", "target_not_found",
+                                  "action_not_observed"} else {}),
                               "next_action": (
+                                  "Observe again and copy an action from that element's "
+                                  "actions list."
+                                  if helper_code == "action_not_observed" else
                                   "Observe again and specify the exact identifier or "
                                   "element_ref to distinguish matching targets."
                                   if helper_code == "target_ambiguous" else

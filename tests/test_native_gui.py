@@ -9,7 +9,7 @@ from anywhere_computer.engine import Engine
 from anywhere_computer.models import Request
 
 PROGRAM = r'''
-import json, sys
+import base64, json, sys
 from pathlib import Path
 counter = Path(sys.argv[1])
 mode = sys.argv[2]
@@ -57,8 +57,22 @@ for line in sys.stdin:
                                    if key != 'value'} for node in tree.get('children', [])]}
         else:
             result = {'observation_id': 'fixture-observation', 'tree': tree}
+        if req.get('include_image'):
+            if mode == 'visual_permission':
+                result['visual_unavailable'] = 'screen_recording_required'
+            elif mode == 'visual_missing':
+                pass
+            else:
+                size = 2 * 1024 * 1024 + 1 if mode == 'visual_oversized' else 70000
+                data = base64.b64encode(b'\xff\xd8\xff' + b'x' * (size - 3)).decode()
+                if mode == 'visual_invalid':
+                    data = 'private-invalid-base64'
+                result['content'] = [{'type': 'image', 'mimeType': 'image/jpeg', 'data': data}]
+                result['visual'] = {'capture_id': 'capture', 'window_id': req['window_id'],
+                                    'capture_window_id': 44, 'coordinate_unit': 'pixel'}
     else:
-        if mode in ('target_ambiguous', 'target_changed', 'target_not_found'):
+        if mode in ('target_ambiguous', 'target_changed', 'target_not_found',
+                    'action_not_observed', 'action_target_changed'):
             print(json.dumps({'id': req['id'], 'error': {'code': mode}}), flush=True)
             continue
         if method == 'press_target' and (req.get('role') != 'AXButton'
@@ -82,7 +96,7 @@ for line in sys.stdin:
         if mode == 'lost':
             sys.exit(0)
         result = ({'action_accepted': True, 'postcondition_verified': False}
-                  if method in ('press', 'press_target') else
+                  if method in ('press', 'press_target', 'action') else
                   {'value_verified': True, 'persistence_verified': False})
     print(json.dumps({'id': req['id'], 'result': result}), flush=True)
 '''
@@ -202,6 +216,8 @@ async def test_semantic_target_rejection_does_not_send_input(
     ("set_value", "lost", "unknown"), ("press", "lost", "unknown"),
     ("set_value_target", "lost", "unknown"),
     ("press_target", "lost", "unknown"),
+    ("action", "lost", "unknown"),
+    ("action", "action_target_changed", "failed"),
     ("set_value", "changed", "failed"), ("press", "changed", "failed"),
     ("press", "press_changed", "failed"),
     ("set_value", "value_not_comparable", "failed"),
@@ -223,6 +239,8 @@ async def test_native_outcome_is_durable_and_not_replayed(
                     if method == "press_target" else
                     {"role": "AXTextField", "label": "Name", "value": "write once"}
                     if method == "set_value_target" else
+                    {"element_ref": "field", "action": "AXIncrement"}
+                    if method == "action" else
                     {"element_ref": "field", **({"value": "write once"}
                                               if method == "set_value" else {})})
         request = Request(operation_id="3" * 32, tool=f"gui_native_{method}", arguments={
@@ -241,6 +259,106 @@ async def test_native_outcome_is_durable_and_not_replayed(
             assert opened.data["session_id"] in engine.native_gui.entries
     finally:
         await engine.close()
+
+
+async def test_secondary_action_is_owned_and_consumes_its_observation(helper_process):
+    gui = native_gui.NativeGUI()
+    try:
+        opened = await gui.windows(native_gui.NativeApp(app="test"), owner="one")
+        target = {"session_id": opened["session_id"], "app": "test", "window_id": 1}
+        observed = await gui.observe(native_gui.NativeObserve(**target), owner="one")
+        args = native_gui.NativeAction(**target, observation_id=observed["observation_id"],
+                                       element_ref="stepper", action="AXIncrement")
+        with pytest.raises(ValueError, match="session unavailable"):
+            await gui.action(args, owner="two")
+        assert not helper_process[1].exists()
+        assert (await gui.action(args, owner="one"))["action_accepted"] is True
+        with pytest.raises(ValueError, match="observation unavailable"):
+            await gui.action(args, owner="one")
+        assert helper_process[1].read_text() == "write\n"
+    finally:
+        await gui.close()
+
+
+@pytest.mark.parametrize("mode,code", [
+    ("action_not_observed", "action_not_observed"),
+    ("action_target_changed", "native_gui_input_refused"),
+])
+async def test_secondary_action_refusal_retains_session_without_dispatch(
+    tmp_path, helper_process, mode, code,
+):
+    helper_process[0][0] = mode
+    engine = Engine(tmp_path / "state")
+    try:
+        opened = await engine.execute(Request(operation_id="1" * 32, tool="gui_native_windows",
+                                             arguments={"app": "test"}), peer="one")
+        target = {"session_id": opened.data["session_id"], "app": "test", "window_id": 1}
+        observed = await engine.execute(Request(operation_id="2" * 32, tool="gui_native_observe",
+                                                arguments=target), peer="one")
+        failed = await engine.execute(Request(operation_id="3" * 32, tool="gui_native_action",
+            arguments={**target, "observation_id": observed.data["observation_id"],
+                       "element_ref": "stepper", "action": "AXIncrement"}), peer="one")
+        assert failed.state == "failed"
+        assert failed.data["error_code"] == code
+        assert failed.data["input_attempted"] is False
+        assert not helper_process[1].exists()
+        assert opened.data["session_id"] in engine.native_gui.entries
+    finally:
+        await engine.close()
+
+
+async def test_native_visual_delivers_bounded_image_as_mcp_content(helper_process, tmp_path):
+    from anywhere_computer.mcp_server import _reply_result
+
+    engine = Engine(tmp_path / "state")
+    try:
+        opened = await engine.execute(Request(operation_id="1" * 32, tool="gui_native_windows",
+                                             arguments={"app": "test"}), peer="one")
+        target = {"session_id": opened.data["session_id"], "app": "test", "window_id": 1}
+        reply = await engine.execute(Request(operation_id="2" * 32, tool="gui_native_observe",
+            arguments={**target, "include_image": True}), peer="one")
+        assert reply.state == "completed"
+        assert reply.data["visual"]["window_id"] == 1
+        assert reply.data["visual"]["capture_window_id"] == 44
+        wire = _reply_result("gui_native_observe", reply)
+        assert wire["content"][1] == reply.data["content"][0]
+        encoded = reply.data["content"][0]["data"]
+        assert len(encoded) > native_gui.LIMIT
+        assert encoded not in wire["content"][0]["text"]
+        assert encoded not in json.dumps(wire["structuredContent"])
+        assert wire["structuredContent"]["data"]["content"][0]["bytes"] == 70000
+        assert not helper_process[1].exists()
+    finally:
+        await engine.close()
+
+
+@pytest.mark.parametrize("mode", ["visual_invalid", "visual_oversized", "visual_missing"])
+async def test_invalid_native_image_retires_session_without_echoing_data(helper_process, mode):
+    helper_process[0][0] = mode
+    gui = native_gui.NativeGUI()
+    try:
+        opened = await gui.windows(native_gui.NativeApp(app="test"), owner="one")
+        with pytest.raises(ValueError, match="^Invalid native observation$"):
+            await gui.observe(native_gui.NativeObserve(session_id=opened["session_id"],
+                app="test", window_id=1, include_image=True), owner="one")
+        assert not gui.entries
+    finally:
+        await gui.close()
+
+
+async def test_native_visual_permission_failure_preserves_ax_observation(helper_process):
+    helper_process[0][0] = "visual_permission"
+    gui = native_gui.NativeGUI()
+    try:
+        opened = await gui.windows(native_gui.NativeApp(app="test"), owner="one")
+        observed = await gui.observe(native_gui.NativeObserve(session_id=opened["session_id"],
+            app="test", window_id=1, include_image=True), owner="one")
+        assert observed["visual_unavailable"] == "screen_recording_required"
+        assert "content" not in observed
+        assert observed["observation_id"] in gui.entries[opened["session_id"]].observations
+        assert not helper_process[1].exists()
+    finally:
+        await gui.close()
 
 
 def test_manifest_mismatch_rejected_before_helper_launch(tmp_path, monkeypatch):

@@ -1,6 +1,9 @@
 """Real helper transport tests; no Accessibility permission or desktop mutation."""
 import asyncio
+import base64
 import json
+import os
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -49,6 +52,15 @@ async def test_persistent_requests_and_recovery_after_invalid_input(native_gui_h
         request.update(method="observe_targets")
         assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
             "invalid_input")
+        request.update(window_id=1, include_image="true")
+        assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
+            "invalid_input")
+        request.pop("include_image")
+        request.update(method="action", observation_id="snapshot", element_ref="button",
+                       action="AXUnobservedCustom")
+        assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
+            "invalid_input")
+        request.pop("action")
         request.update(method="press", window_id=1, observation_id="snapshot",
                        element_ref="button", value="must not be accepted")
         assert (await exchange(json.dumps(request).encode()))["error"]["code"] == (
@@ -296,3 +308,153 @@ emit(["id": "optional-value", "result": [
         }},
     ]
     assert b"private window title" not in result.stdout
+
+
+def test_window_capture_mapping_and_action_revalidation_in_real_swift_source(tmp_path):
+    source = Path(__file__).resolve().parents[1] / "native/macos/AXHelper.swift"
+    text = source.read_text()
+    program = tmp_path / "CaptureIdentity.swift"
+    program.write_text(text.removesuffix("\nrunJSONLines()\n") + r'''
+let bounds = CGRect(x: -120, y: 40, width: 800, height: 600)
+func match(_ pid: pid_t, _ frame: CGRect, _ title: String?) -> Bool {
+    captureMatches(pid: pid, frame: frame, title: title,
+                   expectedPID: 42, expectedFrame: bounds, expectedTitle: "Fixture")
+}
+func checkAction(_ before: Data?, _ after: Data?, _ press: Bool = false) -> String {
+    do {
+        try validateObservedAction(before, after, press: press)
+        return "accepted"
+    } catch let failure as HelperFailure { return failure.code }
+    catch { return "unexpected" }
+}
+let surface = CGContext(data: nil, width: 120, height: 80, bitsPerComponent: 8,
+                        bytesPerRow: 0, space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+surface.setFillColor(NSColor.systemRed.cgColor)
+surface.fill(CGRect(x: 0, y: 0, width: 120, height: 80))
+let encoded = try encodedCapture(surface.makeImage()!)
+emit(["id": "checks", "result": [
+    "exact_window": match(42, bounds, "Fixture"),
+    "other_process": !match(43, bounds, "Fixture"),
+    "other_title": !match(42, bounds, "Other"),
+    "missing_title": !match(42, bounds, nil),
+    "moved_window": !match(42, bounds.offsetBy(dx: 1, dy: 0), "Fixture"),
+    "invalid_bounds": !validBounds(CGRect(x: 0, y: 0, width: 0, height: 5)),
+    "negative_origin_supported": validBounds(bounds),
+    "jpeg_header": encoded.starts(with: [0xff, 0xd8, 0xff]),
+    "bounded_encoding": encoded.count > 0 && encoded.count <= maxImageBytes,
+    "bounds": boundsJSON(bounds),
+    "unchanged_action": checkAction(Data([1]), Data([1])),
+    "unobserved_action": checkAction(nil, Data([1])),
+    "removed_action": checkAction(Data([1]), nil),
+    "changed_action": checkAction(Data([1]), Data([2])),
+    "press_compatibility": checkAction(nil, Data([1]), true),
+    "actions": supportedActions.sorted(),
+]])
+''')
+    executable = tmp_path / "capture-identity"
+    subprocess.run(["swiftc", str(program), "-o", str(executable)],
+                   check=True, capture_output=True, timeout=90)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, timeout=5)
+    checked = json.loads(result.stdout)["result"]
+    for name in ("exact_window", "other_process", "other_title", "missing_title", "moved_window",
+                 "invalid_bounds", "negative_origin_supported", "jpeg_header", "bounded_encoding"):
+        assert checked[name] is True
+    assert checked["bounds"] == {
+        "x": -120, "y": 40, "width": 800, "height": 600,
+        "coordinate_unit": "point", "origin": "global_top_left",
+    }
+    assert checked["unchanged_action"] == "accepted"
+    assert checked["unobserved_action"] == "action_not_observed"
+    assert checked["removed_action"] == checked["changed_action"] == "action_target_changed"
+    assert checked["press_compatibility"] == "press_target_changed"
+    from anywhere_computer.native_gui import NativeAction
+    assert checked["actions"] == sorted(
+        NativeAction.model_json_schema()["properties"]["action"]["enum"])
+
+
+@pytest.mark.skipif(os.environ.get("ANYWHERE_NATIVE_GUI_ACCEPTANCE") != "1",
+                    reason="Opt-in disposable GUI acceptance requires existing AX/capture grants")
+async def test_live_exact_window_image_and_secondary_action(
+    native_gui_helper, tmp_path, monkeypatch,
+):
+    """Opt in on a GUI host; no OS permission dialog or user app is opened."""
+    from anywhere_computer import native_gui
+    from anywhere_computer.mcp_server import _reply_result
+    from anywhere_computer.models import Reply
+
+    bundle = tmp_path / "Anywhere Native Fixture.app" / "Contents"
+    executable = bundle / "MacOS" / "Fixture"
+    executable.parent.mkdir(parents=True)
+    (bundle / "Info.plist").write_bytes(plistlib.dumps({
+        "CFBundleExecutable": "Fixture", "CFBundleIdentifier": "org.anywherecomputer.NativeFixture",
+        "CFBundleName": "Anywhere Native Fixture", "CFBundlePackageType": "APPL",
+        "NSHighResolutionCapable": True,
+    }))
+    source = Path(__file__).parent / "fixtures/native_gui.swift"
+    subprocess.run(["swiftc", str(source), "-o", str(executable)],
+                   check=True, capture_output=True, timeout=90)
+    monkeypatch.setattr(native_gui, "installed_helper", lambda: native_gui_helper)
+    process = await asyncio.create_subprocess_exec(str(executable),
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL)
+    gui = native_gui.NativeGUI()
+
+    def nodes(node):
+        yield node
+        for child in node.get("children", []):
+            yield from nodes(child)
+
+    try:
+        assert await asyncio.wait_for(process.stdout.readline(), 5) == b"ready\n"
+        opened = await gui.windows(native_gui.NativeApp(app="org.anywherecomputer.NativeFixture"),
+                                   owner="fixture")
+        titles = {window["title"] for window in opened["windows"]}
+        assert titles == {"Anywhere Native Fixture Red", "Anywhere Native Fixture Blue"}
+        selected = next(window for window in opened["windows"]
+                        if window["title"] == "Anywhere Native Fixture Red")
+        target = {"session_id": opened["session_id"], "app": "org.anywherecomputer.NativeFixture",
+                  "window_id": selected["window_id"]}
+        observed = await gui.observe(native_gui.NativeObserve(**target, include_image=True),
+                                     owner="fixture")
+        assert "visual_unavailable" not in observed, observed.get("visual_unavailable")
+        assert observed["visual"]["window_id"] == selected["window_id"]
+        assert observed["visual"]["observation_id"] == observed["observation_id"]
+        assert observed["visual"]["bounds"] == observed["tree"]["bounds"]
+        picture = tmp_path / "selected-window.jpg"
+        picture.write_bytes(base64.b64decode(observed["content"][0]["data"], validate=True))
+        pixels = json.loads(subprocess.check_output([str(executable), str(picture)], timeout=5))
+        # The capture carries the display ICC profile and is encoded as JPEG;
+        # test the selected red window's hue, not device-independent RGB equality.
+        assert pixels["red"] > 0.9 and pixels["red"] - pixels["blue"] > 0.7
+        assert pixels["width"] == observed["visual"]["width"]
+        assert pixels["height"] == observed["visual"]["height"]
+        projected = _reply_result("gui_native_observe", Reply(
+            operation_id="a" * 32, state="completed", data=observed))
+        assert projected["content"][1] == observed["content"][0]
+        assert observed["content"][0]["data"] not in projected["content"][0]["text"]
+        stepper = next(node for node in nodes(observed["tree"])
+                       if node.get("identifier") == "fixture-stepper")
+        assert stepper["value"] == 0 and "AXIncrement" in stepper["actions"]
+        action = native_gui.NativeAction(**target, observation_id=observed["observation_id"],
+                                        element_ref=stepper["element_ref"], action="AXIncrement")
+        result = await gui.action(action, owner="fixture")
+        assert result["action_accepted"] and result["postcondition_verified"] is False
+        with pytest.raises(ValueError, match="observation unavailable"):
+            await gui.action(action, owner="fixture")
+        refreshed = await gui.observe(native_gui.NativeObserve(**target), owner="fixture")
+        current = next(node for node in nodes(refreshed["tree"])
+                       if node.get("identifier") == "fixture-stepper")
+        assert current["value"] == 1
+        process.stdin.write(b"ambiguous\n")
+        await process.stdin.drain()
+        assert await asyncio.wait_for(process.stdout.readline(), 5) == b"ambiguous\n"
+        ambiguous = await gui.observe(native_gui.NativeObserve(**target, include_image=True),
+                                      owner="fixture")
+        assert ambiguous["visual_unavailable"] == "capture_window_ambiguous"
+        assert "content" not in ambiguous
+    finally:
+        await gui.close()
+        if process.returncode is None:
+            process.terminate()
+            await asyncio.wait_for(process.wait(), 5)

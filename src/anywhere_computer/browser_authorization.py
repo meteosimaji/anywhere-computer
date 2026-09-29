@@ -270,7 +270,7 @@ class BrowserAuthorization:
             abilities.append("run commands as this device user")
         if record.tools & {"gui_click", "gui_type", "gui_key", "gui_native_press",
                            "gui_native_set_value", "gui_native_press_target",
-                           "gui_native_set_value_target"}:
+                           "gui_native_set_value_target", "gui_native_action"}:
             abilities.append("control apps")
         if record.tools & {"browser_navigate", "browser_click", "browser_fill"}:
             abilities.append("interact with websites")

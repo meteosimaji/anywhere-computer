@@ -172,6 +172,8 @@ async def test_consent_explains_indirect_plugin_route_separately_from_direct_sub
      ("run commands as this device user", "control apps")),
     ({"gui_native_press_target"}, ("control apps",),
      ("interact with websites",)),
+    ({"gui_native_action"}, ("control apps",),
+     ("interact with websites",)),
 ])
 async def test_consent_summarizes_actual_write_and_delegation_tools(
     tmp_path, monkeypatch, tools, expected, absent,
