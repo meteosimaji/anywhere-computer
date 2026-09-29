@@ -1,5 +1,5 @@
 {
-  "as_of_commit": "df1d8d3a865a7ebf9542a4c94c81c7d57251e080",
+  "as_of_commit": "ef1944e1612c9b9bbdb7a8aa194f77c5eea0a4d1",
   "method": "Full-file review by area, source-to-test/consumer trace, targeted regression and integrated-suite checks; each current SHA-256 matched a review record.",
   "included_file_count": 432,
   "areas": {
@@ -424,10 +424,10 @@
     {
       "path": "scripts/windows_test_shards.py",
       "area": "release_runtime",
-      "sha256": "7e5ba9f0633a63bb267920dc813879312f26b9e972266996dba69d54a79760df",
-      "lines": 254,
-      "review": "no_change",
-      "finding": "Read full deterministic file partition, collection proof and outcome receipts; no weakening of coverage."
+      "sha256": "74417790a325837d94764162f7bc04b6fb168cee6506406a3c68c13eb5e91566",
+      "lines": 257,
+      "review": "changed",
+      "finding": "Read full deterministic file partition, collection proof and outcome receipts. Moved native Task Scheduler validation into a dedicated serial preflight group after its 30-second timeout under shard load; coverage remains exactly once."
     },
     {
       "path": "src/anywhere_computer/__init__.py",

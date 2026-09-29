@@ -1,9 +1,10 @@
 # beta.33 code-quality audit
 
 The full-file review began at source commit `c9e1885` on 2026-09-30. The
-subsequent CI repairs changed browser shutdown code and tests. The beta.33
-wheel is built from clean source commit `df1d8d3`, recorded in its release manifest. The
-[file inventory](code-quality-audit.json) records the current SHA-256, area,
+subsequent CI repairs changed browser shutdown code, Windows test scheduling
+and tests. The beta.33 wheel is built from clean source commit `df1d8d3`,
+recorded in its release manifest. The [file inventory](code-quality-audit.json)
+records the current SHA-256, area,
 line count, review outcome and short finding for every included file. It is a
 review record, not a claim that testing can prove the absence of defects.
 
@@ -50,7 +51,10 @@ and their callers, contracts and tests, then inspected later integrated diffs.
 - Desktop UI state handling was simplified, inherited phase keys are rejected,
   browser target validation is reused, and obsolete engine help text was
   corrected. The distributed guest test bundle now includes its dependent
-  fixtures. Windows test sharding checks selected and finished test IDs.
+  fixtures. Windows test sharding checks selected and finished test IDs. The
+  native Task Scheduler XML check runs in a serial preflight group after it
+  reached its 30-second bound under the two-worker shard load. The partition
+  still includes this test exactly once.
 
 The [changelog](../CHANGELOG.md) lists the beta.33 feature work as well as
 these repairs. No confirmed, unpatched defect remained in the reviewed files
@@ -86,8 +90,10 @@ through Playwright's `FrameLocator` before asserting ownership and stale
 snapshot behavior. The next Windows smoke and all four test shards passed. A
 subsequent macOS run exposed a browser-close deadline that matched the caller's
 receipt deadline. The delayed-close regression failed before the repair and
-passed afterward. The beta.33 PR Quality run is required to confirm the final
-combined candidate on all three operating systems.
+passed afterward. A later Windows shard run timed out in native Task Scheduler
+validation; the serial preflight change awaits a new CI run. The beta.33 PR
+Quality run is required to confirm the final combined candidate on all three
+operating systems.
 
 ## Remaining product and operational gates
 
