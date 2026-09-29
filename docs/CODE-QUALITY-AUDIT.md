@@ -1,4 +1,4 @@
-# beta.34 code-quality audit
+# beta.34 code-quality audit and beta.35 follow-up
 
 The full-file review began at source commit `c9e1885` on 2026-09-30. The
 subsequent CI repairs changed browser shutdown code, Windows test scheduling
@@ -76,9 +76,21 @@ and their callers, contracts and tests, then inspected later integrated diffs.
 
 The [changelog](../CHANGELOG.md) lists the beta.33 feature work, beta.34 review
 repair and CI changes. No confirmed, unpatched defect remained in the reviewed files
-at the audit cutoff. The review record retains hypotheses that lacked a
+at the beta.34 audit cutoff. The review record retains hypotheses that lacked a
 reproduction or an upstream contract; it does not change behavior to satisfy
 those hypotheses.
+
+## Post-cutoff CI finding
+
+The beta.34 `main` Quality run failed on Ubuntu in
+`test_frame_scope_is_owned_observed_and_invalidated_on_same_url_reload`.
+After removing an iframe, Playwright sometimes rejected `Frame.title()` with
+`TargetClosedError` before its detach event updated the frame list. The
+browser observation then leaked that exception instead of reporting the
+requested frame as unavailable. Beta.35 maps that specific error when the tab
+and browser remain live. A closed tab still propagates its original error.
+The original integration test failed in that Ubuntu run and passed locally
+after the repair; cross-platform CI remains a separate release gate.
 
 ## Verification at the audit cutoff
 
