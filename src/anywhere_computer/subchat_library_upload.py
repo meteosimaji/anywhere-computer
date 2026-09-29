@@ -92,7 +92,8 @@ def _read_source(path: Path) -> tuple[str, bytes, str]:
             parent = parent / component
             directories.append((parent, os.open(
                 component, directory_flags, dir_fd=directories[-1][1])))
-        descriptor = os.open(path.name, os.O_RDONLY | nofollow_flag,
+        descriptor = os.open(path.name, os.O_RDONLY | nofollow_flag
+                             | getattr(os, 'O_NONBLOCK', 0),
                              dir_fd=directories[-1][1])
         try:
             metadata = os.fstat(descriptor)
