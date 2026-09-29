@@ -3,6 +3,15 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b34 / Plugin 0.2.0-beta.34 — development prerelease (2026-09-30)
+
+- Describe browser tab closure as website interaction on the OAuth consent
+  page, including when it is the only requested browser capability.
+- Run browser-control and browser-backed Subchat integration tests before
+  parallel macOS/Linux workers after CI observed a cookie-test failure and a
+  stalled manual-send test in concurrent workers. Preserve full test coverage
+  and bounded diagnostics.
+
 ## 0.2.0b33 / Plugin 0.2.0-beta.33 — development prerelease (2026-09-30)
 
 - Add observed frame IDs, frame-scoped semantic browser actions and open-shadow

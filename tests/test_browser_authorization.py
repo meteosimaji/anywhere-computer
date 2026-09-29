@@ -171,6 +171,7 @@ async def test_consent_explains_indirect_plugin_route_separately_from_direct_sub
     ({"terminal_output", "gui_native_observe"}, (),
      ("run commands as this device user", "control apps")),
     ({"browser_dialog_handle"}, ("interact with websites",), ("control apps",)),
+    ({"browser_tab_close"}, ("interact with websites",), ("control apps",)),
     ({"gui_native_press_target"}, ("control apps",),
      ("interact with websites",)),
     ({"gui_native_action"}, ("control apps",),
