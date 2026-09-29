@@ -82,8 +82,13 @@ for line in sys.stdin:
         return {"content": [{"type": "image", "mimeType": "image/png", "data": png}],
                 "frames": [{"requested_timestamp_seconds": 0}]}
 
+    async def transcript_fixture(_args):
+        return {"backend": "openai-whisper-cli", "model_sha256": "a" * 64,
+                "language": "en", "speech_detected": True, "text": "fixture speech"}
+
     monkeypatch.setattr(engine_module, "audio_clip", audio_fixture)
     monkeypatch.setattr(engine_module, "video_frames", video_fixture)
+    monkeypatch.setattr(engine_module, "transcribe", transcript_fixture)
     engine = Engine(tmp_path / "engine")
     known = frozenset(engine.tools) - LOCAL_ONLY_TOOLS
     authority = AuthorizationStore(
@@ -286,6 +291,9 @@ for line in sys.stdin:
             assert "dismissed" in handled["observation"]["text"]
             assert (await call("browser_close", browser_ids))["state"] == "closed"
             assert "decoder_available" in await call("media_status")
+            transcript = await call("media_transcribe", {
+                "path": str(upload_path), "model_path": str(upload_path)})
+            assert transcript["text"] == "fixture speech"
             audio_preview = await call("media_audio_clip", {"path": str(upload_path)})
             assert audio_preview["content"][0]["type"] == "audio"
             assert "data" not in audio_preview["content"][0]

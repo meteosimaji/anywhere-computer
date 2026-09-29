@@ -29,7 +29,14 @@ from .history import (
 if TYPE_CHECKING:
     from httpx import AsyncClient
     from httpx import Response as HTTPXResponse
-    from playwright.async_api import APIRequestContext, APIResponse, BrowserContext, Page, Response
+    from playwright.async_api import (
+        APIRequestContext,
+        APIResponse,
+        BrowserContext,
+        CDPSession,
+        Page,
+        Response,
+    )
 
     from ..subchat_http_session import ObservedHTTPSession
 
@@ -91,14 +98,14 @@ class ChatHTTPReader:
         self._denied_urls: set[str] = set()
         self._pending_closes: set[asyncio.Task[None]] = set()
 
-    async def _retry_page_close(self, page: Page) -> None:
+    async def _retry_page_close(self, page: Page, session: CDPSession | None = None,
+                                target_id: str | None = None) -> None:
         """Retry only this owned Chromium target, not its shared context.
 
         Playwright 1.58 marks a page as closing before sending Target.closeTarget.
         A second page.close() only waits on the same close promise; it does not
         send another browser command if Chrome acknowledged but did not close it.
         """
-        session = None
         closed = asyncio.Event()
 
         def on_close(_: Page) -> None:
@@ -109,11 +116,14 @@ class ChatHTTPReader:
             async with asyncio.timeout(_PAGE_CLOSE_RETRY_TIMEOUT):
                 if page.is_closed():
                     return
-                session = await page.context.new_cdp_session(page)
-                info = (await session.send('Target.getTargetInfo'))['targetInfo']
-                target_id = info.get('targetId')
-                if info.get('type') != 'page' or not isinstance(target_id, str) or not target_id:
-                    raise ValueError('Temporary Chat tab target could not be identified')
+                if session is None:
+                    session = await page.context.new_cdp_session(page)
+                    info = (await session.send('Target.getTargetInfo'))['targetInfo']
+                    target_id = info.get('targetId')
+                    if (info.get('type') != 'page' or not isinstance(target_id, str)
+                            or not target_id):
+                        raise ValueError('Temporary Chat tab target could not be identified')
+                assert target_id is not None
                 await session.send('Target.closeTarget', {'targetId': target_id})
                 # Chrome's acknowledgement alone is not evidence of closure.
                 if not page.is_closed():
@@ -129,10 +139,32 @@ class ChatHTTPReader:
                     logger.warning('Temporary Chat tab cleanup detach failed: error_type=%s',
                                    type(error).__name__)
 
-    async def close_owned_page(self, page: Page) -> None:
+    async def close_owned_page(self, page: Page, *, prepare_target: bool = False) -> None:
         """Bound cleanup of a caller-owned page; caller verifies is_closed()."""
         if page.is_closed():
             return
+        session: CDPSession | None = None
+        target_id: str | None = None
+        # A page which is already closing may no longer accept a new CDP
+        # attachment. Identify our exact target while it is still live.
+        if prepare_target:
+            try:
+                async with asyncio.timeout(_PAGE_CLOSE_RETRY_TIMEOUT):
+                    session = await page.context.new_cdp_session(page)
+                    info = (await session.send('Target.getTargetInfo'))['targetInfo']
+                    candidate = info.get('targetId')
+                    if info.get('type') == 'page' and isinstance(candidate, str) and candidate:
+                        target_id = candidate
+            except Exception as error:
+                logger.warning('Temporary Chat tab target preparation failed: error_type=%s',
+                               type(error).__name__)
+        if session is not None and target_id is None:
+            try:
+                await asyncio.wait_for(session.detach(), timeout=_CDP_DETACH_TIMEOUT)
+            except Exception as error:
+                logger.warning('Temporary Chat tab preparation detach failed: error_type=%s',
+                               type(error).__name__)
+            session = None
         try:
             await asyncio.wait_for(page.close(), timeout=_PAGE_CLOSE_TIMEOUT)
             if page.is_closed():
@@ -144,7 +176,7 @@ class ChatHTTPReader:
             logger.warning('Temporary Chat tab close requires retry: error_type=%s closed=%s',
                            type(error).__name__, page.is_closed())
         try:
-            await self._retry_page_close(page)
+            await self._retry_page_close(page, session if target_id else None, target_id)
         except Exception as error:
             if not page.is_closed():
                 logger.warning('Temporary Chat read tab could not be closed: '
@@ -216,7 +248,7 @@ class ChatHTTPReader:
                 # Wait for bounded cleanup before returning normal results. If
                 # the caller cancels, retain the task until that same bound; no
                 # close failure may replace the read result or original error.
-                task = asyncio.create_task(self.close_owned_page(page))
+                task = asyncio.create_task(self.close_owned_page(page, prepare_target=True))
                 self._pending_closes.add(task)
                 task.add_done_callback(self._pending_closes.discard)
                 await asyncio.shield(task)

@@ -191,6 +191,19 @@ canonical URL、サイト側が主張する発行者・著者・日付、可視�
 モデルが audio item を聞き取れたこと、動画全体を理解したことはこの配送だけでは
 証明できません。クライアントと選択モデルで受け入れを確認してください。
 
+音声アイテムを解釈できない Chat では、任意の `media_transcribe` を使えます。
+ローカルの FFmpeg と [OpenAI Whisper CLI](https://github.com/openai/whisper) を
+事前にインストールし、信頼できる `.pt` モデルファイルを所有者が配置します。
+`path` に対象音声・動画の絶対パス、`model_path` に配置済みモデルの絶対パスを
+指定します。`start_seconds` は 0–600、`duration_seconds` は 1–10 秒、
+`language` は任意の小文字言語コードです。ツール呼び出し中にモデルを取得したり、
+音声を外部にアップロードしたりしません。原本は最大 512 MiB、変換後の WAV は
+最大 2 MiB、モデルは最大 5 GiB、処理時間は最大 120 秒です。
+結果の `text` は認識モデルの推定であり、モデル SHA-256 と言語、無音判定を併記します。
+Chat が受け取るのは文字列で、実際に音を聞いたという証拠にはなりません。
+HTTP 接続では必要に応じて `media_transcribe` の scope を追加し、既存の
+認証済み Chat クライアントのツールを更新してください。
+
 ## 外部MCP sessionの開始
 
 既存のMCP実行ファイルを `mcp_session_open` で選び、返された `session_id` を保持します。

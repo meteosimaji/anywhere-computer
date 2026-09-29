@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b36` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.36` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b38` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.38` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -256,7 +256,10 @@ save to a new path and return a SHA-256 digest. A local FFmpeg installation adds
 native MCP media items when the client accepts them. See the
 [GUI guide](docs/GUI-MCP.md) for limits and the
 [comparison](docs/GUI-AUTOMATION-PLAN.md) for remaining gaps. The receiving
-Chat model's audio perception is a separate acceptance check.
+Chat model's audio perception is a separate acceptance check. For a Chat client
+that cannot hear the audio item, optional `media_transcribe` returns text from
+an explicitly installed, trusted local Whisper checkpoint without downloading
+a model during the tool call.
 
 For explicit local agent-to-agent text delivery, `anywhere-peer --help` describes
 owner provisioning and its separate MCP stdio server. Give each local peer its

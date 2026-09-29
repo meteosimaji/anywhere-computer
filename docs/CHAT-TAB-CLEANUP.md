@@ -33,15 +33,26 @@ acknowledgements, and 20 target-detached events. Every original tab survived;
 the original intermittent race did not reproduce. All page content and
 credentials in the probe were synthetic fixtures.
 
+[Quality run 36629209398](https://github.com/meteosimaji/anywhere-computer/actions/runs/36629209398)
+reproduced the remaining failure on macOS: an authenticated catalog read
+completed, then both `page.close()` and the fallback's attempt to attach a new
+CDP session timed out. One `https://chatgpt.com/` temporary tab remained beside
+the untouched original tab. The log does not prove whether Chrome stopped
+responding or Playwright could not attach after it had marked the page closing.
+
 ## Cleanup contract
 
-The reader waits up to five seconds for ordinary `page.close()`. If its own
-temporary page remains open, it creates a public CDP session attached to that
-exact page, obtains that session's target identity, and sends one
-`Target.closeTarget`. It waits for the page's close event, not merely the command
-acknowledgement. The fallback has a five-second deadline; detaching a still-live
-CDP session has a separate one-second limit. No shared context, original tab,
-account profile, or unrelated target is closed.
+Before closing a read-only bootstrap tab, the reader obtains a public CDP
+session and target identity for its exact temporary page. Generation-abort
+closes start immediately so a delayed POST is blocked as soon as possible. The
+reader waits up to five seconds for ordinary `page.close()`. If that page
+remains open, it sends one `Target.closeTarget`
+through the already-attached session. If target preparation failed, it retains
+the older late-attachment fallback. It waits for the page's close event, not
+merely the command acknowledgement. Target preparation and fallback each have a
+five-second deadline; detaching a still-live CDP session has a separate
+one-second limit. No shared context, original tab, account profile, or
+unrelated target is closed.
 
 Normal reads wait for this bounded cleanup. Caller cancellation preserves the
 same bounded cleanup task. Failed cleanup logs only error class and closure
@@ -53,6 +64,7 @@ this is reported as cleanup failure and never treated as confirmed closure.
 
 `tests/test_subchat_tab_cleanup.py` covers prompt closure, timeout recovery,
 driver errors, acknowledged-but-unclosed targets, unresponsive attach/detach,
+an attachment that fails only after page closure begins,
 and caller cancellation. Real Chrome tests inject a stalled initial close and
 require the fallback to destroy only the temporary target before returning the
 read result. A four-context load test runs 24 history bootstrap tabs and retains

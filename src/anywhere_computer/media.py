@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import io
+import json
 import os
 import shutil
 import stat
+import tempfile
+import wave
 from pathlib import Path
 from typing import Annotated
 
@@ -19,6 +24,9 @@ from .plugin_images import IMAGE_LIMIT, bounded_image
 
 _SOURCE_LIMIT = 512 * 1024 * 1024
 _DECODER_TIMEOUT = 12
+_TRANSCRIPTION_TIMEOUT = 120
+_TRANSCRIPT_LIMIT = 8192
+_MODEL_LIMIT = 5 * 1024 * 1024 * 1024
 
 
 class MediaAudioClip(Contract):
@@ -34,8 +42,18 @@ class MediaVideoFrames(Contract):
     )
 
 
+class MediaTranscribe(Contract):
+    path: str = Field(min_length=1, max_length=4096)
+    model_path: str = Field(min_length=1, max_length=4096)
+    start_seconds: float = Field(default=0, ge=0, le=600, allow_inf_nan=False)
+    duration_seconds: int = Field(default=10, ge=1, le=10)
+    language: str | None = Field(default=None, min_length=2, max_length=3,
+                                  pattern=r"^[a-z]+$")
+
+
 def media_status() -> dict[str, JsonValue]:
     return {"decoder_available": shutil.which("ffmpeg") is not None,
+            "local_transcriber_available": shutil.which("whisper") is not None,
             "source_limit_bytes": _SOURCE_LIMIT, "audio_clip_limit_seconds": 10,
             "video_frame_limit": 4, "model_media_receipt_verified": False}
 
@@ -88,6 +106,93 @@ async def audio_clip(args: MediaAudioClip) -> dict[str, JsonValue]:
     return {"path": str(path), "start_seconds": args.start_seconds,
             "requested_duration_seconds": args.duration_seconds,
             "audio_format": "mono_16khz_pcm_wav", "content": [validated]}
+
+
+def _checkpoint(path_value: str) -> tuple[Path, str]:
+    path = absolute_path(path_value)
+    info = path.lstat()
+    if not stat.S_ISREG(info.st_mode) or info.st_size > _MODEL_LIMIT or path.suffix != ".pt":
+        raise ValueError("Whisper model must be an existing local .pt file within 5 GiB")
+    with path.open("rb") as checkpoint:
+        digest = hashlib.file_digest(checkpoint, "sha256").hexdigest()
+    return path, digest
+
+
+async def transcribe(args: MediaTranscribe) -> dict[str, JsonValue]:
+    """Return text from an explicitly installed local Whisper checkpoint."""
+    executable = shutil.which("whisper")
+    if executable is None:
+        raise ValueError("Local Whisper CLI unavailable; install it and a trusted model file")
+    model, model_sha256 = await asyncio.to_thread(_checkpoint, args.model_path)
+    path = _source(args.path)
+    wav = await _decode([
+        "-ss", str(args.start_seconds), "-protocol_whitelist", "file,pipe",
+        "-i", os.fspath(path), "-t", str(args.duration_seconds), "-vn",
+        "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", "-f", "wav", "pipe:1",
+    ])
+    if len(wav) > AUDIO_LIMIT:
+        raise ValueError("Decoded audio clip exceeds the 2 MiB limit")
+    with wave.open(io.BytesIO(wav), "rb") as reader:
+        samples = reader.readframes(reader.getnframes())
+        if reader.getnchannels() != 1 or reader.getsampwidth() != 2:
+            raise ValueError("Decoded audio format is invalid")
+    if not samples or not any(samples):
+        return {"path": str(path), "start_seconds": args.start_seconds,
+                "requested_duration_seconds": args.duration_seconds,
+                "backend": "openai-whisper-cli", "model_sha256": model_sha256,
+                "language": args.language, "speech_detected": False, "text": "",
+                "quality_warning": "Digital silence; no model inference was run"}
+    with tempfile.TemporaryDirectory(prefix="anywhere-transcribe-") as temporary:
+        clip = Path(temporary) / "clip.wav"
+        descriptor = os.open(clip, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(wav)
+        command = [executable, str(clip), "--model", str(model),
+                   "--output_dir", temporary, "--output_format", "json",
+                   "--verbose", "False", "--fp16", "False", "--threads", "2",
+                   "--condition_on_previous_text", "False"]
+        if args.language is not None:
+            command.extend(["--language", args.language])
+        process = await asyncio.create_subprocess_exec(
+            *command, stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        try:
+            await asyncio.wait_for(process.wait(), _TRANSCRIPTION_TIMEOUT)
+        except TimeoutError as error:
+            raise ValueError("Local transcription exceeded the 120-second limit") from error
+        finally:
+            if process.returncode is None:
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+                await process.wait()
+        transcript = Path(temporary) / "clip.json"
+        if process.returncode != 0 or not transcript.is_file() or (
+            transcript.stat().st_size > 256 * 1024
+        ):
+            raise ValueError("Local transcription failed or returned an invalid result")
+        try:
+            result = json.loads(transcript.read_text(encoding="utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError("Local transcription returned an invalid result") from error
+    if not isinstance(result, dict):
+        raise ValueError("Local transcription returned an invalid result")
+    text = result.get("text")
+    language = result.get("language")
+    if not isinstance(text, str) or len(text) > _TRANSCRIPT_LIMIT or (
+        language is not None and (
+            not isinstance(language, str) or len(language) > 16 or not language.isascii()
+        )
+    ):
+        raise ValueError("Local transcription returned an invalid result")
+    return {"path": str(path), "start_seconds": args.start_seconds,
+            "requested_duration_seconds": args.duration_seconds,
+            "backend": "openai-whisper-cli", "model_sha256": model_sha256,
+            "language": language, "speech_detected": bool(text.strip()),
+            "text": text.strip(),
+            "quality_warning": "Transcription is model generated; verify unclear speech"}
 
 
 async def video_frames(args: MediaVideoFrames) -> dict[str, JsonValue]:

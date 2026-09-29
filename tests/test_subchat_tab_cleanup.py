@@ -65,6 +65,8 @@ class CleanupPage:
         assert page is self
         if self.retry == 'attach_timeout':
             await asyncio.Future()
+        if self.retry == 'attach_after_close_timeout' and self.started.is_set():
+            await asyncio.Future()
         return self
 
     async def send(self, command, params=None):
@@ -75,7 +77,7 @@ class CleanupPage:
         assert params == {'targetId': 'owned-target'}
         if self.retry == 'error':
             raise RuntimeError('private-fixture content in driver error')
-        if self.retry == 'normal':
+        if self.retry in ('normal', 'attach_after_close_timeout'):
             self.finish()
         # A positive acknowledgement is not proof that the target went away.
         return {'success': True}
@@ -115,7 +117,9 @@ async def test_bootstrap_cleanup_preserves_result_and_waits_for_retry(
     assert page.close_calls == 1
     assert not reader._pending_closes
     assert not page.listeners
-    assert bool(page.commands) == (mode != 'normal')
+    assert page.commands[0] == ('Target.getTargetInfo', None)
+    assert any(command == 'Target.closeTarget' for command, _ in page.commands) == (
+        mode != 'normal')
     assert 'private-fixture' not in caplog.text
 
 
@@ -135,6 +139,29 @@ async def test_unresponsive_cleanup_is_bounded_and_does_not_mask_result(
     assert page.detached == (retry != 'attach_timeout')
     assert 'could not be closed' in caplog.text
     assert 'private-fixture' not in caplog.text
+
+
+async def test_retry_uses_target_session_prepared_before_close(short_cleanup):
+    page = CleanupPage('timeout', 'attach_after_close_timeout')
+    reader = http_reader.ChatHTTPReader()
+
+    async def observe(_):
+        return ReadResponse()
+
+    assert await asyncio.wait_for(reader._read(page, None, observe), .5) == b'{"ok":true}'
+    assert page.closed
+    assert page.commands == [
+        ('Target.getTargetInfo', None),
+        ('Target.closeTarget', {'targetId': 'owned-target'}),
+    ]
+    assert not reader._pending_closes
+
+
+async def test_direct_page_close_does_not_delay_for_target_preparation(short_cleanup):
+    page = CleanupPage('normal', 'attach_timeout')
+    await http_reader.ChatHTTPReader().close_owned_page(page)
+    assert page.closed
+    assert page.commands == []
 
 
 @pytest.mark.parametrize('during_cleanup', [False, True])
