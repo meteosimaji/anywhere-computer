@@ -1,4 +1,5 @@
-// Experimental macOS 15+ capture probe. Not a public Anywhere tool yet.
+// macOS 15+ audio helper. The public audio_capture tool exposes bounded system playback only.
+// Check and device-list operations never request permission or start recording.
 // Compile: swiftc -parse-as-library scripts/probe_audio_capture.swift -o /tmp/ac-audio-probe
 // Inspect without requesting permission: /tmp/ac-audio-probe --check
 // Capture: /tmp/ac-audio-probe system|microphone|both SECONDS NEW_OUTPUT_DIRECTORY [MIC_DEVICE_ID]

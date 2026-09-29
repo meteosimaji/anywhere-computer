@@ -23,6 +23,33 @@ def normalized(raw: dict[str, JsonValue]) -> dict[str, JsonValue]:
             from None
 
 
+async def tool_contract(sessions: DirectMCPSessions, session_id: str, *, owner: str | None,
+                        name: str) -> dict[str, JsonValue] | None:
+    """Inspect all bounded catalog pages; name filtering only applies to each page."""
+    found: dict[str, JsonValue] | None = None
+    cursor: str | None = None
+    cursors: set[str] = set()
+    for _ in range(16):
+        page = await sessions.tools(session_id, owner=owner, name=name, cursor=cursor)
+        rows = page.get('tools')
+        if not isinstance(rows, list):
+            raise ValueError('Selected MCP catalog has no tools list')
+        for row in rows:
+            if not isinstance(row, dict) or row.get('name') != name:
+                continue
+            if found is not None:
+                raise ValueError(f'Duplicate {name} contract in selected MCP catalog')
+            found = row
+        next_cursor = page.get('nextCursor')
+        if not isinstance(next_cursor, str) or not next_cursor:
+            return found
+        if next_cursor in cursors:
+            raise ValueError('Selected MCP catalog cursor repeated')
+        cursors.add(next_cursor)
+        cursor = next_cursor
+    raise ValueError('Selected MCP catalog exceeded pagination limit')
+
+
 class GUIObserve(DirectMCPSessionId):
     provider: Literal['peekaboo', 'cua'] = 'peekaboo'
     pid: int | None = Field(default=None, ge=1)
@@ -140,36 +167,13 @@ class GUIMCP:
             return True
 
         for tool_name, required in fields.items():
-            page = await self.sessions.tools(session_id, owner=owner, name=tool_name)
-            found = False
-            cursors: set[str] = set()
-            for _ in range(16):
-                rows = page.get('tools')
-                if not isinstance(rows, list):
-                    raise ValueError('Selected MCP catalog has no tools list')
-                for row in rows:
-                    if not isinstance(row, dict) or row.get('name') != tool_name:
-                        continue
-                    if found:
-                        raise ValueError(f'Duplicate {tool_name} contract in selected MCP catalog')
-                    schema = row.get('inputSchema')
-                    properties = schema.get('properties') if isinstance(schema, dict) else None
-                    if not compatible(properties, required):
-                        raise ValueError(
-                            f'Selected MCP server lacks snapshot-bound {tool_name}')
-                    found = True
-                cursor = page.get('nextCursor')
-                if not isinstance(cursor, str) or not cursor:
-                    break
-                if cursor in cursors:
-                    raise ValueError('Selected MCP catalog cursor repeated')
-                cursors.add(cursor)
-                page = await self.sessions.tools(
-                    session_id, owner=owner, name=tool_name, cursor=cursor)
-            else:
-                raise ValueError('Selected MCP catalog exceeded pagination limit')
-            if not found:
+            row = await tool_contract(self.sessions, session_id, owner=owner, name=tool_name)
+            if row is None:
                 raise ValueError(f'Snapshot-bound {tool_name} contract unavailable')
+            schema = row.get('inputSchema')
+            properties = schema.get('properties') if isinstance(schema, dict) else None
+            if not compatible(properties, required):
+                raise ValueError(f'Selected MCP server lacks snapshot-bound {tool_name}')
 
     async def observe(self, args: GUIObserve, *, owner: str | None) -> dict[str, JsonValue]:
         if self._interaction.locked():

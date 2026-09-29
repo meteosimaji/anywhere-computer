@@ -70,7 +70,12 @@ async def run_ssh_child_mcp(directory: Path) -> None:
                 allowed_tools=config.scopes, device_directory=agent_directory or directory,
                 delegated_tasks=delegated,
             )
-            await serve_stdio(SSHChildSession(backend), sys.stdin.buffer, sys.stdout.buffer)
+            try:
+                await serve_stdio(SSHChildSession(backend), sys.stdin.buffer, sys.stdout.buffer)
+            finally:
+                # A disconnected observer can leave an admitted file worker running.
+                # Persist its receipt before the engine and delegation stores close.
+                await backend.close()
         finally:
             if engine is not None:
                 await engine.close()

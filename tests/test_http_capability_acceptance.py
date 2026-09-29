@@ -133,7 +133,9 @@ for line in sys.stdin:
                     b"<option value='basic'>Basic</option><option value='pro'>Pro</option>"
                     b"</select><div id='scrollpane' style='height:60px;overflow:auto'>"
                     b"<div style='height:600px'>Scrollable</div></div>"
-                    b"<a href='/payload'>Get file</a></body></html>")
+                    b"<button id='confirm' onclick=\"document.querySelector('#result')"
+                    b".textContent=confirm('HTTP confirmation')?'accepted':'dismissed'\">"
+                    b"Confirm</button><a href='/payload'>Get file</a></body></html>")
             headers = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
         writer.write(headers
                      + f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode()
@@ -186,7 +188,7 @@ for line in sys.stdin:
                 assert name in discovered, f'Tool was not discovered in this session: {name}'
                 operation_id = operation or uuid.uuid4().hex
                 result = await dispatch(name, args or {}, operation_id)
-                if result["state"] == "running" and expected == "completed":
+                if result["state"] == "running":
                     # A slow tool has only acknowledged the operation. Recover its
                     # original reply without issuing the side effect a second time.
                     async with asyncio.timeout(40):
@@ -265,6 +267,23 @@ for line in sys.stdin:
             assert downloaded["download"]["bytes"] == len(b"HTTP browser download 42\n")
             assert (tmp_path / "browser-downloaded.bin").read_bytes() == (
                 b"HTTP browser download 42\n")
+            tabs = await call("browser_tabs", {"session_id": browser["session_id"]})
+            assert len(tabs["tabs"]) == 1
+            added = await call("browser_tab_open", {"session_id": browser["session_id"]})
+            closed_tab = await call("browser_tab_close", {
+                "session_id": browser["session_id"], "tab_id": added["tab_id"],
+            })
+            assert closed_tab["state"] == "closed" and not closed_tab["session_closed"]
+            unknown = await call("browser_click", {**browser_ids, "selector": "#confirm"},
+                                 expected="unknown")
+            assert unknown["error_code"] == "browser_action_outcome_unknown"
+            pending = await call("browser_dialogs", browser_ids)
+            assert pending["dialog"]["type"] == "confirm"
+            handled = await call("browser_dialog_handle", {
+                **browser_ids, "dialog_id": pending["dialog"]["dialog_id"], "action": "dismiss",
+            })
+            assert handled["response_receipt"] == "confirmed"
+            assert "dismissed" in handled["observation"]["text"]
             assert (await call("browser_close", browser_ids))["state"] == "closed"
             assert "decoder_available" in await call("media_status")
             audio_preview = await call("media_audio_clip", {"path": str(upload_path)})
@@ -309,6 +328,12 @@ for line in sys.stdin:
                 "role": "AXButton", "identifier": "save-primary",
             })
             assert pressed["action_accepted"] and not pressed["postcondition_verified"]
+            snapshot = await call("gui_native_observe", target)
+            action = await call("gui_native_action", {
+                **target, "observation_id": snapshot["observation_id"],
+                "element_ref": "button", "action": "AXPress",
+            })
+            assert action["action_accepted"] and not action["postcondition_verified"]
             await call("gui_native_close", {"session_id": native["session_id"]})
             await call("workspace_open", {"path": str(tmp_path)})
             await call("settings_get")

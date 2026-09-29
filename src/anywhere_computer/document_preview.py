@@ -203,4 +203,5 @@ def preview_document(args: PreviewDocument) -> dict[str, JsonValue]:
         raise ValueError("Document changed during preview; read it again")
     return {"path": str(path), "sha256": digest, "format": extension[1:], "rendered": True,
             "page": args.page, "pages": pages, "mime_type": "image/png",
-            "data_base64": base64.b64encode(data).decode("ascii")}
+            "content": [{"type": "image", "mimeType": "image/png",
+                         "data": base64.b64encode(data).decode("ascii")}]}

@@ -9,32 +9,131 @@ function pairs(id, entries) {
     root.append(term, detail);
   }
 }
-const engineNames = {ready:"エンジンが応答しています",stopped:"エンジンは停止しています",different_build:"別のビルドが稼働しています",stale_endpoint:"記録されたエンジンは終了しています",unresponsive:"エンジンの応答を確認できません",credential_unavailable:"認証情報を利用できません"};
-const engineActions = {ready:"",stopped:"起動ボタンで、このPCのエンジンを起動できます。",different_build:"稼働中の版と管理画面の版を確認してください。",stale_endpoint:"エンジンを起動してから、状態を更新してください。",unresponsive:"処理中の可能性があります。状態を再確認してください。",credential_unavailable:"このPCの認証情報を読み取れるか確認してください。"};
-const resourceNames = {terminal_sessions:"端末セッション",plugin_sessions:"Pluginセッション",direct_mcp_sessions:"直接MCPセッション",searches:"検索",operations:"操作"};
-const featureNames = {files:"ファイル",terminal:"端末",literal_search:"検索",office_text_read:"文書の読取",gui:"組込みGUI",skills:"Skills",audio_capture:"音声取得",gui_native:"macOS GUI",gui_mcp:"MCP GUI"};
-const evidenceNames = {present:"実装あり",absent:"実装なし","true":"利用可能と報告","false":"非対応と報告",unknown:"未確認",not_observed:"未観測",not_checked:"未確認",not_verified:"未検証",authenticated_status_only:"状態照会の認証のみ",authorized:"認可済み",not_granted:"未認可",partial_grant:"一部のみ認可",not_required:"不要",verified_available:"署名済みhelperあり",unavailable:"helperなし",unsupported_platform:"非対応OS",verification_failed:"検証失敗"};
-function render(snapshot) {
-  field("engine",engineNames[snapshot.engine_state] ?? `要確認：${snapshot.engine_state}`);
-  field("action",engineActions[snapshot.engine_state] ?? "接続の診断が必要です。");
-  const configuration = snapshot.setup.configuration;
-  field("connection",snapshot.setup.phase === "configured" ? `設定済み：${configuration.client}（接続は未確認）` : snapshot.setup.phase === "new" ? "接続設定はまだありません" : `設定の確認が必要です：${snapshot.setup.phase}`);
-  const capabilityRows = Object.entries(snapshot.capability_diagnostics ?? {}).filter(([k]) => k in featureNames).map(([key, raw]) => {
-    const value = raw && typeof raw === "object" ? raw : {};
-    const fields = [["実装",value.running_implementation],["稼働版",value.runtime_available],["接続認可",value.connection_authorization],["helper",value.helper],["OS権限",value.os_permission],["受入",value.acceptance],["次の操作（helper/権限）",value.next_action],["認可の次の操作",value.authorization_next_action]];
-    return [featureNames[key],fields.filter(([,item]) => item !== undefined).map(([label,item]) => `${label}：${evidenceNames[String(item)] ?? String(item)}`).join(" / ")];
-  });
-  if (capabilityRows.length) pairs("features",capabilityRows);
-  else pairs("features",Object.entries(snapshot.capabilities).filter(([k]) => k in featureNames).map(([k,v]) => [featureNames[k],v?"エンジンが利用可能と報告":"未対応"]));
-  const blockerRows = (snapshot.update_blocker_details ?? []).filter((item) => item && typeof item === "object").map((item) => [
-    `更新を阻む：${resourceNames[item.resource] ?? item.resource ?? "セッション"}`,
-    `${item.id ?? "ID未確認"}${item.session_id ? ` / session ${item.session_id}` : ""} / 状態 ${item.state ?? "未確認"}${item.reason ? ` / 理由 ${item.reason}` : ""} / ${item.stop_tool ? `${item.stop_tool}：停止${item.stop_available === true ? "可能" : "不可"}${item.stop_arguments ? ` ${JSON.stringify(item.stop_arguments)}` : ""}` : item.inspect_tool ? `${item.inspect_tool}で状態照会可能（停止操作なし）` : "停止操作未確認"}`,
+const engineNames = {
+  ready: "エンジンが応答しています", stopped: "エンジンは停止しています",
+  different_build: "別のビルドが稼働しています", stale_endpoint: "記録されたエンジンは終了しています",
+  unresponsive: "エンジンの応答を確認できません", credential_unavailable: "認証情報を利用できません",
+};
+const engineActions = {
+  ready: "", stopped: "起動ボタンで、このPCのエンジンを起動できます。",
+  different_build: "稼働中の版と管理画面の版を確認してください。",
+  stale_endpoint: "エンジンを起動してから、状態を更新してください。",
+  unresponsive: "処理中の可能性があります。状態を再確認してください。",
+  credential_unavailable: "このPCの認証情報を読み取れるか確認してください。",
+};
+const resourceNames = {
+  terminal_sessions: "端末セッション", plugin_sessions: "Pluginセッション",
+  direct_mcp_sessions: "直接MCPセッション", native_gui_sessions: "ネイティブGUIセッション",
+  browser_sessions: "ブラウザセッション", searches: "検索", operations: "操作",
+};
+const featureNames = {
+  files: "ファイル", terminal: "端末", literal_search: "検索",
+  office_text_read: "文書の読取", office_rendered_preview: "文書の画像プレビュー",
+  gui: "組込みGUI", gui_native: "macOS GUI", gui_mcp: "MCP GUI",
+  browser_isolated: "独立ブラウザ", media_preview: "音声・動画の部分プレビュー",
+  skills: "Skills", codex_skills: "Codex Skills", audio_capture: "音声取得",
+};
+const evidenceNames = {
+  present: "実装あり", absent: "実装なし", true: "利用可能と報告",
+  false: "非対応と報告", unknown: "未確認", not_observed: "未観測",
+  not_checked: "未確認", not_verified: "未検証",
+  authenticated_status_only: "状態照会の認証のみ", authorized: "認可済み",
+  not_granted: "未認可", partial_grant: "一部のみ認可", not_required: "不要",
+  verified_available: "配布物との一致を確認", available: "helperあり",
+  unavailable: "helperなし", unsupported_platform: "非対応OS",
+  verification_failed: "検証失敗",
+};
+
+function renderCapabilities(snapshot) {
+  const capabilityRows = Object.entries(snapshot.capability_diagnostics ?? {})
+    .filter(([key]) => key in featureNames)
+    .map(([key, raw]) => {
+      const value = raw && typeof raw === "object" ? raw : {};
+      const fields = [
+        ["実装", value.running_implementation], ["稼働版", value.runtime_available],
+        ["接続認可", value.connection_authorization], ["helper", value.helper],
+        ["OS権限", value.os_permission], ["受入", value.acceptance],
+        ["次の操作（helper/権限）", value.next_action],
+        ["認可の次の操作", value.authorization_next_action],
+      ];
+      const evidence = fields.filter(([, item]) => item !== undefined)
+        .map(([label, item]) => `${label}：${evidenceNames[String(item)] ?? String(item)}`);
+      return [featureNames[key], evidence.join(" / ")];
+    });
+  const fallbackRows = Object.entries(snapshot.capabilities)
+    .filter(([key]) => key in featureNames)
+    .map(([key, value]) => [featureNames[key], value ? "エンジンが利用可能と報告" : "未対応"]);
+  pairs("features", capabilityRows.length ? capabilityRows : fallbackRows);
+}
+
+function describeBlocker(item) {
+  const details = [item.id ?? "ID未確認"];
+  if (item.session_id) details.push(`session ${item.session_id}`);
+  details.push(`状態 ${item.state ?? "未確認"}`);
+  if (item.reason) details.push(`理由 ${item.reason}`);
+  if (item.stop_tool) {
+    const availability = item.stop_available === true ? "可能" : "不可";
+    const argumentsText = item.stop_arguments ? ` ${JSON.stringify(item.stop_arguments)}` : "";
+    details.push(`${item.stop_tool}：停止${availability}${argumentsText}`);
+  } else {
+    details.push(item.inspect_tool
+      ? `${item.inspect_tool}で状態照会可能（停止操作なし）` : "停止操作未確認");
+  }
+  return details.join(" / ");
+}
+
+function renderWork(snapshot) {
+  const resourceRows = Object.entries(snapshot.active_resources)
+    .map(([key, value]) => [resourceNames[key] ?? key, value]);
+  const blockerRows = (snapshot.update_blocker_details ?? [])
+    .filter(item => item && typeof item === "object")
+    .map(item => [
+      `更新を阻む：${resourceNames[item.resource] ?? item.resource ?? "セッション"}`,
+      describeBlocker(item),
+    ]);
+  const rows = [...resourceRows, ...blockerRows];
+  pairs("work", rows.length ? rows : [["処理状態", "未確認"]]);
+}
+
+function renderIdentity(snapshot) {
+  const matchLabel = value => value === true ? "はい" : value === false ? "いいえ" : "未確認";
+  pairs("identity", [
+    ["管理画面側バージョン", snapshot.source_build?.version],
+    ["管理画面側 runtime ID", snapshot.source_build?.runtime_id],
+    ["稼働版バージョン", snapshot.version], ["稼働版 runtime ID", snapshot.runtime_id],
+    ["version一致", matchLabel(snapshot.runtime_comparison?.version_matches)],
+    ["runtime ID一致", matchLabel(snapshot.runtime_comparison?.runtime_id_matches)],
+    ["instance ID", snapshot.instance_id],
   ]);
-  pairs("work",[...Object.entries(snapshot.active_resources).map(([k,v]) => [resourceNames[k] ?? k,v]),...blockerRows]);
-  if (!Object.keys(snapshot.active_resources).length) pairs("work",[["処理状態","未確認"]]);
-  field("updates",snapshot.automatic_stable_updates ? "stableの自動更新：有効" : "手動更新（自動更新は無効）");
-  field("observed",`確認時刻：${new Date(snapshot.observed_at).toLocaleString()}`);
-  pairs("identity",[["管理画面側バージョン",snapshot.source_build?.version],["管理画面側 runtime ID",snapshot.source_build?.runtime_id],["稼働版バージョン",snapshot.version],["稼働版 runtime ID",snapshot.runtime_id],["version一致",snapshot.runtime_comparison?.version_matches === true ? "はい" : snapshot.runtime_comparison?.version_matches === false ? "いいえ" : "未確認"],["runtime ID一致",snapshot.runtime_comparison?.runtime_id_matches === true ? "はい" : snapshot.runtime_comparison?.runtime_id_matches === false ? "いいえ" : "未確認"],["instance ID",snapshot.instance_id]]);
+}
+
+async function checkDevice(deviceId, button, observation) {
+  button.disabled = true;
+  observation.textContent = " 接続を確認しています…";
+  try {
+    const result = JSON.parse(await window.__TAURI__.core.invoke(
+      "management_device_check", {deviceId}));
+    if (result.schema_version !== 1 || result.device_id !== deviceId) {
+      throw new Error("Invalid observation");
+    }
+    const states = {
+      ready: result.evidence === "authorized_catalog"
+        ? "認証済みツール一覧を取得できました。実操作は未確認です。"
+        : "端末エンジンの応答を確認しました。",
+      unreachable: "接続できません。端末と接続先を確認してください。",
+      not_ready: "接続の準備が整っていません。",
+      authorization_required: "接続の認証が必要です。",
+      credential_unavailable: "保存済みの認証情報を利用できません。",
+    };
+    observation.textContent = ` ${states[result.state] ?? "接続結果は未確認です。"}（${new Date(result.observed_at).toLocaleString()}）`;
+  } catch (_) {
+    observation.textContent = " 接続結果を確認できませんでした。自動再試行はしていません。";
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function renderDevices(snapshot) {
   const devices = document.getElementById("devices"); devices.replaceChildren();
   if (snapshot.device_registry_state === "unavailable") devices.textContent = "登録情報を読み取れません。保存データは変更していません。";
   else if (!snapshot.devices.length) devices.textContent = "追加の端末は登録されていません。";
@@ -45,19 +144,27 @@ function render(snapshot) {
     check.type = "button"; check.textContent = "接続を確認";
     const observation = document.createElement("span");
     observation.setAttribute("role", "status"); observation.setAttribute("aria-live", "polite");
-    check.addEventListener("click", async () => {
-      check.disabled = true; observation.textContent = " 接続を確認しています…";
-      try {
-        const result = JSON.parse(await window.__TAURI__.core.invoke("management_device_check", {deviceId: device.device_id}));
-        if (result.schema_version !== 1 || result.device_id !== device.device_id) throw new Error("Invalid observation");
-        const states = {ready: result.evidence === "authorized_catalog" ? "認証済みツール一覧を取得できました。実操作は未確認です。" : "端末エンジンの応答を確認しました。",unreachable:"接続できません。端末と接続先を確認してください。",not_ready:"接続の準備が整っていません。",authorization_required:"接続の認証が必要です。",credential_unavailable:"保存済みの認証情報を利用できません。"};
-        observation.textContent = ` ${states[result.state] ?? "接続結果は未確認です。"}（${new Date(result.observed_at).toLocaleString()}）`;
-      } catch (_) { observation.textContent = " 接続結果を確認できませんでした。自動再試行はしていません。"; }
-      finally { check.disabled = false; }
-    });
+    check.addEventListener("click", () => checkDevice(device.device_id, check, observation));
     row.append(document.createElement("br"), check, observation);
     devices.append(row);
   }
+}
+
+function render(snapshot) {
+  field("engine", engineNames[snapshot.engine_state] ?? `要確認：${snapshot.engine_state}`);
+  field("action", engineActions[snapshot.engine_state] ?? "接続の診断が必要です。");
+  const configuration = snapshot.setup.configuration;
+  field("connection", snapshot.setup.phase === "configured"
+    ? `設定済み：${configuration.client}（接続は未確認）`
+    : snapshot.setup.phase === "new"
+      ? "接続設定はまだありません" : `設定の確認が必要です：${snapshot.setup.phase}`);
+  renderCapabilities(snapshot);
+  renderWork(snapshot);
+  renderIdentity(snapshot);
+  renderDevices(snapshot);
+  field("updates", snapshot.automatic_stable_updates
+    ? "stableの自動更新：有効" : "手動更新（自動更新は無効）");
+  field("observed", `確認時刻：${new Date(snapshot.observed_at).toLocaleString()}`);
 }
 async function refresh(start = false) {
   const button = document.getElementById("refresh"), startButton = document.getElementById("start");

@@ -246,7 +246,7 @@ class DeviceRouter:
             if reply.operation_id != request.operation_id:
                 raise ConnectionError("Device operation ID mismatch")
             return reply.model_copy(update={"data": {
-                "device_id": args.device_id, "result": reply.data,
+                "device_id": args.device_id, "tool": args.tool, "result": reply.data,
             }})
         except (OSError, ValueError, RuntimeError, sqlite3.Error):
             return Reply(

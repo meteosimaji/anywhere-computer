@@ -36,6 +36,38 @@ def test_recovered_image_is_native_without_losing_original_error(is_error):
     assert original.data["content"] == [image()]
 
 
+@pytest.mark.parametrize("is_error", [False, True])
+@pytest.mark.parametrize("recover", [False, True])
+def test_device_image_is_projected_without_changing_receipt(is_error, recover):
+    from anywhere_computer.mcp_server import _reply_result
+
+    data = _tool_result({"content": [image()], "isError": is_error,
+                        "structuredContent": {"preview": image()}})
+    if recover:
+        data = Reply(operation_id="a" * 32, state="completed", data=data).model_dump(mode="json")
+    reply = Reply(operation_id="b" * 32, state="completed", data={
+        "device_id": "local", "tool": "operations_get" if recover else "mcp_call", "result": data,
+    })
+    result = _reply_result("devices_call", reply)
+    assert result["content"][1:] == [image()]
+    assert PNG not in result["content"][0]["text"]
+    assert PNG not in json.dumps(result["structuredContent"])
+    assert result["isError"] is (is_error and not recover)
+    assert PNG in reply.model_dump_json()  # Wire projection must not rewrite the ledger.
+
+
+@pytest.mark.parametrize("tool", ["files_read", "devices_call", "__catalog", None])
+def test_unknown_device_content_is_not_promoted(tool):
+    from anywhere_computer.mcp_server import _reply_result
+
+    reply = Reply(operation_id="a" * 32, state="completed", data={
+        "device_id": "local", "tool": tool, "result": {"content": [image()]},
+    })
+    result = _reply_result("devices_call", reply)
+    assert len(result["content"]) == 1
+    assert result["structuredContent"] == reply.model_dump(mode="json")
+
+
 async def test_delayed_image_survives_new_mcp_session(tmp_path, monkeypatch):
     from anywhere_computer import codex_plugins
     from anywhere_computer import engine as engine_module
@@ -177,7 +209,7 @@ def test_oversized_image_does_not_hide_subsequent_text(monkeypatch):
     assert result["omitted_image_items"] == 1
 
 
-@pytest.mark.parametrize('name', ['codex_plugin_call', 'mcp_call'])
+@pytest.mark.parametrize('name', ['codex_plugin_call', 'mcp_call', 'gui_native_observe'])
 def test_native_image_result_matches_official_sdk_schema(name):
     from mcp.types import CallToolResult, ImageContent
 

@@ -8,17 +8,25 @@ from pathlib import Path
 
 
 def build_guest_bundle(root: Path, output: Path) -> Path:
-    files = [root / name for name in ("pyproject.toml", "uv.lock", "LICENSE", "README.md")]
-    files += sorted((root / "src/anywhere_computer").rglob("*.py"))
-    files += sorted((root / "src/anywhere_computer").rglob("*.js"))
-    files += sorted((root / "scripts").glob("*.js"))
-    files += sorted((root / "tests").glob("test_*.py"))
-    files += [root / "docs/ARCHITECTURE.md"]
-    files += sorted((root / "scripts").glob("*.py"))
-    files += sorted((root / "src/anywhere_computer/web").glob("*.html"))
+    files = [root / name for name in (
+        "pyproject.toml", "uv.lock", "LICENSE", "README.md", "README.ja.md",
+        "tests/conftest.py", ".github/workflows/quality.yml",
+        ".agents/plugins/marketplace.json", ".claude-plugin/marketplace.json",
+    )]
+    # Keep test support beside its consumers after extraction. Do not recurse
+    # over arbitrary test data: local databases and account state are excluded.
+    for pattern in (
+        "src/anywhere_computer/**/*.py", "src/anywhere_computer/**/*.js",
+        "src/anywhere_computer/web/*.html", "tests/test_*.py", "tests/*.cjs",
+        "tests/fixtures/**/*.swift", "tests/fixtures/*.json", "native/macos/*.swift",
+        "desktop/ui/*.js", "desktop/ui/*.css", "docs/*.md", "scripts/*.py",
+        "scripts/*.js", "scripts/*.swift", "scripts/*.ps1", "scripts/ci/*.json",
+    ):
+        files.extend(sorted(root.glob(pattern)))
     plugin = root / "plugins/anywhere-computer"
     files += [plugin / name for name in (
-        ".codex-plugin/plugin.json", ".mcp.json", "LICENSE", "skills/computer-work/SKILL.md",
+        ".codex-plugin/plugin.json", ".mcp.json", ".claude-plugin/plugin.json",
+        ".claude-mcp.json", "LICENSE", "skills/computer-work/SKILL.md",
         "skills/subchat/SKILL.md",
         "bundled/checksums.json", "bundled/dependencies.txt", "bundled/release.json",
     )]

@@ -5,6 +5,7 @@ import ApplicationServices
 import CryptoKit
 import Darwin
 import Foundation
+import ScreenCaptureKit
 
 private let maxInputBytes = 64 * 1024
 private let maxWindows = 128
@@ -20,6 +21,12 @@ private let axMessagingTimeout: Float = 0.25
 private let requestDeadlineSeconds: TimeInterval = 3
 private let maxLabelCharacters = 512
 private let maxValueCharacters = 4096
+private let maxImageBytes = 2 * 1024 * 1024
+private let supportedActions: Set<String> = [
+    "AXPress", "AXIncrement", "AXDecrement", "AXConfirm", "AXCancel", "AXShowMenu",
+    "AXPick", "AXScrollUpByPage", "AXScrollDownByPage", "AXScrollLeftByPage",
+    "AXScrollRightByPage",
+]
 
 private struct HelperFailure: Error {
     let code: String
@@ -40,6 +47,8 @@ private struct RequestDeadline {
             throw helperError("deadline_exceeded")
         }
     }
+
+    var remaining: TimeInterval { max(0, expiresAt - uptime()) }
 }
 
 private struct ProcessIdentity: Equatable {
@@ -83,6 +92,7 @@ private struct ObservedElement {
     let valueDigest: Data?
     let pressIdentity: Data?
     let target: SemanticTarget
+    var actions: [String: Data] = [:]
 }
 
 private struct SemanticTarget {
@@ -140,19 +150,121 @@ private func pressActionAvailable(_ status: AXError, readOnly: Bool) throws -> B
 }
 
 private func pressIdentity(_ element: AXUIElement, readOnly: Bool = false) throws -> Data? {
+    try actionIdentities(element, readOnly: readOnly)["AXPress"]
+}
+
+private func actionIdentities(
+    _ element: AXUIElement, readOnly: Bool = false
+) throws -> [String: Data] {
     var raw: CFArray?
     let status = AXUIElementCopyActionNames(element, &raw)
     if try !pressActionAvailable(status, readOnly: readOnly) {
-        return nil
+        return [:]
     }
-    guard let actions = raw as? [String], actions.contains(kAXPressAction as String) else {
-        return nil
+    guard let actions = raw as? [String] else { return [:] }
+    let allowed = actions.filter { supportedActions.contains($0) }
+    guard !allowed.isEmpty else {
+        return [:]
     }
     let attributes = [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute,
                       kAXHelpAttribute, kAXIdentifierAttribute]
     let identity: [String?] = try attributes.map { try stringAttribute(element, $0 as CFString) }
     let data = try JSONEncoder().encode(identity)
-    return Data(SHA256.hash(data: data))
+    let digest = Data(SHA256.hash(data: data))
+    return Dictionary(allowed.map { ($0, digest) }, uniquingKeysWith: { first, _ in first })
+}
+
+private func validateObservedAction(_ observed: Data?, _ current: Data?, press: Bool) throws {
+    guard let observed else {
+        throw helperError(press ? "press_target_changed" : "action_not_observed")
+    }
+    guard let current, observed == current else {
+        throw helperError(press ? "press_target_changed" : "action_target_changed")
+    }
+}
+
+private func elementBounds(_ element: AXUIElement) -> CGRect? {
+    var rawPosition: CFTypeRef?
+    var rawSize: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString,
+                                        &rawPosition) == .success,
+          AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString,
+                                        &rawSize) == .success,
+          let rawPosition, let rawSize,
+          CFGetTypeID(rawPosition) == AXValueGetTypeID(),
+          CFGetTypeID(rawSize) == AXValueGetTypeID() else { return nil }
+    var position = CGPoint.zero
+    var size = CGSize.zero
+    guard AXValueGetValue(rawPosition as! AXValue, .cgPoint, &position),
+          AXValueGetValue(rawSize as! AXValue, .cgSize, &size) else { return nil }
+    let bounds = CGRect(origin: position, size: size)
+    return validBounds(bounds) ? bounds : nil
+}
+
+private func validBounds(_ bounds: CGRect) -> Bool {
+    [bounds.minX, bounds.minY, bounds.width, bounds.height].allSatisfy { $0.isFinite }
+        && bounds.width > 0 && bounds.height > 0
+        && bounds.width <= 32768 && bounds.height <= 32768
+}
+
+private func boundsJSON(_ bounds: CGRect) -> [String: Any] {
+    ["x": bounds.minX, "y": bounds.minY, "width": bounds.width, "height": bounds.height,
+     "coordinate_unit": "point", "origin": "global_top_left"]
+}
+
+// Public AX does not expose the CoreGraphics window ID. Require a unique
+// same-process, same-frame, same-title capture window; never guess by z-order.
+private func captureMatches(pid: pid_t, frame: CGRect, title: String?,
+                            expectedPID: pid_t, expectedFrame: CGRect,
+                            expectedTitle: String?) -> Bool {
+    pid == expectedPID && frame == expectedFrame && validBounds(frame)
+        && title == expectedTitle
+}
+
+private final class CaptureResult<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: T?
+    private var failed = false
+    let ready = DispatchSemaphore(value: 0)
+
+    func complete(_ value: T?, failed: Bool) {
+        lock.lock()
+        self.value = value
+        self.failed = failed
+        lock.unlock()
+        ready.signal()
+    }
+
+    func wait(_ deadline: RequestDeadline) throws -> T {
+        guard ready.wait(timeout: .now() + deadline.remaining) == .success else {
+            throw helperError("deadline_exceeded")
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        guard !failed, let value else { throw helperError("capture_failed") }
+        return value
+    }
+}
+
+@available(macOS 14.0, *)
+private func captureContent(_ deadline: RequestDeadline) throws -> SCShareableContent {
+    let result = CaptureResult<SCShareableContent>()
+    SCShareableContent.getExcludingDesktopWindows(true, onScreenWindowsOnly: true) {
+        content, error in result.complete(content, failed: error != nil)
+    }
+    return try result.wait(deadline)
+}
+
+private func encodedCapture(_ image: CGImage) throws -> Data {
+    let bitmap = NSBitmapImageRep(cgImage: image)
+    for quality in [0.75, 0.5] {
+        if let encoded = bitmap.representation(using: .jpeg,
+                                               properties: [.compressionFactor: quality]),
+           encoded.count <= maxImageBytes {
+            return encoded
+        }
+    }
+    throw helperError("image_too_large")
 }
 
 private struct ObservationRecord {
@@ -792,7 +904,8 @@ private final class AXHelper {
         let label = try labelForElement(element, deadline: deadline)
         try deadline.check()
         let observedValue = try observedValue(element)
-        let press = try pressIdentity(element, readOnly: true)
+        let actions = try actionIdentities(element, readOnly: true)
+        let press = actions["AXPress"]
         let digest = observedValue.comparable ? valueDigest(observedValue.value) : nil
         let value = jsonScalar(observedValue.value)
         try deadline.check()
@@ -801,7 +914,7 @@ private final class AXHelper {
         let settable = try observedValueIsSettable(element)
         try deadline.check()
         let identifier: (String?, Bool)
-        if (press != nil && digest != nil) || settable {
+        if (!actions.isEmpty && digest != nil) || settable {
             identifier = identifierForElement(element)
             try deadline.check()
         } else {
@@ -817,8 +930,10 @@ private final class AXHelper {
             "enabled": enabled ?? NSNull(),
             "settable": settable,
             "pressable": press != nil && digest != nil,
+            "actions": digest == nil ? [] : actions.keys.sorted(),
             "children": [[String: Any]](),
         ]
+        if let bounds = elementBounds(element) { node["bounds"] = boundsJSON(bounds) }
         if label.1 { node["label_truncated"] = true }
         if identifier.1 {
             node["identifier_truncated"] = true
@@ -832,7 +947,8 @@ private final class AXHelper {
             element: element, valueDigest: digest, pressIdentity: press,
             target: SemanticTarget(role: node["role"] as? String,
                                    label: label.1 ? nil : node["label"] as? String,
-                                   identifier: node["identifier"] as? String)
+                                   identifier: node["identifier"] as? String),
+            actions: actions
         )
 
         if depth >= maxTreeDepth {
@@ -999,14 +1115,23 @@ private final class AXHelper {
         let listed = try recordWindows(
             app: app, process: identity, elements: current, deadline: deadline
         )
+        let captureAvailable: Bool
+        if #available(macOS 14.0, *) {
+            captureAvailable = CGPreflightScreenCaptureAccess()
+        } else {
+            captureAvailable = false
+        }
         return [
             "process_id": Int(identity.pid),
             "windows": listed,
             "capabilities": [
-                "screen_capture": false,
+                "screen_capture": captureAvailable,
+                "screen_capture_requires": "existing Screen Recording permission and macOS 14+",
                 "keyboard": false,
                 "click": false,
                 "press": true,
+                "secondary_actions": true,
+                "scroll": "observed_AX_page_actions_only",
                 "set_value": true,
             ],
         ]
@@ -1080,9 +1205,10 @@ private final class AXHelper {
             state.nodeCount += 1
 
             do {
-                let press = try pressIdentity(element, readOnly: true)
+                let actions = try actionIdentities(element, readOnly: true)
+                let press = actions["AXPress"]
                 let settable = try observedValueIsSettable(element)
-                if press != nil || settable {
+                if !actions.isEmpty || settable {
                     let value = try observedValue(element)
                     let digest = value.comparable ? valueDigest(value.value) : nil
                     let role = try stringAttribute(element, kAXRoleAttribute as CFString)
@@ -1099,8 +1225,12 @@ private final class AXHelper {
                         "identifier_truncated": identifier.1,
                         "enabled": enabled ?? NSNull(),
                         "pressable": press != nil && digest != nil,
+                        "actions": digest == nil ? [] : actions.keys.sorted(),
                         "settable": settable,
                     ]
+                    if let bounds = elementBounds(element) {
+                        target["bounds"] = boundsJSON(bounds)
+                    }
                     if !label.1, let value = label.0 { target["label"] = value }
                     if !identifier.1, let value = identifier.0 { target["identifier"] = value }
                     let bytes = try JSONSerialization.data(withJSONObject: target).count + 4
@@ -1114,7 +1244,8 @@ private final class AXHelper {
                         element: element, valueDigest: digest, pressIdentity: press,
                         target: SemanticTarget(role: role,
                                                label: label.1 ? nil : label.0,
-                                               identifier: identifier.1 ? nil : identifier.0)
+                                               identifier: identifier.1 ? nil : identifier.0),
+                        actions: actions
                     )
                 }
 
@@ -1182,6 +1313,110 @@ private final class AXHelper {
         return try matchingElementRef(observation.elements, selector: selector)
     }
 
+    private func screenshotResult(
+        app: String, windowID: Int, observationID: String, deadline: RequestDeadline
+    ) throws -> [String: Any] {
+        guard #available(macOS 14.0, *) else {
+            throw helperError("screen_capture_unavailable")
+        }
+        guard CGPreflightScreenCaptureAccess() else {
+            throw helperError("screen_recording_required")
+        }
+        // The CLI has no NSApplication event loop. Initialize AppKit's display
+        // connection before constructing a desktop-independent SCContentFilter.
+        guard !NSScreen.screens.isEmpty else {
+            throw helperError("screen_capture_unavailable")
+        }
+        let record = try windowRecord(windowID, app: app)
+        let window = try revalidateWindow(record, deadline: deadline)
+        guard let bounds = elementBounds(window) else {
+            throw helperError("capture_window_unavailable")
+        }
+        let title = try stringAttribute(window, kAXTitleAttribute as CFString)
+        try requireUniqueCaptureWindow(record, bounds: bounds, title: title, deadline: deadline)
+        let content = try captureContent(deadline)
+        let matches = content.windows.filter { candidate in
+            guard let owner = candidate.owningApplication else { return false }
+            return candidate.isOnScreen && captureMatches(
+                pid: owner.processID, frame: candidate.frame, title: candidate.title,
+                expectedPID: record.process.pid, expectedFrame: bounds, expectedTitle: title
+            )
+        }
+        guard !matches.isEmpty else { throw helperError("capture_window_unavailable") }
+        guard matches.count == 1 else { throw helperError("capture_window_ambiguous") }
+        let selected = matches[0]
+        let filter = SCContentFilter(desktopIndependentWindow: selected)
+        let configuration = SCStreamConfiguration()
+        // Bound dimensions before capture/encoding. Capture only this window,
+        // without the cursor, window shadow, or any surrounding display pixels.
+        let scale = min(1.0, 1600 / max(bounds.width, bounds.height))
+        configuration.width = max(1, Int((bounds.width * scale).rounded()))
+        configuration.height = max(1, Int((bounds.height * scale).rounded()))
+        configuration.showsCursor = false
+        configuration.ignoreShadowsSingleWindow = true
+        configuration.captureResolution = .nominal
+        let captured = CaptureResult<CGImage>()
+        SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) {
+            image, error in captured.complete(image, failed: error != nil)
+        }
+        let image = try captured.wait(deadline)
+        guard image.width > 0, image.height > 0,
+              image.width <= 1600, image.height <= 1600 else {
+            throw helperError("image_too_large")
+        }
+        try requireUniqueCaptureWindow(record, bounds: bounds, title: title, deadline: deadline)
+        let refreshed = try captureContent(deadline)
+        guard refreshed.windows.contains(where: {
+            $0.windowID == selected.windowID && $0.isOnScreen
+                && $0.owningApplication?.processID == record.process.pid
+                && $0.frame == bounds && $0.title == title
+        }) else {
+            throw helperError("capture_target_changed")
+        }
+        try deadline.check()
+        let data = try encodedCapture(image)
+        return [
+            "content": [["type": "image", "mimeType": "image/jpeg",
+                         "data": data.base64EncodedString()]],
+            "visual": [
+                "kind": "native_window", "capture_mode": "sequential",
+                "capture_id": UUID().uuidString.lowercased(),
+                "observation_id": observationID,
+                "window_id": windowID, "capture_window_id": Int(selected.windowID),
+                "process_id": Int(record.process.pid), "bounds": boundsJSON(bounds),
+                "width": image.width, "height": image.height,
+                "image_origin": "window_top_left", "coordinate_unit": "pixel",
+                "mime_type": "image/jpeg", "bytes": data.count,
+                "scale_x": Double(image.width) / bounds.width,
+                "scale_y": Double(image.height) / bounds.height,
+            ],
+        ]
+    }
+
+    private func requireUniqueCaptureWindow(
+        _ record: WindowRecord, bounds: CGRect, title: String?, deadline: RequestDeadline
+    ) throws {
+        let selected = try revalidateWindow(record, deadline: deadline)
+        guard elementBounds(selected) == bounds,
+              try stringAttribute(selected, kAXTitleAttribute as CFString) == title else {
+            throw helperError("capture_target_changed")
+        }
+        let application = try confirmProcess(record.process)
+        let all = try currentWindows(application, pid: record.process.pid, deadline: deadline)
+        var matches = 0
+        for candidate in all {
+            try deadline.check()
+            if elementBounds(candidate) == bounds,
+               try stringAttribute(candidate, kAXTitleAttribute as CFString) == title {
+                matches += 1
+            }
+        }
+        // Check the AX inventory as well as capture candidates. A hidden second
+        // AX window with the same title/frame must not map to a different visible
+        // window merely because ScreenCaptureKit excludes the hidden one.
+        guard matches == 1 else { throw helperError("capture_window_ambiguous") }
+    }
+
     private func mutateResult(
         app: String,
         windowID: Int,
@@ -1189,6 +1424,7 @@ private final class AXHelper {
         elementRef: String,
         rawValue: Any?,
         press: Bool = false,
+        action: String? = nil,
         selector: SemanticSelector? = nil,
         deadline: RequestDeadline
     ) throws -> [String: Any] {
@@ -1210,7 +1446,8 @@ private final class AXHelper {
         // Consume before a possible effect; an ambiguous AX set is never replayable.
         observations.removeAll()
 
-        let requested = press ? nil : try requestedCFValue(rawValue)
+        let actionName = press ? "AXPress" : action
+        let requested = actionName == nil ? try requestedCFValue(rawValue) : nil
         let record = try windowRecord(windowID, app: app)
         guard record.process == observation.process else {
             throw helperError("process_identity_changed")
@@ -1263,7 +1500,7 @@ private final class AXHelper {
             throw helperError("element_not_enabled")
         }
         try deadline.check()
-        if try !press && !valueIsSettable(currentElement) {
+        if try actionName == nil && !valueIsSettable(currentElement) {
             throw helperError("value_not_settable")
         }
         guard let expected = observedElement.valueDigest else {
@@ -1274,20 +1511,19 @@ private final class AXHelper {
             throw helperError("value_not_comparable")
         }
         guard expected == current else { throw helperError("value_changed") }
-        if press {
+        if let actionName {
             guard enabledState.value == true else { throw helperError("element_not_enabled") }
-            guard let expected = observedElement.pressIdentity,
-                  let current = try pressIdentity(currentElement), expected == current else {
-                throw helperError("press_target_changed")
-            }
+            let expected = press ? observedElement.pressIdentity : observedElement.actions[actionName]
+            let current = try actionIdentities(currentElement)[actionName]
+            try validateObservedAction(expected, current, press: press)
             try deadline.check()
-            let status = AXUIElementPerformAction(currentElement, kAXPressAction as CFString)
+            let status = AXUIElementPerformAction(currentElement, actionName as CFString)
             guard status == .success else {
                 throw helperError("ax_error", stage: "perform_action", axStatus: status)
             }
             return ["process_id": Int(record.process.pid), "window_id": windowID,
                     "observation_id": observationID, "element_ref": elementRef,
-                    "action": "AXPress", "action_accepted": true,
+                    "action": actionName, "action_accepted": true,
                     "postcondition_verified": false]
         }
         // No mutation is attempted after the request budget has expired.
@@ -1324,7 +1560,7 @@ private final class AXHelper {
         let deadline = RequestDeadline()
         let allowedKeys: Set<String> = [
             "id", "method", "app", "window_id", "observation_id", "element_ref", "value",
-            "role", "label", "identifier",
+            "role", "label", "identifier", "action", "include_image",
         ]
         guard Set(object.keys).isSubset(of: allowedKeys) else {
             throw helperError("invalid_input")
@@ -1332,6 +1568,17 @@ private final class AXHelper {
 
         let method = try nonEmptyString(object["method"], maxBytes: 64)
         let app = try nonEmptyString(object["app"], maxBytes: 512)
+        if object["action"] != nil && method != "action" {
+            throw helperError("invalid_input")
+        }
+        var includeImage = false
+        if let raw = object["include_image"] {
+            guard ["observe", "observe_targets"].contains(method),
+                  let flag = raw as? NSNumber, isBooleanNSNumber(flag) else {
+                throw helperError("invalid_input")
+            }
+            includeImage = flag.boolValue
+        }
 
         switch method {
         case "windows":
@@ -1350,13 +1597,24 @@ private final class AXHelper {
                 throw helperError("invalid_input")
             }
             let windowID = try positiveInt(object["window_id"])
-            if method == "observe_targets" {
-                return try observeTargetsResult(app: app, windowID: windowID,
-                                                deadline: deadline)
+            var result = try method == "observe_targets"
+                ? observeTargetsResult(app: app, windowID: windowID, deadline: deadline)
+                : observeResult(app: app, windowID: windowID, deadline: deadline)
+            if includeImage, let observationID = result["observation_id"] as? String {
+                do {
+                    let picture = try screenshotResult(
+                        app: app, windowID: windowID, observationID: observationID,
+                        deadline: deadline
+                    )
+                    result.merge(picture) { _, new in new }
+                } catch let failure as HelperFailure {
+                    // Preserve useful AX evidence with an explicit visual failure.
+                    result["visual_unavailable"] = failure.code
+                }
             }
-            return try observeResult(app: app, windowID: windowID, deadline: deadline)
+            return result
 
-        case "set_value", "press":
+        case "set_value", "press", "action":
             guard object["role"] == nil, object["label"] == nil,
                   object["identifier"] == nil else {
                 throw helperError("invalid_input")
@@ -1367,6 +1625,14 @@ private final class AXHelper {
             guard (method == "set_value") == object.keys.contains("value") else {
                 throw helperError("invalid_input")
             }
+            let action: String?
+            if method == "action" {
+                let name = try nonEmptyString(object["action"], maxBytes: 128)
+                guard supportedActions.contains(name) else { throw helperError("invalid_input") }
+                action = name
+            } else {
+                action = nil
+            }
             return try mutateResult(
                 app: app,
                 windowID: windowID,
@@ -1374,6 +1640,7 @@ private final class AXHelper {
                 elementRef: elementRef,
                 rawValue: object["value"],
                 press: method == "press",
+                action: action,
                 deadline: deadline
             )
 
@@ -1417,7 +1684,7 @@ private func validResponseID(_ value: Any?) -> Any? {
     return nil
 }
 
-private func emit(_ object: [String: Any]) {
+private func emit(_ object: [String: Any], maxBytes: Int = 64 * 1024) {
     let data: Data
     do {
         data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
@@ -1426,7 +1693,7 @@ private func emit(_ object: [String: Any]) {
         FileHandle.standardOutput.write(Data((fallback + "\n").utf8))
         return
     }
-    if data.count + 1 > 64 * 1024 {
+    if data.count + 1 > maxBytes {
         emit(["id": object["id"] ?? NSNull(),
               "error": ["code": "response_too_large"]])
         return
@@ -1470,7 +1737,8 @@ private func processLine(_ data: Data, helper: AXHelper) {
 
     do {
         let result = try helper.handle(object)
-        emit(["id": responseID, "result": result])
+        emit(["id": responseID, "result": result],
+             maxBytes: object["include_image"] as? Bool == true ? 4 * 1024 * 1024 : 64 * 1024)
     } catch let failure as HelperFailure {
         emitError(id: responseID, code: failure.code, failure: failure)
     } catch {

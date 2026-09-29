@@ -90,8 +90,10 @@ def _computer_use_compatibility() -> dict[str, JsonValue]:
         "screen_read": "unverified", "native_actions": "unsupported_execution_context",
         "browser_actions": "unsupported_execution_context",
         "turn_context": "not_provided", "inference_requested": False,
-        "next_action": "Use Computer Use in its owning Codex client. This direct bridge "
-        "has no verified non-inference API to activate its required execution context.",
+        "next_action": "This direct bridge has no verified non-inference API to activate "
+        "Computer Use's required execution context. Ordinary Chat can use Anywhere "
+        "Computer's authorized browser_* and gui_native_* tools directly. Check their "
+        "current schemas, permissions and observed targets; no Codex turn is started.",
     }
 
 

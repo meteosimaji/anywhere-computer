@@ -159,7 +159,28 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
       uncertain(operationId,target,name,args);
       throw new Error("完了応答の内容を確認できません。操作結果を照会してください。");
     }
+    if(name==="documents_preview" && data.content!==undefined) {
+      if(!Array.isArray(data.content) || (routed && reply.data.tool!==name)) throw new Error("書式プレビューの操作を確認できません。");
+      return {...data,data_base64:await previewImage(data,result.content)};
+    }
     return data;
+  }
+  async function previewImage(data,content) {
+    const summary=data.content[0];
+    const images=Array.isArray(content)?content.filter(item=>item?.type==="image"):[];
+    const image=images[0];
+    if(data.content.length!==1 || summary?.type!=="image" || summary.mimeType!=="image/png" ||
+       Object.keys(summary).sort().join(",")!=="bytes,mimeType,sha256,type" ||
+       !Number.isInteger(summary.bytes) || summary.bytes<8 || summary.bytes>2*1024*1024 ||
+       typeof summary.sha256!=="string" || !/^[a-f0-9]{64}$/.test(summary.sha256) ||
+       images.length!==1 || image.mimeType!==summary.mimeType || typeof image.data!=="string" ||
+       image.data.length>4*Math.ceil(summary.bytes/3)) throw new Error("書式プレビューの画像情報が不正です。");
+    const decoded=atob(image.data),bytes=Uint8Array.from(decoded,char=>char.charCodeAt(0));
+    if(bytes.length!==summary.bytes || btoa(decoded)!==image.data ||
+       [137,80,78,71,13,10,26,10].some((value,index)=>bytes[index]!==value)) throw new Error("書式プレビューの画像が不正です。");
+    const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),value=>value.toString(16).padStart(2,"0")).join("");
+    if(digest!==summary.sha256) throw new Error("書式プレビューの画像が変更されています。");
+    return image.data;
   }
   function validMutationResult(name,data) {
     return !!data && typeof data==="object" && !Array.isArray(data) &&
@@ -345,8 +366,10 @@ footer{padding:0 36px 24px}#notice{font-size:11px;color:var(--muted);margin:0;li
       const highlights=[
         [hasAny(["files_write","files_write_binary","files_edit","files_move","files_restore","directories_create","documents_write","documents_edit_paragraph","upload_commit"]),"ファイル・文書の変更"],
         [hasAny(["terminal_start","terminal_input","mcp_session_open"]),"コマンド実行"],
-        [hasAny(["gui_click","gui_type","gui_key","gui_native_press","gui_native_set_value","gui_native_press_target","gui_native_set_value_target"]),"アプリの操作"],
-        [hasAny(["browser_navigate","browser_click","browser_fill"]),"Webページの操作"],
+        [hasAny(["gui_click","gui_type","gui_key","gui_native_press","gui_native_set_value","gui_native_press_target","gui_native_set_value_target","gui_native_action"]),"アプリの操作"],
+        [hasAny(["browser_navigate","browser_click","browser_fill","browser_key","browser_drag",
+          "browser_hover","browser_select","browser_scroll","browser_file_upload","browser_download",
+          "browser_dialog_handle","browser_tab_close"]),"Webページの操作"],
         [granted.has("codex_plugin_call"),"ほかのPluginの呼出し"],
         [granted.has("mcp_call"),"MCPサービスの呼出し"],
         [granted.has("devices_call"),"登録端末の操作"],

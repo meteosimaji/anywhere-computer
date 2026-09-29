@@ -17,7 +17,7 @@ import uuid
 from collections import deque
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import urlsplit
 
 from pydantic import JsonValue
@@ -26,6 +26,7 @@ from .files import absolute_path, read_bytes, sha256
 from .models import (
     BrowserClick,
     BrowserConsole,
+    BrowserDialogHandle,
     BrowserDownload,
     BrowserDrag,
     BrowserFileUpload,
@@ -39,6 +40,7 @@ from .models import (
     BrowserScroll,
     BrowserSelect,
     BrowserSession,
+    BrowserSessionId,
     BrowserSource,
     BrowserTarget,
 )
@@ -48,6 +50,8 @@ if TYPE_CHECKING:
         Browser,
         BrowserContext,
         ConsoleMessage,
+        Dialog,
+        Frame,
         Locator,
         Page,
         Playwright,
@@ -74,6 +78,10 @@ _IMAGE_LIMIT = 1024 * 1024
 _SOURCE_LIMIT = 32768
 _NETWORK_LIMIT = 100
 _CONSOLE_LIMIT = 100
+_FRAME_LIMIT = 32
+_TAB_LIMIT = 8
+_PAGE_WAIT_SECONDS = 20.0
+_T = TypeVar("_T")
 _BROWSER_DOWNLOAD_LIMIT = 64 * 1024 * 1024
 _FORM_CONTROLS_SCRIPT = r"""() => {
     const clean = value => String(value || '').replace(/[\r\n\t\u2028\u2029\u00a0]/g, ' ')
@@ -81,10 +89,16 @@ _FORM_CONTROLS_SCRIPT = r"""() => {
     const controls = [];
     let inspected = 0;
     let truncated = false;
-    for (const element of document.querySelectorAll(
-        'input, textarea, select, button, [role="textbox"], [role="combobox"], [role="button"]'
-    )) {
-        if (++inspected > 512 || controls.length >= 50) { truncated = true; break; }
+    const roots = [document];
+    for (let index = 0; index < roots.length; index++) {
+      const root = roots[index];
+      const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+      let element;
+      while ((element = walker.nextNode())) {
+        if (++inspected > 4096 || controls.length >= 50) { truncated = true; break; }
+        if (element.shadowRoot) roots.push(element.shadowRoot);
+        if (!element.matches('input, textarea, select, button, [role="textbox"], '
+                             + '[role="combobox"], [role="button"]')) continue;
         const style = getComputedStyle(element);
         if (element.getAttribute('type') === 'hidden' || style.display === 'none'
             || style.visibility === 'hidden' || element.getClientRects().length === 0
@@ -94,7 +108,7 @@ _FORM_CONTROLS_SCRIPT = r"""() => {
         const ariaLabel = clean(element.getAttribute('aria-label'));
         const labelledBy = clean((element.getAttribute('aria-labelledby') || '')
             .split(/\s+/).map(id => {
-                const label = document.getElementById(id);
+                const label = root.getElementById(id);
                 return label?.innerText || label?.textContent || '';
             }).join(' '));
         const tag = element.tagName.toLowerCase();
@@ -106,6 +120,7 @@ _FORM_CONTROLS_SCRIPT = r"""() => {
             : labels.length ? 'html-label' : buttonText ? 'button-text'
             : title ? 'title' : null;
         const item = {tag, label, label_source: source,
+            in_shadow_dom: root !== document,
             disabled: Boolean(element.disabled || element.getAttribute('aria-disabled') === 'true'),
             required: Boolean(element.required
                               || element.getAttribute('aria-required') === 'true')};
@@ -124,6 +139,8 @@ _FORM_CONTROLS_SCRIPT = r"""() => {
         const placeholder = clean(element.getAttribute('placeholder'));
         if (placeholder) item.placeholder = placeholder;
         controls.push(item);
+      }
+      if (truncated) break;
     }
     return {controls, truncated};
 }"""
@@ -192,7 +209,7 @@ def _cleanup_done(task: asyncio.Task[None]) -> None:
     try:
         task.result()
     except BaseException:
-        _LOG.warning("Browser startup cleanup did not complete successfully")
+        _LOG.warning("Browser cleanup did not complete successfully")
 
 
 async def _finish_cleanup(cleanup: Coroutine[Any, Any, None]) -> None:
@@ -235,6 +252,37 @@ class _ConsoleEvent:
     data: dict[str, JsonValue]
 
 
+class _DialogOpened(ValueError):
+    """A pending page dialog prevents DOM work; no automatic response is sent."""
+
+
+@dataclass
+class _PendingDialog:
+    dialog: Dialog
+    dialog_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    state: str = "pending"
+
+    def data(self) -> dict[str, JsonValue]:
+        return {"dialog_id": self.dialog_id, "type": self.dialog.type,
+                "message": self.dialog.message[:4096],
+                "message_truncated": len(self.dialog.message) > 4096,
+                "default_value": self.dialog.default_value[:4096],
+                "default_value_truncated": len(self.dialog.default_value) > 4096,
+                "state": self.state, "source_kind": "untrusted_page_dialog"}
+
+
+@dataclass
+class _Tabs:
+    entries: dict[str, _Entry] = field(default_factory=dict)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    closing: bool = False
+    close_task: asyncio.Task[None] | None = None
+    rejected_pages: set[Page] = field(default_factory=set)
+    rejected_popups: int = 0
+    dialog_opened: asyncio.Event = field(default_factory=asyncio.Event)
+    cleanup_tasks: set[asyncio.Task[None]] = field(default_factory=set)
+
+
 @dataclass
 class _Entry:
     owner: str | None
@@ -245,10 +293,19 @@ class _Entry:
     context: BrowserContext
     page: Page
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    tabs: _Tabs = field(default_factory=_Tabs)
+    pending_dialog: _PendingDialog | None = None
+    last_dialog_response: dict[str, JsonValue] | None = None
+    dialog_opened: asyncio.Event = field(default_factory=asyncio.Event)
+    dialog_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_navigation: _Navigation | None = None
     snapshot_id: str | None = None
     snapshot_at: float = 0.0
     snapshot_url: str | None = None
+    snapshot_frame_id: str | None = None
+    document_revision: int = 0
+    frame_revisions: dict[Frame, int] = field(default_factory=dict)
+    observed_frames: dict[str, Frame] = field(default_factory=dict)
     network_events: deque[_NetworkEvent] = field(
         default_factory=lambda: deque(maxlen=_NETWORK_LIMIT)
     )
@@ -271,33 +328,46 @@ class BrowserControl:
 
     @staticmethod
     def _live(entry: _Entry) -> bool:
-        return not entry.page.is_closed() and entry.browser.is_connected()
+        return entry.browser.is_connected() and any(
+            not tab.page.is_closed() for tab in entry.tabs.entries.values()
+        )
 
     async def _reap_dead(self) -> None:
         """Release ended sessions before enforcing the isolated-browser limit."""
-        for session_id, entry in list(self.entries.items()):
-            if self._live(entry) or entry.lock.locked():
+        for entry in list(self.entries.values()):
+            if self._live(entry) or self.busy(entry):
                 continue
-            async with entry.lock:
-                if self._live(entry) or self.entries.get(session_id) is not entry:
+            async with entry.tabs.lock:
+                if self._live(entry) or self.entries.get(entry.session_id) is not entry:
                     continue
-                del self.entries[session_id]
                 try:
-                    await entry.browser.close()
-                except Exception:
-                    pass  # The browser may already have exited.
-                try:
-                    await entry.playwright.stop()
-                except Exception:
-                    pass  # A dead driver must not exhaust session capacity.
+                    await self._request_close(entry)
+                except BrowserActionUnknown:
+                    pass  # Keep its update/capacity blocker until cleanup is confirmed.
+
+    @staticmethod
+    def busy(entry: _Entry) -> bool:
+        return (entry.tabs.lock.locked()
+                or (entry.tabs.close_task is not None and not entry.tabs.close_task.done())
+                or any(tab.lock.locked() or tab.dialog_lock.locked()
+                       for tab in entry.tabs.entries.values()))
+
+    def _session(self, args: BrowserSessionId, owner: str | None, *,
+                 allow_closing: bool = False) -> _Entry:
+        entry = self.entries.get(args.session_id)
+        if (entry is None or entry.owner != owner
+                or (entry.tabs.closing and not allow_closing)):
+            raise ValueError("Browser session unavailable for this connection")
+        return entry
 
     def _entry(
         self, args: BrowserSession, owner: str | None, *, require_live: bool = True,
     ) -> _Entry:
-        entry = self.entries.get(args.session_id)
-        if entry is None or entry.owner != owner or entry.tab_id != args.tab_id:
+        session = self._session(args, owner, allow_closing=not require_live)
+        entry = session.tabs.entries.get(args.tab_id)
+        if entry is None:
             raise ValueError("Browser session or tab unavailable for this connection")
-        if require_live and not self._live(entry):
+        if require_live and (entry.page.is_closed() or not entry.browser.is_connected()):
             raise ValueError("Browser session ended; open a new isolated session")
         return entry
 
@@ -344,6 +414,45 @@ class BrowserControl:
             "type": "error", "text": raw_text[:1024],
             "text_truncated": len(raw_text) > 1024,
         }))
+
+    @staticmethod
+    def _document_changed(entry: _Entry, frame: Frame) -> None:
+        # URL equality does not detect a reload or navigation to the same URL.
+        if frame is entry.page.main_frame:
+            entry.document_revision += 1
+            entry.snapshot_id = None
+        else:
+            entry.frame_revisions[frame] = entry.frame_revisions.get(frame, 0) + 1
+            if entry.observed_frames.get(entry.snapshot_frame_id or "") is frame:
+                entry.snapshot_id = None
+
+    @staticmethod
+    def _scope(entry: _Entry, frame_id: str | None) -> Frame:
+        if frame_id is None:
+            return entry.page.main_frame
+        frame = entry.observed_frames.get(frame_id)
+        if frame is None or frame.is_detached() or frame not in entry.page.frames:
+            raise ValueError("Browser frame unavailable; observe the tab again")
+        return frame
+
+    @staticmethod
+    def _frame_rows(entry: _Entry) -> tuple[list[JsonValue], bool]:
+        frames = [frame for frame in entry.page.frames if frame is not entry.page.main_frame]
+        previous = {frame: frame_id for frame_id, frame in entry.observed_frames.items()}
+        entry.observed_frames = {
+            previous.get(frame, uuid.uuid4().hex): frame for frame in frames[:_FRAME_LIMIT]
+        }
+        entry.frame_revisions = {
+            frame: revision for frame, revision in entry.frame_revisions.items() if frame in frames
+        }
+        identifiers = {frame: frame_id for frame_id, frame in entry.observed_frames.items()}
+        rows: list[JsonValue] = [{
+            "frame_id": frame_id, "name": frame.name[:256],
+            "url": _network_url(frame.url),
+            "parent_frame_id": (identifiers.get(frame.parent_frame)
+                                if frame.parent_frame is not None else None),
+        } for frame_id, frame in entry.observed_frames.items()]
+        return rows, len(frames) > _FRAME_LIMIT
 
     async def open(self, *, owner: str | None) -> dict[str, JsonValue]:
         # Each session gets its own ephemeral browser process and context. No
@@ -415,13 +524,225 @@ class BrowserControl:
             session_id = uuid.uuid4().hex
             tab_id = uuid.uuid4().hex
             entry = _Entry(owner, session_id, tab_id, driver, browser, context, page)
-            page.on("response", lambda response: self._record_response(entry, response))
-            page.on("requestfailed", lambda request: self._record_failure(entry, request))
-            page.on("console", lambda message: self._record_console(entry, message))
-            page.on("pageerror", lambda error: self._record_page_error(entry, error))
             self.entries[session_id] = entry
+            entry.tabs.entries[tab_id] = entry
+            self._listen(entry)
+            def record_page(popup: Page) -> None:
+                self._register_page(entry, popup)
+
+            context.on("page", record_page)
+            # Context events also catch an early dialog before a popup page event.
+            context.on("dialog", lambda dialog: self._record_dialog(entry, dialog))
             return {"session_id": session_id, "tab_id": tab_id, "isolation": "ephemeral_context",
                     "url": page.url}
+
+    def _listen(self, entry: _Entry) -> None:
+        page = entry.page
+        page.on("response", lambda response: self._record_response(entry, response))
+        page.on("requestfailed", lambda request: self._record_failure(entry, request))
+        page.on("console", lambda message: self._record_console(entry, message))
+        page.on("pageerror", lambda error: self._record_page_error(entry, error))
+        page.on("framenavigated", lambda frame: self._document_changed(entry, frame))
+        page.on("framedetached", lambda frame: self._document_changed(entry, frame))
+        page.on("close", lambda _: self._page_closed(entry))
+
+    def _page_closed(self, entry: _Entry) -> None:
+        entry.pending_dialog = None
+        entry.dialog_opened.clear()
+        self._refresh_dialog_event(entry)
+        entry.snapshot_id = None
+        live = [tab for tab in entry.tabs.entries.values() if not tab.page.is_closed()]
+        if live:
+            entry.tabs.entries.pop(entry.tab_id, None)
+            if self.entries.get(entry.session_id) is entry:
+                self.entries[entry.session_id] = live[0]
+        # Retain the final closed ID until browser_close/reaping can release its driver.
+
+    def _register_page(self, session: _Entry, page: Page) -> _Entry | None:
+        for existing in session.tabs.entries.values():
+            if existing.page is page:
+                return existing
+        if session.tabs.closing:
+            return None  # The owned context already has a retained cleanup task.
+        if len(session.tabs.entries) >= _TAB_LIMIT:
+            if page in session.tabs.rejected_pages:
+                return None
+            session.tabs.rejected_popups += 1
+            session.tabs.rejected_pages.add(page)
+
+            async def close_excess() -> None:
+                try:
+                    # Do not run beforeunload handlers or accept page requests on cleanup.
+                    await asyncio.wait_for(page.close(run_before_unload=False),
+                                           _CLEANUP_WAIT_SECONDS)
+                except Exception:
+                    # An unregistered live page must not evade capacity/ownership checks.
+                    # Shut down this owned context and retain its blocker until confirmed.
+                    await self._request_close(session)
+                finally:
+                    session.tabs.rejected_pages.discard(page)
+
+            task = asyncio.create_task(close_excess())
+            session.tabs.cleanup_tasks.add(task)
+            task.add_done_callback(session.tabs.cleanup_tasks.discard)
+            task.add_done_callback(_cleanup_done)
+            if len(session.tabs.rejected_pages) >= _TAB_LIMIT:
+                # Bound in-flight excess-page cleanup even if a page opens a popup storm.
+                self._begin_close(session)
+            return None
+        entry = _Entry(session.owner, session.session_id, uuid.uuid4().hex,
+                       session.playwright, session.browser, session.context, page,
+                       tabs=session.tabs)
+        session.tabs.entries[entry.tab_id] = entry
+        self._listen(entry)
+        return entry
+
+    def _record_dialog(self, session: _Entry, dialog: Dialog) -> None:
+        page = dialog.page
+        if page is None:
+            return
+        entry = self._register_page(session, page)
+        if entry is None:
+            return  # Excess pages are closed, never accepted.
+        entry.pending_dialog = _PendingDialog(dialog)
+        entry.snapshot_id = None
+        entry.dialog_opened.set()
+        entry.tabs.dialog_opened.set()
+
+    @staticmethod
+    def _refresh_dialog_event(entry: _Entry) -> None:
+        if any(tab.pending_dialog is not None for tab in entry.tabs.entries.values()):
+            entry.tabs.dialog_opened.set()
+        else:
+            entry.tabs.dialog_opened.clear()
+
+    @staticmethod
+    def _tab_rows(entry: _Entry) -> list[JsonValue]:
+        return [{"tab_id": tab.tab_id, "url": _network_url(tab.page.url),
+                 "state": "closed" if tab.page.is_closed() else "open",
+                 "dialog": tab.pending_dialog.data() if tab.pending_dialog else None}
+                for tab in entry.tabs.entries.values()]
+
+    async def tabs(self, args: BrowserSessionId, *, owner: str | None) -> dict[str, JsonValue]:
+        entry = self._session(args, owner, allow_closing=True)
+        return {"session_id": entry.session_id, "tabs": self._tab_rows(entry),
+                "state": "closing" if entry.tabs.closing else "open",
+                "cleanup_in_progress": (entry.tabs.close_task is not None
+                                        and not entry.tabs.close_task.done()),
+                "tab_limit": _TAB_LIMIT, "rejected_popups": entry.tabs.rejected_popups}
+
+    async def tab_open(self, args: BrowserSessionId, *, owner: str | None
+                       ) -> dict[str, JsonValue]:
+        session = self._session(args, owner)
+        async with session.tabs.lock:
+            self._session(args, owner)
+            if not self._live(session):
+                raise ValueError("Browser session ended; open a new isolated session")
+            if len(session.tabs.entries) >= _TAB_LIMIT:
+                raise ValueError("Browser tab capacity reached")
+            try:
+                page = await asyncio.wait_for(session.context.new_page(), _PAGE_WAIT_SECONDS)
+                entry = self._register_page(session, page)
+                if entry is None:
+                    raise ValueError("Browser tab capacity reached during creation")
+            except Exception as error:
+                raise BrowserActionUnknown(
+                    "Browser tab creation unconfirmed; list the same session before another open"
+                ) from error
+            return {"session_id": entry.session_id, "tab_id": entry.tab_id,
+                    "url": page.url, "isolation": "same_ephemeral_context"}
+
+    async def tab_close(self, args: BrowserSession, *, owner: str | None
+                        ) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner, require_live=False)
+        async with entry.tabs.lock:
+            self._entry(args, owner, require_live=False)
+            try:
+                await asyncio.wait_for(entry.page.close(run_before_unload=False),
+                                       _CLEANUP_WAIT_SECONDS)
+            except Exception as error:
+                raise BrowserActionUnknown(
+                    "Browser tab close unconfirmed; list the same session before another close"
+                ) from error
+            remaining = [tab for tab in entry.tabs.entries.values() if not tab.page.is_closed()]
+            if remaining:
+                entry.tabs.entries.pop(entry.tab_id, None)
+                self.entries[entry.session_id] = remaining[0]
+            else:
+                # Claim final-session cleanup before releasing the tab registry lock,
+                # so a concurrent open cannot create a tab that this close then kills.
+                await self._request_close(entry)
+        return {"session_id": entry.session_id, "tab_id": entry.tab_id, "state": "closed",
+                "session_closed": not remaining}
+
+    async def dialogs(self, args: BrowserSession, *, owner: str | None
+                      ) -> dict[str, JsonValue]:
+        # Never wait for a DOM/action lock: a dialog may be the reason it is held.
+        entry = self._entry(args, owner)
+        return {"session_id": entry.session_id, "tab_id": entry.tab_id,
+                "dialog": entry.pending_dialog.data() if entry.pending_dialog else None}
+
+    async def dialog_handle(self, args: BrowserDialogHandle, *, owner: str | None
+                            ) -> dict[str, JsonValue]:
+        entry = self._entry(args, owner)
+        async with entry.dialog_lock:
+            self._entry(args, owner)
+            pending = entry.pending_dialog
+            if pending is None or pending.dialog_id != args.dialog_id:
+                raise ValueError("Browser dialog unavailable; observe the same tab again")
+            if pending.state != "pending":
+                raise ValueError("Browser dialog response already claimed; do not replay it")
+            if args.prompt_text is not None and pending.dialog.type != "prompt":
+                raise ValueError("prompt_text is only valid for an observed prompt")
+            pending.state = "response_unconfirmed"
+            entry.last_dialog_response = {
+                "dialog_id": args.dialog_id, "action": args.action, "outcome": "unconfirmed",
+            }
+            entry.snapshot_id = None
+            try:
+                response = (pending.dialog.accept(args.prompt_text)
+                            if args.action == "accept" else pending.dialog.dismiss())
+                await asyncio.wait_for(response, _CLEANUP_WAIT_SECONDS)
+            except Exception as error:
+                raise BrowserActionUnknown(
+                    "Browser dialog response unconfirmed; observe the same tab, do not replay"
+                ) from error
+            entry.last_dialog_response["outcome"] = "confirmed"
+            if entry.pending_dialog is pending:
+                entry.pending_dialog = None
+                entry.dialog_opened.clear()
+                self._refresh_dialog_event(entry)
+        async with entry.lock:
+            try:
+                snapshot = await self._snapshot(entry)
+            except Exception:
+                # Chrome acknowledged the choice; failure to read the changed page
+                # must not erase that receipt or imply another response is safe.
+                snapshot = {"state": "unavailable", "next_tool": "browser_observe"}
+        return {"session_id": entry.session_id, "tab_id": entry.tab_id,
+                "dialog_id": args.dialog_id, "action": args.action,
+                "response_receipt": "confirmed", "observation": snapshot}
+
+    @staticmethod
+    async def _until_dialog(entry: _Entry, work: Coroutine[Any, Any, _T]) -> _T:
+        if entry.tabs.dialog_opened.is_set():
+            work.close()
+            raise _DialogOpened("Browser dialog pending; inspect browser_dialogs before responding")
+        running = asyncio.create_task(work)
+        # A popup modal can block its opener as well as its own page.
+        opened = asyncio.create_task(entry.tabs.dialog_opened.wait())
+        try:
+            done, _ = await asyncio.wait({running, opened}, timeout=_PAGE_WAIT_SECONDS,
+                                         return_when=asyncio.FIRST_COMPLETED)
+            if opened in done:
+                raise _DialogOpened("Browser dialog opened; inspect it before responding")
+            if running not in done:
+                raise TimeoutError("Browser page operation exceeded its bounded wait")
+            return await running
+        finally:
+            running.cancel()
+            opened.cancel()
+            await asyncio.gather(running, opened, return_exceptions=True)
 
     async def navigate(self, args: BrowserNavigate, *, owner: str | None) -> dict[str, JsonValue]:
         parsed = urlsplit(args.url)
@@ -437,8 +758,9 @@ class BrowserControl:
             entry.last_navigation = navigation
             entry.snapshot_id = None
             try:
-                response = await entry.page.goto(args.url, wait_until="domcontentloaded",
-                                                 timeout=15000)
+                response = await self._until_dialog(entry, entry.page.goto(
+                    args.url, wait_until="domcontentloaded", timeout=15000,
+                ))
                 snapshot = await self._snapshot(entry)
             except Exception as error:
                 raise BrowserNavigationUnknown(
@@ -454,28 +776,31 @@ class BrowserControl:
         async with entry.lock:
             self._entry(args, owner)
             return await self._snapshot(
-                entry, include_image=isinstance(args, BrowserObserve) and args.include_image
+                entry, include_image=isinstance(args, BrowserObserve) and args.include_image,
+                frame_id=args.frame_id if isinstance(args, BrowserObserve) else None,
             )
 
     async def source(self, args: BrowserSource, *, owner: str | None) -> dict[str, JsonValue]:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
+            scope = self._scope(entry, args.frame_id)
             if args.selector is None:
-                result = await entry.page.evaluate("""limit => {
+                result = await self._until_dialog(entry, scope.evaluate("""limit => {
                     const html = document.documentElement?.outerHTML || '';
                     return {html: html.slice(0, limit), total_characters: html.length};
-                }""", _SOURCE_LIMIT)
+                }""", _SOURCE_LIMIT))
             else:
-                target = entry.page.locator("css=" + args.selector)
-                if await target.count() != 1:
+                target = scope.locator("css=" + args.selector)
+                if await self._until_dialog(entry, target.count()) != 1:
                     raise ValueError("Browser source selector must match exactly one element")
-                result = await target.evaluate("""(element, limit) => {
+                result = await self._until_dialog(entry, target.evaluate("""(element, limit) => {
                     const html = element.outerHTML;
                     return {html: html.slice(0, limit), total_characters: html.length};
-                }""", _SOURCE_LIMIT)
+                }""", _SOURCE_LIMIT))
             return {"session_id": entry.session_id, "tab_id": entry.tab_id,
-                    "url": entry.page.url, "source_kind": "current_dom_outer_html",
+                    "url": scope.url, "frame_id": args.frame_id,
+                    "source_kind": "current_dom_outer_html",
                     "selector": args.selector, "html": result["html"],
                     "total_characters": result["total_characters"],
                     "truncated": result["total_characters"] > _SOURCE_LIMIT}
@@ -513,7 +838,8 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            result = await entry.page.evaluate("""limit => {
+            scope = self._scope(entry, args.frame_id)
+            result = await self._until_dialog(entry, scope.evaluate("""limit => {
                 const clean = value => String(value || '').replace(/\\s+/gu, ' ')
                     .trim().slice(0, 256);
                 const meta = (...names) => {
@@ -550,12 +876,13 @@ class BrowserControl:
                     headings, links,
                     links_truncated: inspected > 512 || links.length >= limit,
                 };
-            }""", args.link_limit)
+            }""", args.link_limit))
             links = [{"label": item["label"], "destination": _network_url(item["href"]),
                       "external": item["external"]} for item in result["links"]]
             return {"session_id": entry.session_id, "tab_id": entry.tab_id,
                     "source_kind": "current_dom_claims", "observed_at_unix": time.time(),
-                    "page_url": _network_url(entry.page.url), "title": result["title"],
+                    "page_url": _network_url(scope.url), "frame_id": args.frame_id,
+                    "title": result["title"],
                     "canonical": (_network_url(result["canonical"])
                                   if result["canonical"] else None),
                     "publisher_claim": result["publisher"], "author_claim": result["author"],
@@ -564,35 +891,40 @@ class BrowserControl:
                     "headings": result["headings"], "links": links,
                     "links_truncated": result["links_truncated"]}
 
-    @staticmethod
-    def _target_locator(entry: _Entry, args: BrowserClick | BrowserTarget) -> Locator:
+    @classmethod
+    def _target_locator(cls, entry: _Entry, args: BrowserClick | BrowserTarget,
+                        frame_id: str | None = None) -> Locator:
+        scope = cls._scope(entry, frame_id)
         if args.selector is not None:
-            return entry.page.locator("css=" + args.selector)
+            return scope.locator("css=" + args.selector)
         if args.role is not None:
-            return entry.page.get_by_role(args.role, name=args.name, exact=True)
+            return scope.get_by_role(args.role, name=args.name, exact=True)
         assert args.label is not None
-        return entry.page.get_by_label(args.label, exact=True)
+        return scope.get_by_label(args.label, exact=True)
 
-    @staticmethod
-    def _check_snapshot(entry: _Entry, snapshot_id: str | None) -> None:
+    @classmethod
+    def _check_snapshot(cls, entry: _Entry, snapshot_id: str | None,
+                        frame_id: str | None = None) -> None:
+        scope = cls._scope(entry, frame_id)
         if snapshot_id is not None and (
             snapshot_id != entry.snapshot_id
             or time.monotonic() - entry.snapshot_at > 60
-            or entry.page.url != entry.snapshot_url
+            or scope.url != entry.snapshot_url
+            or frame_id != entry.snapshot_frame_id
         ):
             raise ValueError("Browser snapshot is stale; observe the tab again")
 
     @classmethod
     async def _unique_target(cls, entry: _Entry, target: BrowserTarget,
-                             *, enabled: bool = False) -> Locator:
+                             *, enabled: bool = False, frame_id: str | None = None) -> Locator:
         try:
-            locator = cls._target_locator(entry, target)
-            if await locator.count() > 1:
+            locator = cls._target_locator(entry, target, frame_id)
+            if await cls._until_dialog(entry, locator.count()) > 1:
                 raise ValueError("Browser target must match exactly one element")
-            await locator.wait_for(state="visible", timeout=3000)
-            if await locator.count() != 1:
+            await cls._until_dialog(entry, locator.wait_for(state="visible", timeout=3000))
+            if await cls._until_dialog(entry, locator.count()) != 1:
                 raise ValueError("Browser target must match exactly one element")
-            if enabled and not await locator.is_enabled():
+            if enabled and not await cls._until_dialog(entry, locator.is_enabled()):
                 raise ValueError("Browser target is disabled")
             return locator
         except ValueError:
@@ -606,45 +938,47 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             # User-facing role/label locators can resolve the current DOM after a
             # framework rerender. Preserve the exact-one preflight and let Playwright
             # check actionability again at dispatch rather than pinning a stale handle.
             try:
-                target = self._target_locator(entry, args)
-                if await target.count() > 1:
+                target = self._target_locator(entry, args, args.frame_id)
+                if await self._until_dialog(entry, target.count()) > 1:
                     raise ValueError("Browser target must match exactly one element")
-                await target.wait_for(state="visible", timeout=3000)
-                if await target.count() != 1:
+                await self._until_dialog(entry, target.wait_for(state="visible", timeout=3000))
+                if await self._until_dialog(entry, target.count()) != 1:
                     raise ValueError("Browser target must match exactly one element")
-                if not await target.is_enabled():
+                if not await self._until_dialog(entry, target.is_enabled()):
                     raise ValueError("Browser target is not visible and enabled")
                 if value is not None:
-                    editable = await target.evaluate("""el => el.isContentEditable ||
+                    editable = await self._until_dialog(entry, target.evaluate("""el =>
+                        el.isContentEditable ||
                         (el instanceof HTMLTextAreaElement && !el.readOnly) ||
                         (el instanceof HTMLInputElement && !el.readOnly &&
                          ['text', 'search', 'email', 'number', 'password', 'tel',
                           'url'].includes(el.type))
-                    """)
+                    """))
                     if not editable:
                         raise ValueError("Browser target is not editable")
             except ValueError:
                 raise
             except Exception as error:
                 raise ValueError("Browser target could not be resolved") from error
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
                 if key is not None:
-                    await target.press(key, timeout=10000)
+                    await self._until_dialog(entry, target.press(key, timeout=10000))
                 elif value is None:
-                    await target.click(timeout=10000)
+                    await self._until_dialog(entry, target.click(timeout=10000))
                 else:
-                    await target.fill(value, timeout=10000)
-                snapshot = await self._snapshot(entry)
+                    await self._until_dialog(entry, target.fill(value, timeout=10000))
+                snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 if value is not None:
-                    observed_value = await target.evaluate(
+                    observed_value = await self._until_dialog(entry, target.evaluate(
                         "el => el.isContentEditable ? el.innerText : el.value"
-                    )
+                    ))
                     snapshot["value_verified"] = observed_value == value
                 return snapshot
             except Exception as error:
@@ -665,25 +999,26 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             try:
-                source = self._target_locator(entry, args.source)
-                target = self._target_locator(entry, args.target)
+                source = self._target_locator(entry, args.source, args.frame_id)
+                target = self._target_locator(entry, args.target, args.frame_id)
                 for locator in (source, target):
-                    if await locator.count() != 1:
+                    if await self._until_dialog(entry, locator.count()) != 1:
                         raise ValueError("Browser drag target must match exactly one element")
-                    if not await locator.is_visible():
+                    if not await self._until_dialog(entry, locator.is_visible()):
                         raise ValueError("Browser drag target is not visible")
-                if not await source.is_enabled():
+                if not await self._until_dialog(entry, source.is_enabled()):
                     raise ValueError("Browser drag source is disabled")
             except ValueError:
                 raise
             except Exception as error:
                 raise ValueError("Browser drag target could not be resolved") from error
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
-                await source.drag_to(target, timeout=10000)
-                return await self._snapshot(entry)
+                await self._until_dialog(entry, source.drag_to(target, timeout=10000))
+                return await self._snapshot(entry, frame_id=args.frame_id)
             except Exception as error:
                 raise BrowserActionUnknown(
                     "Browser drag outcome unconfirmed; observe the same tab before another action"
@@ -693,12 +1028,13 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
-            target = await self._unique_target(entry, args.target)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
+            target = await self._unique_target(entry, args.target, frame_id=args.frame_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
-                await target.hover(timeout=10000)
-                return await self._snapshot(entry)
+                await self._until_dialog(entry, target.hover(timeout=10000))
+                return await self._snapshot(entry, frame_id=args.frame_id)
             except Exception as error:
                 raise BrowserActionUnknown(
                     "Browser hover outcome unconfirmed; observe the same tab before another action"
@@ -708,30 +1044,37 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
-            target = await self._unique_target(entry, args.target, enabled=True)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
+            target = await self._unique_target(
+                entry, args.target, enabled=True, frame_id=args.frame_id,
+            )
             try:
-                matches = await target.evaluate("""(el, choice) => {
+                matches = await self._until_dialog(entry, target.evaluate("""(el, choice) => {
                     if (!(el instanceof HTMLSelectElement)) return null;
                     return Array.from(el.options).filter(option =>
                         !option.disabled && !option.parentElement?.disabled &&
                         (choice.value !== null ? option.value === choice.value
                                                : option.label === choice.label))
                         .map(option => ({value: option.value, label: option.label}));
-                }""", {"value": args.value, "label": args.label})
+                }""", {"value": args.value, "label": args.label}))
             except Exception as error:
                 raise ValueError("Browser select option could not be resolved") from error
             if matches is None:
                 raise ValueError("Browser target is not a select element")
             if len(matches) != 1:
                 raise ValueError("Browser option must match exactly one enabled option")
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
                 if args.value is not None:
-                    selected = await target.select_option(value=args.value, timeout=10000)
+                    selected = await self._until_dialog(entry, target.select_option(
+                        value=args.value, timeout=10000,
+                    ))
                 else:
-                    selected = await target.select_option(label=args.label, timeout=10000)
-                snapshot = await self._snapshot(entry)
+                    selected = await self._until_dialog(entry, target.select_option(
+                        label=args.label, timeout=10000,
+                    ))
+                snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 snapshot["selected_option"] = matches[0]
                 snapshot["selection_verified"] = selected == [matches[0]["value"]]
                 return snapshot
@@ -744,19 +1087,20 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
-            target = await self._unique_target(entry, args.target)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
+            target = await self._unique_target(entry, args.target, frame_id=args.frame_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
-                offsets = await target.evaluate("""(el, delta) => {
+                offsets = await self._until_dialog(entry, target.evaluate("""(el, delta) => {
                     const scroller = el === document.body
                         ? (document.scrollingElement || el) : el;
                     const before = {x: scroller.scrollLeft, y: scroller.scrollTop};
                     scroller.scrollTo({left: before.x + delta.x, top: before.y + delta.y,
                                      behavior: 'instant'});
                     return {before, after: {x: scroller.scrollLeft, y: scroller.scrollTop}};
-                }""", {"x": args.delta_x, "y": args.delta_y})
-                snapshot = await self._snapshot(entry)
+                }""", {"x": args.delta_x, "y": args.delta_y}))
+                snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 snapshot["scroll"] = {**offsets,
                     "changed": offsets["before"] != offsets["after"]}
                 return snapshot
@@ -770,30 +1114,31 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             path = absolute_path(args.path)
             content = await asyncio.to_thread(read_bytes, path)
             try:
-                target = self._target_locator(entry, args.target)
-                if await target.count() != 1:
+                target = self._target_locator(entry, args.target, args.frame_id)
+                if await self._until_dialog(entry, target.count()) != 1:
                     raise ValueError("Browser file input must match exactly one element")
-                if not await target.evaluate(
+                if not await self._until_dialog(entry, target.evaluate(
                     "el => el instanceof HTMLInputElement && el.type === 'file'"
-                ):
+                )):
                     raise ValueError("Browser target is not a file input")
-                if not await target.is_enabled():
+                if not await self._until_dialog(entry, target.is_enabled()):
                     raise ValueError("Browser file input is disabled")
             except ValueError:
                 raise
             except Exception as error:
                 raise ValueError("Browser file input could not be resolved") from error
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
             try:
-                await target.set_input_files(
+                await self._until_dialog(entry, target.set_input_files(
                     {"name": path.name, "mimeType": mime, "buffer": content}, timeout=10000
-                )
-                snapshot = await self._snapshot(entry)
+                ))
+                snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 snapshot["selected_file"] = {"name": path.name, "bytes": len(content),
                                              "sha256": sha256(content)}
                 return snapshot
@@ -807,32 +1152,34 @@ class BrowserControl:
         entry = self._entry(args, owner)
         async with entry.lock:
             self._entry(args, owner)
-            self._check_snapshot(entry, args.snapshot_id)
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             destination = absolute_path(args.path)
             if not destination.parent.is_dir() or os.path.lexists(destination):
                 raise ValueError(
                     "Browser download requires an unused path in an existing directory"
                 )
             try:
-                target = self._target_locator(entry, args.target)
-                if await target.count() != 1:
+                target = self._target_locator(entry, args.target, args.frame_id)
+                if await self._until_dialog(entry, target.count()) != 1:
                     raise ValueError("Browser download target must match exactly one element")
-                if not await target.is_visible() or not await target.is_enabled():
+                if (not await self._until_dialog(entry, target.is_visible())
+                        or not await self._until_dialog(entry, target.is_enabled())):
                     raise ValueError("Browser download target is not visible and enabled")
             except ValueError:
                 raise
             except Exception as error:
                 raise ValueError("Browser download target could not be resolved") from error
+            self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             entry.snapshot_id = None
             try:
                 async with entry.page.expect_download(timeout=15000) as pending:
-                    await target.click(timeout=10000)
+                    await self._until_dialog(entry, target.click(timeout=10000))
                 received = await pending.value
                 source = await received.path()
                 if source is None:
                     raise ValueError("Browser download file is unavailable")
                 size, digest = await asyncio.to_thread(_save_download, str(source), args.path)
-                snapshot = await self._snapshot(entry)
+                snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 snapshot["download"] = {
                     "path": str(destination), "bytes": size, "sha256": digest,
                     "suggested_filename": received.suggested_filename[:255],
@@ -845,20 +1192,62 @@ class BrowserControl:
                     "before another action"
                 ) from error
 
-    async def _snapshot(self, entry: _Entry, *, include_image: bool = False
+    async def _snapshot(self, entry: _Entry, *, include_image: bool = False,
+                        frame_id: str | None = None) -> dict[str, JsonValue]:
+        pending = entry.pending_dialog
+        if pending is not None and pending.state == "response_unconfirmed":
+            # A response may have reached Chrome before its acknowledgement was lost.
+            # A bounded read can establish that the modal is gone, never its choice.
+            try:
+                observed = await asyncio.wait_for(self._snapshot_content(
+                    entry, include_image=include_image, frame_id=frame_id,
+                ), 3)
+            except Exception:
+                pass  # Keep the original claimed dialog and unknown response.
+            else:
+                if entry.pending_dialog is pending:
+                    entry.pending_dialog = None
+                    entry.dialog_opened.clear()
+                    self._refresh_dialog_event(entry)
+                    observed["tabs"] = self._tab_rows(entry)
+                    if entry.last_dialog_response is not None:
+                        entry.last_dialog_response["observed_dialog_closed"] = True
+                    observed["last_dialog_response"] = entry.last_dialog_response
+                    return observed
+        try:
+            return await self._until_dialog(entry, self._snapshot_content(
+                entry, include_image=include_image, frame_id=frame_id,
+            ))
+        except _DialogOpened:
+            return {"session_id": entry.session_id, "tab_id": entry.tab_id,
+                    "url": entry.page.url, "state": "dialog_open", "snapshot_id": None,
+                    "dialog": entry.pending_dialog.data() if entry.pending_dialog else None,
+                    "tabs": self._tab_rows(entry),
+                    "last_dialog_response": entry.last_dialog_response}
+
+    async def _snapshot_content(self, entry: _Entry, *, include_image: bool = False,
+                        frame_id: str | None = None,
                         ) -> dict[str, JsonValue]:
-        title = await entry.page.title()
-        text = await entry.page.evaluate(
+        scope = self._scope(entry, frame_id)
+        revision = entry.document_revision
+        frame_revision = entry.frame_revisions.get(scope, 0)
+        frames, frames_truncated = self._frame_rows(entry)
+        title = await scope.title()
+        text = await scope.evaluate(
             "limit => (document.body?.innerText || '').slice(0, limit + 1)", 16384
         )
-        observed_url = entry.page.url
+        observed_url = scope.url
         snapshot: dict[str, JsonValue] = {
             "session_id": entry.session_id, "tab_id": entry.tab_id,
             "url": observed_url, "title": title[:512],
             "text": _readable_lines(text[:16384]), "text_truncated": len(text) > 16384,
+            "frame_id": frame_id, "frames": frames, "frames_truncated": frames_truncated,
+            "tabs": self._tab_rows(entry),
+            "last_dialog_response": entry.last_dialog_response,
+            "form_control_coordinate_space": "frame_viewport_css_pixels",
         }
         try:
-            form_controls = await entry.page.evaluate(_FORM_CONTROLS_SCRIPT)
+            form_controls = await scope.evaluate(_FORM_CONTROLS_SCRIPT)
         except Exception:
             snapshot["form_controls_unavailable"] = True
         else:
@@ -882,12 +1271,13 @@ class BrowserControl:
                     snapshot["visual"] = {"kind": "rendered_viewport", "mime_type": "image/jpeg",
                                           "bytes": len(picture), "coordinate_unit": "css_px",
                                           "capture_mode": "sequential",
+                                          "scope": "tab_viewport",
                                           "width": viewport["width"] if viewport else None,
                                           "height": viewport["height"] if viewport else None}
             except Exception:
                 snapshot["visual_unavailable"] = "capture_failed"
         try:
-            semantic_tree = await entry.page.locator("body").aria_snapshot(timeout=3000)
+            semantic_tree = await scope.locator("body").aria_snapshot(timeout=3000)
         except Exception:
             # Accessible structure is supplementary; URL, title and visible
             # text still give a useful observation if the page has no body.
@@ -895,12 +1285,16 @@ class BrowserControl:
         else:
             snapshot["semantic_tree"] = _readable_lines(semantic_tree[:16384])
             snapshot["semantic_tree_truncated"] = len(semantic_tree) > 16384
+        if (revision != entry.document_revision or scope.is_detached()
+                or frame_revision != entry.frame_revisions.get(scope, 0)):
+            raise ValueError("Browser document changed during observation; observe the tab again")
         entry.snapshot_id = uuid.uuid4().hex
         entry.snapshot_at = time.monotonic()
         entry.snapshot_url = observed_url
+        entry.snapshot_frame_id = frame_id
         snapshot["snapshot_id"] = entry.snapshot_id
         if entry.last_navigation is not None:
-            entry.last_navigation.observed_url = observed_url
+            entry.last_navigation.observed_url = entry.page.url
             snapshot["last_navigation"] = self._navigation_state(entry.last_navigation)
         return snapshot
 
@@ -910,25 +1304,54 @@ class BrowserControl:
                 "outcome": navigation.outcome,
                 "observed_url": navigation.observed_url}
 
+    def _begin_close(self, entry: _Entry) -> asyncio.Task[None]:
+        task = entry.tabs.close_task
+        if task is None or (task.done() and (task.cancelled() or task.exception() is not None)):
+            entry.tabs.closing = True
+            task = asyncio.create_task(self._close_session(entry))
+            entry.tabs.close_task = task
+            task.add_done_callback(_cleanup_done)
+        return task
+
+    async def _request_close(self, entry: _Entry) -> None:
+        task = self._begin_close(entry)
+        try:
+            await asyncio.wait_for(asyncio.shield(task), _CLEANUP_WAIT_SECONDS)
+        except Exception as error:
+            raise BrowserActionUnknown(
+                "Browser session cleanup unconfirmed; inspect the same session before another close"
+            ) from error
+
+    async def _close_session(self, entry: _Entry) -> None:
+        try:
+            # The caller has a short, shielded receipt deadline. Give the
+            # already-owned browser longer to finish its actual shutdown;
+            # cancelling it at the receipt deadline can leave a closed
+            # transport with an unconfirmed capacity/update blocker.
+            await asyncio.wait_for(entry.browser.close(), 3 * _CLEANUP_WAIT_SECONDS)
+        finally:
+            # Canceling Playwright 1.58 stop() corrupts its shared transport-stopped
+            # future. The retained close task is shielded by the caller's bounded
+            # wait; an unfinished driver remains visible as a busy update blocker.
+            await entry.playwright.stop()
+        # The update guard continues to see this owned session throughout cleanup.
+        current = self.entries.get(entry.session_id)
+        if current is not None and current.tabs is entry.tabs:
+            del self.entries[entry.session_id]
+
     async def stop(self, args: BrowserSession, *, owner: str | None) -> dict[str, JsonValue]:
         async with self._lock:
             entry = self._entry(args, owner, require_live=False)
-            async with entry.lock:
+            async with entry.tabs.lock:
                 self._entry(args, owner, require_live=False)
-                del self.entries[args.session_id]
-                try:
-                    await entry.browser.close()
-                finally:
-                    await entry.playwright.stop()
+                await self._request_close(entry)
         return {"session_id": args.session_id, "tab_id": args.tab_id, "state": "closed"}
 
     async def close(self) -> None:
         async with self._lock:
             entries = list(self.entries.values())
-            self.entries.clear()
-        for entry in entries:
-            async with entry.lock:
-                try:
-                    await entry.browser.close()
-                finally:
-                    await entry.playwright.stop()
+        results = await asyncio.gather(*(self._request_close(entry) for entry in entries),
+                                       return_exceptions=True)
+        for result in results:
+            if isinstance(result, BaseException):
+                raise result

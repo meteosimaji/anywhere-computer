@@ -37,22 +37,56 @@ async def agent(tmp_path):
     credential = secrets.token_urlsafe(32)
     shutdown = asyncio.Event()
     task = asyncio.create_task(serve(tmp_path, credential=credential, shutdown=shutdown))
-    for _ in range(300):
-        if (tmp_path / "agent.json").exists():
-            break
-        if task.done():
-            await task
-        await asyncio.sleep(0.01)
-    else:
-        pytest.fail("Agent failed to publish endpoint")
-    yield tmp_path, credential
-    shutdown.set()
-    await asyncio.wait_for(task, 10)
+    try:
+        for _ in range(300):
+            if (tmp_path / "agent.json").exists():
+                break
+            if task.done():
+                await task
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("Agent failed to publish endpoint")
+        yield tmp_path, credential
+    finally:
+        shutdown.set()
+        await asyncio.wait_for(task, 10)
     # Windows mandatory locks prevent reading agent.lock while it is held.
     # Inspect every file after shutdown, including the released lock file.
     for path in tmp_path.rglob("*"):
         if path.is_file():
             assert credential.encode() not in path.read_bytes()
+
+
+async def test_agent_fixture_cleans_up_if_cancelled_before_readiness(tmp_path, monkeypatch):
+    import sys
+
+    entered = asyncio.Event()
+    stopped = asyncio.Event()
+    owned = []
+
+    async def never_ready(directory, *, credential, shutdown):
+        owned.append((asyncio.current_task(), shutdown))
+        entered.set()
+        try:
+            await shutdown.wait()
+        finally:
+            stopped.set()
+
+    monkeypatch.setattr(sys.modules[__name__], 'serve', never_ready)
+    fixture = agent.__wrapped__(tmp_path)
+    startup = asyncio.create_task(anext(fixture))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        startup.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await startup
+        assert stopped.is_set()
+        assert owned[0][0].done()
+    finally:
+        for task, shutdown in owned:
+            shutdown.set()
+            await asyncio.wait_for(task, 2)
+        await fixture.aclose()
 
 
 async def test_authenticated_rpc_and_catalog(agent):
@@ -61,7 +95,7 @@ async def test_authenticated_rpc_and_catalog(agent):
     assert status.data["state"] == "ready"
     assert status.data["remote_ready"] is False
     catalog = await exchange(directory, "__catalog", credential=credential)
-    assert len(catalog.data["tools"]) == 94
+    assert len(catalog.data["tools"]) == 100
     assert "gui_native_press" in {tool["name"] for tool in catalog.data["tools"]}
     assert "outputSchema" in catalog.data["tools"][0]
     with pytest.raises(ConnectionError):

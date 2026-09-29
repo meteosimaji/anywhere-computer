@@ -1,0 +1,3473 @@
+{
+  "as_of_commit": "1c07207960a3f5bc04e6f3026ed6c3573e4247cb",
+  "method": "Full-file review by area, source-to-test/consumer trace, targeted regression and integrated-suite checks; each current SHA-256 matched a review record.",
+  "included_file_count": 432,
+  "areas": {
+    "release_runtime": 142,
+    "core_ui": 82,
+    "network_security": 140,
+    "subchat": 68
+  },
+  "excluded_data_fixtures": [
+    "scripts/ci/windows_test_costs.json",
+    "tests/fixtures/anywhere-fixture-device-realm.json"
+  ],
+  "files": [
+    {
+      "path": ".agents/plugins/marketplace.json",
+      "area": "release_runtime",
+      "sha256": "c32f51c56cd16749b4a3e64e559d90b23d116306f9f2bc211a4dd721721afb55",
+      "lines": 20,
+      "review": "no_change",
+      "finding": "Marketplace path and installation/authentication policy match plugin layout."
+    },
+    {
+      "path": ".claude-plugin/marketplace.json",
+      "area": "release_runtime",
+      "sha256": "0174035a8e9b0413f3114db932bac0999082ca3ec658eb43b5c0167aa3d84898",
+      "lines": 12,
+      "review": "no_change",
+      "finding": "Claude marketplace points at the shared plugin with matching name."
+    },
+    {
+      "path": ".github/workflows/quality.yml",
+      "area": "release_runtime",
+      "sha256": "4c14fb3a81ad0e5e7583659c008cb5ac5bf0c263b844c6682795cfd991185d5d",
+      "lines": 508,
+      "review": "changed",
+      "finding": "Read full job graph, 6 required contexts, fail-closed Windows composite and release provenance gates. Shared-runtime fails on the first failure and logs test names. Browser control and Subchat integration files run serially before parallel workers after a macOS concurrency failure and hang; all collected tests remain covered."
+    },
+    {
+      "path": "desktop/Cargo.toml",
+      "area": "core_ui",
+      "sha256": "4963f6b6d58a6318338ac96beae8823a89b43594fefc1a7401f604ba676964eb",
+      "lines": 14,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "desktop/build.rs",
+      "area": "core_ui",
+      "sha256": "6aeeab41bc35efde4e3c2b644a6248f7fc06d24ae30b75c0d33491cbb0c1fa31",
+      "lines": 3,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "desktop/capabilities/main.json",
+      "area": "core_ui",
+      "sha256": "68d795d00fde1081f50460c1dea7099d4d7c74fc6b1ab2067c702ed46bc93fb1",
+      "lines": 5,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "desktop/src/enrollment.rs",
+      "area": "core_ui",
+      "sha256": "fac5d51a95b8573e62229acf1f5fca17e38bbf3acdd12a0bd72a9d96fe7418f3",
+      "lines": 273,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "desktop/src/main.rs",
+      "area": "core_ui",
+      "sha256": "bc559da4ea08d1729bc554fec5b8022fbe15b1bf6e4d8f2d42c6d8a38b3ec3d4",
+      "lines": 337,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "desktop/tauri.conf.json",
+      "area": "core_ui",
+      "sha256": "7fe9374f65b2e1ccc6da1f13d0808bc36351431106724a5b59f713ff9f8fe13a",
+      "lines": 15,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "desktop/ui/app.js",
+      "area": "core_ui",
+      "sha256": "e885cfcd2cc6501ffc35797c71539a8b663d6638475cc85d95d35d3a1ee24871",
+      "lines": 219,
+      "review": "changed",
+      "finding": "Separated capability/work/identity/device rendering; accurate helper verification and retained blocker evidence."
+    },
+    {
+      "path": "desktop/ui/enrollment.js",
+      "area": "core_ui",
+      "sha256": "a8b1218e303b6106fccb25893ba05eabf0b6e2cf87780296c3ca62573fc8cc9e",
+      "lines": 103,
+      "review": "changed",
+      "finding": "Separated transition controls and state text; rejects inherited object keys as phase names."
+    },
+    {
+      "path": "desktop/ui/index.html",
+      "area": "core_ui",
+      "sha256": "831b787e84c6b599efcc4067ff915c280ee8c2751e03001b93fd9c0daefd9b02",
+      "lines": 25,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "desktop/ui/style.css",
+      "area": "core_ui",
+      "sha256": "4d915ec33548893a94794db9a37fc125af8a8fa1b21f4d378042a9440a7c2eaa",
+      "lines": 155,
+      "review": "changed",
+      "finding": "Expanded dense rules into readable declarations without altering values."
+    },
+    {
+      "path": "native/macos/AXHelper.swift",
+      "area": "core_ui",
+      "sha256": "4a891b149c579a41f384ee7d249b510f2dfa0a54a42cbfc90c789cce3473b6ae",
+      "lines": 1801,
+      "review": "no_change",
+      "finding": "Full file reviewed: process/window identity, bounded AX tree, value/action consumption, exact-window image capture and bounded JSON lines."
+    },
+    {
+      "path": "plugins/anywhere-computer/.claude-mcp.json",
+      "area": "release_runtime",
+      "sha256": "db456f5c200005a754ac1c320389b66ce3439660d2d14bf98bc209fa3a18ff3e",
+      "lines": 47,
+      "review": "changed",
+      "finding": "Reviewed generated beta.34 wheel path for all three Claude MCP servers."
+    },
+    {
+      "path": "plugins/anywhere-computer/.claude-plugin/plugin.json",
+      "area": "release_runtime",
+      "sha256": "53257c5ebae163db86b68a161e116da53c74b7f87e157e7d6e5ce443f9bddbdc",
+      "lines": 12,
+      "review": "changed",
+      "finding": "Reviewed generated beta.34 Claude plugin version."
+    },
+    {
+      "path": "plugins/anywhere-computer/.codex-plugin/plugin.json",
+      "area": "release_runtime",
+      "sha256": "c496ad63cde3c333d3cb6a81646a7e011938c9faccc86c84ca3092760139deb6",
+      "lines": 28,
+      "review": "changed",
+      "finding": "Reviewed generated beta.34 Codex plugin version."
+    },
+    {
+      "path": "plugins/anywhere-computer/.mcp.json",
+      "area": "release_runtime",
+      "sha256": "947a102a32fb91af4ac06bd3b0ba24775ce444b3cce2ac1f4a2767e99946bfc4",
+      "lines": 50,
+      "review": "changed",
+      "finding": "Reviewed generated beta.34 wheel path for all three Codex MCP servers."
+    },
+    {
+      "path": "pyproject.toml",
+      "area": "release_runtime",
+      "sha256": "677264bb2d641b906ae01406f273cc5003ffe2f2a84f2191d3e20870d4847fb8",
+      "lines": 79,
+      "review": "no_change",
+      "finding": "Package entry points, pinned transport extras, strict source typing and test/tool configuration are consistent."
+    },
+    {
+      "path": "scripts/assemble_release_assets.py",
+      "area": "release_runtime",
+      "sha256": "4fa48df9e183e3d57fcec95f068f30ba61008d2d1ecbc8e9da43830330a0aa51",
+      "lines": 113,
+      "review": "no_change",
+      "finding": "Read full release assembly, source/plugin version consistency, digest and atomic publication contracts."
+    },
+    {
+      "path": "scripts/build_guest_test_bundle.py",
+      "area": "release_runtime",
+      "sha256": "b964600d4e385c0007c1862f71835f2aa81aa6dc8b20ba72cb1e9b34deaca4c4",
+      "lines": 66,
+      "review": "changed",
+      "finding": "Explicit test-support allowlist now includes conftest, CJS, native fixtures, workflow and package descriptors; excludes local database/account data."
+    },
+    {
+      "path": "scripts/build_portable.py",
+      "area": "release_runtime",
+      "sha256": "340118fd6108e70d8f81421c59b6892831838e91f186535e0d5708b61d29b378",
+      "lines": 315,
+      "review": "no_change",
+      "finding": "Read full portable environment build and platform verification; pinned dependencies and safety guards retained."
+    },
+    {
+      "path": "scripts/check_release_candidate.py",
+      "area": "release_runtime",
+      "sha256": "4546af3a647202c59ec4ea8a1f51712373693dcf7da215fbf92aa60d9fab60f4",
+      "lines": 46,
+      "review": "no_change",
+      "finding": "Read full remote exact tag check; network errors fail closed and source/bundle version consistency reused."
+    },
+    {
+      "path": "scripts/compare_chat_shapes.py",
+      "area": "release_runtime",
+      "sha256": "2bdc57a4c1c5288739a6098b2868105015e1f06f57e8e94ae9639444201e150a",
+      "lines": 117,
+      "review": "no_change",
+      "finding": "Read bounded value-free request shape comparison and non-regular rejection."
+    },
+    {
+      "path": "scripts/measure_subchat_research.py",
+      "area": "release_runtime",
+      "sha256": "79b8748c539909daf5160175aa38f185e78d6f91a3b51068240723eaacf0974b",
+      "lines": 366,
+      "review": "no_change",
+      "finding": "Reviewed full research probe: bounded fanout, stable operation recovery, receipt evidence and metrics preserve noncompletion states."
+    },
+    {
+      "path": "scripts/measure_test_costs.py",
+      "area": "release_runtime",
+      "sha256": "7deef8df91e83dbe9a8e0f0441162d6d7213e19369421103c5841334844383d1",
+      "lines": 73,
+      "review": "no_change",
+      "finding": "Read full duration extraction and schema validation; no change needed."
+    },
+    {
+      "path": "scripts/package_plugin.py",
+      "area": "release_runtime",
+      "sha256": "0109d8447e5cb4df1194b749c2fafa8f81a0314ae4041a6dbb5c8c0d43f01e6b",
+      "lines": 177,
+      "review": "no_change",
+      "finding": "Read complete allowlist-based packaging and portable inclusion; generated bundle refresh owned by root."
+    },
+    {
+      "path": "scripts/probe_audio_capture.swift",
+      "area": "release_runtime",
+      "sha256": "9e417455b277b8444322869b0069d4ae7aa05534707e40ca114a3292a97d4e24",
+      "lines": 211,
+      "review": "no_change",
+      "finding": "Reviewed full native audio probe: explicit capture permission, bounded duration and cleanup; no real permission prompts executed."
+    },
+    {
+      "path": "scripts/probe_subchat.py",
+      "area": "release_runtime",
+      "sha256": "808205f0197720983d6491bc92960fe6b420698d75067686204e7dee5155ce9a",
+      "lines": 320,
+      "review": "no_change",
+      "finding": "Reviewed full probe: selected backend, bounded waits, receipt checks and recovery; CLI validates wait range."
+    },
+    {
+      "path": "scripts/probe_subchat_catalog.py",
+      "area": "release_runtime",
+      "sha256": "8bf8f0e022db9b92fbd5646e17aba8fa00b963c66b22b6778cb7c017043d452b",
+      "lines": 34,
+      "review": "no_change",
+      "finding": "Read compatibility entrypoint exports; runtime catalog implementation separately assigned."
+    },
+    {
+      "path": "scripts/probe_subchat_receipt.py",
+      "area": "release_runtime",
+      "sha256": "3b10d5c65f099c63bca4724f84a87a47f8bd2600d0315a6e608cb2495879b4a1",
+      "lines": 84,
+      "review": "no_change",
+      "finding": "Read observational DOM receipt probe; no completion claims or automatic resend."
+    },
+    {
+      "path": "scripts/probe_subchat_transport.py",
+      "area": "release_runtime",
+      "sha256": "3da8f0abfd734b679310b33fea8f1974e737132961c4924bd0d23fb5d8d57dfe",
+      "lines": 172,
+      "review": "no_change",
+      "finding": "Reviewed full transport probe: isolated evidence collection distinguishes readiness, submit and provider receipt."
+    },
+    {
+      "path": "scripts/subchat_browser_backend.py",
+      "area": "release_runtime",
+      "sha256": "bc8fce56127ee2a4141cbbee83324438ce5b5c020c7c58d951fd7eb66525c714",
+      "lines": 2,
+      "review": "no_change",
+      "finding": "Read compatibility re-export; no change needed."
+    },
+    {
+      "path": "scripts/subchat_efforts.py",
+      "area": "release_runtime",
+      "sha256": "ed6caf79c30cd528c27a95f87ea13ab5adfff200c0904be1143ff1c30b97047e",
+      "lines": 2,
+      "review": "no_change",
+      "finding": "Read compatibility re-export; no change needed."
+    },
+    {
+      "path": "scripts/subchat_submission.js",
+      "area": "release_runtime",
+      "sha256": "3bbc5f2a208463fc2cc83437c6886141af42577e44a59e4fbf6d537dacddef9b",
+      "lines": 34,
+      "review": "no_change",
+      "finding": "Read exact route and unique-user-bubble receipt matching; no provider completion claim."
+    },
+    {
+      "path": "scripts/update_readme.py",
+      "area": "release_runtime",
+      "sha256": "35b2fd5de4ca7d3943262d3efe1ec06cd85828965a0bfe39113c237c634ee477",
+      "lines": 81,
+      "review": "no_change",
+      "finding": "Read full bilingual generated README pipeline and table generation; no source change needed."
+    },
+    {
+      "path": "scripts/verify_codex_plugins.py",
+      "area": "release_runtime",
+      "sha256": "b70fbf752729debd03770fc3d3cc1115eb6da117740e594f25e4b3e96d00ec84",
+      "lines": 175,
+      "review": "no_change",
+      "finding": "Reviewed full isolated Codex catalog/call fixture; no formal model delegation or production profile mutation."
+    },
+    {
+      "path": "scripts/verify_device_continuity.py",
+      "area": "release_runtime",
+      "sha256": "2ae35401e85805db4009fcdf87b3821894eaeb6e0ffb7edb389e5ce1af28f163",
+      "lines": 91,
+      "review": "no_change",
+      "finding": "Reviewed full disposable workspace operation continuity check and child cleanup."
+    },
+    {
+      "path": "scripts/verify_download_copy.py",
+      "area": "release_runtime",
+      "sha256": "95365928fcfd36755837d1d69daedc7a4e0f91a9197e2112eadb81ed8cb7304a",
+      "lines": 84,
+      "review": "no_change",
+      "finding": "Reviewed full bounded download-copy fixture and final file/hash assertions."
+    },
+    {
+      "path": "scripts/verify_enrollment_provider.py",
+      "area": "release_runtime",
+      "sha256": "1ee5f4c773f462f8a9e7c6fcc4e2bdb2eaee2f33a5d721e0d846b86b61d5640d",
+      "lines": 304,
+      "review": "no_change",
+      "finding": "Reviewed full loopback provider enrollment harness, token boundaries and temporary resources; real provider execution not performed."
+    },
+    {
+      "path": "scripts/verify_gui_http.py",
+      "area": "release_runtime",
+      "sha256": "5b114754d65de227b59cb3e43ce120cace6ddf65543b93b10f41f912eef3d542",
+      "lines": 345,
+      "review": "no_change",
+      "finding": "Reviewed full owner-scoped GUI HTTP acceptance and recovery comparisons; real user UI not invoked."
+    },
+    {
+      "path": "scripts/verify_http_service.py",
+      "area": "release_runtime",
+      "sha256": "fb9a1781254f1e609efc20cc0e55bc1aa30e443ae01c5a7f564b2584f18addba",
+      "lines": 199,
+      "review": "no_change",
+      "finding": "Reviewed full authenticated HTTP service probe and cleanup; native credential prompts not exercised."
+    },
+    {
+      "path": "scripts/verify_http_watch.py",
+      "area": "release_runtime",
+      "sha256": "680cb24ab80d8f4f3cc9194bc5e8be39d935969c507b707721378392b618fc97",
+      "lines": 139,
+      "review": "no_change",
+      "finding": "Reviewed full HTTP watch lifecycle and restart acceptance; real credential-store actions not executed."
+    },
+    {
+      "path": "scripts/verify_internet.py",
+      "area": "release_runtime",
+      "sha256": "b274682df8e7e68d4012c2225498bb636e547d6701aeb4e4953e3541b551a4ae",
+      "lines": 935,
+      "review": "no_change",
+      "finding": "Reviewed full public tunnel/enrollment acceptance, authorization, files, reconnect and cleanup; external account/provider flow not executed."
+    },
+    {
+      "path": "scripts/verify_large_reads.py",
+      "area": "release_runtime",
+      "sha256": "e5c2a58ef9ac766c7bee752f341420795e0af306a2b57788f20707e7ac4a10d8",
+      "lines": 87,
+      "review": "no_change",
+      "finding": "Reviewed full multi-range read checks and exact final content comparisons."
+    },
+    {
+      "path": "scripts/verify_plugin_images.py",
+      "area": "release_runtime",
+      "sha256": "346ec8ae761aea13f9327a36daf69ba3470f1169e56ff9c8b605f1f4e728d8c4",
+      "lines": 225,
+      "review": "changed",
+      "finding": "Updated stale recovery assertion to require top-level MCP image and absence of raw image in JSON/text; actual isolated Codex fixture failed before and passed after."
+    },
+    {
+      "path": "scripts/verify_plugin_sessions.py",
+      "area": "release_runtime",
+      "sha256": "50d75d5dd141c514108417ab0fedd57c2eb50e2313fc7fbb68cf3441715d38c1",
+      "lines": 375,
+      "review": "no_change",
+      "finding": "Reviewed full isolated plugin session reuse, receipt and image checks; temporary HOME only within fixture process."
+    },
+    {
+      "path": "scripts/verify_portable.py",
+      "area": "release_runtime",
+      "sha256": "7c2c824bbc2d7ced4a40aba6692eac7c0f0a4492de67eb95e59944a0f3ff0c98",
+      "lines": 183,
+      "review": "no_change",
+      "finding": "Read full archive and installed runtime verification paths; concrete platform contract retained."
+    },
+    {
+      "path": "scripts/verify_tunnel_pipe.py",
+      "area": "release_runtime",
+      "sha256": "fbf5bcee79f5d5e1b9169cb3911cdae384b486ec09e26084605fdba94fb71f77",
+      "lines": 170,
+      "review": "no_change",
+      "finding": "Reviewed full tunnel pipe lifecycle, bounded waits and disposal."
+    },
+    {
+      "path": "scripts/verify_workspace_browser.py",
+      "area": "release_runtime",
+      "sha256": "275a0a361237b6c539bd2e0375e7b967f0fbf2ae327e1e70c731b71996a29ca5",
+      "lines": 197,
+      "review": "no_change",
+      "finding": "Reviewed full disposable workspace browser fixture, frame capture and resource cleanup."
+    },
+    {
+      "path": "scripts/windows_local_startup.ps1",
+      "area": "release_runtime",
+      "sha256": "247f1a393fe0a2d7167051758fcd3d51bb7b7f0c456cf4b9f978456da051d585",
+      "lines": 71,
+      "review": "no_change",
+      "finding": "Read full install/recover/remove startup contract and argument handling; no change needed."
+    },
+    {
+      "path": "scripts/windows_test_shards.py",
+      "area": "release_runtime",
+      "sha256": "da3334650054a1b276d4f828f3f0b057c1f3b726cb5d26cf47c9cecf54903477",
+      "lines": 259,
+      "review": "changed",
+      "finding": "Read full deterministic file partition, collection proof and outcome receipts. Native Task Scheduler validation runs in serial preflight. Parallel shards dump/exits a test after five minutes with verbose node IDs; coverage remains exactly once."
+    },
+    {
+      "path": "src/anywhere_computer/__init__.py",
+      "area": "network_security",
+      "sha256": "40c9b87d4867847e2d47f4bbdb6f4480cabdb1b2034557e74f72dad190c18058",
+      "lines": 3,
+      "review": "version_bump",
+      "finding": "Single release constant advanced to beta.34 because the owner-consent correction changes the immutable wheel."
+    },
+    {
+      "path": "src/anywhere_computer/__main__.py",
+      "area": "network_security",
+      "sha256": "6d8b7d7846a845059d7a3107143f11131f63c5511d669b44085b15ec5e3d2279",
+      "lines": 3,
+      "review": "no_change",
+      "finding": "Module entry delegates directly to the CLI; no duplicate command parsing."
+    },
+    {
+      "path": "src/anywhere_computer/audio_capture.py",
+      "area": "core_ui",
+      "sha256": "aadf8d777b07d3dadf4d84b677cb22ab438e92b334d962e9dd2c136700ba8f9e",
+      "lines": 76,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/audio_status.py",
+      "area": "core_ui",
+      "sha256": "6ef1f2b6ba6a6c585ba30de3160a9060f60909ae6d3151b9d1da199ac134cecb",
+      "lines": 93,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/authorization.py",
+      "area": "network_security",
+      "sha256": "5b823457cfc8fcbcf2028efef5b0408c99b4dad73fe89f53d2951292c7389e2e",
+      "lines": 572,
+      "review": "no_change",
+      "finding": "Reviewed consent binding, PKCE/code/refresh transactions, revocation, reset gate and read-only grant lookup; no permission broadening or replay found."
+    },
+    {
+      "path": "src/anywhere_computer/authorized_http.py",
+      "area": "network_security",
+      "sha256": "b5871d9d7a72acaa0140d857931c7716e7ffd4b2b7edeea95473dcd98f3fea7b",
+      "lines": 803,
+      "review": "no_change",
+      "finding": "Full authorization/delegation/save dispatch reviewed. Retained completed save tasks also preserve same-ID input binding before durable claim; notified root that safe cleanup requires durable binding, not unconditional discard. No scoped change."
+    },
+    {
+      "path": "src/anywhere_computer/autostart.py",
+      "area": "release_runtime",
+      "sha256": "d922e71296508a5d1c6ab85a7f42cdb5f9acaf937be318e0ba713786fb66d723",
+      "lines": 248,
+      "review": "no_change",
+      "finding": "Pure cross-platform argv rendering escapes scheduler/systemd expansion and preserves legacy receipt reconstruction."
+    },
+    {
+      "path": "src/anywhere_computer/bounded_mcp_stdio.py",
+      "area": "network_security",
+      "sha256": "15d0c27166f843c8bb23593313309a30f68af266b2c974443232b26434564d9d",
+      "lines": 131,
+      "review": "no_change",
+      "finding": "Reviewed bounded frame handling and pinned SDK process lifecycle; conservative cleanup evidence is preserved."
+    },
+    {
+      "path": "src/anywhere_computer/browser_authorization.py",
+      "area": "network_security",
+      "sha256": "166e3d8fa9dbc77e0a729310e6eeb4b814fb77d92da51d1b881874412c63b266",
+      "lines": 816,
+      "review": "changed",
+      "finding": "Consent ability summary now classifies browser_tab_close as website interaction; reviewed origin, CSRF, cookie and callback boundaries."
+    },
+    {
+      "path": "src/anywhere_computer/browser_control.py",
+      "area": "core_ui",
+      "sha256": "5f14be9a6aa5d2cc8c453630ac081cc68d89244813bc6c3ce011003b71a9cfdd",
+      "lines": 1357,
+      "review": "fixed_ci_cleanup",
+      "finding": "Read owner-scoped browser lifecycle end to end. macOS CI reproduced a five-second browser.close timeout at the same deadline as the caller receipt. The internal owned-browser close is now bounded at three times the caller deadline; the caller still returns unknown after five seconds and retains its blocker until task success. A delayed-close regression was first red, then green."
+    },
+    {
+      "path": "src/anywhere_computer/capability_contract.py",
+      "area": "core_ui",
+      "sha256": "6c971d53388eccf219f34098063e53c000cc7070cd15f601e6f928d4052369d8",
+      "lines": 28,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/cli.py",
+      "area": "core_ui",
+      "sha256": "40779381572fa088831557310b5f4854549bed3ee123f67be5c51662a81e5262",
+      "lines": 794,
+      "review": "no_change",
+      "finding": "Full file reviewed: command-specific options, owner authentication, lifecycle dispatch and error exit status."
+    },
+    {
+      "path": "src/anywhere_computer/client_tokens.py",
+      "area": "network_security",
+      "sha256": "073c7b58b417223604cc10ab41c1eb88c41bacf2ac010dc81a017d4106d02aef",
+      "lines": 276,
+      "review": "no_change",
+      "finding": "Reviewed native-vault renewal intent and token validation; ambiguous rotation cannot replay the consumed token."
+    },
+    {
+      "path": "src/anywhere_computer/cloudflare_tunnel.py",
+      "area": "network_security",
+      "sha256": "5c2a210196bd82fef70828601a8e7eedd9a7505fc0fdf4d632f0c7559bef864b",
+      "lines": 257,
+      "review": "no_change",
+      "finding": "Reviewed tunnel token vault readback, environment isolation, secret pipe and bounded restart lifecycle; provider output remains excluded."
+    },
+    {
+      "path": "src/anywhere_computer/codex_context.py",
+      "area": "network_security",
+      "sha256": "cd009e77fb2c735c8e45fed7281f95a0c61eab9658ffe70312587d567e98657a",
+      "lines": 268,
+      "review": "no_change",
+      "finding": "Full bounded read-only context flow reviewed. Existing extraction helper is local and UTF-8 limits are enforced by its consumers; no behavior change justified."
+    },
+    {
+      "path": "src/anywhere_computer/codex_plugins.py",
+      "area": "network_security",
+      "sha256": "b25a8c352454b45339c6de175b612a2a36e3254ce96e88afa4803ea9a0a93d0d",
+      "lines": 789,
+      "review": "no_change",
+      "finding": "Reviewed entire catalog/descriptor validation, ephemeral context lifetime and pre/post-dispatch errors; no replay route found."
+    },
+    {
+      "path": "src/anywhere_computer/common_skills.py",
+      "area": "core_ui",
+      "sha256": "308011cca8fde69fca95ccaaa4431f6e055bc104484be0a1db1ff15fb21223b7",
+      "lines": 169,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/connection.py",
+      "area": "network_security",
+      "sha256": "d7dc358119a100a664c6995fecf5cbdbddfffc16ef303068d5b6baa55f3c8020",
+      "lines": 398,
+      "review": "no_change",
+      "finding": "Reviewed endpoint authentication, shutdown admission, owned worker lifecycle and active runtime replacement guards."
+    },
+    {
+      "path": "src/anywhere_computer/credentials.py",
+      "area": "network_security",
+      "sha256": "a7cfc86168e7d903e252b0bcad9ae7f17f65d3ea8678798d473dc6aa0fcc78ec",
+      "lines": 164,
+      "review": "no_change",
+      "finding": "Reviewed native-only vault selection, in-place macOS update, interactive input and narrowly classified Windows logon errors."
+    },
+    {
+      "path": "src/anywhere_computer/delegated_files.py",
+      "area": "network_security",
+      "sha256": "506f4db533cf6425bd80035de36e2253f0dfa496f813879d5cc08a59b78d7e12",
+      "lines": 166,
+      "review": "no_change",
+      "finding": "Reviewed descriptor confinement, ancestor symlink rejection, read bounds, replacement identity check and backup verification."
+    },
+    {
+      "path": "src/anywhere_computer/delegated_routes.py",
+      "area": "network_security",
+      "sha256": "ee89f27528c2686dca4342224b3bd9e527e9d152af53391a4046346116be6acd",
+      "lines": 126,
+      "review": "no_change",
+      "finding": "Reviewed route identity, vault-only bearer storage, database migration, locking and revoke semantics."
+    },
+    {
+      "path": "src/anywhere_computer/delegated_tasks.py",
+      "area": "network_security",
+      "sha256": "f3efddbc588c8947e5df78874e63f93cd8b7fe4b8245c9138a6d46882d59a3dc",
+      "lines": 341,
+      "review": "no_change",
+      "finding": "Reviewed child scope intersection, durable request binding, revocation serialization and confined worker guard; no extra abstract layers needed."
+    },
+    {
+      "path": "src/anywhere_computer/delegated_win32.py",
+      "area": "network_security",
+      "sha256": "f46544272282838748d1c65e62ede911c92cf420c59e67f22418f60374c7cb1c",
+      "lines": 103,
+      "review": "no_change",
+      "finding": "Reviewed Windows alias rejection, pinned ancestor handles and create-only hard-link publication."
+    },
+    {
+      "path": "src/anywhere_computer/delegation_admin.py",
+      "area": "network_security",
+      "sha256": "52ff134e1ada864e557c3852215e4a281c4c063f10cd37b8ffdad271876f3442",
+      "lines": 177,
+      "review": "no_change",
+      "finding": "Reviewed owner authentication, parent scope binding, local root validation and independent source/target revocation reporting."
+    },
+    {
+      "path": "src/anywhere_computer/device_authorization.py",
+      "area": "network_security",
+      "sha256": "ccb15a63470e25140f14de9388bd13a1718e5fc8dd0f0f2b911c88779a04eb2f",
+      "lines": 290,
+      "review": "no_change",
+      "finding": "Reviewed single-attempt enrollment state machine, cancellation lock, grant-save reconciliation and origin/scope validation."
+    },
+    {
+      "path": "src/anywhere_computer/device_polling.py",
+      "area": "network_security",
+      "sha256": "a2e6a22e9c17304186fe4a6b19d683d036bca4ef01adae57bc51e6703f06d2af",
+      "lines": 93,
+      "review": "no_change",
+      "finding": "Reviewed monotonic polling state transitions, cancellation terminality and RFC backoff behavior."
+    },
+    {
+      "path": "src/anywhere_computer/device_router.py",
+      "area": "network_security",
+      "sha256": "558878c9ec2826f859fade11f73cc053dea3d131d20b9e1d3362a39956b5d19f",
+      "lines": 268,
+      "review": "no_change",
+      "finding": "Reviewed route digest binding, exactly-once dispatch claim, catalog filtering, nested ID prohibition and unknown recovery."
+    },
+    {
+      "path": "src/anywhere_computer/devices.py",
+      "area": "network_security",
+      "sha256": "7a2ab7f47c95f3a0fdca6e6b6840c6c840001a11f17c5c9a2f128b81acd0ca40",
+      "lines": 264,
+      "review": "no_change",
+      "finding": "Reviewed schema migration, normalized device identities, metadata-only storage and freshness-qualified SSH/HTTP probes."
+    },
+    {
+      "path": "src/anywhere_computer/diagnostics.py",
+      "area": "network_security",
+      "sha256": "86df3f734f41d9718c407214851c0908d9278d4619dcaa08f6dc22cd4c67040a",
+      "lines": 246,
+      "review": "no_change",
+      "finding": "Reviewed source/runtime/catalog separation, snapshot reconfirmation and read-only diagnostics with fixed safe output."
+    },
+    {
+      "path": "src/anywhere_computer/direct_mcp.py",
+      "area": "network_security",
+      "sha256": "a1d72c2bf43836039a37397e1f54d84d376747f5a28e00c231cba0ad48583e91",
+      "lines": 149,
+      "review": "no_change",
+      "finding": "Reviewed owner-task stream lifetime, serialized calls, cancellation and unknown outcomes; no automatic reconnect or replay."
+    },
+    {
+      "path": "src/anywhere_computer/direct_mcp_sessions.py",
+      "area": "network_security",
+      "sha256": "98aaa0439322d469aa9a037291173c3eb5621a014b6bcdf4835ca85df045ebbb",
+      "lines": 404,
+      "review": "no_change",
+      "finding": "Reviewed direct session capacity, ownership, activity probes and watch lease cleanup; task and terminal state boundaries remain explicit."
+    },
+    {
+      "path": "src/anywhere_computer/document_preview.py",
+      "area": "core_ui",
+      "sha256": "9afe5f17d425c125dcbfaeaee20b85c7d4a68831b52aab601a22e7e9fc995b5d",
+      "lines": 207,
+      "review": "changed",
+      "finding": "Preserve real sandboxed renderer, source hash and size limits; replace duplicated base64 field with one native content image."
+    },
+    {
+      "path": "src/anywhere_computer/document_writer.py",
+      "area": "core_ui",
+      "sha256": "863a76f2cf8747ecea257252b1255e5aba17fef857b12a98676dc0ee741f6513",
+      "lines": 303,
+      "review": "no_change",
+      "finding": "Full file reviewed: XML text restrictions, package-part preservation, hash-checked atomic edit and bounded workbook generation."
+    },
+    {
+      "path": "src/anywhere_computer/documents.py",
+      "area": "core_ui",
+      "sha256": "118e5d78f8d4d1fa3c332d1f6e76b2e45dc58389854da8ed303710d1236442f8",
+      "lines": 338,
+      "review": "no_change",
+      "finding": "Full file reviewed: OOXML relationship validation, extraction budgets, nested paragraph semantics and pagination."
+    },
+    {
+      "path": "src/anywhere_computer/downloads.py",
+      "area": "core_ui",
+      "sha256": "f40ef5971624067d3e7afe0b7fe6993d1d3e63a81d200b149d9fb9c4f3dea588",
+      "lines": 183,
+      "review": "no_change",
+      "finding": "Full file reviewed including ownership, bounds, atomic publication and recovery; no justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/engine.py",
+      "area": "core_ui",
+      "sha256": "05dde9601778c323ecee178f415682b2c533618aa7487872da9f29baac42385c",
+      "lines": 1999,
+      "review": "changed",
+      "finding": "Full file reviewed; corrected stale Windows upload limitations and manifest verification wording."
+    },
+    {
+      "path": "src/anywhere_computer/engine_migration.py",
+      "area": "release_runtime",
+      "sha256": "66697644375c3f45ebbc99c2dffdc87712b58ba3b94c50c9e2ea929867d89d16",
+      "lines": 165,
+      "review": "no_change",
+      "finding": "Two entrance migration is resumable with digest and expected-content checks; pending records block partial selections."
+    },
+    {
+      "path": "src/anywhere_computer/engine_selection.py",
+      "area": "release_runtime",
+      "sha256": "0671a9d221a6d4c9e7d9dd9d08fa29710b0fa9800c390226848ab4d4358d74ea",
+      "lines": 50,
+      "review": "no_change",
+      "finding": "Bounded non-symlink selection with migration guard and existing-ledger requirement preserves history."
+    },
+    {
+      "path": "src/anywhere_computer/enrollment_credentials.py",
+      "area": "network_security",
+      "sha256": "61a8864b3957024b9d2edc5929d32bf6261e6eafd0dab7af1012ed727edd5653",
+      "lines": 164,
+      "review": "no_change",
+      "finding": "Reviewed strict token validation, exact vault readback, same-attempt reconciliation and scoped cleanup."
+    },
+    {
+      "path": "src/anywhere_computer/enrollment_http.py",
+      "area": "network_security",
+      "sha256": "a899d5f00ac8f4e2bdfefa8182a3f6aafa0ce62b4d6a76e14683c0fe9bf85806",
+      "lines": 144,
+      "review": "no_change",
+      "finding": "Reviewed bounded HTTPS exchange, watchdog shutdown, TLS requirements, duplicate JSON/header rejection and dispatched uncertainty."
+    },
+    {
+      "path": "src/anywhere_computer/enrollment_worker.py",
+      "area": "network_security",
+      "sha256": "1ab30e2a3cc763ef76b61e2c315a01a2f991e520597a0947dc992340cc340279",
+      "lines": 199,
+      "review": "no_change",
+      "finding": "Reviewed fixed enrollment command protocol, recovery credential isolation, bounded frames and error redaction."
+    },
+    {
+      "path": "src/anywhere_computer/execution_environment.py",
+      "area": "core_ui",
+      "sha256": "5f6bc46a0be7fcfb0f6a832fb45de28639924cb43a970ff022e47398a227ff3c",
+      "lines": 51,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/files.py",
+      "area": "core_ui",
+      "sha256": "2245bc408cefa70c51b3ba3d5d5c7feb3d78eb1d82e93ab8006c225537600714",
+      "lines": 306,
+      "review": "no_change",
+      "finding": "Full file reviewed including ownership, bounds, atomic publication and recovery; no justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/github_releases.py",
+      "area": "release_runtime",
+      "sha256": "4744548e1afa2ab6c64b8a5b0bb0346d1f5ca45cd756ed0f57143969e8b483be",
+      "lines": 176,
+      "review": "no_change",
+      "finding": "Discovery pins workflow and tag commit; bounded download validates size/digest and restricted redirect hosts before no-replace publication."
+    },
+    {
+      "path": "src/anywhere_computer/gui_cua.py",
+      "area": "core_ui",
+      "sha256": "42a911a543b441a6fa3bea2bc40ef2a5f606689a17949967d632858fc80bffe0",
+      "lines": 210,
+      "review": "changed",
+      "finding": "Reviewed shared bounded catalog lookup and Cua contract validation from 291ca56."
+    },
+    {
+      "path": "src/anywhere_computer/gui_mcp.py",
+      "area": "core_ui",
+      "sha256": "b0d098b0ae08be27ecf2e4ea7c6f718240de14837ad5276385ffec8a7a1e5307",
+      "lines": 350,
+      "review": "changed",
+      "finding": "Reviewed shared paginated catalog lookup and duplicate/cursor rejection from 291ca56."
+    },
+    {
+      "path": "src/anywhere_computer/http_client.py",
+      "area": "network_security",
+      "sha256": "e20a373a429df1738123ba89048f528c13433ecffdb3036414d412c66cceb909",
+      "lines": 422,
+      "review": "no_change",
+      "finding": "Reviewed authenticated session handshake, marked pre-dispatch retries, worker-thread serialization and unknown-result non-replay."
+    },
+    {
+      "path": "src/anywhere_computer/http_diagnostics.py",
+      "area": "network_security",
+      "sha256": "0b4ac454b5e8430266603a8e070d6f5c6c65ef0df54fb8a05ab6d2b30a7d94b4",
+      "lines": 210,
+      "review": "no_change",
+      "finding": "Reviewed bounded metadata framing, explicit public probing and separation from authenticated acceptance."
+    },
+    {
+      "path": "src/anywhere_computer/http_mcp.py",
+      "area": "network_security",
+      "sha256": "e68a832168df982c17ff2ca937a75cd70a3a44754adc189e817c54341a6fe02a",
+      "lines": 383,
+      "review": "no_change",
+      "finding": "Reviewed bounded HTTP framing, bearer task ownership, durable dispatch wait, session binding and shutdown task draining."
+    },
+    {
+      "path": "src/anywhere_computer/http_service.py",
+      "area": "network_security",
+      "sha256": "ebf45b2ffbea58585a692ab79e1b368582875b14525d8df3aa9696925dac3f5f",
+      "lines": 410,
+      "review": "no_change",
+      "finding": "Reviewed explicit configuration publication, enrollment consistency, shared/local engine ownership and owner reset revocation order."
+    },
+    {
+      "path": "src/anywhere_computer/http_supervisor.py",
+      "area": "network_security",
+      "sha256": "055c4523d4d8850f785431689417beaabcc0b04758e38d29290d1d6ee760984c",
+      "lines": 128,
+      "review": "no_change",
+      "finding": "Reviewed owned child supervision, bounded restart budget, signal/pipe cleanup and watcher/server locks."
+    },
+    {
+      "path": "src/anywhere_computer/http_tool_upgrade.py",
+      "area": "network_security",
+      "sha256": "874c7de3a214d08e31d68666a64c6cb7ea0e7dae0bd2b6787ebddb6de71c84d7",
+      "lines": 117,
+      "review": "no_change",
+      "finding": "Reviewed offline scope expansion, fresh-consent tool classes, crash-safe exact enrollment reconciliation and credential preservation."
+    },
+    {
+      "path": "src/anywhere_computer/local_supervisor.py",
+      "area": "release_runtime",
+      "sha256": "a1ac5da41ab018f827f542599b66d4e3f93d8a4f1510aed8580d49187f832bb9",
+      "lines": 53,
+      "review": "no_change",
+      "finding": "Watcher reuses selected runtime and blocks credential errors; inspected interval and owned signal/lock lifetime."
+    },
+    {
+      "path": "src/anywhere_computer/locking.py",
+      "area": "core_ui",
+      "sha256": "31872112176bfc042930e1d253545e2d9fc60cead96676de33b033c0ae4c7968",
+      "lines": 58,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/management.py",
+      "area": "network_security",
+      "sha256": "55a57d3643fafe74512e2a1088a378e6824c0abd12589f4fd5ecef26b768f540",
+      "lines": 232,
+      "review": "no_change",
+      "finding": "Reviewed typed management snapshots, explicit start/startup changes, observed postconditions and cached-device separation."
+    },
+    {
+      "path": "src/anywhere_computer/mcp_media.py",
+      "area": "network_security",
+      "sha256": "61f295e8baeffca7f2ce57f3286254169e45f2b120d15548ff56c827723950ee",
+      "lines": 85,
+      "review": "no_change",
+      "finding": "Reviewed exact media summary matching and count/byte bounds; failed restore retains caller operation identity."
+    },
+    {
+      "path": "src/anywhere_computer/mcp_result_data.py",
+      "area": "network_security",
+      "sha256": "3e74b704f25be4625205895e3255ee51caaca857fab0f79568bcd19491eb584c",
+      "lines": 52,
+      "review": "changed",
+      "finding": "Register only documents_preview in existing known-media traversal; wrapper depth, recovery and arbitrary metadata behavior unchanged."
+    },
+    {
+      "path": "src/anywhere_computer/mcp_results.py",
+      "area": "network_security",
+      "sha256": "7285cae577f5005f1a6a7ec8c6f4afeb6a4dbad9d978349f6c3d586746ecc0a3",
+      "lines": 157,
+      "review": "no_change",
+      "finding": "Reviewed shared text/media normalization, bounded diagnostics and metadata stripping; existing validators centralize limits."
+    },
+    {
+      "path": "src/anywhere_computer/mcp_server.py",
+      "area": "network_security",
+      "sha256": "1ea06dfb4b80ee5e2bc02a9681819738ae413d11be72f2a094a0777c7dc61a60",
+      "lines": 368,
+      "review": "no_change",
+      "finding": "Reviewed complete MCP negotiation, operation-ID validation, error envelopes, notification pump and stdio task cleanup."
+    },
+    {
+      "path": "src/anywhere_computer/media.py",
+      "area": "core_ui",
+      "sha256": "aff93d5c9124a54148b5b499413c8bad5f88f919f943ddfe5fc0e898338a287d",
+      "lines": 112,
+      "review": "changed",
+      "finding": "Real process cancellation left decoder alive before patch; final cleanup reaps timeout/cancel paths, 47 related tests pass."
+    },
+    {
+      "path": "src/anywhere_computer/models.py",
+      "area": "core_ui",
+      "sha256": "f3369d4c200239b893900f83207351c535965c8da5deb81529fa8b7a9ab6b508",
+      "lines": 472,
+      "review": "changed",
+      "finding": "Reused BrowserTarget validation across click/fill/key; all public browser JSON schemas unchanged."
+    },
+    {
+      "path": "src/anywhere_computer/move_native.py",
+      "area": "core_ui",
+      "sha256": "cee4756ec176492572b32ac1ee229252a2665d5d387f732c6a9fc6f389171cf1",
+      "lines": 34,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/native_gui.py",
+      "area": "core_ui",
+      "sha256": "88d7ecbf147a3cc5eb4fa379f16b1ac96de772178534feedfb24987d3d200b56",
+      "lines": 406,
+      "review": "changed",
+      "finding": "Reviewed owner retention through confirmed native helper shutdown from 291ca56."
+    },
+    {
+      "path": "src/anywhere_computer/native_login.py",
+      "area": "network_security",
+      "sha256": "f085d7c8ad2320d8f625cc4d5317ee60f070c662aaec130e65dc27a71f40bcf3",
+      "lines": 278,
+      "review": "no_change",
+      "finding": "Reviewed PKCE/state-bound temporary callback, finite listener concurrency, single redemption and safe shutdown."
+    },
+    {
+      "path": "src/anywhere_computer/oauth_endpoints.py",
+      "area": "network_security",
+      "sha256": "7d2885695dcfae6b56dca42efcb2b539b1ed289fd3dd17cf772402375837061e",
+      "lines": 164,
+      "review": "no_change",
+      "finding": "Reviewed canonical OAuth discovery, strict form decoding, code/refresh redemption and redacted standard error responses."
+    },
+    {
+      "path": "src/anywhere_computer/owner_credentials.py",
+      "area": "network_security",
+      "sha256": "f6ac72ab03d40a2c06198db791afea7ec1167f35b51630899d0187822f74de51",
+      "lines": 196,
+      "review": "no_change",
+      "finding": "Reviewed owner password derivation, locked update/readback, reset revocation prerequisite and secret repr exclusion."
+    },
+    {
+      "path": "src/anywhere_computer/owner_json_pipe.py",
+      "area": "network_security",
+      "sha256": "e284df63f49f92fe64c332e0d29ea86141709b9b1683c9587e71974a07a49db3",
+      "lines": 1039,
+      "review": "changed",
+      "finding": "Reviewed strict JSON parse of non-finite constants and over-nesting from 9109a6d."
+    },
+    {
+      "path": "src/anywhere_computer/owner_passkeys.py",
+      "area": "network_security",
+      "sha256": "76937c340ecbb35a3f282fcb28d2d35dd022cf1954c28a55321b140295b4b617",
+      "lines": 323,
+      "review": "no_change",
+      "finding": "Reviewed passkey ticket consumption, password-reset ordering, atomic counter verification, vault readback and no duplicate enrollment."
+    },
+    {
+      "path": "src/anywhere_computer/parent_liveness.py",
+      "area": "network_security",
+      "sha256": "e6bc0dd0f3f0be368ea20621b5462c3574016d4c2654cb61c7a75497a1139f9b",
+      "lines": 25,
+      "review": "no_change",
+      "finding": "Reviewed private parent pipe EOF handling and bounded supervisor notification."
+    },
+    {
+      "path": "src/anywhere_computer/peer_cli.py",
+      "area": "release_runtime",
+      "sha256": "ca0c64ca6c265df61642896afc9b62fa16f0f5898f6a729ee41f87a780a3866d",
+      "lines": 166,
+      "review": "no_change",
+      "finding": "Credential publish is no-replace and platform-scoped; heartbeat failure stops stdio process to avoid stale presence."
+    },
+    {
+      "path": "src/anywhere_computer/peer_mailbox.py",
+      "area": "release_runtime",
+      "sha256": "d87518c06ef62064e51b27f9128688bbd725dd78e852e8009599271d08324f2d",
+      "lines": 602,
+      "review": "changed",
+      "finding": "Make all schema creation/migration transactional so failed DDL can roll back and retry."
+    },
+    {
+      "path": "src/anywhere_computer/peer_mcp.py",
+      "area": "release_runtime",
+      "sha256": "c5fc1bd4f7916efbb86e5af42a0d69fcfff8918e15590ea3eac75d05cd3aac59",
+      "lines": 178,
+      "review": "no_change",
+      "finding": "Explicit durable send ID and sole-live recipient rules preserved; wait returns messages without implicit acknowledgement/model execution."
+    },
+    {
+      "path": "src/anywhere_computer/plugin_audio.py",
+      "area": "network_security",
+      "sha256": "b11a97077fb6741ac05578f70a36fe02676775b8113a81b4ee8361bd21d9dbf3",
+      "lines": 49,
+      "review": "no_change",
+      "finding": "MIME/magic/canonical-base64 and aggregate byte contracts are explicit; summary excludes raw audio."
+    },
+    {
+      "path": "src/anywhere_computer/plugin_diagnostics.py",
+      "area": "network_security",
+      "sha256": "82d47c459b73ff3c2a70acc14812ce2be836e86675d268f113dea36bc7e29ef9",
+      "lines": 90,
+      "review": "no_change",
+      "finding": "Fixed diagnostic classifications and bounded stderr history prevent forwarding raw credentials."
+    },
+    {
+      "path": "src/anywhere_computer/plugin_images.py",
+      "area": "network_security",
+      "sha256": "edbd0a69e369ee490de8170eaaa0409881188044f2a8253d5a43205512a2036c",
+      "lines": 55,
+      "review": "no_change",
+      "finding": "Reviewed image magic and canonical-base64 validation; compressed data is intentionally not decoded."
+    },
+    {
+      "path": "src/anywhere_computer/plugin_sessions.py",
+      "area": "network_security",
+      "sha256": "32ef56ee2255b9f3d0f0f0f0205aa609b12f6cc009de81b13a80062cb05c4d0d",
+      "lines": 356,
+      "review": "no_change",
+      "finding": "Reviewed plugin session authorization, idle probes and cleanup capacity; active or unconfirmed Subchat work protects the session."
+    },
+    {
+      "path": "src/anywhere_computer/portable_archive.py",
+      "area": "release_runtime",
+      "sha256": "947910d1f7ece48cc1ea0e87815193b7a0657e345b7bfcf4ebd93e0e23b06454",
+      "lines": 180,
+      "review": "no_change",
+      "finding": "Manifest exact membership, path/type/hash and expansion bounds precede private-snapshot extraction; compatibility prevents schema downgrade."
+    },
+    {
+      "path": "src/anywhere_computer/private_directory.py",
+      "area": "network_security",
+      "sha256": "db823087320f725a2786c155fabc486b32e26ab333d5d08b6d548e0a957cb2ac",
+      "lines": 472,
+      "review": "no_change",
+      "finding": "Reviewed private ACL creation/validation, lexical reparse detection, explicit migration preflight and owner-SID binding."
+    },
+    {
+      "path": "src/anywhere_computer/private_file.py",
+      "area": "network_security",
+      "sha256": "c4e3eb79e8f265a8c64ca058736d38f103bdf1d0b8190f95a42622d371effba7",
+      "lines": 184,
+      "review": "no_change",
+      "finding": "Reviewed Windows credential DACL validation, explicit native signatures, owned handle publication and reparse rejection."
+    },
+    {
+      "path": "src/anywhere_computer/processes.py",
+      "area": "core_ui",
+      "sha256": "66dd3e3af8cb6c91ebd16c6d8851abd43ffde6be35bc49cbf5508c53f72cea2b",
+      "lines": 47,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/regex_worker.py",
+      "area": "core_ui",
+      "sha256": "82192b40591a62b31061535aa4e5d14ce45c07d0cc57f82007b6155ec2f9d99e",
+      "lines": 85,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/registration_client.py",
+      "area": "network_security",
+      "sha256": "dc55d69d7df3103624f15a9342d310e419db7b32e07a0a91a11f1771adf54878",
+      "lines": 257,
+      "review": "no_change",
+      "finding": "Reviewed persisted enrollment identity, same-account reauthorization, vault slot cleanup and receipt/request consistency."
+    },
+    {
+      "path": "src/anywhere_computer/relay_channels.py",
+      "area": "release_runtime",
+      "sha256": "2bb63e2609bcb5804fa114a5573631fb991ac8e0b8c0afbabe2a3ff743d56cc2",
+      "lines": 199,
+      "review": "no_change",
+      "finding": "mTLS identity and revocation rechecked around bounded one-flight exchange; replaced/uncertain channel outcomes never replay."
+    },
+    {
+      "path": "src/anywhere_computer/relay_client.py",
+      "area": "release_runtime",
+      "sha256": "95cf29ba0b12becca6560aa4277f2570d00228d8e09b52af336efa2c5b91994f",
+      "lines": 174,
+      "review": "no_change",
+      "finding": "Loopback-only signed client separates transient transport reconnect from execution/auth errors; enrollment redirects refused."
+    },
+    {
+      "path": "src/anywhere_computer/relay_enrollment.py",
+      "area": "release_runtime",
+      "sha256": "4104c2ed7ad3dc5b17837be248e7d6f53a4057ee7cbe1ccd93336dbe0333df95",
+      "lines": 67,
+      "review": "no_change",
+      "finding": "Enrollment purpose stays separate from execution and exact audience/client/lifetime checked."
+    },
+    {
+      "path": "src/anywhere_computer/relay_grants.py",
+      "area": "release_runtime",
+      "sha256": "16e6c7b1f82c6961bf10fb9e1e3891c5126ef4ec06338545a154dd39f78f12ec",
+      "lines": 119,
+      "review": "no_change",
+      "finding": "Execution grants bind account/device/client and trusted revocation; bearer stays outside engine ledger arguments."
+    },
+    {
+      "path": "src/anywhere_computer/relay_http.py",
+      "area": "release_runtime",
+      "sha256": "9f59f729f0a07e0482d5aa3946e204eacff48d6eaeb20a5cc422e369eabf7766",
+      "lines": 92,
+      "review": "no_change",
+      "finding": "Loopback enrollment routes bound input and bearer parsing; no implicit MCP access from enrollment grant."
+    },
+    {
+      "path": "src/anywhere_computer/relay_mcp.py",
+      "area": "release_runtime",
+      "sha256": "5339eaef4caba34334ded46fc995c60240170a50c9985ba5379d15c4493abbe1",
+      "lines": 69,
+      "review": "no_change",
+      "finding": "Request-scoped bearer refreshed and verified against fixed session grant identity before dispatch."
+    },
+    {
+      "path": "src/anywhere_computer/relay_registry.py",
+      "area": "release_runtime",
+      "sha256": "8764795c38515a57c0b68d9ef1b3e0d6cc41690a06475b49cccc4a339c2b51ab",
+      "lines": 203,
+      "review": "no_change",
+      "finding": "Atomic registry migration and binding/revocation tombstones prevent identity reassignment and resurrection."
+    },
+    {
+      "path": "src/anywhere_computer/relay_tokens.py",
+      "area": "release_runtime",
+      "sha256": "b11bafe389b7afc095557399a13ad8613ef70b9a863f4ed77aac260bf1ac450a",
+      "lines": 52,
+      "review": "no_change",
+      "finding": "Fixed issuer/audience/RS256 key boundary rejects caller key URLs and unsupported header controls."
+    },
+    {
+      "path": "src/anywhere_computer/release_activation.py",
+      "area": "release_runtime",
+      "sha256": "fadcd4e6c608c49d9598014fefc9486c0397e3f8429848ae94aa11ee2369add4",
+      "lines": 96,
+      "review": "no_change",
+      "finding": "Prepared record precedes activation; active-work and unknown outcome paths retain installation and intent."
+    },
+    {
+      "path": "src/anywhere_computer/release_preparation.py",
+      "area": "release_runtime",
+      "sha256": "145679da8f775665b1be0a55e83a6fccaf70c870511c74693f50480211a29b26",
+      "lines": 104,
+      "review": "no_change",
+      "finding": "Exact release asset/platform/version, attestation and compatibility checks precede runtime import and activation."
+    },
+    {
+      "path": "src/anywhere_computer/release_record.py",
+      "area": "release_runtime",
+      "sha256": "44a6b24e0d734021cfcab9335d73a29479ceca2670a5269ff90b2250af4239d8",
+      "lines": 62,
+      "review": "no_change",
+      "finding": "Bounded validated prepared-release record uses atomic replace and durable write."
+    },
+    {
+      "path": "src/anywhere_computer/release_supervisor.py",
+      "area": "release_runtime",
+      "sha256": "9342021a397de0ff8400468bc258bf262b09267d6dd5e710a705d3f7c4298dba",
+      "lines": 153,
+      "review": "no_change",
+      "finding": "Opt-in remains strict; update subprocess lifetime and independent engine process group preserved; invalid output never means success."
+    },
+    {
+      "path": "src/anywhere_computer/release_update.py",
+      "area": "release_runtime",
+      "sha256": "39fece151e6a49990bd80ca4bd66c406a282471a597b1e366fd146e0ea3267b0",
+      "lines": 70,
+      "review": "no_change",
+      "finding": "Stable ordering avoids downgrades and durable prepared candidate resumes before discovery."
+    },
+    {
+      "path": "src/anywhere_computer/remote_bridge.py",
+      "area": "network_security",
+      "sha256": "963c5ae61e9639a8bee33beec7bea065d14929d863cf9b2c40c5c42e6a9aa424",
+      "lines": 229,
+      "review": "no_change",
+      "finding": "Reviewed per-peer grants, finite expiry, operation/transfer namespace isolation and status authorization attribution."
+    },
+    {
+      "path": "src/anywhere_computer/remote_health.py",
+      "area": "network_security",
+      "sha256": "2e0a38d8ab6d2839a88552138bd6b60261ebeb5ad53266b50c0985b60ef60d65",
+      "lines": 165,
+      "review": "no_change",
+      "finding": "Reviewed monitor opt-in state, owned regular-file IO, bounded observations and generation-based stale-result suppression."
+    },
+    {
+      "path": "src/anywhere_computer/remote_service.py",
+      "area": "network_security",
+      "sha256": "b156d921962340f6f111c723eafda7adaa5f7ae616e46c01ce7bc631a09d0df7",
+      "lines": 280,
+      "review": "no_change",
+      "finding": "Reviewed remote owner process/descendant cleanup, bounded credential retry classes and explicit persistent restart lifecycle."
+    },
+    {
+      "path": "src/anywhere_computer/remote_setup.py",
+      "area": "network_security",
+      "sha256": "bc37fa12100ffec11724babf44e3da37dd66dada401690ed962d1d559c8b4fc4",
+      "lines": 189,
+      "review": "no_change",
+      "finding": "Reviewed resumable setup, exact reviewed scopes, shell-safe displayed commands and vault readback prerequisites."
+    },
+    {
+      "path": "src/anywhere_computer/remote_transport.py",
+      "area": "network_security",
+      "sha256": "77352c0fad7e34c0e99c7c3bb6a2637986b827333513d8ae1e9f20bc5c1c698d",
+      "lines": 165,
+      "review": "no_change",
+      "finding": "Reviewed verified mutual TLS, ALPN/fingerprint binding, bounded frames, revocation recheck and stream/task cleanup."
+    },
+    {
+      "path": "src/anywhere_computer/renderer_location.py",
+      "area": "release_runtime",
+      "sha256": "606e0f7a4ce38c9b1389ef881c6d7f19dd731a1621d166c9a3946346f3095126",
+      "lines": 27,
+      "review": "no_change",
+      "finding": "Partial portable renderer bundle refuses host fallback; development PATH fallback remains explicit."
+    },
+    {
+      "path": "src/anywhere_computer/runtime_identity.py",
+      "area": "release_runtime",
+      "sha256": "d094cd783d7901087c1e82a9c453ca5ee117cb0d22594c03da65dda10ab6da76",
+      "lines": 19,
+      "review": "no_change",
+      "finding": "Deterministic source and browser-script hashing distinguishes installed implementation."
+    },
+    {
+      "path": "src/anywhere_computer/runtime_launch.py",
+      "area": "release_runtime",
+      "sha256": "cead01276520fd7a4bbef9208ad439005cdf68fa030b7862679c92669b07b812",
+      "lines": 21,
+      "review": "no_change",
+      "finding": "Isolated interpreter invocation retains selected venv and forbids workspace Python shadowing."
+    },
+    {
+      "path": "src/anywhere_computer/runtime_selection.py",
+      "area": "release_runtime",
+      "sha256": "589dcc81326d602c3cc19d3724a7ddba6ae60e963186c293319a6360e5dfffa1",
+      "lines": 114,
+      "review": "no_change",
+      "finding": "Intent-before-switch and readiness-before-publication ordering retained; writes fsync and recover exact selection."
+    },
+    {
+      "path": "src/anywhere_computer/search.py",
+      "area": "core_ui",
+      "sha256": "5b7cd2dacc2111dd8729bcb66b7d796eec89620c48b4a2e8e0d8796dd5234efb",
+      "lines": 400,
+      "review": "no_change",
+      "finding": "Full file reviewed: cancellable searches, bounded file/regex/document extraction, cursor and result budgets."
+    },
+    {
+      "path": "src/anywhere_computer/secret_pipe.py",
+      "area": "network_security",
+      "sha256": "b99e3934ff6c4f36abaa32930f75c443a84c70b64266d5a2335e98d7ac2ce892",
+      "lines": 325,
+      "review": "no_change",
+      "finding": "Reviewed bounded single-consumer secret handoff, no regular-file fallback, Windows cancellation and payload clearing."
+    },
+    {
+      "path": "src/anywhere_computer/sessions.py",
+      "area": "core_ui",
+      "sha256": "c71a0d6a3f96296944e65d490fd7a7b3ab030ba7f419c6a07a2a925c25b60046",
+      "lines": 452,
+      "review": "no_change",
+      "finding": "Full file reviewed: process ownership, input serialization, unknown receipts, byte cursor and bounded output."
+    },
+    {
+      "path": "src/anywhere_computer/setup_connector.py",
+      "area": "network_security",
+      "sha256": "df25650142dfd0e9d92b8fa32adc8be03ba049f912a9edeee9f54ab6a4c8f29a",
+      "lines": 196,
+      "review": "no_change",
+      "finding": "Reviewed setup request binding, durable dispatch claim, reviewed-plan identity and local-only catalog annotations."
+    },
+    {
+      "path": "src/anywhere_computer/setup_controller.py",
+      "area": "network_security",
+      "sha256": "2da8730e199ddb9d9363aab76cc10e8f8892b48d834085bcacf2e63111ffa0a3",
+      "lines": 82,
+      "review": "no_change",
+      "finding": "Reviewed immutable plan hash, revalidation, serialized confirmation and disk-state reconciliation after failed acknowledgement."
+    },
+    {
+      "path": "src/anywhere_computer/skills_context.py",
+      "area": "core_ui",
+      "sha256": "b4e41adb3c66f2fe2ff927e61942cd72e23af48ac465efbb7cc32dad0fc22274",
+      "lines": 95,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/ssh_child.py",
+      "area": "network_security",
+      "sha256": "c3a38ddfe39a3f7c25496d952aa28682b7dd3c6f86473d3073f1020cbb8b59d0",
+      "lines": 81,
+      "review": "changed",
+      "finding": "Reviewed SSH child backend shutdown before delegation stores close from 9109a6d."
+    },
+    {
+      "path": "src/anywhere_computer/ssh_client.py",
+      "area": "network_security",
+      "sha256": "2c6dcf49e0f0f8e9e22102a9c0ec7568b7c797befcb03255e18ba10c04ef9f88",
+      "lines": 135,
+      "review": "no_change",
+      "finding": "Reviewed fixed SSH handshake, bounded JSON protocol, media restoration and subprocess escalation cleanup."
+    },
+    {
+      "path": "src/anywhere_computer/ssh_transport.py",
+      "area": "network_security",
+      "sha256": "930e592bc95a90b331b5ac5f3aed596f3b44f6b091e42dad3f6a6296c53ea27d",
+      "lines": 51,
+      "review": "no_change",
+      "finding": "Reviewed alias validation, fixed command allowlist and strict host/no-forwarding options."
+    },
+    {
+      "path": "src/anywhere_computer/startup_native.py",
+      "area": "release_runtime",
+      "sha256": "520c32f2d4df070442decb69bbdba2b5832802543ce3f200fddb2211dad55250",
+      "lines": 258,
+      "review": "no_change",
+      "finding": "OS adapters revalidate exact identity before start/remove; no shell interpolation or privilege escalation."
+    },
+    {
+      "path": "src/anywhere_computer/startup_service.py",
+      "area": "release_runtime",
+      "sha256": "f8c1008818d77e0d74773a33c34944bf5415420fb5a8fb79f876264a70e5622e",
+      "lines": 402,
+      "review": "changed",
+      "finding": "Open startup records nonblocking before regular-file validation; reject FIFO without hanging."
+    },
+    {
+      "path": "src/anywhere_computer/state.py",
+      "area": "core_ui",
+      "sha256": "dd5e5e96ae96d7b3b4f852ebdf965c5f4420b51b7a9285c5256bbe6a8e700a28",
+      "lines": 254,
+      "review": "no_change",
+      "finding": "Full file reviewed including ownership, bounds, atomic publication and recovery; no justified change found."
+    },
+    {
+      "path": "src/anywhere_computer/state_migration.py",
+      "area": "release_runtime",
+      "sha256": "6034adcb87b24c119974dcb6d9f96cc025cb7df8ce6670c8010a0b155faecd34",
+      "lines": 162,
+      "review": "no_change",
+      "finding": "Snapshot-only normalization validates schemas, hashes and explicit primary keys; source databases and manual backups preserved."
+    },
+    {
+      "path": "src/anywhere_computer/subchat.py",
+      "area": "subchat",
+      "sha256": "bada568e81e8b77b7e57088688c07bb9e5cb0a55d6b1a19a98b7db45f58889e0",
+      "lines": 338,
+      "review": "no_change",
+      "finding": "Read lifecycle/dispatch/recovery in full; durable begin_send precedes dispatch and unknown outcomes cannot replay. Typed receipts, queued revision checks, pending/final separation, owner propagation and post-commit cleanup checked. Failed reservation explicitly discards prepared state for concurrent, authorization, revision and cancellation cases."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/__init__.py",
+      "area": "subchat",
+      "sha256": "be1e8d493afa410097ba058f7132ca97ccc254c02a3831a22b852b01e69f2d0d",
+      "lines": 5,
+      "review": "no_change",
+      "finding": "Read profile-keychain default override; immutable tuple is shared browser startup contract."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/backend.py",
+      "area": "subchat",
+      "sha256": "d654a47155c3a5f41a01233bdf74f03f781a652cdff0056883a2ebf870b4abf3",
+      "lines": 1163,
+      "review": "changed",
+      "finding": "Full send, preparation, recovery, catalog, resource and teardown paths read. Fixed late POST escape on unclaimed timeout/cancellation and preserved uncertain human drafts; regression baseline produced escaped POST, fixed suite passes. Commit e5562f0."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/background.py",
+      "area": "subchat",
+      "sha256": "17b7756dec3dd7d2f610d9a436e59738e4506793a8e40f24cb9cb6f2a87a6914",
+      "lines": 337,
+      "review": "changed",
+      "finding": "Full source/guardian consumers and owned-profile tests. Bound browser.close at 5sec, keep exact profile/token process cleanup authoritative, preserve primary error and redact CDP exception text. Commit8989998."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/background_guardian.py",
+      "area": "subchat",
+      "sha256": "e0be6f8e5c3f669dc40d20404a63d97024fe179050d607d93ca85b6de6e73c86",
+      "lines": 31,
+      "review": "no_change",
+      "finding": "Read owned process guardian end to end; absolute path/token/platform validation and exact-owner stop, acknowledged EOF behavior. Correlated background stop lifecycle and bounded browser disconnect regression; no unrelated profile cleanup."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/catalog.py",
+      "area": "subchat",
+      "sha256": "a0c5ccc70ecb47c0dfd7e99c897fc5be78b8ac5475e4554772cbdee666ce8d32",
+      "lines": 483,
+      "review": "no_change",
+      "finding": "Full read including probe/finally and CLI: typed bounded catalog projection/opaque choice ID, exact labels and observed fallback; UI-only availability separated. Strict structural probes and no send."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/efforts.py",
+      "area": "subchat",
+      "sha256": "566741eec492a471b25f7940ed4a54bcf4162854d919de0b9f7995c6a003bc43",
+      "lines": 108,
+      "review": "no_change",
+      "finding": "Full read: bounded observed slider traversal with exact range/index/description and finally restoration. Cancellation is propagated; no prompt dispatch."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/history.py",
+      "area": "subchat",
+      "sha256": "89ab94429d61633d2de6af7af3b319cfe7f955676b61d09fcb057f1ae98dcb94",
+      "lines": 344,
+      "review": "no_change",
+      "finding": "Full read: exact saved input/resource correlation, asynchronous turn identity safeguards, provisional/final/image separation and output interruption. Potential duplicated correlation selectors are deliberate until tests support safe factoring."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/http_reader.py",
+      "area": "subchat",
+      "sha256": "98757c22afb42f019cfb3d2e751fa1bdfa672b872894707b63f656da2b6771ea",
+      "lines": 428,
+      "review": "changed",
+      "finding": "Full GET/bootstrap/page close/owner/account and deletion paths read. Added access/headers recheck after awaited client factory before destructive PATCH; actual concurrent 401 regression. Commit8989998."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/httpx_generation.py",
+      "area": "subchat",
+      "sha256": "39aa880de5d7d93eb84ebf0d48954e997f83cdda2e73abd88ad83fa05316d31f",
+      "lines": 108,
+      "review": "no_change",
+      "finding": "Full read: one authenticated exact-origin POST, header timeout, stream byte limits, no retry, response close in finally. Header/content sanitization traced through claimed-stage callers."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/request_content.py",
+      "area": "subchat",
+      "sha256": "0ee1677c4bee3a412334304342687e65c69693f42fcbb1f82882b6238e0cf232",
+      "lines": 97,
+      "review": "no_change",
+      "finding": "Full read: exact input/conversation/resources validation, observed model aliases, conservative same-target URL normalization. No credential synthesis or local paths."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/subchat_copy.js",
+      "area": "subchat",
+      "sha256": "cbfb595bec3dfd91269ec5d33c519ab18d4630f2b00bfbe2725ec0824dc28591",
+      "lines": 159,
+      "review": "no_change",
+      "finding": "Full read: exact conversation/message/turn association, clipboard descriptor restoration, provisional completion guards, bounded pending candidates. Delayed Copy callback fixture coverage checked; arbitrary callback after restoration is an unvalidated edge, not a demonstrated production mismatch."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/subchat_input.js",
+      "area": "subchat",
+      "sha256": "305ad0cbbb0a08e472a19f907c83743766586a07541a09b9fa7fd95d10e998b6",
+      "lines": 178,
+      "review": "changed",
+      "finding": "Full canonical reader, insertion, guard consumers read. Preserve original editor identity and refused draft snapshot; changed/replaced editor is unconfirmed, never proof of locally refused draft. Async insertion preserves one input/send and listener cleanup."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/subchat_model_menu.js",
+      "area": "subchat",
+      "sha256": "0a41a4063a8b7f6ff3884962404885a2d53548ba0942f95fad08828da3b679f3",
+      "lines": 85,
+      "review": "no_change",
+      "finding": "Full read: visibility-scoped unique menu/radio selections and strict observed integer slider/description contract; labels do not become provider identifiers."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser/subchat_stream.js",
+      "area": "subchat",
+      "sha256": "fe43dacb60863b20e31117642ef0e75e234b4264c30520bd223e94c96f79df20",
+      "lines": 72,
+      "review": "no_change",
+      "finding": "Full read: bounded response clone/SSE identity observation, fetch restoration only while wrapper owns it, never marks acceptance; backend validates identity/account candidates."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_browser_specs.py",
+      "area": "subchat",
+      "sha256": "996e0055179438831eaa4fedc9572c77c13244b2fbbe68faf421fc6ab9869756",
+      "lines": 40,
+      "review": "no_change",
+      "finding": "Read fixed browser allowlist and platform errors; no arbitrary executable resolution."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_chrome_login.py",
+      "area": "release_runtime",
+      "sha256": "313a5262b28cdcbdf8db5940b237e7c6751ca5eb3e1c225ee0c22d2294848237",
+      "lines": 129,
+      "review": "no_change",
+      "finding": "Read exact-origin cookie handoff, bounded auth/catalog reads and pinned-account checks; no changes."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_chrome_profile.py",
+      "area": "release_runtime",
+      "sha256": "90972b206f46d75d905b52af4c43696a897f3ea04082e513fdef88284672e39c",
+      "lines": 125,
+      "review": "no_change",
+      "finding": "Read selected-profile confinement and filtered SQLite snapshot; no account profile touched."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_cli.py",
+      "area": "release_runtime",
+      "sha256": "727d0f8d607afe8babde4a6e6b634d92de6955d00a4effb051827ba85a60af39",
+      "lines": 643,
+      "review": "changed",
+      "finding": "Read complete transport/session lifecycle and dispatch contract; remove broken instruction sentence fragment."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_content.py",
+      "area": "subchat",
+      "sha256": "c932d3755c734c8e3ad705888fde976f6c4c461afb2a59208bca87b958ada356",
+      "lines": 47,
+      "review": "no_change",
+      "finding": "Read all typed resource descriptors, uniqueness and prompt/wire projection; resources are references rather than grants/paths."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_delete.py",
+      "area": "subchat",
+      "sha256": "ccb96f84024349a939c2f062e0211b3cf2ffccf7fccda3bfbeec9b8b2872b47f",
+      "lines": 137,
+      "review": "no_change",
+      "finding": "Full read: completed saved identity/account and active-peer checks, transaction/claim-before-PATCH, unknown durable outcomes. Request-factory authentication latch race fixed in http_reader.py with a concurrent regression."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_device_adapters.py",
+      "area": "release_runtime",
+      "sha256": "45dfa85d8a20252b97a1320d1a2cd0945fee49a2684ec3b91902f3159203e6f2",
+      "lines": 212,
+      "review": "no_change",
+      "finding": "Read per-call grant and route revalidation, internal-only binary and unknown outcomes."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_device_save.py",
+      "area": "release_runtime",
+      "sha256": "89d164926f173b6263807544dbccf5e9f6c8a247ce8303b661f8b3575c3acf22",
+      "lines": 559,
+      "review": "changed",
+      "finding": "Open spool nonblocking before regular-file validation; preserve size/hash checks and unknown publication reconciliation."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_gateway.py",
+      "area": "subchat",
+      "sha256": "50bbbced682fb65fb202a064d87499aea94649284b9705b915bdc9feadb45c6d",
+      "lines": 894,
+      "review": "changed",
+      "finding": "Full direct gateway, lazy lifecycle, scopes, owner migration, read-only SQLite, request cache and exact durable receipt paths read. Fixed saved local HTTPS status to project the current owned send worker consistently with stdio without opening Chrome; owner/account checks retained."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_http.py",
+      "area": "subchat",
+      "sha256": "865c76801cf78ea37eb6d5f98efcdd2718f9bd782550fb18863a4bae63aa2591",
+      "lines": 485,
+      "review": "no_change",
+      "finding": "Full HTTP backend read; explicit observed credentials, bound account, read-only recovery, image/file verification and runtime capability projection checked against reader contracts."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_http_download.py",
+      "area": "subchat",
+      "sha256": "6187d2d41e04ec7e8af29c208ba1a67111192ac4f86ed09a700d119da2c1c209",
+      "lines": 169,
+      "review": "no_change",
+      "finding": "Full read: final-answer/account/link binding and exact-origin bounded byte ranges. Metadata status and empty-file/range edges reviewed against tests; no new provider status restriction was added without a supported upstream contract."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_http_generation.py",
+      "area": "subchat",
+      "sha256": "e87015563bc19e86ff2d883a63f94c495f93ec3e410a3fc3e5a06f6f5d519d85",
+      "lines": 443,
+      "review": "no_change",
+      "finding": "Full handoff and one-shot generation reviewed: observed templates copied, durable claim before POST, strict preflight and no retry. Redundant JSON template copy is harmless; no speculative behavior or dependency changes."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_http_image.py",
+      "area": "subchat",
+      "sha256": "8abbdc9181a086e1019cf2e61f804b9c183b59131fc545963548c130fdf65962",
+      "lines": 256,
+      "review": "no_change",
+      "finding": "Full read: bound tool/final images, account/wire ID/MIME/size/dimensions checks, no redirects. Codec headers are structural validation rather than full image decode."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_http_library.py",
+      "area": "subchat",
+      "sha256": "fea4b08d3638c8105d15bb6f87b028d76aa849fbbed5e32ac51b47983ecf0693",
+      "lines": 74,
+      "review": "no_change",
+      "finding": "Full read: bound-account read-only Library POST query, bounded pages/bytes/cursors, no upload/replay, stable-file reconciliation."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_http_sender.py",
+      "area": "subchat",
+      "sha256": "41e52a3fdfdd37d8b119bc35b93a22d558679e00a941e1516356f64c72d9ffd7",
+      "lines": 174,
+      "review": "no_change",
+      "finding": "Full read: loopback-only unintegrated fixture sender with durable claim before once-only POST, exact verified parent binding, bounded SSE; production availability explicitly absent."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_http_session.py",
+      "area": "subchat",
+      "sha256": "a136fe81834318647a1458f995edebf5e0b3c541d6804dc314de97a3b659a4b5",
+      "lines": 151,
+      "review": "no_change",
+      "finding": "Full read: bounded private handoff, duplicate-key rejection, secret-safe errors, exact origin/catalog and cookie jar validation. Provider credentials retained only in memory."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_library_batch.py",
+      "area": "release_runtime",
+      "sha256": "1332cfd93da669ed43f45b25c970694ad82a21b3a0dc6e77167177b31089efb5",
+      "lines": 227,
+      "review": "no_change",
+      "finding": "Read pinned bytes, bounded batch/account/session reuse, per-file durable outcomes and cleanup."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_library_mcp.py",
+      "area": "release_runtime",
+      "sha256": "87bb6ca2a510d343963dd65636429a88b66fde621ee2814c92bbe4b1e0a12ad9",
+      "lines": 222,
+      "review": "no_change",
+      "finding": "Read stable-ID dispatch boundary and ready-only attachment projection; no changes."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_library_upload.py",
+      "area": "release_runtime",
+      "sha256": "92511236a15152905ae2f9ce00465d9021f401c3b385ffd366e2b646c647f426",
+      "lines": 492,
+      "review": "changed",
+      "finding": "Open source nonblocking before fstat so FIFOs cannot stall validation; all directory pinning, size and digest checks retained."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_mcp.py",
+      "area": "subchat",
+      "sha256": "ef389e0385785a076054e8b5f9748085122c1305065a9d25be61512946c0ef3c",
+      "lines": 1725,
+      "review": "changed",
+      "finding": "Full catalog/types/instructions/session lifetime, send task/receipt projection, recovery, bounded auto-queue/watch semantics, resource changes and error projections read. Extracted shared secret-safe send_worker_status for stdio/HTTPS parity. Reproduced notification subprocess leak on controller cancellation and fixed owned-process kill plus bounded reap in finally; cancellation and saved completion event retained."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_plugin.py",
+      "area": "release_runtime",
+      "sha256": "70bfdbb24c976ab5500a6e2b254b252ce38164d9b8ba0fd1b5357417b3bdaa7d",
+      "lines": 238,
+      "review": "no_change",
+      "finding": "Read full platform-specific selection, channel/account overrides and explicitly enabled send routing; no changes."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_setup.py",
+      "area": "release_runtime",
+      "sha256": "a9ac69ebff7f166b8013ab6feb050c92183b92e662b244bb4c4a2a09089f13c6",
+      "lines": 748,
+      "review": "no_change",
+      "finding": "Read full discovery/inspection/selection/staging/named-account and Windows login flows; no real profile touched."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_sse.py",
+      "area": "subchat",
+      "sha256": "27afd182a76a667a19bae7c58842dfd619d273a1c70ba26e189962fc284a8125",
+      "lines": 125,
+      "review": "no_change",
+      "finding": "Full read: incremental UTF8/BOM/framing/line/event/total limits and no EOF implicit frame; close-on-error and no reconnect policy retained."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_state.py",
+      "area": "subchat",
+      "sha256": "b4567d2b8106c71d2019f23a6ab9814714c6146f59e87cc77c123f06aca079e1",
+      "lines": 1311,
+      "review": "no_change",
+      "finding": "Full schema/migrations/CAS/intent bindings, account evidence side tables, immutable receipts, queue revisions and auto-queue epoch/event methods read. Checked shared consumers in service, MCP and gateway; no replay or cross-owner mutation introduced."
+    },
+    {
+      "path": "src/anywhere_computer/subchat_upload_state.py",
+      "area": "release_runtime",
+      "sha256": "df2c226d82b5e8bb541cb3de072ccb699626752024abac2017e146fafc877fe6",
+      "lines": 352,
+      "review": "no_change",
+      "finding": "Read complete upload stages, owner/account binding, migration fail-closed and exact ready identity."
+    },
+    {
+      "path": "src/anywhere_computer/terminal_worker.py",
+      "area": "core_ui",
+      "sha256": "78ec1e4f1138deb69173e884fcf979a1476f4a40468ab1ebdd56eb98295634f3",
+      "lines": 240,
+      "review": "no_change",
+      "finding": "Full file reviewed: POSIX process group ownership, Windows Job and ConPTY framed input/resize acknowledgment."
+    },
+    {
+      "path": "src/anywhere_computer/transfer_admin.py",
+      "area": "network_security",
+      "sha256": "01331233287fff0ad44d5f8899df85f2c2ec9a06ab3658a2f41841f7bafe5660",
+      "lines": 125,
+      "review": "no_change",
+      "finding": "Reviewed local-owner transfer inventory, read-only schema compatibility and explicit scoped transfer release."
+    },
+    {
+      "path": "src/anywhere_computer/upload_win32.py",
+      "area": "core_ui",
+      "sha256": "252823428726d985e1a96a993767a329b801e61088d910146d2baac74c04354b",
+      "lines": 213,
+      "review": "no_change",
+      "finding": "Full file reviewed: pinned directory ancestry and exact file handles, no-reparse validation, no-overwrite hard links."
+    },
+    {
+      "path": "src/anywhere_computer/uploads.py",
+      "area": "core_ui",
+      "sha256": "2b6d6728416dc7ac5d9dd0da990ec13b4cb561d9e7da9545ba9fcf04da42b641",
+      "lines": 434,
+      "review": "no_change",
+      "finding": "Full file reviewed: durable chunk claims, directory identity, exclusive publication and explicit unknown recovery."
+    },
+    {
+      "path": "src/anywhere_computer/watch_status.py",
+      "area": "release_runtime",
+      "sha256": "1c27fb1a90d63eae43a3e7510c756b4bd3882d1074f9d5750e59c05e4d5250db",
+      "lines": 122,
+      "review": "no_change",
+      "finding": "Bounded historical status ring uses atomic snapshots and labels present liveness unverified; reader rejects symlinks/nonregular files."
+    },
+    {
+      "path": "src/anywhere_computer/web/workspace.html",
+      "area": "core_ui",
+      "sha256": "7b0f7778eb07b62c362e2ff20d4f90fd920c2ffb7f57ea5106c1a4a33b36731a",
+      "lines": 514,
+      "review": "changed",
+      "finding": "Restore document display bytes only for matching completed operation/device/tool. Verify exact PNG summary keys, MIME, canonical base64, byte limit, magic and SHA; retain legacy-engine display. Reviewed integration delta: nine browser action scopes now appear in the setup summary and matching cases; no overlap with media handling."
+    },
+    {
+      "path": "src/anywhere_computer/workspace_ui.py",
+      "area": "core_ui",
+      "sha256": "43e63be6e94adaa3b7f79db9374be830a1bc479dbc8f693bd5e8b36677dd4ec4",
+      "lines": 63,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "tests/conftest.py",
+      "area": "network_security",
+      "sha256": "0d96e55a43a4f1b07b3cadc1e1943428f7321ff464cac2ebbf3941db308e83fb",
+      "lines": 36,
+      "review": "no_change",
+      "finding": "Reviewed test-only native directory ACL setup and opt-in fast derivation without production verifier weakening."
+    },
+    {
+      "path": "tests/desktop_enrollment_ui.cjs",
+      "area": "core_ui",
+      "sha256": "414de7618d1f18b3e3cf72fbaa313b00c10b3bf6de54fc2a3c6eeda9bf2f1eab",
+      "lines": 86,
+      "review": "changed",
+      "finding": "Added invalid inherited phase regression to real JS renderer."
+    },
+    {
+      "path": "tests/desktop_management_ui.cjs",
+      "area": "core_ui",
+      "sha256": "561eec1a6b49fea0892cbdbb1f3f4a07036efd297015685506a358fc72eeb001",
+      "lines": 67,
+      "review": "changed",
+      "finding": "Verified real renderer outcomes including missing resource counters and independent refresh handlers."
+    },
+    {
+      "path": "tests/fixtures/audio/probe_harness.swift",
+      "area": "core_ui",
+      "sha256": "dc3659fa6f8a5d66ab9c6972930bf744f5ec09c5f6027d42ada023a28efe62aa",
+      "lines": 49,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "tests/fixtures/native_gui.swift",
+      "area": "core_ui",
+      "sha256": "5f6058c6118cc69a6164a6ad999f4f72b81c17c15590093c301375ee0a3ed3c6",
+      "lines": 64,
+      "review": "no_change",
+      "finding": "Full file reviewed: real fixture behavior, platform conditions, recovery assertions and owned resource cleanup."
+    },
+    {
+      "path": "tests/test_adversarial_boundaries.py",
+      "area": "network_security",
+      "sha256": "4643863a68061cdda8041d6c3d157f0dee713f56827a3560efc39264bff584ec",
+      "lines": 98,
+      "review": "changed",
+      "finding": "Reviewed atomic passkey enrollment regression assertion from 9109a6d."
+    },
+    {
+      "path": "tests/test_assemble_release_assets.py",
+      "area": "release_runtime",
+      "sha256": "adfe6364000f9dabfdb7ddafddce0353ea023e9bef0db771466c566c585495c4",
+      "lines": 99,
+      "review": "no_change",
+      "finding": "Read release asset assembly and mismatch rejection tests."
+    },
+    {
+      "path": "tests/test_audio_capture.py",
+      "area": "core_ui",
+      "sha256": "5161aff677882597af5e554d3aaa7f24f76fcbc360fb321399ec0e9d1958e2da",
+      "lines": 149,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "tests/test_audio_probe.py",
+      "area": "core_ui",
+      "sha256": "43aeaed5e1d1e39dcdc19e60702c0c2a8de5d78a8e7a3913a4713ec821e46634",
+      "lines": 55,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "tests/test_audio_status.py",
+      "area": "core_ui",
+      "sha256": "e73232019c91d3168d392e65ea68d231e19444bbf23d94c5dacc8eee3fca6e09",
+      "lines": 92,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "tests/test_audit_edge_cases_20260913.py",
+      "area": "network_security",
+      "sha256": "e9914ff7b2d859cbde806a5607f873edf95f5fc4dc75a92006c591d45b8afbfb",
+      "lines": 105,
+      "review": "no_change",
+      "finding": "Reviewed fault coverage for true OS spawn rejection, unexpected cleanup uncertainty and durable terminal input outcomes."
+    },
+    {
+      "path": "tests/test_audit_regressions_20260913.py",
+      "area": "network_security",
+      "sha256": "223a679f3cde62ddbcc487b56c7f47a3b6c9b0fb7bb67f954f2495ace04f7ea1",
+      "lines": 129,
+      "review": "no_change",
+      "finding": "Reviewed bounded terminal-capacity interleavings and post-write unknown-result non-replay assertions."
+    },
+    {
+      "path": "tests/test_authorization.py",
+      "area": "network_security",
+      "sha256": "92c6966fc3aaecbabd700f507179e76dc7370b12ba575d3e889cc51c090bdcc2",
+      "lines": 439,
+      "review": "no_change",
+      "finding": "Full tests exercise concurrent redemptions, migration rollback, revocation and exact scope/resource/device boundaries."
+    },
+    {
+      "path": "tests/test_authorized_http.py",
+      "area": "network_security",
+      "sha256": "8d2bf36167dbca1c934732f80c094a272e42a13e7b69f6e5b83ba85f74f2564f",
+      "lines": 242,
+      "review": "no_change",
+      "finding": "Reviewed real embedded/shared HTTP enforcement and failure teardown; no token/profile fixture escapes."
+    },
+    {
+      "path": "tests/test_autostart.py",
+      "area": "release_runtime",
+      "sha256": "c2937b22babc4ce6757441f00076fae19a9576d209ec94d4b7fc362470111250",
+      "lines": 223,
+      "review": "no_change",
+      "finding": "Argv escaping and native in-memory/static validators cover platform formats without production registrations."
+    },
+    {
+      "path": "tests/test_binary_files.py",
+      "area": "core_ui",
+      "sha256": "3b4f82e03d03da806ba8e126067c2b78aca58a8b00ae94a3e25633e7ff737f8a",
+      "lines": 365,
+      "review": "no_change",
+      "finding": "Reviewed real binary bounds, strict base64, stable SHA reads, exactly-once HTTP/TLS recovery and grant restrictions."
+    },
+    {
+      "path": "tests/test_bounded_mcp_stdio.py",
+      "area": "network_security",
+      "sha256": "9baeaa8657dfcc65dc0aa1c6485e29134cf922e1c6d86c78b88d33c7b7fe0ac0",
+      "lines": 54,
+      "review": "no_change",
+      "finding": "Real oversized peer plus fragmented/truncated framing tests cover runtime boundary without account data."
+    },
+    {
+      "path": "tests/test_browser_authorization.py",
+      "area": "network_security",
+      "sha256": "9e9487a090b7e1f548897b82d57fd2453348570cedf218bd41358642a35a0fd9",
+      "lines": 344,
+      "review": "changed",
+      "finding": "Added browser_tab_close-only consent regression alongside scope, generation, callback CSP and password-slot tests."
+    },
+    {
+      "path": "tests/test_browser_control.py",
+      "area": "core_ui",
+      "sha256": "96a50c84912666cf9d125b3302c5fa7886eb9b99bf00de25322c97455fe73acc",
+      "lines": 1150,
+      "review": "fixed_test_race",
+      "finding": "Read all frame ownership and navigation tests. Windows CI reproduced a test race: page.frame(name) could be None before iframe attachment. The fixture now waits for each frame body through a Playwright FrameLocator before asserting scoped behavior; local targeted test passed."
+    },
+    {
+      "path": "tests/test_browser_tabs_dialogs.py",
+      "area": "core_ui",
+      "sha256": "d0b886c427e5cbf35e678a5d49ba364f5bd6fe1e9934381e838ea837cc3d0e4a",
+      "lines": 617,
+      "review": "added_regression",
+      "finding": "Reviewed popup, dialog, and close-task tests. Added a delayed browser-close acknowledgement case with real process teardown outside the synthetic short deadline. It asserts caller timeout, retained owner, then confirmed cleanup. The initial form failed under the original shared deadline; the deterministic form passes after the internal deadline change."
+    },
+    {
+      "path": "tests/test_chat_shape_compare.py",
+      "area": "release_runtime",
+      "sha256": "24e4b9fecb857fb197149aac223c52f89c0ee699f85d709ea739e1f2213edc3a",
+      "lines": 103,
+      "review": "no_change",
+      "finding": "Read invalid/malformed/name/value confidentiality and FIFO coverage."
+    },
+    {
+      "path": "tests/test_cli_setup.py",
+      "area": "release_runtime",
+      "sha256": "cce2c015ee8a10acdcc8a4918ee30b8b9067e280b69129d158c46284f3e32818",
+      "lines": 68,
+      "review": "no_change",
+      "finding": "Read setup menu routing/cancellation/noninteractive rejection tests."
+    },
+    {
+      "path": "tests/test_cli_skills.py",
+      "area": "release_runtime",
+      "sha256": "1aedb91d3fc046ada3dbd7868aba7d1d45455e87de9fa77fa56493b8e0a8ea45",
+      "lines": 54,
+      "review": "no_change",
+      "finding": "Read CLI-to-persistent-engine settings and invalid option coverage."
+    },
+    {
+      "path": "tests/test_client_tokens.py",
+      "area": "network_security",
+      "sha256": "e3a1d592dc7ce0c0d49634b3e4bd9060e29aea39fe67b20d600efa5dca0e6f4d",
+      "lines": 384,
+      "review": "no_change",
+      "finding": "Full tests cover process death, cross-process serialization, real TLS and vault write failures with synthetic credentials."
+    },
+    {
+      "path": "tests/test_cloudflare_tunnel.py",
+      "area": "network_security",
+      "sha256": "85475425762cddfdba36f8d5c432102cb5da1ca3fa19283c0313c0086f445dcf",
+      "lines": 328,
+      "review": "no_change",
+      "finding": "Reviewed real credential pipe handoff, failed consumer cleanup, bounded restart policy and console gating."
+    },
+    {
+      "path": "tests/test_codex_context.py",
+      "area": "network_security",
+      "sha256": "917f529713c6ff66f659aec9cbdaa057a242d415db5a6ae3802c2205af3390c7",
+      "lines": 163,
+      "review": "no_change",
+      "finding": "Tests cover exact IDs, sanitized context, UTF-8 aggregate bounds and executable preflight; no test pollution found."
+    },
+    {
+      "path": "tests/test_codex_independence.py",
+      "area": "network_security",
+      "sha256": "7b20de50e8cb682fd5473bf8bf31e32df5b03c95e77eda8b724a07c62ab8a224",
+      "lines": 43,
+      "review": "no_change",
+      "finding": "Core file/terminal/recovery path is tested with deliberately unavailable Codex."
+    },
+    {
+      "path": "tests/test_codex_plugin_probe.py",
+      "area": "network_security",
+      "sha256": "ba507bee0453381aedbd5e556aa6f2310c0295b7d192646903cb5a3f98210ee4",
+      "lines": 50,
+      "review": "no_change",
+      "finding": "Probe fixture stops before process launch and tests explicit executable selection."
+    },
+    {
+      "path": "tests/test_codex_plugins.py",
+      "area": "network_security",
+      "sha256": "25fdae423b81a698ed176b3f39c7c617e15a2647424dbce6b214e104b8d4dc31",
+      "lines": 789,
+      "review": "no_change",
+      "finding": "Read full bridge catalog, preflight, startup and dispatch tests; unsupported Computer Use context and stale digests prevent calls; dispatched failures remain unknown."
+    },
+    {
+      "path": "tests/test_common_skills.py",
+      "area": "core_ui",
+      "sha256": "f7d4c47e00342e99fa13ab30d6530c51dcaf94ece554606f39ac9c3a96522a97",
+      "lines": 268,
+      "review": "no_change",
+      "finding": "Reviewed root scope, pagination, hash freshness, traversal/symlink containment and remote grant recovery. No fixture-only weakening needed."
+    },
+    {
+      "path": "tests/test_connection.py",
+      "area": "network_security",
+      "sha256": "5983e5777e87cfccd49de94eece31d7139b1418b3b204f73ff883eae7ea50234",
+      "lines": 341,
+      "review": "changed",
+      "finding": "Reviewed final fixture cleanup on cancellation and post-shutdown secret check from 9109a6d."
+    },
+    {
+      "path": "tests/test_context_integration.py",
+      "area": "network_security",
+      "sha256": "8eae6f53178165f9d2765484278cca0ad63d7c5f5a4e92e393e4a5286228b654",
+      "lines": 106,
+      "review": "no_change",
+      "finding": "Reviewed source registry grants, absence of implicit inference turns and durable plugin uncertainty across restart."
+    },
+    {
+      "path": "tests/test_credentials.py",
+      "area": "network_security",
+      "sha256": "6be790fe0046fcebcf14967838cfc6d7e9c1f58d9ed0d66d3b5f76376278a1fb",
+      "lines": 49,
+      "review": "no_change",
+      "finding": "Tests preserve unrelated exceptions and prove unavailable vault reads never create credentials."
+    },
+    {
+      "path": "tests/test_delegated_files.py",
+      "area": "network_security",
+      "sha256": "0045ac9e40649e0ac906eecc7091a4d8c19779f8b02551b0b19062ad22376aad",
+      "lines": 170,
+      "review": "no_change",
+      "finding": "Reviewed actual POSIX and Windows handle confinement, alias/reparse rejection, no overwrite and pinned publication tests."
+    },
+    {
+      "path": "tests/test_delegated_routes.py",
+      "area": "network_security",
+      "sha256": "bc991116e4a71486579774aa235a05346dd1a2fd5438da0023e099f1a897b100",
+      "lines": 160,
+      "review": "no_change",
+      "finding": "Reviewed durable route/vault binding, exact resource isolation, migration and revoke/read concurrency."
+    },
+    {
+      "path": "tests/test_delegated_tasks.py",
+      "area": "network_security",
+      "sha256": "1bf309f3bda2b364a3ee3daeb5778b62234ab8c28e509d2ce2735cda3d95ab27",
+      "lines": 1261,
+      "review": "changed",
+      "finding": "Reviewed exact delegated worker drain and durable receipt regression from 9109a6d."
+    },
+    {
+      "path": "tests/test_desktop_enrollment_ui.py",
+      "area": "core_ui",
+      "sha256": "e91001b901f63d49b90e29eab430ba0bf6a1dcbf58babc78135233d10a0620d5",
+      "lines": 24,
+      "review": "no_change",
+      "finding": "Full file reviewed; responsibilities, bounded interfaces and cleanup remain coherent. No justified change found."
+    },
+    {
+      "path": "tests/test_development_http_workflow.py",
+      "area": "network_security",
+      "sha256": "806ec39213a8c71f035045ad0fd31e69e3cb4d41f1eee21d08c55d754eaf6b5f",
+      "lines": 138,
+      "review": "no_change",
+      "finding": "Reviewed real authenticated code-write/run/recovery workflow with one execution across engine restart."
+    },
+    {
+      "path": "tests/test_device_authorization.py",
+      "area": "network_security",
+      "sha256": "3327f84729562cb3829b41e80d08e3982ffa0d5b78a1b123a4e23c77840e6a70",
+      "lines": 485,
+      "review": "no_change",
+      "finding": "Reviewed real TLS enrollment validation, drop/duplicate/oversize uncertainty, bounded watchdog and cancellation/save races."
+    },
+    {
+      "path": "tests/test_device_polling.py",
+      "area": "network_security",
+      "sha256": "eb9a5adf9acbd5a47ae3d104f3376efd82a572fd22c1e636c2ce1cc96cac15c7",
+      "lines": 82,
+      "review": "no_change",
+      "finding": "Reviewed polling timing, terminal cancellation, explicit slowdown and bounded expiry tests."
+    },
+    {
+      "path": "tests/test_device_router.py",
+      "area": "network_security",
+      "sha256": "6b01cf49f603063acb61e6d3fb27efb1af9179cc6216a4156591f71e383fdf56",
+      "lines": 334,
+      "review": "no_change",
+      "finding": "Reviewed explicit device routing, replay/changed-device rejection, refreshed catalogs, cleanup and image preservation."
+    },
+    {
+      "path": "tests/test_devices.py",
+      "area": "network_security",
+      "sha256": "eb4c38be84215299d74f3e6a57c54fac41a54a6beca24fb4175d94b834a12117",
+      "lines": 356,
+      "review": "no_change",
+      "finding": "Reviewed device normalization/migration, probe freshness, credential isolation and management/CLI selection."
+    },
+    {
+      "path": "tests/test_diagnostics.py",
+      "area": "network_security",
+      "sha256": "643d3bbaa7c109d765bd35240d3a5fe0533ce737f9a753448fdff27408653a66",
+      "lines": 300,
+      "review": "no_change",
+      "finding": "Reviewed diagnostic tests separating source/runtime/catalog, snapshot change, safe credential failure and no process mutation."
+    },
+    {
+      "path": "tests/test_direct_mcp.py",
+      "area": "network_security",
+      "sha256": "3f600d8489b25c63740fa7365eba157b69eb887fb45b09ea9b1d8dd082ecf2c6",
+      "lines": 157,
+      "review": "no_change",
+      "finding": "Reviewed real stdio statefulness, post-effect process death, safe error classes and cleanup failure visibility."
+    },
+    {
+      "path": "tests/test_direct_mcp_sessions.py",
+      "area": "network_security",
+      "sha256": "9cb09e1f344ef13ecb5fafb96eeb12c400a5bcde052391d6c5fa8d5f357c2354",
+      "lines": 677,
+      "review": "no_change",
+      "finding": "Read full direct MCP ownership, watches, expiry, subprocess and media tests; active work and grant revocation contracts exercised with cleanup."
+    },
+    {
+      "path": "tests/test_document_preview.py",
+      "area": "core_ui",
+      "sha256": "77685caf72cefd66e5eeaa6ef34f0fd6e483a3d40f2ba3c527558057da4b7880",
+      "lines": 408,
+      "review": "changed",
+      "finding": "Real LibreOffice/Poppler output now proves native MCP ImageContent and no JSON/text base64 duplication; original test fails at zero image items."
+    },
+    {
+      "path": "tests/test_document_writer.py",
+      "area": "core_ui",
+      "sha256": "2e22ccc2818e55874bdb254fdf44c28983f33d6ba3d280f24ff6d2b041f4cf27",
+      "lines": 410,
+      "review": "no_change",
+      "finding": "Reviewed OOXML namespaces, typed cells, hash conflicts, backups, exact paragraph edits, unsupported rich/signed/compatibility preservation."
+    },
+    {
+      "path": "tests/test_documents.py",
+      "area": "core_ui",
+      "sha256": "bfad4cb0c40d756e5a966c459d4363343eb29fc8517c9f487c59db73d14a659e",
+      "lines": 238,
+      "review": "no_change",
+      "finding": "Reviewed OOXML extraction limits, nested paragraph/table locations, spreadsheet types and phonetics, slide ordering and path/XML rejection."
+    },
+    {
+      "path": "tests/test_downloads.py",
+      "area": "core_ui",
+      "sha256": "8b24876379157f7281e88a264ebbefdb813d62386b30e598198d302bf6aeb188",
+      "lines": 241,
+      "review": "no_change",
+      "finding": "Reviewed immutable snapshot chunks, hash integrity, crash rollback, grants and source mutation; real process fixture uses disposable state."
+    },
+    {
+      "path": "tests/test_engine.py",
+      "area": "core_ui",
+      "sha256": "8c2dba5fbbca963ac3862165d34063e6259200d74fd288c2caa7ce8bcda489fa",
+      "lines": 679,
+      "review": "no_change",
+      "finding": "Full file reviewed: registry, evidence flags, owner isolation, duplicate operations, actual terminal and file effects."
+    },
+    {
+      "path": "tests/test_engine_migration.py",
+      "area": "release_runtime",
+      "sha256": "fe08f433c9c3cb040987c858a38ba01b55a036e28b3872bd28e78f2643d7b903",
+      "lines": 170,
+      "review": "no_change",
+      "finding": "Real authenticated entrances retain old login, replay receipts and transfer state across migration interruptions."
+    },
+    {
+      "path": "tests/test_engine_selection.py",
+      "area": "release_runtime",
+      "sha256": "544c4aef106df320e86e9078cfc14b2931ce58d6ec07842d47a09247246cbebd",
+      "lines": 62,
+      "review": "no_change",
+      "finding": "Real local endpoint reads selected ledger and refuses missing/corrupt/pending selection rather than empty replacement."
+    },
+    {
+      "path": "tests/test_enrollment_credentials.py",
+      "area": "network_security",
+      "sha256": "9b0b23ad2796cd9685025e42e7e0eb07583b3cb19fc268003ad7b8d9f7cfd229",
+      "lines": 147,
+      "review": "no_change",
+      "finding": "Reviewed vault grant binding, expiry/rollback rejection, selective cleanup and confirmed deletion."
+    },
+    {
+      "path": "tests/test_enrollment_worker.py",
+      "area": "network_security",
+      "sha256": "f5b4cae6caff5f713c8bfdd48c6d7a17f7b572337972e81d00311e4f6625ef2e",
+      "lines": 283,
+      "review": "no_change",
+      "finding": "Reviewed worker registration recovery, isolated fresh grants, explicit cleanup, fixed IPC commands and restart preservation."
+    },
+    {
+      "path": "tests/test_execution_environment.py",
+      "area": "core_ui",
+      "sha256": "dd995c9a9c60b2102977cc242830814607f3c50b0b41cb56bed2eb62c525a757",
+      "lines": 120,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "tests/test_file_info.py",
+      "area": "core_ui",
+      "sha256": "a41fa846db3f9804970d05c0e150aa0bee80b161011441d6c380a268cf8b58d1",
+      "lines": 79,
+      "review": "no_change",
+      "finding": "Reviewed metadata meaning across platforms, symlink entry/target distinction and nonopening FIFO inspection."
+    },
+    {
+      "path": "tests/test_file_search_terminal_workflow.py",
+      "area": "core_ui",
+      "sha256": "49a2f955d36bfe8e504124333cab609c3d1f6c98f8a60cb349540fe88c550e79",
+      "lines": 122,
+      "review": "no_change",
+      "finding": "Reviewed real search/edit/terminal workflow, UTF-8 content, stale hash rejection and restart recovery."
+    },
+    {
+      "path": "tests/test_github_releases.py",
+      "area": "release_runtime",
+      "sha256": "af1d18a9294bfaad2a5aad700d234a2517d11007eac61358b92ab5abc7ca191d",
+      "lines": 113,
+      "review": "no_change",
+      "finding": "Metadata mismatch and download corruption/redirect/overwrite refusal preserve destination."
+    },
+    {
+      "path": "tests/test_guest_bundle.py",
+      "area": "release_runtime",
+      "sha256": "7a50cec4b63ef159fa0a77c463adb551ba6d69b02817337e4804de0e37ef03ef",
+      "lines": 65,
+      "review": "changed",
+      "finding": "Regression checks exact allowlist plus extracted fixture-dependent pytest execution; real source ZIP separately collected 2818 tests and passed 78 support-dependent tests."
+    },
+    {
+      "path": "tests/test_gui_cua.py",
+      "area": "core_ui",
+      "sha256": "46c1b316095f2e005b9208091c68a99eddadc3277de9fdc91c8f861e4557f7d3",
+      "lines": 412,
+      "review": "changed",
+      "finding": "Reviewed paginated Cua catalog contract regressions from 291ca56."
+    },
+    {
+      "path": "tests/test_gui_mcp.py",
+      "area": "core_ui",
+      "sha256": "e85bbca336325a99fbba6c65b9dc83d14c74edf5614b25e56e1ce3069137b0a9",
+      "lines": 545,
+      "review": "no_change",
+      "finding": "Read complete exact-window, contract, serialization, observation consumption and error tests. Assertions distinguish acknowledgment from verified postcondition."
+    },
+    {
+      "path": "tests/test_gui_wire_results.py",
+      "area": "core_ui",
+      "sha256": "c11efc9a94977ceb41ef2226e1686e180205184e63a4cf451efec84c63c50301",
+      "lines": 113,
+      "review": "no_change",
+      "finding": "Read complete native MCP image and nested error projection tests; ambiguous/truncated observation cannot authorize input."
+    },
+    {
+      "path": "tests/test_history_filters.py",
+      "area": "network_security",
+      "sha256": "70f363555eae91adda1510c2356d848865dfce29106be6e42f0de16b1bf7a74a",
+      "lines": 40,
+      "review": "no_change",
+      "finding": "Reviewed pre-limit history filtering, parameterized SQL safety, private argument exclusion and finite timestamps."
+    },
+    {
+      "path": "tests/test_http_capability_acceptance.py",
+      "area": "network_security",
+      "sha256": "34be54f7d5812ed541d49813ca450ed0e86343df16856bb03039fba28323071d",
+      "lines": 598,
+      "review": "no_change",
+      "finding": "Read full all-tools HTTP acceptance; receipts recovered without resending and postconditions checked; explicit synthetic media/native boundaries retained."
+    },
+    {
+      "path": "tests/test_http_client.py",
+      "area": "network_security",
+      "sha256": "8a681f43dd266bf190c5fe70b4616c5a1cfeb3fcbeb4f35662ce900c50397c07",
+      "lines": 533,
+      "review": "no_change",
+      "finding": "Read complete HTTP client tests; marked pre-dispatch failures distinguished from unknown writes, same operation identity and transport lock verified."
+    },
+    {
+      "path": "tests/test_http_device_routing.py",
+      "area": "network_security",
+      "sha256": "f99ce0309ee3eddc622bdfd21157fb2ce7cee04a2198a1d25794ec1452a2658a",
+      "lines": 218,
+      "review": "no_change",
+      "finding": "Reviewed real two-hop HTTP routing, grant isolation, lost-response recovery, target terminal operation and startup-failure cleanup."
+    },
+    {
+      "path": "tests/test_http_diagnostics.py",
+      "area": "network_security",
+      "sha256": "220c3cc97a7f4c7b04e6e0dffe0df75936d93966ee92b8a8706882e56be18079",
+      "lines": 267,
+      "review": "no_change",
+      "finding": "Reviewed actual loopback/TLS metadata probes, bounds and public-network opt-in without credential disclosure."
+    },
+    {
+      "path": "tests/test_http_mcp.py",
+      "area": "network_security",
+      "sha256": "dfba976c1100e7ac6229021f0e565cc3bacc88444283007ada314116e370e60f",
+      "lines": 497,
+      "review": "no_change",
+      "finding": "Read complete HTTP transport/SDK tests; framing, revocation, observer cancellation, recoverable receipts and nested error projection have assertions."
+    },
+    {
+      "path": "tests/test_http_request_context.py",
+      "area": "network_security",
+      "sha256": "331c7e40f6a685f9ed4deee8da5c6b60c233c45ece257913e69d9cfb37f8ea6b",
+      "lines": 54,
+      "review": "no_change",
+      "finding": "Reviewed concurrent bearer request scoping and child-task credential noninheritance."
+    },
+    {
+      "path": "tests/test_http_service.py",
+      "area": "network_security",
+      "sha256": "efeea3a80c1e7a08d9a82fbcb86af665a1ea4b147b0744461064c644acf3bd0c",
+      "lines": 754,
+      "review": "no_change",
+      "finding": "Read full service configuration/restart/reset tests; shared-agent ownership, resource release, revocation and persisted deduplication exercised."
+    },
+    {
+      "path": "tests/test_http_supervisor.py",
+      "area": "network_security",
+      "sha256": "8c2411b7c063d4345390a266241791060dea1035614664b4c706505589e826ef",
+      "lines": 139,
+      "review": "no_change",
+      "finding": "Reviewed real child restart/interrupt, bounded backoff and safe supervisor observation persistence."
+    },
+    {
+      "path": "tests/test_http_tool_upgrade.py",
+      "area": "network_security",
+      "sha256": "c90c39863e5ae911da5ec0ce3936b05621dbdfd8f22f90cdedd5b74d9798b7e0",
+      "lines": 230,
+      "review": "no_change",
+      "finding": "Reviewed persisted token-preserving scope upgrades, new-consent boundaries and interrupted publication reconciliation."
+    },
+    {
+      "path": "tests/test_internet_probe.py",
+      "area": "release_runtime",
+      "sha256": "796948055a3f4e345930b357dbee559e6b8beb08ec592d44d4e4f32040cdd7c5",
+      "lines": 294,
+      "review": "no_change",
+      "finding": "Reviewed full offline internet probe tests, native prerequisite handling and report aggregation."
+    },
+    {
+      "path": "tests/test_ledger_migration.py",
+      "area": "network_security",
+      "sha256": "46dfd441153f45be50c8003404e277fc122abbb57685ab0391b33378022568d1",
+      "lines": 106,
+      "review": "no_change",
+      "finding": "Reviewed migration interruption rollback, read-only compatibility checks and durable operation preservation."
+    },
+    {
+      "path": "tests/test_local_supervisor.py",
+      "area": "release_runtime",
+      "sha256": "4359393de52975494f5c673f472526017f8b3611bc13db9e378928977c63cea3",
+      "lines": 116,
+      "review": "no_change",
+      "finding": "Real disposable engine verifies watcher does not replace engine; credential rejection blocks repeated access."
+    },
+    {
+      "path": "tests/test_locking.py",
+      "area": "core_ui",
+      "sha256": "9f460b9ba20b18d94e110c41c4ee9d2c9f651618e4e0e3bc1dfd05cdd6f36b6c",
+      "lines": 44,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "tests/test_management.py",
+      "area": "network_security",
+      "sha256": "b48f8c7db3ada830827704b1916139b978c2686ccd92ddc009e16118fec3c713",
+      "lines": 245,
+      "review": "no_change",
+      "finding": "Reviewed management observed postconditions, read-only registry behavior, local startup restrictions and explicit probes."
+    },
+    {
+      "path": "tests/test_mcp_media.py",
+      "area": "network_security",
+      "sha256": "13c715b99f6256256f1cecd3752c53e4243497ac1c5ed0eb42489d6449c21bb3",
+      "lines": 138,
+      "review": "no_change",
+      "finding": "Reviewed exact media summary/byte/hash/type validation, count budgets and known envelope restoration."
+    },
+    {
+      "path": "tests/test_mcp_notifications.py",
+      "area": "network_security",
+      "sha256": "1eed4810b0dfe3a380e04f7fe26f6ade1cb12b5246a730246b1d05fc30d13e3f",
+      "lines": 79,
+      "review": "no_change",
+      "finding": "Reviewed initialization-gated notification emission and negotiated log levels."
+    },
+    {
+      "path": "tests/test_mcp_outcome_diagnostics.py",
+      "area": "network_security",
+      "sha256": "e10eb346bc062a9114e30da62863d3f2b760492ebb144291312024662012eb99",
+      "lines": 35,
+      "review": "no_change",
+      "finding": "Reviewed closed-vocabulary provider diagnostics, type validation and no fabricated dispatch proof."
+    },
+    {
+      "path": "tests/test_mcp_plugin_errors.py",
+      "area": "network_security",
+      "sha256": "2ae8f73b5372652eff76d01b0a7d786a326b77811fb044707bef699510d9a3c5",
+      "lines": 125,
+      "review": "no_change",
+      "finding": "Reviewed plugin error versus operation state, preserved IDs/diagnostics and no retries after transport uncertainty."
+    },
+    {
+      "path": "tests/test_mcp_protocol.py",
+      "area": "network_security",
+      "sha256": "cdb591e2d51169ce1b696c84a9f4faf091a7013653b31d5bbcfed86142c4f65b",
+      "lines": 130,
+      "review": "no_change",
+      "finding": "Reviewed actual official SDK stdio interoperability, initialization/protocol errors and core operation recovery."
+    },
+    {
+      "path": "tests/test_media.py",
+      "area": "core_ui",
+      "sha256": "c11918bf870d217a79ba3a5250bfaf3f2e6d9df5a9dd9e40de816c730e4bd618",
+      "lines": 105,
+      "review": "changed",
+      "finding": "Real process cancellation left decoder alive before patch; final cleanup reaps timeout/cancel paths, 47 related tests pass."
+    },
+    {
+      "path": "tests/test_metadata_http_error.py",
+      "area": "network_security",
+      "sha256": "fd53b7b3bf644eee53259910bfab9d4701901cb3ca4219d45a650705aaa58c1a",
+      "lines": 23,
+      "review": "no_change",
+      "finding": "Reviewed actual local metadata error framing and bounded provider status extraction."
+    },
+    {
+      "path": "tests/test_move_native.py",
+      "area": "core_ui",
+      "sha256": "05395d05dcdec76536f73496d744a82573813d392bb1c57e0ec3231974c5ada0",
+      "lines": 57,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "tests/test_native_credentials.py",
+      "area": "network_security",
+      "sha256": "c916d935841d35081e9a166375b87f0ed9ff47d73a7ae2a39cbf1c10852391c0",
+      "lines": 59,
+      "review": "no_change",
+      "finding": "Synthetic native adapter tests verify update-in-place and failure preservation without Keychain access."
+    },
+    {
+      "path": "tests/test_native_gui.py",
+      "area": "core_ui",
+      "sha256": "2c6365912006ee9d69c4395bd7bbf20ddb8e6222d709d5deafcd912e87cdcdcc",
+      "lines": 612,
+      "review": "changed",
+      "finding": "Reviewed cancelled/timeout helper shutdown and retained owner regressions from 291ca56."
+    },
+    {
+      "path": "tests/test_native_gui_helper.py",
+      "area": "core_ui",
+      "sha256": "16e42af671faacdfbd6a9b0dbfb396e18f4262368ee41acc2bb9c9a4e8751692",
+      "lines": 460,
+      "review": "no_change",
+      "finding": "Read complete real Swift serialization/identity/mapping and opt-in GUI acceptance tests. Compile-only and actual GUI evidence boundaries are explicit."
+    },
+    {
+      "path": "tests/test_native_login.py",
+      "area": "network_security",
+      "sha256": "1537022222672e74028707a677144528673f56d5dd56503fafa21bcc5f45eb90",
+      "lines": 331,
+      "review": "no_change",
+      "finding": "Reviewed real loopback login, wrong callback binding, cancellation, one-use TLS redemption and token preservation."
+    },
+    {
+      "path": "tests/test_oauth_endpoints.py",
+      "area": "network_security",
+      "sha256": "bcad3545c72708f8d98490987cf6bdb32b31ab8cbd2333ff353fcd34f83ffa5b",
+      "lines": 198,
+      "review": "no_change",
+      "finding": "Reviewed real OAuth discovery, code/refresh redemption, malformed form denial and session continuity/revocation."
+    },
+    {
+      "path": "tests/test_operation_acceptance.py",
+      "area": "network_security",
+      "sha256": "21125bf86c3244891987fcc04f377611029e3929b161e6495c61d8255ae5ff80",
+      "lines": 105,
+      "review": "no_change",
+      "finding": "Reviewed invalid IDs before dispatch, operation receipt persistence, early ACK and single execution after response loss."
+    },
+    {
+      "path": "tests/test_owner_credentials.py",
+      "area": "network_security",
+      "sha256": "92092c10a9711b0ce66beae279efe28d918a528cba109290d54dd3f2b87194e1",
+      "lines": 319,
+      "review": "no_change",
+      "finding": "Read complete credential lifecycle and fixed-vector tests; write failure reconciliation and locked verification assertions match the contract."
+    },
+    {
+      "path": "tests/test_owner_json_pipe.py",
+      "area": "network_security",
+      "sha256": "6802ba99bb06dfe7526e002812c16101d3e3859e89478c1ea02b65b5f1882a1a",
+      "lines": 295,
+      "review": "no_change",
+      "finding": "Read complete Windows native pipe tests; covers peer identity, deadlines, active request drain and framing. Native execution remains Windows CI."
+    },
+    {
+      "path": "tests/test_owner_passkeys.py",
+      "area": "network_security",
+      "sha256": "e79787a3cefbfc9186831bcb48ba2b3553b31759ed748eb92f088f25275694a2",
+      "lines": 727,
+      "review": "no_change",
+      "finding": "Read full passkey tests; credential/ticket limits, password reset generations, browser origin and counter concurrency have concrete postconditions."
+    },
+    {
+      "path": "tests/test_owner_passkeys_browser.py",
+      "area": "network_security",
+      "sha256": "bc9fbb82ecd35b36404e84c97e15b013e3037d6b9c7e03f8dab29f1edea1d388",
+      "lines": 126,
+      "review": "no_change",
+      "finding": "Read complete isolated Chromium virtual WebAuthn test; registration and consent postconditions are checked and resources closed."
+    },
+    {
+      "path": "tests/test_owner_pipe_contract.py",
+      "area": "network_security",
+      "sha256": "ea8bde5365ae855b79563495da8ea09bad8086b314196a50a4b6d2a7e6d395fd",
+      "lines": 80,
+      "review": "changed",
+      "finding": "Reviewed strict owner-pipe JSON encode/decode regression from 9109a6d."
+    },
+    {
+      "path": "tests/test_parent_liveness.py",
+      "area": "network_security",
+      "sha256": "af434b95aebeb68eda93942b61bd26b591aeb7ce6d258c9440265a808dde6af0",
+      "lines": 115,
+      "review": "no_change",
+      "finding": "Real subprocess tests exercise EOF, owner death and graceful descendant shutdown with bounded cleanup."
+    },
+    {
+      "path": "tests/test_peer_mailbox.py",
+      "area": "release_runtime",
+      "sha256": "5c61ba7b68925b5a6b30ffc45652886ddd0657aea312e6766015705eb8993572",
+      "lines": 643,
+      "review": "changed",
+      "finding": "Real SQLite failure injection proves fresh and legacy schemas roll back unchanged and retry succeeds."
+    },
+    {
+      "path": "tests/test_peer_mcp.py",
+      "area": "release_runtime",
+      "sha256": "45749664998f5b92f4b46ed8d77af92b6d0e8eacbb012bd5a228cc46ab12da13",
+      "lines": 312,
+      "review": "no_change",
+      "finding": "Real two-process MCP send/ack boundary, invalid recipient, heartbeat loss and credential publication cases reviewed."
+    },
+    {
+      "path": "tests/test_persistent_watch.py",
+      "area": "release_runtime",
+      "sha256": "38ddc94ea795d5aa8f4a65824cfb1f4c165032136036128c88b403b43354daac",
+      "lines": 95,
+      "review": "no_change",
+      "finding": "Bounded history, blocked permanent failures, cooldown and legacy startup byte compatibility covered."
+    },
+    {
+      "path": "tests/test_plugin_diagnostics.py",
+      "area": "network_security",
+      "sha256": "e089f96e80afd96a2ab5f60ad6223af79cc45a0c02e0e6dcea314221250e4c2a",
+      "lines": 38,
+      "review": "no_change",
+      "finding": "Diagnostics tests distinguish fixed classifications from arbitrary secret text and enforce ring bounds."
+    },
+    {
+      "path": "tests/test_plugin_image_results.py",
+      "area": "network_security",
+      "sha256": "bd83ddd8b99c8a6673a64fb061c030d1e3744ecc82341b69885253d7c227d33d",
+      "lines": 256,
+      "review": "no_change",
+      "finding": "Reviewed native image projection, text/base64 separation, bounds, errors and unchanged durable receipts."
+    },
+    {
+      "path": "tests/test_plugin_package.py",
+      "area": "release_runtime",
+      "sha256": "182729d442120162686d0852c6db5d48858dfe123f807d141d590ada47254f51",
+      "lines": 225,
+      "review": "no_change",
+      "finding": "Read complete marketplace/runtime bundle consistency assertions; root owns regenerated outputs."
+    },
+    {
+      "path": "tests/test_plugin_sessions.py",
+      "area": "network_security",
+      "sha256": "e99d1e0eb974dddf3ef04fc8c355c6860464a3bb26e90461f7ca0816d978d1ab",
+      "lines": 726,
+      "review": "no_change",
+      "finding": "Full plugin session tests reviewed: lifecycle, ownership, same-ID replay, unknown cleanup, bounded metadata and background activity protection match implementation."
+    },
+    {
+      "path": "tests/test_portable_archive.py",
+      "area": "release_runtime",
+      "sha256": "a32babfa294d64a7bf03ab07e1f6de84d6ff948e60a842d0dd825b1340108255",
+      "lines": 139,
+      "review": "no_change",
+      "finding": "Archive traversal, reserved names, symlinks, hash, size and compatibility negatives preserve sources; snapshot swap regression retained."
+    },
+    {
+      "path": "tests/test_portable_build.py",
+      "area": "release_runtime",
+      "sha256": "068586103072e339e0804cff3a7f0ac3c648b81918dfde55bb17b8b8565ee988",
+      "lines": 271,
+      "review": "no_change",
+      "finding": "Read build target, dependency, native helper and archive permission tests."
+    },
+    {
+      "path": "tests/test_portable_verification.py",
+      "area": "release_runtime",
+      "sha256": "4226ca8eed912daca881c36826fa33e61b28a6e94af1b3765f7cbe6f8b509bbe",
+      "lines": 85,
+      "review": "no_change",
+      "finding": "Read full archive payload verification, dependency and unsafe path tests."
+    },
+    {
+      "path": "tests/test_private_directory.py",
+      "area": "network_security",
+      "sha256": "a5e15018aa25eca8ea10166659bc34377ce69ca3da013e2cffa679d84f6d00a7",
+      "lines": 235,
+      "review": "no_change",
+      "finding": "Full private directory tests reviewed: existing ACL validation and explicit preflighted migration avoid silent permission rewrites; Windows native assertions retained."
+    },
+    {
+      "path": "tests/test_processes.py",
+      "area": "core_ui",
+      "sha256": "0702b9d48acd504e48b56b7135e36e71ca938354335df6266f051d2950e35594",
+      "lines": 25,
+      "review": "no_change",
+      "finding": "Full file reviewed, including validation, failure/cleanup paths and relevant consumers; no justified change found."
+    },
+    {
+      "path": "tests/test_regex_worker.py",
+      "area": "core_ui",
+      "sha256": "dadd47ee33b9db7a185e0c93a501ee38eeb13431122ffababbfa05bc064b52be",
+      "lines": 91,
+      "review": "no_change",
+      "finding": "Reviewed real isolated child execution, workspace shadowing rejection, syntax/word semantics, timeout and cancellation reaping."
+    },
+    {
+      "path": "tests/test_registration_client.py",
+      "area": "network_security",
+      "sha256": "f9bb68c107b284f2e48400c60440e9d024eddb7aa1ad79701894779ffa52ed8c",
+      "lines": 407,
+      "review": "no_change",
+      "finding": "Full registration tests reviewed: durable original identity and account/endpoint binding retained across expired grants, lost replies and schema migration."
+    },
+    {
+      "path": "tests/test_relay_authorized_channel.py",
+      "area": "release_runtime",
+      "sha256": "113e00df961da3a1880d451ae769f6d69c84dd46004da51f85da400abe3ebc50",
+      "lines": 164,
+      "review": "no_change",
+      "finding": "Signed WSS operations retain grant verification at both ends and reject unsigned/enrollment requests before dispatch."
+    },
+    {
+      "path": "tests/test_relay_channel_enrollment.py",
+      "area": "release_runtime",
+      "sha256": "2c63b5be3cbabbcc858800ae402e1a00c992ce6bf4b68f2589e9c6c1a8921d31",
+      "lines": 187,
+      "review": "no_change",
+      "finding": "Real certificate possession enrollment then execution/restart validates persistent device identity and no duplicate writes."
+    },
+    {
+      "path": "tests/test_relay_channels.py",
+      "area": "release_runtime",
+      "sha256": "54bf3735e2e97c31a69d54931adfad48cdd19e00eec98228d9458d232a310cc2",
+      "lines": 253,
+      "review": "no_change",
+      "finding": "Real mTLS sockets cover late replies, wrong identities, busy/offline/replaced channels and certificate rotation without replay."
+    },
+    {
+      "path": "tests/test_relay_client.py",
+      "area": "release_runtime",
+      "sha256": "c53dc4cd08afa383ac28cd70d6723b31ef766c4d26078f1077d289988d4e3d13",
+      "lines": 165,
+      "review": "no_change",
+      "finding": "Real reconnect/resume and stop-during-handshake tests; engine I/O faults do not cause transport retry."
+    },
+    {
+      "path": "tests/test_relay_enrollment.py",
+      "area": "release_runtime",
+      "sha256": "6d8c319f935708cbd7d5c7d3698a771d25db4d76ebb879d09265a57d2d1ec6af",
+      "lines": 106,
+      "review": "no_change",
+      "finding": "Signed claims/header/key negatives reject without registration; exact grant purpose separated from execution."
+    },
+    {
+      "path": "tests/test_relay_grants.py",
+      "area": "release_runtime",
+      "sha256": "961e33d5cd0eb2ed8182cca76d44fd18e4b61155c87d4230545511c7846c474d",
+      "lines": 137,
+      "review": "no_change",
+      "finding": "Real signed grants test PC account/device/tool boundaries, refresh namespace and trusted revocation without persisting bearer material."
+    },
+    {
+      "path": "tests/test_relay_http.py",
+      "area": "release_runtime",
+      "sha256": "044e2f5bcb35776bf4bfb135b9798b0309826d16931d41663bf406de739211e2",
+      "lines": 176,
+      "review": "no_change",
+      "finding": "Actual loopback HTTP tests account-bound recovery, malformed/query/origin rejection and no enrollment-to-MCP permission escalation."
+    },
+    {
+      "path": "tests/test_relay_mcp.py",
+      "area": "release_runtime",
+      "sha256": "783d40d2920699cc6be67b20d4a915b6b6967035742062b4659eec11ee9f2344",
+      "lines": 132,
+      "review": "no_change",
+      "finding": "MCP and HTTP-to-WSS integration tests verify refresh, grant-bound sessions, revoked access and exact once recovery."
+    },
+    {
+      "path": "tests/test_relay_registry.py",
+      "area": "release_runtime",
+      "sha256": "03c66dfaafff6dd3b9f12574e079bb3f96cafa5cbb6cfe3341c4b1df09369f5c",
+      "lines": 212,
+      "review": "no_change",
+      "finding": "Concurrent enrollment and certificate rotation preserve one binding; revoked device cannot be resurrected by replay."
+    },
+    {
+      "path": "tests/test_release_activation.py",
+      "area": "release_runtime",
+      "sha256": "13c7f720a1d33edab58b4b9cdc1d46303b9c3d52e413f27e281f00ea12b6f2bf",
+      "lines": 160,
+      "review": "no_change",
+      "finding": "Covers busy/current/applied/unknown activation plus record-before-stop and exact pending-runtime resume."
+    },
+    {
+      "path": "tests/test_release_candidate.py",
+      "area": "release_runtime",
+      "sha256": "00e4140c64a0e25a8394dcef6d759bf1e2fcb3e651a4a9b067ac110bf2085b73",
+      "lines": 134,
+      "review": "no_change",
+      "finding": "Read real bare-git missing/lightweight/annotated/error fixture tests."
+    },
+    {
+      "path": "tests/test_release_preparation.py",
+      "area": "release_runtime",
+      "sha256": "100315c5bdf9fb3c5dee54ed9fc04f0282efadd020b209f4ed34735ab2274c8b",
+      "lines": 130,
+      "review": "no_change",
+      "finding": "Covers attestation policy, platform/version identity and cleanup before activation; candidate commit consistency examined."
+    },
+    {
+      "path": "tests/test_release_record.py",
+      "area": "release_runtime",
+      "sha256": "60cd0d467206b77f4e6e73963d12534f697260bd59376fc18d38936951ae7c02",
+      "lines": 37,
+      "review": "no_change",
+      "finding": "Atomic replace failure and corrupt record preserve prior state; staging cleanup asserted."
+    },
+    {
+      "path": "tests/test_release_supervisor.py",
+      "area": "release_runtime",
+      "sha256": "570e3d3084a840d5e19ea292c20d969c75d41d43992f21048ef56cc389dd2faf",
+      "lines": 126,
+      "review": "no_change",
+      "finding": "Real process-group test preserves independent engine; cancellation and verifier absence paths covered."
+    },
+    {
+      "path": "tests/test_release_update.py",
+      "area": "release_runtime",
+      "sha256": "0d55885175b9bdedb399b9f0c68b08b4ccbde3fa64dcc3983e3fbf7b15e4b399",
+      "lines": 159,
+      "review": "no_change",
+      "finding": "Covers version ordering, idle-only discovery, prior intent recovery and verifier CLI prerequisites."
+    },
+    {
+      "path": "tests/test_remote_health.py",
+      "area": "network_security",
+      "sha256": "b090dfc270fc312183833b81acd5c0a6b031c1263fbd79e5aeeb99ecd866826e",
+      "lines": 226,
+      "review": "no_change",
+      "finding": "Full remote health tests reviewed: no unapproved endpoint contact, generation changes discard stale probes and observations remain unauthenticated."
+    },
+    {
+      "path": "tests/test_remote_lifecycle.py",
+      "area": "network_security",
+      "sha256": "848622822b338a3ee49009c1cf8047b0313ef65b148a616b7ac6859c268582b8",
+      "lines": 203,
+      "review": "no_change",
+      "finding": "Full real CLI/process/HTTP/secret-pipe integration reviewed: isolated interpreter and exact owned process identities, crash recovery and deduplication checked."
+    },
+    {
+      "path": "tests/test_remote_media_transport.py",
+      "area": "network_security",
+      "sha256": "56a67e69480c29582315e7762a72e5b7a066e582dcf2025b5d34f6aed040764b",
+      "lines": 405,
+      "review": "changed",
+      "finding": "Real HTTP sockets and subprocess stdio exercise direct/device native image receipt and recovery, plus missing/tampered rejection with exactly one render dispatch."
+    },
+    {
+      "path": "tests/test_remote_service.py",
+      "area": "network_security",
+      "sha256": "6e2090da1e07c159c00a9e0b0bbd83fc2a86b94e568f22699c0a03d12612410d",
+      "lines": 357,
+      "review": "no_change",
+      "finding": "Full remote service tests reviewed: staged readiness, locks, connector descendants and parent loss have concrete cleanup postconditions."
+    },
+    {
+      "path": "tests/test_remote_setup.py",
+      "area": "network_security",
+      "sha256": "121aeab7c2e44ee31c83f2a6cf7fcd602d2732aec196268e8755d1089f722eec",
+      "lines": 286,
+      "review": "no_change",
+      "finding": "Full remote setup tests reviewed: explicit grants, plan persistence, no implicit service start and safe shell quoting verified."
+    },
+    {
+      "path": "tests/test_remote_startup.py",
+      "area": "release_runtime",
+      "sha256": "65f266e876efcf45709d7457d9bb2467ced95ca89635dc6c8acb360a7b1e511e",
+      "lines": 271,
+      "review": "no_change",
+      "finding": "Credential retry/lock ownership/termination paths use synthetic state; lifecycle histories do not disclose credentials."
+    },
+    {
+      "path": "tests/test_remote_transport.py",
+      "area": "network_security",
+      "sha256": "feedd5aac9c132451544cdd3686ee66c610126116daa0006adfa953b7cc5f575",
+      "lines": 536,
+      "review": "no_change",
+      "finding": "Full TLS transport tests reviewed: actual certificate validation, grant expiry/revocation and peer-scoped receipts checked."
+    },
+    {
+      "path": "tests/test_renderer_location.py",
+      "area": "release_runtime",
+      "sha256": "2e4404389d887caa1effb501fc763a09067ef14de2ee46daee288e7a45778a7d",
+      "lines": 27,
+      "review": "no_change",
+      "finding": "Bundled executables win and incomplete bundle refuses host mixing; platform-specific skip is justified."
+    },
+    {
+      "path": "tests/test_research_measurement.py",
+      "area": "release_runtime",
+      "sha256": "b7f832d2b34754978a56f8c89b64feae367b66c06165b160e7d03c411c698227",
+      "lines": 179,
+      "review": "no_change",
+      "finding": "Reviewed full fixtures for overlap, duplicate intent and result metrics; assertions preserve exact dispatch and completion evidence."
+    },
+    {
+      "path": "tests/test_runtime_identity.py",
+      "area": "release_runtime",
+      "sha256": "51e0761c428e9edf107761fbc0c1947443eaf5f5a531a5d825a74751c6796ea5",
+      "lines": 118,
+      "review": "no_change",
+      "finding": "Checks source/hash identity and nested assets; incompatible API/active-work paths never replace running engine."
+    },
+    {
+      "path": "tests/test_runtime_provenance.py",
+      "area": "release_runtime",
+      "sha256": "88be7528757a118a77ad698b4e6ed73d7f2122722a88e079f439d7097cd552c9",
+      "lines": 33,
+      "review": "no_change",
+      "finding": "Isolated child checks current worktree against independent hash to detect wrong editable installation."
+    },
+    {
+      "path": "tests/test_runtime_selection.py",
+      "area": "release_runtime",
+      "sha256": "4293417f76186e98662e9bb7686fce95125d0aeb08481cc0bd57fcd59449453f",
+      "lines": 189,
+      "review": "no_change",
+      "finding": "Covers interrupted updates, existing engine reuse, startup failure and no unsafe credential/runtime fallback."
+    },
+    {
+      "path": "tests/test_runtime_settings.py",
+      "area": "release_runtime",
+      "sha256": "5249a1af5dbcc0cae16d5f702510204862ffd7a8ac9e9de8d69e7e0ba9113068",
+      "lines": 53,
+      "review": "no_change",
+      "finding": "Persistent strict settings and configured shell exercised through real engine lifecycle."
+    },
+    {
+      "path": "tests/test_search.py",
+      "area": "core_ui",
+      "sha256": "07293c056413f51d8457f5f5bc1591fb697aaf075602d0bef35d6e00c15c0247",
+      "lines": 351,
+      "review": "no_change",
+      "finding": "Reviewed bounded pagination, Unicode/context behavior, cancellation, subprocess regex deadlines and OOXML location roundtrip."
+    },
+    {
+      "path": "tests/test_secret_pipe.py",
+      "area": "network_security",
+      "sha256": "c54f7e523fb7c3fb8cc67df523ebe79927bb62c9f160498b1d47deeda94acbff",
+      "lines": 86,
+      "review": "no_change",
+      "finding": "Full secret pipe tests reviewed: real child payload digest/EOF, private mode, abandoned consumer cancellation and size bounds covered."
+    },
+    {
+      "path": "tests/test_setup_connector.py",
+      "area": "network_security",
+      "sha256": "42242b2ade6e60510aee2e32acee1e2c2d22e1b9bd29e3e0996e22d238964995",
+      "lines": 283,
+      "review": "no_change",
+      "finding": "Full setup connector tests reviewed: local-only exposure, operation claims, cancelled confirmation and exact reviewed scopes protected."
+    },
+    {
+      "path": "tests/test_setup_controller.py",
+      "area": "network_security",
+      "sha256": "cedaf53a5f65d915a77016e2a9511d478353e830d76bda9fdcd93330d5248cfb",
+      "lines": 81,
+      "review": "no_change",
+      "finding": "Full setup controller tests reviewed: lost confirmation reconciliation, concurrent confirmation and corrupt configuration preservation covered."
+    },
+    {
+      "path": "tests/test_shared_agent_reconnect.py",
+      "area": "release_runtime",
+      "sha256": "5e14673cd4a6c3fea2f98cb391d8440ef412622f337db56d0e685c180f453880",
+      "lines": 352,
+      "review": "no_change",
+      "finding": "Reviewed full real subprocess/socket recovery fixtures, exact-once writes, grant recheck and identity rejection; disposable state and teardown bounded."
+    },
+    {
+      "path": "tests/test_skills_context.py",
+      "area": "core_ui",
+      "sha256": "cbe845f3785302f982c077274c37acefb53687ce7aa18d5d32bea40d2fbcf1bb",
+      "lines": 85,
+      "review": "no_change",
+      "finding": "Reviewed enabled catalog selection, path replacement rejection, metadata filtering and bounded pagination."
+    },
+    {
+      "path": "tests/test_ssh_client.py",
+      "area": "network_security",
+      "sha256": "3a087fbe7db60bc55f084b4610cf7af1f46d4ca26fada15f89d425db0fc21ef1",
+      "lines": 195,
+      "review": "no_change",
+      "finding": "Full SSH client tests reviewed: real stdio replay, delegated scope/revocation and startup cancellation covered; runner-specific cleanup regression will live in delegated tests."
+    },
+    {
+      "path": "tests/test_ssh_transport.py",
+      "area": "network_security",
+      "sha256": "f0badda3841764dc7f06432d117818819eee2db7dd18d6c89f45f118feb99ad8",
+      "lines": 31,
+      "review": "no_change",
+      "finding": "Full SSH transport tests reviewed: command injection rejection, verified noninteractive flags and propagated exit status asserted."
+    },
+    {
+      "path": "tests/test_startup_native.py",
+      "area": "release_runtime",
+      "sha256": "d56eda93dc79709d532a653efab633012fc45faa314f4f1998ccfcefee92dd33",
+      "lines": 151,
+      "review": "no_change",
+      "finding": "Disposable runner-only registration test uses owned markers and cleanup; interactive native test guarded by CI environment."
+    },
+    {
+      "path": "tests/test_startup_recovery_native.py",
+      "area": "release_runtime",
+      "sha256": "62c62a5b7ed8e4119b9cc1a6b45d0d956fab58e9925019ac07beedb4ac9323ff",
+      "lines": 89,
+      "review": "no_change",
+      "finding": "Cross-platform start identity is freshly checked; macOS starts without kill and Windows XML stays exact."
+    },
+    {
+      "path": "tests/test_startup_service.py",
+      "area": "release_runtime",
+      "sha256": "ce890460b2f67a46306f2c4673c52f643e08b391062ed56bc030b636677547a9",
+      "lines": 484,
+      "review": "changed",
+      "finding": "Real FIFO subprocess proves startup read rejects it without a writer; old code times out."
+    },
+    {
+      "path": "tests/test_state_migration.py",
+      "area": "release_runtime",
+      "sha256": "61119ecf8580333001ce7102e71ca4078ab026da44134386162d4ce4ec65dc2d",
+      "lines": 184,
+      "review": "no_change",
+      "finding": "Integration asserts operation, backup and transfer preservation; conflicting data refuses publication without modifying sources."
+    },
+    {
+      "path": "tests/test_subchat_asset_encoding.py",
+      "area": "subchat",
+      "sha256": "83a9d3e055f9fbd010021e11703f74b4f826737577024458e89cb7506946b2e6",
+      "lines": 25,
+      "review": "no_change",
+      "finding": "Read full reload test: JS assets explicitly UTF-8 under simulated legacy default."
+    },
+    {
+      "path": "tests/test_subchat_browser_backend.py",
+      "area": "subchat",
+      "sha256": "414e8585d3b824b7c013b012990d7491e8325010ecd929cab01e4578a96a010a",
+      "lines": 1056,
+      "review": "changed",
+      "finding": "Full offline browser fixture and all prepare/baseline/model/Chat-Work/history/cleanup/manual-send regressions reviewed. Exposed independent native paragraph message serialization for resource fixture reuse, with no production matcher reuse."
+    },
+    {
+      "path": "tests/test_subchat_browser_background.py",
+      "area": "subchat",
+      "sha256": "00c0d3099c8215df819169eb083dcb5929e3662c915df2121981649fc9c6c5f0",
+      "lines": 506,
+      "review": "changed",
+      "finding": "Full file reviewed; six close normal/stalled/failed × body success/failure cases verify exact-owner stop and primary error preservation. Other guardian/cancel/real Chrome tests preserved."
+    },
+    {
+      "path": "tests/test_subchat_browser_httpx_generation.py",
+      "area": "subchat",
+      "sha256": "59153ea0aea0300bf4c2d649e2e826942235806a549a9fc11fafb15d15afe154",
+      "lines": 732,
+      "review": "no_change",
+      "finding": "Full fixture and tests read. Covers observed body/auth/account, once-only HTTPX, stream finish/timeout/cancel, wrong selection and failure scopes."
+    },
+    {
+      "path": "tests/test_subchat_browser_request_content.py",
+      "area": "subchat",
+      "sha256": "941bcd5a2f906fd3802c17ba8d34384dd44a3f7076ae8ac7b7b374e7b195c545",
+      "lines": 81,
+      "review": "no_change",
+      "finding": "Read all observed alias model/effort validation fixtures; exact preset/version and wire mismatches rejected."
+    },
+    {
+      "path": "tests/test_subchat_browser_specs.py",
+      "area": "subchat",
+      "sha256": "89ad7bf1f38f382c62b2759488f3ec12b364de95dc9a309c123c4e362409ed67",
+      "lines": 23,
+      "review": "no_change",
+      "finding": "Read complete closed-product/platform registry fixtures."
+    },
+    {
+      "path": "tests/test_subchat_chrome_login.py",
+      "area": "release_runtime",
+      "sha256": "a6b120b1b7f88f0f1e79299b37f2b15e891730154c4bf49ddde3ef0e044e5fe5",
+      "lines": 231,
+      "review": "no_change",
+      "finding": "Read cookie scope/rotation, bounded response and account mismatch regressions."
+    },
+    {
+      "path": "tests/test_subchat_chrome_profile.py",
+      "area": "release_runtime",
+      "sha256": "f9a09622965d5faeaa14210112d4ecfeafc4629dbffec2a67c5cfdf0342636eb",
+      "lines": 109,
+      "review": "no_change",
+      "finding": "Read real SQLite WAL/filter/privacy and cleanup tests."
+    },
+    {
+      "path": "tests/test_subchat_cli.py",
+      "area": "release_runtime",
+      "sha256": "067caf848e0f635d545371d88a6ff54bb665c90ddf414483b69a5e01c86bbda2",
+      "lines": 371,
+      "review": "no_change",
+      "finding": "Read full saved-state/no-browser, owner scoping and selected Windows browser tests."
+    },
+    {
+      "path": "tests/test_subchat_copy.py",
+      "area": "subchat",
+      "sha256": "67550e09a62b07703d425a6fcbecb823518286bfe4955e5dc22e023f8311e376",
+      "lines": 225,
+      "review": "no_change",
+      "finding": "Full legacy/current identity and exact copy interception/recovery tests; callback restoration verified. Late arbitrary page callback remains outside fixture coverage; no production mismatch demonstrated."
+    },
+    {
+      "path": "tests/test_subchat_delete.py",
+      "area": "subchat",
+      "sha256": "681f3edbfa1e699a228a018f73eb2184966f9a1cf34aec51b0bdc5785f9cb650",
+      "lines": 303,
+      "review": "changed",
+      "finding": "Full deletion fixture/service/restart tests read; added true concurrent client-factory wait and authentication rejection before PATCH. Old implementation reaches PATCH after 401; fixed prevents it."
+    },
+    {
+      "path": "tests/test_subchat_delivery.py",
+      "area": "subchat",
+      "sha256": "6de1e35d7787c11418a0a8a5f070e8e82a2d7677d779e29c7430c68e8cff49c5",
+      "lines": 404,
+      "review": "no_change",
+      "finding": "Read all 404 lines and traced Subchats._dispatch/recover. Tests exercise durable pre-dispatch reservation, receipt loss/no replay, concurrent dispatch, queued cancellation and cleanup preserving final answers. No new concrete defect."
+    },
+    {
+      "path": "tests/test_subchat_device_save.py",
+      "area": "release_runtime",
+      "sha256": "04f7db2cd48f9b170dd4ba277b257ece77d5826fd6ff997b7233176b660cb46e",
+      "lines": 708,
+      "review": "no_change",
+      "finding": "Read real HTTP/router save recovery, scope revocation and immutable source tests."
+    },
+    {
+      "path": "tests/test_subchat_dispatch_diagnostics.py",
+      "area": "subchat",
+      "sha256": "dcf3ef14c83b67e3a704435e8eac19b1d467a398b894cf3405d3eb1a762d764a",
+      "lines": 337,
+      "review": "changed",
+      "finding": "Full diagnostics suite read and extended. Provider normalization fixture is independent of insertion DOM. Added failed-close timeout/cancellation late-POST rejection, human replacement preservation, plus running/failed/cancelled send-worker parity tests across local HTTPS and stdio with no browser opening."
+    },
+    {
+      "path": "tests/test_subchat_efforts.py",
+      "area": "subchat",
+      "sha256": "adebdc2b4c22a06e155e8bc5b078a1335bf270ac559fc0792b2ccafb6ea362c2",
+      "lines": 111,
+      "review": "no_change",
+      "finding": "Read full effort traversal and partial-failure fixtures, restoration and diagnostics redaction."
+    },
+    {
+      "path": "tests/test_subchat_gateway.py",
+      "area": "subchat",
+      "sha256": "5215ccaf0a88519f0681be6f835faa6c9739add223fa12b399747f16b0ce1441",
+      "lines": 1807,
+      "review": "changed",
+      "finding": "Read all 1802 original lines and Lazy/SubchatGateway execute/acquire/release/close definitions. Confirmed test fixture retained the old closed controller across idle-close and explicit same-ID retry. Added 50 ms to second preparation in a temporary test copy: original failed with running result; new-controller lookup passed. Fixed test with explicit preparation Events and current controller task, preserving same operation ID and no replay. Independent status/send_worker parity failure reproduced and reported to source owner, who is fixing it separately."
+    },
+    {
+      "path": "tests/test_subchat_gateway_model_change.py",
+      "area": "subchat",
+      "sha256": "120bc60fd817ce5e3dcf43e4943678956befe44c7ad235c10d200eac51e7a7d2",
+      "lines": 154,
+      "review": "no_change",
+      "finding": "Read actual loopback HTTPS scope/account/CAS and observed-choice availability fixture, cleanup contract checked."
+    },
+    {
+      "path": "tests/test_subchat_gateway_resources_change.py",
+      "area": "subchat",
+      "sha256": "2335596fe4f40a6bd1052ec214fd1fd54f3fc1124f26dd5b43c5a24ec236dcd4",
+      "lines": 160,
+      "review": "no_change",
+      "finding": "Read actual loopback HTTPS scoped resource-CAS fixture, wrong account and local path reject; no dispatch."
+    },
+    {
+      "path": "tests/test_subchat_http_catalog.py",
+      "area": "subchat",
+      "sha256": "d30027effa751cd013afb12baa3f43f8bfcd81d07ed5a926d491cff456b85bf3",
+      "lines": 562,
+      "review": "no_change",
+      "finding": "Full typed dynamic model/preset/choice-ID/UI label and browser read tests; authentic GET evidence is kept separate from availability/sendability."
+    },
+    {
+      "path": "tests/test_subchat_http_download.py",
+      "area": "subchat",
+      "sha256": "ee014e0fc13f832ffae6b88da3aa672f31c4b7a3e74e1644523ea85a4974e94d",
+      "lines": 525,
+      "review": "no_change",
+      "finding": "Read all authenticated verified final-link, URL/status/range/size/metadata/compression/owner and MCP tests. Candidate unvalidated metadata.status is not changed without provider contract evidence."
+    },
+    {
+      "path": "tests/test_subchat_http_generation.py",
+      "area": "subchat",
+      "sha256": "9311dcba1ce4a026110d72a696a36a7f4e02d3926f2796f46989d1f8c4c8b32c",
+      "lines": 1532,
+      "review": "no_change",
+      "finding": "Read all 1532 lines and full dispatch_generation implementation. HTTP loopback and fixtures cover reserved IDs, preflight/dispatch distinction, SSE parsing, read timeout/cancellation, evidence persistence, media metadata and retry prohibition after uncertain POST. No additional concrete defect."
+    },
+    {
+      "path": "tests/test_subchat_http_history.py",
+      "area": "subchat",
+      "sha256": "d59937f12e610d6b23866bf44142da0024ef37ac4ff9b9db317e4bbff53db02e",
+      "lines": 1232,
+      "review": "no_change",
+      "finding": "Read all 1232 lines and traced project_observation. Source-only local HTTP/Chromium fixtures verify post-dispatch history, account-bound reads, malformed/cyclic mappings, selected branch, streaming/final states and provider source metadata. No additional concrete defect."
+    },
+    {
+      "path": "tests/test_subchat_http_image.py",
+      "area": "subchat",
+      "sha256": "d868588ec78de44c79de9e3787af9c5fdbef7faab8e62c8b1ba5440ad1ad4be4",
+      "lines": 476,
+      "review": "no_change",
+      "finding": "Full correlated history and image/content-bound download tests including prior/other-turn/ambiguous image, signatures and declared metadata. Byte signatures validate dimensions/containers, not general image decoding."
+    },
+    {
+      "path": "tests/test_subchat_http_library.py",
+      "area": "subchat",
+      "sha256": "7656cfe038256a168292b459d748210ca9b77f4ee75b0cd4133d43ac4154b535",
+      "lines": 106,
+      "review": "no_change",
+      "finding": "Read complete exact-ID cursor pagination/reconciliation and account/owner/failure fixtures."
+    },
+    {
+      "path": "tests/test_subchat_http_only.py",
+      "area": "subchat",
+      "sha256": "3fcc48c5623729cabf5564d68fdb35a15935e828960642f6a1f59f7fcb86bf0d",
+      "lines": 618,
+      "review": "no_change",
+      "finding": "Full explicit session/cookie/account/status/refresh/GET-only/restart/error-latch tests reviewed, including concurrent 401 factory scenario and independent recovery."
+    },
+    {
+      "path": "tests/test_subchat_http_only_cli.py",
+      "area": "subchat",
+      "sha256": "ba8cd5786f22007476278efc9597a6a929c3e0a0331e2946025d73fe574bdc3e",
+      "lines": 539,
+      "review": "no_change",
+      "finding": "Full process and CLI startup/session validation/refresh/HTTP client/stdio tests, synthetic credentials only. Mode guards precede ledger/browser creation."
+    },
+    {
+      "path": "tests/test_subchat_http_sender.py",
+      "area": "subchat",
+      "sha256": "bcd2386594a46bcdbe15ca594fed3fd72d66f8c28bb2873bb7045086ac73bee5",
+      "lines": 363,
+      "review": "no_change",
+      "finding": "Full one-shot loopback sender and durable SQLite claims, concurrent connections, rejections, interrupted stream, mismatch, and preflight-vs-claim tests."
+    },
+    {
+      "path": "tests/test_subchat_http_workflow.py",
+      "area": "subchat",
+      "sha256": "c2cdc206459d6ea7111d11f95ca747a0d10bde938acaff334e60c45c5e56157e",
+      "lines": 147,
+      "review": "no_change",
+      "finding": "Read real HTTP-to-stdio lifecycle/restart and queued follow-up fixture. Persistent send count proves no replay across processes."
+    },
+    {
+      "path": "tests/test_subchat_input.py",
+      "area": "subchat",
+      "sha256": "8f97461d9249e188f876ae91c4a111bc7285abce0e83b637d5ea327eef8ac87e",
+      "lines": 312,
+      "review": "changed",
+      "finding": "Full JS integration fixtures and all exact-text/URL/literal injection/paragraph/async interference/listener cleanup regressions read. Updated editor remove/replace to uncertain preservation."
+    },
+    {
+      "path": "tests/test_subchat_library_batch.py",
+      "area": "release_runtime",
+      "sha256": "0c035afa66e5710a18cc997f1d2ec3a8136cbc70d2a80afb679de1e45f194787",
+      "lines": 323,
+      "review": "no_change",
+      "finding": "Read shared-session, pinned-file and ambiguous dispatch regressions."
+    },
+    {
+      "path": "tests/test_subchat_library_mcp.py",
+      "area": "release_runtime",
+      "sha256": "073060dd3108b823d5920c81785a2c3602408edffbde93f1484f98c30f700f2d",
+      "lines": 121,
+      "review": "no_change",
+      "finding": "Read request-ID, preflight and uncertain-outcome contract coverage."
+    },
+    {
+      "path": "tests/test_subchat_library_upload.py",
+      "area": "release_runtime",
+      "sha256": "d1f9a1947bbb51ee0beab0a502b7586c9ae3e33363718a332a022aa9c059827c",
+      "lines": 483,
+      "review": "changed",
+      "finding": "Real writerless FIFO subprocess tests both upload source and save spool; old code timed out in both cases and fixed readers reject promptly."
+    },
+    {
+      "path": "tests/test_subchat_lifecycle.py",
+      "area": "subchat",
+      "sha256": "68de8e45e8b0df4797ba3e88c38c8edd20c274b25070c1614e3d03702bb7e3ad",
+      "lines": 351,
+      "review": "no_change",
+      "finding": "Full durable service send/recover/queue/cancel/read-answer tests and fixtures; revision race, cancellation, identity mismatch and unknown no-replay semantics checked."
+    },
+    {
+      "path": "tests/test_subchat_mcp.py",
+      "area": "subchat",
+      "sha256": "cdcd75802ca92c81aa141ad48577b5f2a473c8e634b96ce6caf5918e0857bea8",
+      "lines": 1321,
+      "review": "no_change",
+      "finding": "Read all 1321 lines and traced session worker creation, observe, preparation failure and close. Tests cover owner separation, explicit same-ID prepared retry, uncertain dispatch nonreplay, delayed ACK, background task limits and bounded observations. No additional concrete defect."
+    },
+    {
+      "path": "tests/test_subchat_model_menu.py",
+      "area": "subchat",
+      "sha256": "12dcb8877ceae7793fcd603ea91fbc4446a9cbbcf1de80c134da5c1ef00965b8",
+      "lines": 348,
+      "review": "no_change",
+      "finding": "Full DOM visibility/identity/effort/model picker/work toggle/partial catalog and minimization tests. Scans support observed explicit selectors; no silent model fallback."
+    },
+    {
+      "path": "tests/test_subchat_mutation_receipts.py",
+      "area": "subchat",
+      "sha256": "f97b94bc4be9d6d762dcb1efb0162afdc435fe5ed1efa84f282f6102ddc201ba",
+      "lines": 319,
+      "review": "no_change",
+      "finding": "Read all 319 lines. Atomic mutation receipt rollback, cache eviction, controller restart, OAuth grant binding and legacy queue disarm are tested without browser/profile use. No concrete defect."
+    },
+    {
+      "path": "tests/test_subchat_plugin.py",
+      "area": "release_runtime",
+      "sha256": "508d3f4492010c4c9212337e92dca0ff17cb4d89dc0dc6c953c636c847dda303",
+      "lines": 885,
+      "review": "no_change",
+      "finding": "Read all platform selection, read-only tool filtering, capabilities and no-resend tests."
+    },
+    {
+      "path": "tests/test_subchat_probe.py",
+      "area": "release_runtime",
+      "sha256": "fdd63343ec34408b4af0f07c2c38b392f4f11b9922accc68752ba6431badd0ce",
+      "lines": 361,
+      "review": "no_change",
+      "finding": "Reviewed full probe tests including delayed receipt, missing messages and bounded poll behavior."
+    },
+    {
+      "path": "tests/test_subchat_queue_auto.py",
+      "area": "subchat",
+      "sha256": "402fc3d194adb2c7c789b41cea6dc5fbe3b86463758e739090d2db888686d2f3",
+      "lines": 1087,
+      "review": "changed",
+      "finding": "Reviewed durable queue and notification cancellation regressions. The Windows CI failure was isolated to test setup order; ledger creation now precedes the macOS platform simulation."
+    },
+    {
+      "path": "tests/test_subchat_queue_resources_change.py",
+      "area": "subchat",
+      "sha256": "ba7828449afaac485b939ce704e84e56e97a6285855f4a5919f89815973fe514",
+      "lines": 102,
+      "review": "no_change",
+      "finding": "Read queued resource CAS/clear/owner/cancel tests and plain-send fallback only when refs explicitly cleared."
+    },
+    {
+      "path": "tests/test_subchat_queue_watch.py",
+      "area": "subchat",
+      "sha256": "394691e6283d8dc83c2d77bbd22b4f29daa759728477e12bd23015769e572f78",
+      "lines": 288,
+      "review": "no_change",
+      "finding": "Read all 288 lines; matched watch and observe lifetimes to source. Explicit enable/disable, no implicit browser startup, bounded leases, nonreplay and real stdio notification delivery are covered. No concrete defect."
+    },
+    {
+      "path": "tests/test_subchat_resources.py",
+      "area": "subchat",
+      "sha256": "d2baf49a601c4c3048610ee953cd0aa416cd4c380ead4c7f328f963709370962",
+      "lines": 365,
+      "review": "changed",
+      "finding": "Full wire resources/history/owner/restart/public entry tests reviewed. Fixed overriding resource send fixture to use independent base message serialization instead of layout-derived innerText; all 30 resource cases pass."
+    },
+    {
+      "path": "tests/test_subchat_setup.py",
+      "area": "release_runtime",
+      "sha256": "bbc6ee46c1d6ac826a636c8d6852353fa7f8fbfd7df5e493b0defa3075aa95c1",
+      "lines": 702,
+      "review": "no_change",
+      "finding": "Read complete isolated account/profile staging and setup rejection tests."
+    },
+    {
+      "path": "tests/test_subchat_sse.py",
+      "area": "subchat",
+      "sha256": "03a4b4f3fd5bc6e9fc3669ca4bcabc917863e5664a8dae1ad37a7b522c07b8ab",
+      "lines": 183,
+      "review": "no_change",
+      "finding": "Full UTF-8/BOM/CRLF/multiline/incomplete EOF/limits and actual loopback stream tests. No partial stream creates final receipt."
+    },
+    {
+      "path": "tests/test_subchat_state.py",
+      "area": "subchat",
+      "sha256": "b51e69ee4f06116227faa8d099ea538592702a0068add042ecc5f08cd86a63b4",
+      "lines": 600,
+      "review": "no_change",
+      "finding": "Read all 600 lines, including reread of truncated initial output. Durable owner identity, input/receipt uniqueness, atomic queue revisions, legacy migration and answer side table boundaries are exercised. No concrete defect."
+    },
+    {
+      "path": "tests/test_subchat_stream.py",
+      "area": "subchat",
+      "sha256": "562943180a1c348ab34f0b2286ba12c4ec091c4bd02e4f8c72fbf63af172e6d2",
+      "lines": 163,
+      "review": "no_change",
+      "finding": "Full isolated browser fetch observer, bounded late candidate, parallel candidate/restart/identity tests. Candidate is not provider acceptance."
+    },
+    {
+      "path": "tests/test_subchat_submission.py",
+      "area": "release_runtime",
+      "sha256": "0e2db049b5c6a6f548f2be154a0f125192678f3948b57a2e22a88cff1b4b8cc4",
+      "lines": 70,
+      "review": "no_change",
+      "finding": "Read account-free real DOM identity/mismatch/ambiguity coverage."
+    },
+    {
+      "path": "tests/test_subchat_tab_cleanup.py",
+      "area": "subchat",
+      "sha256": "1cf3f1532b13d23f1c550570614407d0127df76c06743fc24e32e86c01c168e9",
+      "lines": 265,
+      "review": "no_change",
+      "finding": "Full bounded close/CDP retry/cancellation and real owned-target isolation tests, 24 read pages across four contexts preserve original tabs."
+    },
+    {
+      "path": "tests/test_subchat_transport_probe.py",
+      "area": "release_runtime",
+      "sha256": "5586fc45748cd6ae77d1aa81c69e6a3864b5c81c616019071e815605b0855556",
+      "lines": 162,
+      "review": "no_change",
+      "finding": "Reviewed full transport fixtures and failure evidence, no change needed."
+    },
+    {
+      "path": "tests/test_subchat_upload_state.py",
+      "area": "release_runtime",
+      "sha256": "6a45c9a8683927fd7cdef316b0227915b9864d16603da4f133a034686f886181",
+      "lines": 315,
+      "review": "no_change",
+      "finding": "Read durable stage, ownership, migration and ready-item verification tests."
+    },
+    {
+      "path": "tests/test_subchat_wait_lifetime.py",
+      "area": "subchat",
+      "sha256": "38feefa213bc4f966bb14c6343db7c6a61363236767d2e48567873b786bb3895",
+      "lines": 313,
+      "review": "no_change",
+      "finding": "Read all 313 lines and traced session.observe/close. Tests cover shielded workers surviving observation budgets, durable late preparation errors, controller cancellation and recovery capacity release. No new concrete defect."
+    },
+    {
+      "path": "tests/test_subchat_work_context.py",
+      "area": "subchat",
+      "sha256": "33252f886313a41f0fcbb7dff1e2d31939781e4793a4a6a966c1a2f7533eba5b",
+      "lines": 66,
+      "review": "no_change",
+      "finding": "Read complete immutable provenance/restart/owner/self-reference tests. Context remains caller provenance, no permission."
+    },
+    {
+      "path": "tests/test_terminal_children.py",
+      "area": "core_ui",
+      "sha256": "9f492237da10d39b3f91ce10c34783a7631f70d5f24d3242fe34b01fff0c7a89",
+      "lines": 100,
+      "review": "no_change",
+      "finding": "Full file reviewed: real fixture behavior, platform conditions, recovery assertions and owned resource cleanup."
+    },
+    {
+      "path": "tests/test_terminal_conpty.py",
+      "area": "core_ui",
+      "sha256": "e2b8bdcd649dd704e4e001db72575919daf981086542a528c5066e91a4f4565e",
+      "lines": 315,
+      "review": "no_change",
+      "finding": "Full file reviewed: real fixture behavior, platform conditions, recovery assertions and owned resource cleanup."
+    },
+    {
+      "path": "tests/test_terminal_interaction.py",
+      "area": "core_ui",
+      "sha256": "9e64fac95f3f7791054408148db49068a19d16b760a21437b9437a51a79fe7ed",
+      "lines": 85,
+      "review": "no_change",
+      "finding": "Full file reviewed: real fixture behavior, platform conditions, recovery assertions and owned resource cleanup."
+    },
+    {
+      "path": "tests/test_terminal_output.py",
+      "area": "core_ui",
+      "sha256": "6cd0636c913d1b7ec1366d94be623efe7b9b9d429a38ad674f56c8df0e908d97",
+      "lines": 89,
+      "review": "no_change",
+      "finding": "Full file reviewed: real fixture behavior, platform conditions, recovery assertions and owned resource cleanup."
+    },
+    {
+      "path": "tests/test_terminal_pty.py",
+      "area": "core_ui",
+      "sha256": "ffaf276b7072efa48174ec088a0f29e98e556287f88d262d5bbe6066a7aa4fce",
+      "lines": 84,
+      "review": "no_change",
+      "finding": "Full file reviewed: real fixture behavior, platform conditions, recovery assertions and owned resource cleanup."
+    },
+    {
+      "path": "tests/test_transfer_admin.py",
+      "area": "network_security",
+      "sha256": "1071e9b263dfe13e3a8a1031bb377ac705ed77ba91011edba4f56139be3669bd",
+      "lines": 134,
+      "review": "no_change",
+      "finding": "Full transfer administration tests reviewed: pagination, explicit area, uncertain publication preservation and read-only legacy inventory covered."
+    },
+    {
+      "path": "tests/test_uploads.py",
+      "area": "core_ui",
+      "sha256": "373875d1b7a9374e42cc66d1443c995d3788c460c3a7be17b51d6781425401bb",
+      "lines": 491,
+      "review": "no_change",
+      "finding": "Reviewed streaming/resume, directory identity, exact publication state, crash and response-loss recovery. Unsupported Windows publication remains explicit."
+    },
+    {
+      "path": "tests/test_uploads_windows.py",
+      "area": "network_security",
+      "sha256": "00c73863ce8736b410569ff28cedd719f29ea2290cad16a4c51694d66dea8dd3",
+      "lines": 196,
+      "review": "no_change",
+      "finding": "Full Windows upload tests reviewed: pinned parent/source identity and uncertain publication faults exercised on Windows CI only."
+    },
+    {
+      "path": "tests/test_verify_tunnel_pipe.py",
+      "area": "release_runtime",
+      "sha256": "84f42f4eedf44ea693b2bf63f0b3d4e9f253459d2a7cc2708879b81843d07337",
+      "lines": 48,
+      "review": "no_change",
+      "finding": "Reviewed full platform/pipe error fixtures and reason assertions."
+    },
+    {
+      "path": "tests/test_watch_status.py",
+      "area": "release_runtime",
+      "sha256": "cc93c8a43885803a9c1b3d8b38abf724261044c03d68198515b67e524d9b8ece",
+      "lines": 36,
+      "review": "no_change",
+      "finding": "Untrusted records do not expose raw contents; failed atomic write retains prior snapshot."
+    },
+    {
+      "path": "tests/test_windows_test_shards.py",
+      "area": "network_security",
+      "sha256": "fe149cabd3ff79cf153cf33630de01c2739166ed81bd6092a6af4870dcdf17bb",
+      "lines": 179,
+      "review": "no_change",
+      "finding": "Full sharding tests reviewed: actual pytest/xdist execution completeness, skipped collection, corruption rejection and required workflow dependencies asserted."
+    },
+    {
+      "path": "tests/test_workspace_ui.py",
+      "area": "core_ui",
+      "sha256": "01f579ecf0a9b5d76b671aae591f34ff5f7eed4616c0035fd16adff7bc1fdfea",
+      "lines": 138,
+      "review": "no_change",
+      "finding": "Full file reviewed: real fixture behavior, platform conditions, recovery assertions and owned resource cleanup."
+    },
+    {
+      "path": "tests/workspace_ui_state.cjs",
+      "area": "core_ui",
+      "sha256": "ffa59aedded9c9f08f1d540d71ba3f3c7d066160da947f69732b1cc0903230d3",
+      "lines": 298,
+      "review": "changed",
+      "finding": "Actual packaged UI script accepts current native and legacy results, displays Blob image, and rejects mismatched operation/device/tool or malformed/tampered media. Reviewed integration delta: nine browser action scopes now appear in the setup summary and matching cases; no overlap with media handling."
+    }
+  ]
+}

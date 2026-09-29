@@ -19,7 +19,7 @@ sessionは不要です。
 次を使用できます。
 
 通常は `gui_native_observe(..., compact=true)` で、操作可能な要素の
-`role`、`label`、`identifier`、有効状態だけを受け取れます。内蔵ヘルパーが
+`role`、`label`、`identifier`、有効状態、`actions`、取得できる座標範囲を受け取れます。内蔵ヘルパーが
 幅優先で対象を探索するため、先頭の長いリストが上限に達してもツールバーなどを
 見つけやすくなります。値やツリー構造が必要な場合は `compact=false` で
 再観測します。探索は最大128要素で、`truncated=true` の場合は全要素を
@@ -45,16 +45,44 @@ sessionは不要です。
   書き込み可能なAXValueを置換し、同じ要素の値を読み戻します。ファイル保存の確認ではありません。
 - `gui_native_press(session_id, app, window_id, observation_id, element_ref)`:
   `pressable` と表示された要素へAXPressを1回実行します。
+- `gui_native_action(..., observation_id, element_ref, action)`:
+  その要素の `actions` に表示された操作を1回実行します。増減、確定、取消、メニュー表示、
+  アプリが公開したページ単位のスクロールに対応します。未観測の操作名は使いません。
+  操作直前に対象のプロセス・ウィンドウ・要素・識別属性・値を再確認します。
+  `action_accepted=true` は AX の受領を示し、効果の確認には再観測が必要です。
+
+`gui_native_observe(..., include_image=true)` は、同じウィンドウの画像も MCP の
+image block として返します。macOS 14 以降と既存の Screen Recording 権限が必要で、
+このツールは権限ダイアログを開きません。AX のプロセス・座標範囲・タイトルに一致する
+ScreenCaptureKit のウィンドウが一意である場合だけ、そのウィンドウを撮影します。
+撮影後も対象を再確認し、曖昧、移動済み、撮影不能の場合は `visual_unavailable` に理由を
+示して AX 観測を返します。全画面や別ウィンドウの撮影への切替は行いません。
+
+画像はカーソルとウィンドウ外の影を除く JPEG で、長辺 1,600 pixel、2 MiB 以下です。
+`visual` には観測 ID、capture ID、選択した window ID、実際の capture window ID、
+画像の幅・高さ・縮尺を返します。`bounds` はグローバル左上原点の point、画像は
+ウィンドウ左上原点の pixel です。AX と画像は順番に取得するため、同一瞬間の状態や
+元の Retina 画素の完全一致を保証しません。
 
 操作後は再観測します。最後に `gui_native_close(session_id)` でsessionを終了します。
 macOSのAccessibility権限とmanifest検証済みのnative helperが必要です。
 `AXWindows` が空のアプリでは、同じプロセスの `AXFocusedWindow` と
 `AXMainWindow` にあるウィンドウを補助的に列挙します。
-この経路は座標クリック、スクリーンショット、キー送信、Windows UI Automationを
+この経路は座標クリック、グローバルなスクロール／キー送信、Windows UI Automationを
 提供しません。アプリの前面化を代替手段として実行しませんが、アプリ側の動作で
 フォーカスやウィンドウが変わることはあります。
 `capabilities.gui=false` だけで別登録の `gui_native_*` の可否を判断せず、
 稼働中のツール一覧、helper、権限、対象アプリを個別に確認してください。
+
+ネイティブ画像と副操作の実機確認には、既存の両 OS 権限を持つ GUI ホストで次を実行します。
+一時的なテストアプリの赤／青ウィンドウを作り、赤い方だけの画像と stepper の 0→1 を
+検証して終了します。ユーザーの文書は開きません。通常の CI では明示的な opt-in がないため
+この実機テストだけを skip し、ヘルパー実コードと通信・所有者・再実行拒否のテストを実行します。
+
+```sh
+ANYWHERE_NATIVE_GUI_ACCEPTANCE=1 uv run --locked pytest -q \
+  tests/test_native_gui_helper.py::test_live_exact_window_image_and_secondary_action
+```
 
 ## 隔離ブラウザの役割・ラベル操作
 
@@ -62,16 +90,22 @@ macOSのAccessibility権限とmanifest検証済みのnative helperが必要で�
 `semantic_tree`、HTMLフォーム要素の `form_controls` と `snapshot_id` を返します。
 `form_controls` は非表示でない入力・選択・ボタンについて、`<label>` の対応、
 `aria-label`、`aria-labelledby`、プレースホルダーなどを別の項目に整理します。
-この一覧はメイン文書を対象とし、iframe や shadow DOM 内の要素はまだ列挙しません。
-各要素の `box` は表示領域を基準にした CSS pixel 単位で、`in_viewport` は
+初回はメイン文書を観測し、最大32件の子フレームを `frames` に列挙します。
+観測済みの `frame_id` を指定すると、そのフレームの本文・ラベル・役割ツリーを取得し、
+同じフレームの新しい `snapshot_id` で操作できます。別フレームの観測 ID や
+切り離されたフレームを拒否します。フォーム一覧と役割・ラベルによる操作は
+open shadow root 内も対象にします。closed shadow root は対象外です。
+各要素の `box` は選択フレームの表示領域を基準にした CSS pixel 単位で、`in_viewport` は
 その枠が表示領域と交差するかを示します。重なりや操作可能性の保証ではありません。
 ラベルの改行や連続空白は読みやすい空白に整え、入力値はこの一覧に含めません。
 正確なアクセシブル名は `semantic_tree` も参照してください。表示用の本文と
 ツリーでは改行コードと余分な空行を正規化します。
 
 `browser_observe(..., include_image=true)` は同じ隔離タブの表示領域を
-最大1MiBの JPEG 画像として追加します。画像は CSS pixel の大きさで撮り、
-`form_controls` の `box` と見比べられます。MCP では画像 item として配送し、
+最大1MiBの JPEG 画像として追加します。画像はタブ全体の表示領域を CSS pixel の
+大きさで撮ります。`frame_id` を指定した場合も画像はタブ全体、`form_controls` の
+`box` は選択フレーム内の座標なので、同じ座標として扱いません。
+MCP では画像 item として配送し、
 テキスト結果には画像のバイト数・ダイジェストだけを記載します。DOM観測と
 画像取得は順番に実行されるため同一時刻の状態とは限りません。画像の座標を
 入力に使う API はまだありません。
@@ -86,6 +120,32 @@ macOSのAccessibility権限とmanifest検証済みのnative helperが必要で�
 処理結果が不明なら同じタブを再観測し、確認前にクリックを繰り返しません。
 この経路は新しい一時ブラウザを所有するもので、利用者が開いているタブの
 操作やCodex専用 `cua_repl` の実行環境には接続しません。
+
+### 追加タブとページのダイアログ
+
+`browser_tabs(session_id)` は所有する一時セッション内のタブ ID と保留中の
+ページダイアログを列挙します。`browser_tab_open(session_id)` は同じ Cookie を共有する
+空のタブを1件作ります。ページが開いたポップアップも自動的に ID が付いて列挙されます。
+別セッションとは Cookie を共有せず、既存ブラウザやプロファイルには接続しません。
+前面タブという指定はなく、操作には正確な `session_id` と `tab_id` が必要です。
+タブは1セッション最大8件で、超過ポップアップを閉じ、`rejected_popups` に記録します。
+`browser_tab_close` は指定タブだけを終了し、最後のタブならセッションも解放します。
+`browser_close` はそのセッション全体を終了します。終了はページの未保存状態を破棄します。
+
+`alert`、`confirm`、`prompt`、`beforeunload` をページが出した場合、自動承認・
+自動回答を行いません。`browser_dialogs(session_id, tab_id)` は `dialog_id`、型、
+本文、既定値、状態を返します。本文と既定値は各4096文字までの信頼できないページデータです。
+`browser_dialog_handle(..., dialog_id, action="accept" または "dismiss")` で明示的に回答します。
+`prompt_text` は観測した prompt を accept する場合だけ指定できます。
+
+ダイアログが操作中に開いて操作完了を確認できなければ結果は不明として記録し、
+観測・一覧・回答が操作ロックで停止し続けないようにします。ポップアップの
+ダイアログが元のタブも止める場合、元のタブの観測は `tabs` から正確な回答先を示します。保留中の観測は `state="dialog_open"` と
+ダイアログ情報を返し、使用可能な `snapshot_id` は発行しません。入力・クリックを
+再送せず、ダイアログを確認して回答したあと、返された新しい観測で変化を確認します。
+応答が失われたダイアログ ID は再回答できません。再観測でモーダルが閉じたと確認できても
+`last_dialog_response.outcome="unconfirmed"` は残し、承認結果を推定しません。
+詳細と実ブラウザ検証範囲は [BROWSER-TABS-DIALOGS.md](BROWSER-TABS-DIALOGS.md) を参照してください。
 
 `browser_source` は現在の DOM の outerHTML を最大32768文字返します。
 HTTP の元レスポンスとは限らず、指定した CSS 要素は一意でなければなりません。

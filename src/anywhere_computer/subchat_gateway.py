@@ -29,6 +29,7 @@ from .subchat_mcp import (
     capability_report,
     direct_gateway_catalog,
     public_submission_data,
+    send_worker_status,
 )
 from .subchat_state import (
     SubchatAccountMismatch,
@@ -584,9 +585,10 @@ class LazySubchatGateway:
             saved = await asyncio.to_thread(self._saved_status, grant_id,
                                             request.operation_id, target.operation_id,
                                             queue_watch)
+            core = gateway.cores.get(grant_id) if gateway is not None else None
+            sending = core.sends.get(target.operation_id) if core is not None else None
+            saved.data['send_worker'] = send_worker_status(sending)
             if saved.data.get("state") == "prepared" and gateway is not None:
-                core = gateway.cores.get(grant_id)
-                sending = core.sends.get(target.operation_id) if core is not None else None
                 if (core is not None and sending is not None and sending.done()
                         and not sending.cancelled() and sending.exception() is not None):
                     # Preserve the live error when it is still available.
@@ -748,6 +750,7 @@ class LazySubchatGateway:
                                "error_code": "preparation_failed", "dispatched": False,
                                "reason": failure_reason})
         data = public_submission_data(result)
+        data["send_worker"] = send_worker_status(None)
         data["queue_revision"] = queue_revision
         if progress is not None:
             data["http_progress"] = progress

@@ -56,9 +56,17 @@ Object.defineProperty(navigator.clipboard,'writeText',
  {configurable:true,value:async()=>{window.osWrites++}});
 Object.defineProperty(navigator.clipboard,'write',
  {configurable:true,value:async()=>{window.osWrites++}});
+window.fixtureDraftText=()=>{
+ const editor=document.querySelector('[role=textbox]');
+ const blocks=[...editor.childNodes];
+ // Serialize native paragraph boundaries as text; innerText inserts an extra
+ // layout newline between P elements, outside this fixture's message contract.
+ return blocks.length && blocks.every(node=>node.nodeType===1 && node.tagName==='P')
+   ? blocks.map(node=>node.innerText).join('\\n') : editor.innerText;
+};
 send.onclick=()=>{
  window.sends++;
- window.sentText=document.querySelector('[role=textbox]').innerText;
+ window.sentText=window.fixtureDraftText();
  history.pushState({},'', '/c/11111111-2222-3333-4444-555555555555');
  document.querySelector('main').innerHTML+='<div data-turn-key="user">'+
  '<div data-user-message-bubble="true">rendered</div>'+

@@ -613,13 +613,17 @@ def _canonical_executable(pid: int) -> str:
     return os.path.normcase(os.path.abspath(psutil.Process(pid).exe()))
 
 
+def _invalid_json_constant(value: str) -> None:
+    raise ValueError("Non-finite JSON constant")
+
+
 def _validate_json(payload: bytes, maximum: int) -> None:
     if not 1 <= len(payload) <= maximum:
         raise OwnerPipeProtocolError(f"Owner pipe JSON must contain 1–{maximum} bytes")
     try:
         decoded = payload.decode("utf-8", errors="strict")
-        parsed = json.loads(decoded)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        parsed = json.loads(decoded, parse_constant=_invalid_json_constant)
+    except (ValueError, RecursionError) as error:
         raise OwnerPipeProtocolError("Owner pipe payload must be strict UTF-8 JSON") from error
     if not isinstance(parsed, dict):
         raise OwnerPipeProtocolError("Owner pipe payload must be a JSON object")

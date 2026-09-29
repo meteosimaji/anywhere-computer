@@ -369,7 +369,8 @@ class SaveRunner:
 
     def _read_spool(self, save_id: str, record: dict[str, object]) -> bytes:
         descriptor = os.open(self._spool_path(save_id),
-                             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                             | getattr(os, "O_NONBLOCK", 0))
         with os.fdopen(descriptor, "rb") as source:
             metadata = os.fstat(source.fileno())
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 16 * 1024 * 1024:

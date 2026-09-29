@@ -8,7 +8,8 @@
    結果の `checked_at` と `state` は今回の観測であり、モデルがツールを実行できる保証ではない。
 3. `devices_tools {"device_id":"…"}` で指定端末へ接続し、現在許可されているツールとschemaを取得する。
 4. `devices_call {"device_id":"…","tool":"computer_status","arguments":{}}` で実行する。
-   応答の `data.device_id` が宛先、`data.result` が対象ツールの結果。外側のoperation_id/stateを保持する。
+   応答の `data.device_id` が宛先、`data.tool` が対象ツール名、`data.result` が対象ツールの結果。
+   外側のoperation_id/stateを保持する。
 
 通常の `files_read` などのツールは引き続きローカルを対象とする。暗黙の選択変更はない。
 端末名ではなく登録時に発行した固定IDを使う。登録解除・再登録では新しいIDになる。
@@ -18,7 +19,9 @@ SSH端末は既存のOpenSSH aliasと厳格なホスト鍵検査、HTTP端末は
 ローカルstdioに加え、HTTP入口もこれらのツールを公開する。HTTPでは対応する
 明示的なtool grantが必要。新規設定のallには含まれるが、read-only/filesには追加しない。
 既存の全件接続は`http-add-tools --scope devices_list --scope devices_probe --scope devices_tools --scope devices_call`
-で更新し、クライアントのカタログも更新する。制限付き・失効した認可は拡張しない。
+で停止中のHTTP設定を更新する。端末ルーティングの追加には新しい同意が必要であり、
+既存grantは拡張しない。再承認後にクライアントのカタログも更新する。
+制限付き・失効した認可は拡張しない。
 共通エンジン構成ではshared_agent_directoryの登録を共有し、それ以外ではHTTPのstate-dirを使う。
 `devices_` / `connection_setup_` / `__`で始まる内部・転送用ツールは転送先一覧から除外し、実行も拒否する。
 汎用のdevices_callは書込み・コード実行を含み得るため、破壊的・外部操作を伴うツールとして宣言する。
@@ -47,6 +50,14 @@ HTTP入口では外側の認可ごとに転送操作IDを分離する。転送�
 隔離する仕組みではなく、devices_callは対象側で許可された操作全体へのアクセスを含む。
 
 ## 検証と限界
+
+GUI・ブラウザ・メディアなどの画像と音声は、既知の結果 `content` に含まれる場合に
+MCP の `ImageContent` / `AudioContent` として返す。JSONのテキスト部分は MIME、
+バイト数、SHA-256 の要約にし、同じ Base64 を重複してモデルへ渡さない。
+HTTP／SSH の中継では型付き媒体と要約の完全一致を検証してから復元する。
+媒体が欠けた、改変された、形式や上限が合わない場合、処理の再送は行わず、
+元の操作 ID を同じ端末で照会する。入口と転送元をこの修正版に更新する必要がある。
+プロトコル試験での型付き受信は、受信モデルが画像を理解した・音を聞いた証拠ではない。
 
 Windows VMも別の操作先として扱う。ゲスト内にAnywhere Computerを配置し、ゲストの
 SSHまたは認証付きHTTP接続を登録する。Macの`local`をWindowsと見なすことはできない。

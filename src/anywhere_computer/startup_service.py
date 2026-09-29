@@ -59,7 +59,8 @@ def _read_file(path: Path) -> bytes | None:
     if path.is_symlink():
         raise ValueError("Startup files must not be symlinks")
     try:
-        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                             | getattr(os, "O_NONBLOCK", 0))
     except FileNotFoundError:
         return None
     with os.fdopen(descriptor, "rb") as source:

@@ -1,8 +1,10 @@
 """Real bounded media decoding and typed MCP projection."""
 
+import asyncio
 import json
 import shutil
 import subprocess
+import sys
 
 import pytest
 from mcp.types import AudioContent, CallToolResult, ImageContent
@@ -11,6 +13,45 @@ from anywhere_computer.mcp_results import normalize_tool_result
 from anywhere_computer.mcp_server import _reply_result
 from anywhere_computer.media import MediaAudioClip, MediaVideoFrames, audio_clip, video_frames
 from anywhere_computer.models import Reply
+
+
+@pytest.mark.parametrize('interruption', ['cancel', 'timeout'])
+async def test_interrupted_decoder_reaps_its_child(monkeypatch, interruption):
+    from anywhere_computer import media
+
+    started = asyncio.Event()
+    children = []
+    spawn = asyncio.create_subprocess_exec
+
+    async def stalled_decoder(*arguments, **options):
+        child = await spawn(sys.executable, '-c', 'import time; time.sleep(60)', **options)
+        children.append(child)
+        started.set()
+        return child
+
+    monkeypatch.setattr(media.shutil, 'which', lambda name: sys.executable)
+    monkeypatch.setattr(media.asyncio, 'create_subprocess_exec', stalled_decoder)
+    if interruption == 'timeout':
+        monkeypatch.setattr(media, '_DECODER_TIMEOUT', .01)
+    task = asyncio.create_task(media._decode([]))
+    try:
+        await asyncio.wait_for(started.wait(), 10)
+        if interruption == 'cancel':
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        else:
+            with pytest.raises(ValueError, match='decoding exceeded'):
+                await asyncio.wait_for(task, 10)
+        assert children[0].returncode is not None
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        for child in children:
+            if child.returncode is None:
+                child.kill()
+            await child.wait()
 
 
 @pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="Optional FFmpeg not installed")

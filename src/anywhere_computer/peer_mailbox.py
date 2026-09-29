@@ -104,6 +104,9 @@ class PeerMailbox:
         try:
             self.connection.execute("PRAGMA journal_mode=WAL")
             with self.connection:
+                # sqlite3 does not begin a transaction for DDL. Serialize the
+                # entire migration and roll back partial schema changes on error.
+                self.connection.execute("BEGIN IMMEDIATE")
                 self.connection.execute(
                     "CREATE TABLE IF NOT EXISTS peers ("
                     "peer_id TEXT PRIMARY KEY, owner TEXT NOT NULL, account TEXT NOT NULL, "

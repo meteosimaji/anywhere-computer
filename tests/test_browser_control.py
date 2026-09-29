@@ -1031,3 +1031,120 @@ async def test_semantic_click_waits_for_observed_target_after_rerender(local_pag
         assert clicked["text"].count("clicked") == 1
     finally:
         await control.close()
+
+
+async def test_frame_scope_is_owned_observed_and_invalidated_on_same_url_reload():
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="frame-owner")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        page = control.entries[ids["session_id"]].page
+        parent = ('<title>Parent</title><button>Save</button>'
+                  '<iframe name="editor" src="http://child.test/form"></iframe>'
+                  '<iframe name="second" src="http://child.test/form"></iframe>')
+        child = ('<title>Child</title><label>Name<input id="entry"></label>'
+                 '<button onclick="document.querySelector(\'p\').textContent='
+                 'document.querySelector(\'input\').value">Save</button><p>unchanged</p>')
+
+        async def serve(route):
+            await route.fulfill(content_type="text/html", body=(
+                parent if route.request.url.startswith("http://parent.test") else child
+            ))
+
+        await page.route("http://**/*", serve)
+        await control.navigate(BrowserNavigate(**ids, url="http://parent.test/"),
+                               owner="frame-owner")
+        for name in ("editor", "second"):
+            await page.frame_locator(f'iframe[name="{name}"]').locator("p").wait_for()
+        main = await control.observe(BrowserObserve(**ids), owner="frame-owner")
+        frame_id = next(row["frame_id"] for row in main["frames"] if row["name"] == "editor")
+        scoped = {**ids, "frame_id": frame_id}
+        with pytest.raises(ValueError, match="stale"):
+            await control.click(BrowserClick(**scoped, role="button", name="Save",
+                                snapshot_id=main["snapshot_id"]), owner="frame-owner")
+        observed = await control.observe(BrowserObserve(**scoped), owner="frame-owner")
+        assert observed["title"] == "Child"
+        assert observed["frame_id"] == frame_id
+        assert observed["form_controls"][0]["label"] == "Name"
+        with pytest.raises(ValueError, match="unavailable"):
+            await control.observe(BrowserObserve(**scoped), owner="another-owner")
+        filled = await control.fill(BrowserFill(**scoped, label="Name", value="frame-specific",
+                                    snapshot_id=observed["snapshot_id"]), owner="frame-owner")
+        assert filled["value_verified"] is True
+        clicked = await control.click(BrowserClick(**scoped, role="button", name="Save",
+                                      snapshot_id=filled["snapshot_id"]), owner="frame-owner")
+        assert "frame-specific" in clicked["text"]
+        assert await page.frame(name="second").locator("p").inner_text() == "unchanged"
+        source = await control.source(BrowserSource(**scoped, selector="p"), owner="frame-owner")
+        assert source["html"] == "<p>frame-specific</p>"
+        assert (await control.research(BrowserResearch(**scoped),
+                                      owner="frame-owner"))["title"] == "Child"
+        await page.frame(name="editor").goto("http://child.test/form")
+        with pytest.raises(ValueError, match="stale"):
+            await control.click(BrowserClick(**scoped, role="button", name="Save",
+                                snapshot_id=clicked["snapshot_id"]), owner="frame-owner")
+        assert await page.frame(name="editor").locator("p").inner_text() == "unchanged"
+        await page.locator('iframe[name="editor"]').evaluate("element => element.remove()")
+        with pytest.raises(ValueError, match="frame unavailable"):
+            await control.observe(BrowserObserve(**scoped), owner="frame-owner")
+    finally:
+        await control.close()
+
+
+async def test_shadow_labels_match_semantic_actions_and_frame_images_keep_tab_coordinates():
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="shadow-owner")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        page = control.entries[ids["session_id"]].page
+        await page.set_content('<div id="host"></div>')
+        await page.evaluate("""() => {
+            const root = document.querySelector('#host').attachShadow({mode: 'open'});
+            root.innerHTML = '<span id="label">Shadow name</span>'
+                + '<input aria-labelledby="label"><button>Save shadow</button>';
+            root.querySelector('button').onclick = () => {
+                document.body.dataset.saved = root.querySelector('input').value;
+            };
+        }""")
+        observed = await control.observe(BrowserObserve(**ids), owner="shadow-owner")
+        controls = observed["form_controls"]
+        assert any(row["label"] == "Shadow name" and row["in_shadow_dom"] for row in controls)
+        filled = await control.fill(BrowserFill(**ids, label="Shadow name", value="visible",
+                                    snapshot_id=observed["snapshot_id"]), owner="shadow-owner")
+        assert filled["value_verified"] is True
+        await control.click(BrowserClick(**ids, role="button", name="Save shadow",
+                            snapshot_id=filled["snapshot_id"]), owner="shadow-owner")
+        assert await page.evaluate("document.body.dataset.saved") == "visible"
+        await page.evaluate("""() => {
+            const frame = document.createElement('iframe');
+            frame.srcdoc = '<label>Frame label<input></label>';
+            document.body.append(frame);
+        }""")
+        await page.frames[1].locator("input").wait_for()
+        main = await control.observe(BrowserObserve(**ids), owner="shadow-owner")
+        child = await control.observe(BrowserObserve(
+            **ids, frame_id=main["frames"][0]["frame_id"], include_image=True,
+        ), owner="shadow-owner")
+        assert child["form_controls"][0]["label"] == "Frame label"
+        assert child["visual"]["scope"] == "tab_viewport"
+        assert child["form_control_coordinate_space"] == "frame_viewport_css_pixels"
+        assert base64.b64decode(child["content"][0]["data"]).startswith(b"\xff\xd8")
+    finally:
+        await control.close()
+
+
+async def test_snapshot_rejects_main_reload_even_when_url_is_unchanged(local_page):
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="reload-owner")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        observed = await control.navigate(BrowserNavigate(**ids, url=local_page),
+                                          owner="reload-owner")
+        page = control.entries[ids["session_id"]].page
+        await page.reload()
+        with pytest.raises(ValueError, match="stale"):
+            await control.fill(BrowserFill(**ids, role="textbox", value="must not be entered",
+                               snapshot_id=observed["snapshot_id"]), owner="reload-owner")
+        assert await page.locator("#entry").input_value() == ""
+    finally:
+        await control.close()

@@ -576,18 +576,30 @@ async def test_literal_search_pagination(engine, tmp_path):
 async def test_registry_schemas_validation_and_duplicate_guard(engine):
     from anywhere_computer.models import Empty
 
-    assert len(engine.tools) == 94
+    assert len(engine.tools) == 100
     document_edit = engine.tools["documents_edit_paragraph"]
     assert document_edit.destructive and not document_edit.read_only
     capture = engine.tools["audio_capture"]
     assert not capture.destructive and not capture.open_world and not capture.read_only
     assert not engine.tools["browser_open"].open_world
+    for name in ("browser_tabs", "browser_dialogs"):
+        tool = engine.tools[name]
+        assert tool.read_only and not tool.destructive and tool.open_world
+    dialog = engine.tools["browser_dialog_handle"]
+    assert dialog.destructive and dialog.open_world and not dialog.read_only
+    assert dialog.schema.model_json_schema()["required"] == [
+        "session_id", "tab_id", "dialog_id", "action",
+    ]
+    assert engine.tools["browser_tab_open"].schema.model_json_schema()["required"] == ["session_id"]
+    assert engine.tools["browser_tab_close"].destructive
     plugin_close = engine.tools["codex_plugin_session_close"]
     assert not plugin_close.destructive and not plugin_close.open_world
     press = engine.tools["gui_native_press"]
     assert press.destructive and press.open_world and not press.read_only
     press_target = engine.tools["gui_native_press_target"]
     assert press_target.destructive and press_target.open_world and not press_target.read_only
+    action = engine.tools["gui_native_action"]
+    assert action.destructive and action.open_world and not action.read_only
     for name, tool in engine.tools.items():
         assert name == tool.name
         assert tool.schema.model_json_schema()["additionalProperties"] is False

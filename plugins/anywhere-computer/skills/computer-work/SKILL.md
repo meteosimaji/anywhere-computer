@@ -43,6 +43,12 @@ require a fresh observation; never guess an element reference. Use compact=false
 when the full AX tree is needed. Verify the effect with another observation and
 close the native session when finished. Existing grants need the new tool scopes
 before these actions appear to an HTTP client.
+Use include_image=true when the selected window's appearance matters. This returns
+an image only when its identity can be matched and revalidated; ambiguous windows
+are refused. The AX tree and image are sequential observations, not one atomic
+capture. gui_native_action can invoke an exact action listed on an observed
+element, including supported menu, increment, confirm and scroll actions. Supply
+the current observation_id and element_id; do not infer an unlisted action.
 
 For an isolated web page, call browser_observe or browser_navigate first. Its
 bounded semantic_tree names accessible roles and labels, form_controls lists
@@ -57,6 +63,24 @@ A stale snapshot or
 multiple matching elements is rejected before input. Observe again after each
 action and after an uncertain result. The isolated browser has no existing
 user profile or tab; it is separate from native GUI and Codex Computer Use.
+
+Use browser_tabs to inspect tabs owned by the selected session. browser_tab_open
+shares that session's isolated cookies; select the returned tab_id explicitly for
+further observation and input. Use browser_dialogs to inspect a pending JavaScript
+dialog and browser_dialog_handle with its exact dialog_id and an explicit decision.
+Never automatically accept an alert, confirmation or prompt. A dialog receipt
+does not verify the following page state. Close owned tabs or the session when
+finished. A closing session still owns its resources: inspect cleanup progress
+and do not open replacement sessions to evade an unfinished cleanup.
+
+The observation lists up to 32 child frames. Select its observed frame_id, call
+browser_observe for that frame, and use the returned snapshot_id with the same
+frame_id for actions, source or research. A main-document or sibling-frame snapshot
+does not authorize input in another frame. Detached frames and same-URL reloads
+invalidate previous observations. Open shadow-root labels are included; closed
+shadow roots are not exposed. Form-control boxes are in the selected frame's CSS
+viewport coordinates. An optional image always shows the whole tab viewport;
+do not mix those two coordinate spaces.
 
 Use browser_research for bounded source-claimed publisher/date and visible links,
 browser_source for current DOM HTML, and browser_network for redacted response and

@@ -340,7 +340,8 @@ class SubchatSubmissions:
         'prepare_request', 'prepare_response', 'prepare_failed',
         'branch_request', 'branch_response', 'branch_stale', 'branch_failed',
         'dispatch_claimed', 'generation_request', 'generation_response',
-        'generation_failed', 'sse_candidate', 'history_receipt',
+        'generation_failed', 'draft_rejected', 'send_worker_failed',
+        'sse_candidate', 'history_receipt',
         'history_final', 'history_unknown', 'history_failed',
     })
     _HTTP_EVENT_LIMIT = 64

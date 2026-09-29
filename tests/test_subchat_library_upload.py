@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import os
 import sqlite3
 import subprocess
 import sys
@@ -34,7 +35,8 @@ async def test_library_mcp_annotations_describe_upload_and_saved_reconciliation(
 
     catalog = {tool['name']: tool['annotations'] for tool in await _catalog()}
     assert catalog['subchat_upload_library'] == {
-        'readOnlyHint': False, 'destructiveHint': True, 'openWorldHint': False}
+        'readOnlyHint': False, 'destructiveHint': False, 'openWorldHint': True}
+    assert catalog['subchat_upload_library_batch'] == catalog['subchat_upload_library']
     assert catalog['subchat_upload_status'] == {
         'readOnlyHint': False, 'destructiveHint': False, 'openWorldHint': False}
 
@@ -447,3 +449,35 @@ def test_status_cli_network_timeout_keeps_same_id_unverified(monkeypatch, capsys
         'automatic_retry': False,
         'next_action': 'Inspect this same operation ID later',
     }
+
+
+@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='POSIX named pipe')
+@pytest.mark.parametrize('reader', ['upload', 'save'])
+def test_file_only_readers_reject_fifo_without_waiting_for_writer(tmp_path, reader):
+    pipe = tmp_path / 'source.txt'
+    os.mkfifo(pipe, 0o600)
+    script = """
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+from anywhere_computer.subchat_library_upload import _read_source
+from anywhere_computer.subchat_device_save import SaveRunner
+path = Path(sys.argv[1])
+try:
+    if sys.argv[2] == 'upload':
+        _read_source(path)
+    else:
+        SaveRunner._read_spool(SimpleNamespace(_spool_path=lambda _: path), 'unused', {})
+except ValueError as error:
+    assert str(error) in {
+        'Upload source must be a nonempty regular file of at most 20 MiB',
+        'Save spool is invalid',
+    }, str(error)
+else:
+    raise AssertionError('A FIFO was accepted as file contents')
+"""
+    # No writer opens the real FIFO. A timeout detects blocking before fstat.
+    result = subprocess.run([sys.executable, '-I', '-c', script, str(pipe), reader],
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert pipe.exists()

@@ -92,7 +92,8 @@ def _read_source(path: Path) -> tuple[str, bytes, str]:
             parent = parent / component
             directories.append((parent, os.open(
                 component, directory_flags, dir_fd=directories[-1][1])))
-        descriptor = os.open(path.name, os.O_RDONLY | nofollow_flag,
+        descriptor = os.open(path.name, os.O_RDONLY | nofollow_flag
+                             | getattr(os, 'O_NONBLOCK', 0),
                              dir_fd=directories[-1][1])
         try:
             metadata = os.fstat(descriptor)
@@ -429,7 +430,30 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument('--prepare', action='store_true',
                         help='approve exact local bytes and ID for a later MCP upload; '
                              'do not open a browser or upload')
+    parser.add_argument('--batch', type=Path, metavar='MANIFEST',
+                        help='prepare a JSON files array of absolute paths and operation IDs; '
+                             'requires --prepare, up to ten files and 40 MiB total')
     args = parser.parse_args(argv)
+    if args.batch is not None:
+        if not args.prepare or args.file is not None or args.operation_id or args.status:
+            parser.error('--batch requires --prepare without a file, --operation-id or --status')
+        from .subchat_library_batch import LibraryBatch, prepare_local_batch
+
+        with args.batch.open('rb') as stream:
+            manifest = stream.read(65_537)
+        if len(manifest) > 65_536:
+            parser.error('batch manifest exceeds 64 KiB')
+        try:
+            batch = LibraryBatch.model_validate_json(manifest)
+            prepared = prepare_local_batch(batch)
+        except ValueError as error:
+            parser.error(str(error))
+        print(json.dumps({'outcome': 'prepared', 'provider_dispatched': False,
+                          'files': [{'operation_id': item.operation_id,
+                                     'path': item.mcp_source_path,
+                                     'prepared_until': item.mcp_prepared_until}
+                                    for item in prepared]}))
+        return
     if args.status is not None:
         if args.file is not None or args.operation_id is not None or args.prepare:
             parser.error('--status cannot be combined with a file, --operation-id or --prepare')

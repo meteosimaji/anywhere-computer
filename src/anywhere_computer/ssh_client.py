@@ -7,6 +7,7 @@ import uuid
 from pydantic import JsonValue
 
 from .connection import WIRE_LIMIT
+from .mcp_media import restore_reply_media
 from .mcp_server import OPERATION_CAPABILITY, OPERATION_META, PROTOCOL_VERSION
 from .models import Reply, Request
 from .ssh_transport import ssh_command
@@ -106,7 +107,7 @@ class SSHBackend:
             "name": request.tool, "arguments": request.arguments,
             "_meta": {OPERATION_META: request.operation_id},
         })
-        reply = Reply.model_validate(result.get("structuredContent"))
+        reply = restore_reply_media(request.tool, result)
         if reply.operation_id != request.operation_id:
             raise ConnectionError("SSH operation ID mismatch")
         return reply

@@ -77,7 +77,10 @@ async def test_auto_queue_desktop_notice_only_for_opted_in_winning_epoch(
     calls = []
 
     class NoticeProcess:
+        returncode = None
+
         async def wait(self):
+            self.returncode = 0
             return 0
 
     async def launch(*args, **kwargs):
@@ -123,6 +126,82 @@ async def test_auto_queue_desktop_notice_only_for_opted_in_winning_epoch(
         assert status is not None and status['notify_desktop'] is True
     finally:
         reopened.close()
+
+
+@pytest.mark.parametrize('stop', ['cancel', 'timeout'])
+@pytest.mark.parametrize('cleanup', ['exit', 'exit_race', 'stalled'])
+async def test_desktop_notice_cleanup_preserves_saved_event_and_cancellation(
+    tmp_path, monkeypatch, caplog, stop, cleanup,
+):
+    entered = asyncio.Event()
+    exited = asyncio.Event()
+
+    class NoticeProcess:
+        returncode = None
+        kill_calls = 0
+        wait_calls = 0
+
+        async def wait(self):
+            self.wait_calls += 1
+            entered.set()
+            await exited.wait()
+            return self.returncode
+
+        def kill(self):
+            self.kill_calls += 1
+            if cleanup != 'stalled':
+                self.returncode = -9
+                exited.set()
+            if cleanup == 'exit_race':
+                raise ProcessLookupError('private subprocess detail')
+
+    process = NoticeProcess()
+
+    async def launch(*args, **kwargs):
+        assert args[:2] == ('osascript', '-e')
+        return process
+
+    monkeypatch.setattr(subchat_mcp, 'QUEUE_WATCH_INTERVAL', .001)
+    monkeypatch.setattr(subchat_mcp, '_DESKTOP_NOTICE_TIMEOUT', 1 if stop == 'cancel' else .01)
+    monkeypatch.setattr(subchat_mcp, '_DESKTOP_NOTICE_CLEANUP_TIMEOUT', .01)
+    monkeypatch.setattr(subchat_mcp.asyncio, 'create_subprocess_exec', launch)
+    ledger = Ledger(tmp_path)
+    # Build the real host's state before simulating macOS notification support.
+    monkeypatch.setattr(subchat_mcp.sys, 'platform', 'darwin')
+    store = SubchatSubmissions(ledger.connection)
+    provider = Provider()
+    service = Subchats(store, provider)
+    controller = session(service, owner='alice')
+    parent, child = 'a' * 32, 'b' * 32
+    try:
+        await service.send(parent, 'first', 'model', 'effort', owner='alice')
+        service.queue(child, parent, 'second', owner='alice')
+        armed = await controller.execute(Request(operation_id='c' * 32,
+            tool='subchat_queue_auto', arguments={'operation_id': child, 'notify_desktop': True}))
+        assert armed.state == 'completed'
+        provider.parent_ready = True
+        await _until(lambda: store.get(child, owner='alice').state == 'submitted')
+        provider.child_ready = True
+        await asyncio.wait_for(entered.wait(), 2)
+        worker = controller.auto_queue_tasks[child]
+        if stop == 'cancel':
+            await asyncio.wait_for(controller.close(), 2)
+            assert worker.cancelled()
+        else:
+            await asyncio.wait_for(asyncio.shield(worker), 2)
+            assert not worker.cancelled()
+        assert process.kill_calls == 1
+        assert process.wait_calls == 2
+        assert store.get(child, owner='alice').state == 'completed'
+        assert store.auto_queue_status(child, owner='alice')['event'] == 'completed'
+        assert len(store.auto_queue_events(owner='alice')) == 1
+        assert provider.sends == [parent, child]
+        assert 'private subprocess detail' not in caplog.text
+        assert ('Subchat notification cleanup failed' in caplog.text) == (cleanup == 'stalled')
+    finally:
+        exited.set()
+        await controller.close()
+        ledger.close()
 
 
 async def test_https_gateway_auto_queue_keeps_worker_after_call_and_checks_scope(

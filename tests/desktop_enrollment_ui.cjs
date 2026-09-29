@@ -76,5 +76,11 @@ const snapshot = phase => ({schema_version:1,authorization:{phase},registration:
   assert.equal(get('enrollment-retry_save').disabled,true);
   response.authorization.can_retry_save=true; await click('progress');
   assert.equal(get('enrollment-retry_save').disabled,false);
+  for (const phase of ['constructor', 'toString', '__proto__']) {
+    response=snapshot(phase); await click('progress');
+    assert.equal(get('enrollment-state').textContent,'現在の登録状態は未確認です');
+    assert.equal(get('enrollment-code-area').hidden,true);
+    assert.equal(get('enrollment-retry_save').disabled,true);
+  }
   console.log('Enrollment UI state and recovery checks passed');
 })().catch(error => {console.error(error);process.exitCode=1;});

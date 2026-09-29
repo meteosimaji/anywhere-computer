@@ -463,7 +463,7 @@ async def run(profile: Path | None, state: Path, *, mcp: bool = False, http_read
                         'Credential refresh is unavailable for this session. '
                     )
                     instructions = (
-                        'Ordinary Chat recovery and explicit deletion over HTTPX. A configured '
+                        'Ordinary Chat recovery and explicit deletion over HTTPX. '
                         'The selected browser login profile is read at startup. '
                         + refresh_instructions +
                         'No browser fallback, independent login or generation is implemented. '

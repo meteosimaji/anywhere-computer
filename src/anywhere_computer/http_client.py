@@ -25,6 +25,7 @@ from .authorization import validate_authorization_url
 from .client_tokens import ClientAuthorizationRequired, ClientTokens
 from .connection import WIRE_LIMIT
 from .http_mcp import AUTH_REJECTED_HEADER, SESSION_EXPIRED_HEADER
+from .mcp_media import restore_reply_media
 from .mcp_server import (
     OPERATION_CAPABILITY,
     OPERATION_META,
@@ -361,7 +362,7 @@ class HTTPBackend:
                             "_meta": {OPERATION_META: request.operation_id},
                         },
                     )
-                    reply = Reply.model_validate(result.get("structuredContent"))
+                    reply = restore_reply_media(request.tool, result)
                     if reply.operation_id != request.operation_id:
                         raise ConnectionError("Remote operation ID mismatch")
                     return reply

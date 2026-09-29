@@ -155,8 +155,11 @@ async def verify(codex: Path, cwd: Path, installed: bool) -> dict:
                         assert len(images) == 1 and images[0].data == PNG
                         assert PNG not in result.content[0].text
                         assert PNG not in json.dumps(result.structuredContent)
-                        saved = recovered.structuredContent["data"]["data"]["content"]
-                        assert any(item.get("data") == PNG for item in saved)
+                        recovered_images = [item for item in recovered.content
+                                            if isinstance(item, ImageContent)]
+                        assert len(recovered_images) == 1 and recovered_images[0].data == PNG
+                        assert PNG not in json.dumps(recovered.structuredContent)
+                        assert PNG not in recovered.content[0].text
                         before = check_trace(trace)["sent_methods"].count("mcpServer/tool/call")
                         stale = await client.call_tool("codex_plugin_call", {
                             **arguments, "arguments": {}, "catalog_sha256": "0" * 64,

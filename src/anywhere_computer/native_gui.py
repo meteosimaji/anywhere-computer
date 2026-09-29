@@ -8,13 +8,17 @@ import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, JsonValue, TypeAdapter, model_validator
 
 from .models import Contract
+from .plugin_images import IMAGE_LIMIT, bounded_image
 
 LIMIT = 64 * 1024
+VISUAL_LIMIT = 4 * 1024 * 1024
 TIMEOUT = 5.0
+CLEANUP_TIMEOUT = 1.0
 JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 HELPER_ERROR_CODES = frozenset({
     "accessibility_required", "ambiguous_process", "ax_error", "deadline_exceeded",
@@ -26,6 +30,9 @@ HELPER_ERROR_CODES = frozenset({
     "target_ambiguous", "target_changed", "target_not_found", "value_changed",
     "value_not_comparable", "value_not_settable",
     "window_limit_exceeded", "window_unavailable",
+    "action_not_observed", "action_target_changed", "screen_recording_required",
+    "screen_capture_unavailable", "capture_window_unavailable", "capture_window_ambiguous",
+    "capture_target_changed", "capture_failed", "image_too_large",
 })
 # The helper reports these only before AXPress/AXValue is attempted. A valid
 # response leaves its JSON-lines stream usable, even when the target is stale.
@@ -37,6 +44,9 @@ NONFATAL_HELPER_ERRORS = frozenset({
     "target_ambiguous", "target_changed", "target_not_found", "tree_limit_exceeded",
     "value_changed", "value_not_comparable",
     "value_not_settable", "window_limit_exceeded", "window_unavailable",
+    "action_not_observed", "action_target_changed", "screen_recording_required",
+    "screen_capture_unavailable", "capture_window_unavailable", "capture_window_ambiguous",
+    "capture_target_changed", "capture_failed", "image_too_large",
 })
 AX_DIAGNOSTIC_STAGES = frozenset({
     "attribute_type", "copy_actions", "copy_attribute", "copy_attribute_values",
@@ -84,6 +94,10 @@ class NativeWindow(NativeSession, NativeApp):
 
 
 class NativeObserve(NativeWindow):
+    include_image: bool = Field(default=False, exclude=True, description=(
+        "Include a bounded screenshot of this exact window with pixel dimensions and global "
+        "point bounds. Requires existing Screen Recording permission; does not request it."
+    ))
     compact: bool = Field(default=False, exclude=True, description=(
         "Return only actionable role/label/identifier targets, omitting the full AX tree. "
         "Use the full tree when a target is missing or ambiguous."
@@ -97,6 +111,14 @@ class NativePress(NativeWindow):
 
 class NativeSetValue(NativePress):
     value: str = Field(max_length=8000)
+
+
+class NativeAction(NativePress):
+    action: Literal[
+        "AXPress", "AXIncrement", "AXDecrement", "AXConfirm", "AXCancel", "AXShowMenu",
+        "AXPick", "AXScrollUpByPage", "AXScrollDownByPage", "AXScrollLeftByPage",
+        "AXScrollRightByPage",
+    ] = Field(description="Copy one action from the selected element's observed actions list.")
 
 
 class NativeTarget(NativeWindow):
@@ -128,6 +150,10 @@ class NativeGUIInputRefused(ValueError):
     pass
 
 
+class NativeGUICleanupUnconfirmed(RuntimeError):
+    pass
+
+
 def installed_helper() -> Path:
     if sys.platform != "darwin":
         raise ValueError("Native GUI requires macOS")
@@ -150,6 +176,7 @@ class NativeEntry:
     owner: str | None
     process: asyncio.subprocess.Process
     observations: set[str] = field(default_factory=set)
+    closing: bool = False
 
 
 class NativeGUI:
@@ -164,28 +191,42 @@ class NativeGUI:
             raise ValueError("Native GUI session unavailable")
         return entry
 
-    async def _retire(self, session_id: str) -> None:
-        entry = self.entries.pop(session_id, None)
+    async def _retire(self, session_id: str) -> bool:
+        entry = self.entries.get(session_id)
         if entry is None:
-            return
+            return True
+        # Keep ownership and resource accounting until exit is confirmed, including
+        # when this waiter is cancelled. A later owner close can finish cleanup.
+        entry.closing = True
+        entry.observations.clear()
         process = entry.process
-        if process.returncode is None:
-            try:
-                process.terminate()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(process.wait(), 1)
-            except TimeoutError:
+        try:
+            if process.returncode is None:
                 try:
-                    process.kill()
+                    process.terminate()
                 except ProcessLookupError:
                     pass
-                await process.wait()
+                try:
+                    await asyncio.wait_for(process.wait(), CLEANUP_TIMEOUT)
+                except TimeoutError:
+                    try:
+                        process.kill()
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        await asyncio.wait_for(process.wait(), CLEANUP_TIMEOUT)
+                    except TimeoutError:
+                        return False
+            return True
+        finally:
+            if process.returncode is not None:
+                self.entries.pop(session_id, None)
 
     async def _call(self, session_id: str, request: dict[str, JsonValue], *,
                     mutation: bool = False) -> dict[str, JsonValue]:
         entry = self.entries[session_id]
+        if entry.closing:
+            raise ValueError("Native GUI session is closing; close the same session again")
         process = entry.process
         request_id = uuid.uuid4().hex
         wire = json.dumps({**request, "id": request_id}, ensure_ascii=False).encode() + b"\n"
@@ -202,7 +243,8 @@ class NativeGUI:
                 process.stdin.write(wire)
                 await process.stdin.drain()
                 raw = await process.stdout.readline()
-                if not raw.endswith(b"\n") or len(raw) > LIMIT:
+                response_limit = VISUAL_LIMIT if request.get("include_image") is True else LIMIT
+                if not raw.endswith(b"\n") or len(raw) > response_limit:
                     raise ValueError("Invalid native GUI response framing")
                 try:
                     response = JSON_OBJECT.validate_json(raw)
@@ -219,7 +261,8 @@ class NativeGUI:
                                     and request.get("method") != "windows"
                                     and "result" not in response
                                     and code in NONFATAL_HELPER_ERRORS)
-                    if keep_session and (code in {"value_changed", "target_changed"} or (
+                    if keep_session and (code in {
+                            "value_changed", "target_changed", "action_target_changed"} or (
                             code == "press_target_changed"
                             and request.get("method") in {"press", "press_target"})):
                         raise NativeGUIInputRefused(
@@ -251,7 +294,7 @@ class NativeGUI:
             helper = installed_helper()
             process = await asyncio.create_subprocess_exec(
                 str(helper), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL, limit=LIMIT,
+                stderr=asyncio.subprocess.DEVNULL, limit=VISUAL_LIMIT,
             )
             session_id = uuid.uuid4().hex
             self.entries[session_id] = NativeEntry(owner, process)
@@ -264,7 +307,29 @@ class NativeGUI:
             result = await self._call(args.session_id, {
                 "method": "observe_targets" if args.compact else "observe",
                 "app": args.app, "window_id": args.window_id,
+                **({"include_image": True} if args.include_image else {}),
             })
+            visual_error = result.get("visual_unavailable")
+            if (args.include_image and "content" not in result
+                    and (not isinstance(visual_error, str)
+                         or visual_error not in HELPER_ERROR_CODES)):
+                await self._retire(args.session_id)
+                raise ValueError("Invalid native observation")
+            if args.include_image and "content" in result:
+                content = result["content"]
+                try:
+                    if not isinstance(content, list) or len(content) != 1:
+                        raise ValueError("Invalid native observation")
+                    item = content[0]
+                    if not isinstance(item, dict) or item.get("type") != "image":
+                        raise ValueError("Invalid native observation")
+                    picture, _ = bounded_image(item, IMAGE_LIMIT)
+                    if picture is None:
+                        raise ValueError("Invalid native observation")
+                    result["content"] = [picture]
+                except ValueError:
+                    await self._retire(args.session_id)
+                    raise ValueError("Invalid native observation") from None
             observation = result.get("observation_id")
             if not isinstance(observation, str) or not observation or len(observation) > 128:
                 await self._retire(args.session_id)
@@ -299,6 +364,13 @@ class NativeGUI:
                 "observation_id": args.observation_id, "element_ref": args.element_ref,
             }, owner=owner)
 
+    async def action(self, args: NativeAction, *, owner: str | None) -> dict[str, JsonValue]:
+        return await self._apply(args.session_id, args.observation_id, {
+            "method": "action", "app": args.app, "window_id": args.window_id,
+            "observation_id": args.observation_id, "element_ref": args.element_ref,
+            "action": args.action,
+        }, owner=owner)
+
     async def set_value_target(self, args: NativeSetValueTarget, *, owner: str | None
                                ) -> dict[str, JsonValue]:
         return await self._apply(args.session_id, args.observation_id, {
@@ -321,10 +393,14 @@ class NativeGUI:
     async def stop(self, args: NativeSession, *, owner: str | None) -> dict[str, JsonValue]:
         async with self.lock:
             self._entry(args.session_id, owner)
-            await self._retire(args.session_id)
+            if not await self._retire(args.session_id):
+                raise NativeGUICleanupUnconfirmed(
+                    "Native GUI helper cleanup is unconfirmed; close the same session again")
             return {"state": "closed"}
 
     async def close(self) -> None:
         async with self.lock:
             for session_id in list(self.entries):
                 await self._retire(session_id)
+            if self.entries:
+                raise NativeGUICleanupUnconfirmed("Native GUI helper cleanup is unconfirmed")

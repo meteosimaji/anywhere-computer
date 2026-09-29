@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import re
 import sys
 import time
@@ -59,6 +60,7 @@ from .subchat_state import (
 
 _QUEUE_AUTHORIZATION_GRANT: ContextVar[str | None] = ContextVar(
     'subchat_queue_authorization_grant', default=None)
+logger = logging.getLogger(__name__)
 
 
 def _mutation_digest(request: Request, grant_id: str | None = None) -> str:
@@ -166,6 +168,8 @@ class ChatImage(OperationId):
 
 QUEUE_WATCH_INTERVAL = 5.0
 SEND_ACK_TIMEOUT = 2.0
+_DESKTOP_NOTICE_TIMEOUT = 5.0
+_DESKTOP_NOTICE_CLEANUP_TIMEOUT = 1.0
 WAIT_POLL_INTERVAL_MS = 10_000
 READ_ONLY_TOOLS = frozenset({
     'subchat_capabilities', 'subchat_activity', 'subchat_catalog', 'subchat_list',
@@ -526,6 +530,26 @@ class SubchatSession(MCPSession):
         self.queue_watch_deadlines.clear()
 
 
+def send_worker_status(task: asyncio.Task[SubchatSubmission] | None) -> dict[str, JsonValue]:
+    """Session-local diagnostics, independent of provider receipt state."""
+    if task is None:
+        return {'state': 'not_owned'}
+    if not task.done():
+        return {'state': 'running'}
+    if task.cancelled():
+        return {'state': 'cancelled'}
+    error = task.exception()
+    if error is None:
+        return {'state': 'finished'}
+    cause = error.__cause__ or error
+    reason = ('timeout' if isinstance(cause, TimeoutError) else
+              'connection_failed' if isinstance(cause, ConnectionError) else
+              'preflight_failed' if isinstance(error, SubchatPreflightFailed) else
+              'dispatch_outcome_unknown' if isinstance(error, SubchatOutcomeUnknown) else
+              'worker_failed')
+    return {'state': 'failed', 'reason': reason}
+
+
 def session(service: Subchats, *,
             observe_catalog: Callable[[str | None], Awaitable[dict[str, object]]] | None = None,
             observe_http_catalog: Callable[[], Awaitable[dict[str, object]]] | None = None,
@@ -540,6 +564,9 @@ def session(service: Subchats, *,
     browser_lock = asyncio.Lock()
     recoveries: dict[str, asyncio.Task[SubchatSubmission]] = {}
     sends: dict[str, asyncio.Task[SubchatSubmission]] = {}
+
+    def send_worker(operation_id: str) -> dict[str, JsonValue]:
+        return send_worker_status(sends.get(operation_id))
 
     def save_preparation_failure(operation_id: str, error: BaseException) -> None:
         if isinstance(error, SubchatSelectionError):
@@ -632,10 +659,25 @@ def session(service: Subchats, *,
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL)
                 try:
-                    await asyncio.wait_for(process.wait(), timeout=5)
-                except TimeoutError:
-                    process.kill()
-                    await process.wait()
+                    await asyncio.wait_for(process.wait(), timeout=_DESKTOP_NOTICE_TIMEOUT)
+                finally:
+                    # Controller shutdown can cancel the notification after the
+                    # durable event is saved. Reap only this owned child and keep
+                    # cancellation propagating, even if process cleanup stalls.
+                    if process.returncode is None:
+                        try:
+                            process.kill()
+                        except ProcessLookupError:
+                            pass
+                        except OSError as error:
+                            logger.warning('Subchat notification stop failed error_type=%s',
+                                           type(error).__name__)
+                        try:
+                            await asyncio.wait_for(process.wait(),
+                                                   timeout=_DESKTOP_NOTICE_CLEANUP_TIMEOUT)
+                        except (OSError, TimeoutError) as error:
+                            logger.warning('Subchat notification cleanup failed error_type=%s',
+                                           type(error).__name__)
             except (OSError, TimeoutError):
                 pass  # The durable event is still available.
 
@@ -1152,6 +1194,8 @@ def session(service: Subchats, *,
                                                    + watches_active + auto_active
                                                    + int(generation_active),
                                    'active_sends': sends_active,
+                                   'failed_send_workers': sum(
+                                       send_worker(key)['state'] == 'failed' for key in sends),
                                    'active_recoveries': recoveries_active,
                                    'active_queue_watches': watches_active,
                                    'active_auto_queues': auto_active,
@@ -1322,6 +1366,7 @@ def session(service: Subchats, *,
                 raise_failed_preparation(wait.operation_id, result)
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={**public_submission_data(result),
+                                   'send_worker': send_worker(result.operation_id),
                                    'elapsed_ms': max(0, round((time.monotonic() - started) * 1000)),
                                    'suggested_poll_interval_ms': (
                                        WAIT_POLL_INTERVAL_MS if result.state in {
@@ -1444,6 +1489,16 @@ def session(service: Subchats, *,
                                 error = done.exception() if not done.cancelled() else None
                                 if error is not None:
                                     save_preparation_failure(submission_id, error)
+                                    current = service.store.get(submission_id, owner=owner)
+                                    if current.state == 'sending':
+                                        # No provider text, exception message or traceback.
+                                        logger.warning('Subchat send worker failed '
+                                                       'operation_id=%s reason=%s',
+                                                       submission_id,
+                                                       send_worker(submission_id)['reason'])
+                                        if current.http_selection is not None:
+                                            service.store.record_http_event(
+                                                submission_id, 'send_worker_failed', owner=owner)
                                 if error is None or isinstance(error, SubchatPreparationFailed):
                                     sends.pop(submission_id)
 
@@ -1455,6 +1510,7 @@ def session(service: Subchats, *,
                         current = service.store.get(submission_id, owner=owner)
                         return Reply(operation_id=request.operation_id, state='running',
                                      data={**public_submission_data(current),
+                                           'send_worker': send_worker(submission_id),
                                            'submission_operation_id': submission_id,
                                            'send_in_progress': True})
             elif request.tool in {'subchat_recover', 'subchat_observe', 'subchat_status'}:
@@ -1476,6 +1532,7 @@ def session(service: Subchats, *,
                 raise ValueError('Unknown subchat tool')
             return Reply(operation_id=request.operation_id, state='completed',
                          data={**public_submission_data(result),
+                               'send_worker': send_worker(result.operation_id),
                                'queue_revision': service.store.queue_revision(
                                    result.operation_id, owner=owner),
                                **({'http_progress': progress} if (progress :=
@@ -1626,6 +1683,7 @@ def session(service: Subchats, *,
                          error='Submission unconfirmed. Use subchat_observe with '
                                'submission_operation_id; do not send again with a new ID.',
                          data={**saved_receipt(error.operation_id),
+                               'send_worker': send_worker(error.operation_id),
                                'automatic_retry': False})
         except SubchatDeletionUnknown:
             return Reply(operation_id=request.operation_id, state='unknown',

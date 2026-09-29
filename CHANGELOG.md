@@ -3,6 +3,77 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b34 / Plugin 0.2.0-beta.34 — development prerelease (2026-09-30)
+
+- Describe browser tab closure as website interaction on the OAuth consent
+  page, including when it is the only requested browser capability.
+- Run browser-control and browser-backed Subchat integration tests before
+  parallel macOS/Linux workers after CI observed a cookie-test failure and a
+  stalled manual-send test in concurrent workers. Preserve full test coverage
+  and bounded diagnostics.
+
+## 0.2.0b33 / Plugin 0.2.0-beta.33 — development prerelease (2026-09-30)
+
+- Add observed frame IDs, frame-scoped semantic browser actions and open-shadow
+  form labels. Reject stale observations after same-URL reloads and frame detach.
+  Keep frame element coordinates distinct from the full-tab screenshot.
+- Manage owned tabs and popups in one isolated browser context, and expose
+  observed JavaScript dialogs with explicit accept/dismiss responses. Modal
+  dialogs in another owned tab wake blocked observations without autoaccepting.
+- Include exact-window native macOS screenshots alongside Accessibility data,
+  and permit explicitly observed secondary AX actions such as increment and
+  page scroll. Revalidate the target before input and require reobservation
+  to confirm its effect. Existing Screen Recording permission is required.
+- Restore validated MCP images and audio across HTTP, SSH and device routing.
+  Match MIME, byte count and SHA-256, preserve original operation recovery, and
+  keep media bytes out of the JSON text presented to models.
+- Return rendered document previews as native MCP images, including through
+  device routing and operation recovery. Check the image receipt in Workspace
+  before displaying it; direct consumers of the former `data_base64` field
+  must read the new image content.
+- Prepare up to ten Library attachments in one bounded browser session, with
+  immutable per-file request bindings, durable receipts, complete preflight
+  and no further dispatch after an uncertain upload. A real two-file, one-Chat
+  acceptance verified both contents and saved resource references.
+- Bound temporary history-tab cleanup and retry only the exact owned CDP
+  target when Playwright's existing close promise cannot resend the command.
+- Keep browser and native GUI ownership while shutdown is unconfirmed, so a
+  guarded engine update cannot discard a live input session. Close admitted
+  SSH file workers before their delegation stores close, and reject nonfinite
+  or overnested owner-pipe JSON as a protocol error.
+- Let an already-owned browser shutdown continue beyond the five-second caller
+  receipt deadline, with a bounded internal close attempt. This permits slow
+  Chrome shutdown to release capacity after an initially unknown receipt.
+- Expose late Subchat send-worker failures separately from provider receipts.
+  Classify a rejected draft as unsent only when interception and confirmed
+  closure of its owned page prove that no generation request escaped.
+  Retain a page-specific request guard if rejected-page cleanup is unconfirmed.
+- Preserve literal paragraph boundaries when inserting Subchat drafts, including
+  terminal newlines and decorated URLs. Compare exact text after the editor's
+  queued mutation processing; do not trim input or retry a rejected insertion.
+- Keep the rejected-page send guard when page cleanup is unconfirmed, bound
+  background browser shutdown, and recheck authorization after HTTP client
+  construction before issuing a delete request.
+- Show the same session-local send-worker diagnostics over local MCP and HTTPS.
+  Reap an owned desktop notification process on cancellation or timeout without
+  changing its durable queue event.
+- Reap media decoder processes when the caller is cancelled, as well as after
+  timeout. Keep actual media delivery and model perception as separate checks.
+- Separate desktop capability, resource, identity and device renderers. Display
+  browser/media/document-preview capabilities and describe helper manifest
+  verification accurately; retain cleanup blockers even when counts are absent.
+- Package the existing macOS system-audio helper in portable archives and
+  verify it after relocation. A permission check does not prove recording or
+  receiving-model audio perception.
+- Add a read-only measurement harness for one Chat versus parallel Subchats,
+  and document primary-source competitor comparisons and unverified gates.
+  No usage reduction or comparison win is claimed without measured evidence.
+- Reduce explicit credential state-test KDF cost while retaining real
+  production-work-factor tests. Separate Windows KDF and ACL measurements;
+  distribute remaining Windows tests across four VMs with two workers each,
+  and verify collected and finished test IDs before the existing required gate.
+  Actual CI stability, elapsed time and total VM time need separate measurement.
+
 ## 0.2.0b31 / Plugin 0.2.0-beta.31 — development prerelease (2026-09-28)
 
 - Stop waiting for ChatGPT's deferred resources after the document response

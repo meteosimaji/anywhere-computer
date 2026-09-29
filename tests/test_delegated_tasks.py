@@ -30,6 +30,106 @@ from anywhere_computer.remote_bridge import RemoteAgent
 from anywhere_computer.state import Ledger
 
 
+async def test_ssh_child_shutdown_drains_cancelled_observers_before_closing_stores(
+    tmp_path, unused_tcp_port, monkeypatch,
+):
+    from anywhere_computer import ssh_child
+    from anywhere_computer.http_service import _http_authority
+
+    tools = frozenset({'files_write', 'operations_get'})
+    config = await setup(tmp_path, unused_tcp_port, scopes=tools)
+    allowed = tmp_path / 'allowed'
+    allowed.mkdir()
+    child_id = uuid.uuid4().hex
+    delegation_directory = tmp_path / 'http-server' / 'delegated-tasks'
+    with _http_authority(tmp_path) as (_, authority):
+        redirect = next(iter(config.redirects))
+        code = authority.approve(
+            owner=config.owner, device=config.device, client=config.client,
+            redirect=redirect, resource=config.resource, tools=tools,
+            challenge=pkce_s256('v' * 43),
+        )
+        token = authority.exchange_code(
+            code=code, verifier='v' * 43, client=config.client,
+            redirect=redirect, resource=config.resource,
+        ).value
+        parent = authority.verify(token, resource=config.resource)
+        assert parent is not None
+        delegation = DelegatedTaskStore(delegation_directory, authority)
+        try:
+            bearer = delegation.issue(DelegatedTaskGrant(
+                owner=config.owner, child_id=child_id, parent_grant_id=parent.grant_id,
+                device_id='local', tools=tools, write_roots=(str(allowed.resolve()),),
+                expires_at=time.time() + 600,
+            ))
+        finally:
+            delegation.close()
+
+    entered, release = threading.Event(), threading.Event()
+    draining = asyncio.Event()
+    workers = []
+    request = Request(operation_id=uuid.uuid4().hex, tool='files_write', arguments={
+        'path': str(allowed / 'after-disconnect.txt'), 'text': 'write once',
+    })
+    writes = 0
+
+    def delayed_write(*args):
+        nonlocal writes
+        entered.set()
+        assert release.wait(10)
+        writes += 1
+        return delegated_write(*args)
+
+    original_close = AuthorizedDeviceMCP.close
+
+    async def close_backend(backend):
+        draining.set()
+        await original_close(backend)
+
+    async def disconnected_stdio(session, source, destination):
+        authenticated = await session.handle({
+            'jsonrpc': '2.0', 'id': 'auth', 'method': ssh_child.AUTH_METHOD,
+            'params': {'bearer': bearer},
+        })
+        assert authenticated['result']['authenticated'] is True
+        observer = asyncio.create_task(session.session.execute(request))
+        try:
+            assert await asyncio.to_thread(entered.wait, 5)
+            workers.extend(session.backend._delegated_file_tasks)
+        finally:
+            observer.cancel()
+            await asyncio.gather(observer, return_exceptions=True)
+
+    monkeypatch.setattr('anywhere_computer.authorized_http.delegated_write', delayed_write)
+    monkeypatch.setattr(AuthorizedDeviceMCP, 'close', close_backend)
+    monkeypatch.setattr(ssh_child, 'serve_stdio', disconnected_stdio)
+    runner = asyncio.create_task(ssh_child.run_ssh_child_mcp(tmp_path))
+    waiting = asyncio.create_task(draining.wait())
+    try:
+        done, _ = await asyncio.wait({runner, waiting}, timeout=5,
+                                    return_when=asyncio.FIRST_COMPLETED)
+        assert waiting in done, 'SSH child exited without draining its admitted file worker'
+        assert not runner.done()
+        release.set()
+        await asyncio.wait_for(runner, 5)
+        assert len(workers) == 1 and workers[0].done()
+        assert workers[0].result().state == 'completed'
+        assert (allowed / 'after-disconnect.txt').read_text() == 'write once'
+        assert writes == 1
+        # Reopen the durable receipt after all runner-owned stores were closed.
+        ledger = Ledger(delegation_directory / 'delegated-operations')
+        try:
+            internal_id = RemoteAgent.internal_id('delegated-child:' + child_id,
+                                                   request.operation_id)
+            assert ledger.get(internal_id).state == 'completed'
+        finally:
+            ledger.close()
+    finally:
+        release.set()
+        waiting.cancel()
+        await asyncio.gather(waiting, runner, *workers, return_exceptions=True)
+
+
 @pytest.mark.asyncio
 async def test_shared_delegated_files_use_selected_engine_limits(tmp_path):
     control = tmp_path / "control"

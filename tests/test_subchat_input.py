@@ -19,9 +19,11 @@ async def test_literal_draft_preserves_text_and_rejects_existing_content():
             page = await browser.new_page()
             await page.set_content('<form data-chatgpt-composer>'
                                    '<div data-composer-markdown role="textbox" '
-                                   'contenteditable="true"><p><br></p></div></form>')
+                                   'contenteditable="true"></div></form>')
             editor = page.get_by_role('textbox')
-            prompt = '日本語 🚀\n```python\nprint("<tag>", "*x*", "a_b")\n```\n\n- item'
+            # Native insertion stays literal. Provider-specific empty paragraph
+            # fillers and consecutive blank lines are checked separately below.
+            prompt = '日本語 🚀\n```python\nprint("<tag>", "*x*", "a_b")\n```\n- item'
 
             async def insert(text):
                 return await page.evaluate(
@@ -176,5 +178,135 @@ async def test_current_chat_message_ids_guard_followup_dispatch():
                 + 'data-message-id="user-b"></div>')''')
             assert await submit(['user-a', 'assistant-a']) is False
             assert await page.evaluate('window.sends') == 1
+        finally:
+            await browser.close()
+
+
+async def test_observed_paragraphs_preserve_exact_newlines_and_only_known_fillers():
+    playwright = pytest.importorskip('playwright.async_api')
+    source = (Path(__file__).parents[1] /
+              'src/anywhere_computer/subchat_browser/subchat_input.js').read_text(
+                  encoding='utf-8')
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content('''<main></main><form data-chatgpt-composer>
+              <div data-composer-markdown role="textbox" contenteditable="true"></div>
+              <button type="button" aria-label="Send"
+                onclick="window.sends=(window.sends||0)+1">Send</button></form>''')
+            editor = page.get_by_role('textbox')
+            empty = '<p data-empty-paragraph="true"><br class="ProseMirror-trailingBreak"></p>'
+            # These are observed editor shapes, independent of native browser
+            # innerText's extra paragraph spacing. No provider model turn runs.
+            cases = [
+                ('<p>alpha</p>', 'alpha', True),
+                ('<p>alpha</p>' + empty, 'alpha\n', True),
+                ('<p>alpha</p>' + empty * 2, 'alpha\n\n', True),
+                (empty + '<p>first  line</p>' + empty + '<p>last\tline</p>' + empty * 2,
+                 '\nfirst  line\n\nlast\tline\n\n', True),
+                ('<p>alpha</p><p>beta</p>', 'alpha\nbeta', True),
+                ('<p>alpha</p><p>beta</p>', 'alpha\n\nbeta', False),
+                ('<p>alpha<br>beta<br></p>', 'alpha\nbeta\n', True),
+                ('<p>alpha</p>' + empty, 'alpha', False),
+                ('<p>alpha</p>' + empty, 'alpha\n\n', False),
+                ('<p>alpha</p>' + empty.replace('true', 'false'), 'alpha\n', False),
+                ('<p>alpha</p>' + empty.replace('class=', 'aria-hidden="true" class='),
+                 'alpha\n', False),
+                ('<p>alpha</p>' + empty.replace('</p>', 'changed</p>'), 'alpha\n', False),
+                ('<p>alpha<br class="ProseMirror-trailingBreak"></p>', 'alpha', False),
+                ('<p>alpha<br><br class="ProseMirror-trailingBreak"></p>',
+                 'alpha\n\n', False),
+                ('<p aria-hidden="true">alpha</p>', 'alpha', False),
+                ('<p>alpha</p><div>beta</div>', 'alpha\nbeta', False),
+            ]
+            accepted = 0
+            for html, text, expected in cases:
+                await editor.evaluate('(element, html) => element.innerHTML=html', html)
+                assert await page.evaluate(
+                    source + '\ntext => submitSubchatDraft(document,location.href,text,[])',
+                    text) is expected, (html, text)
+                accepted += expected
+                assert await page.evaluate('window.sends || 0') == accepted
+        finally:
+            await browser.close()
+
+
+@pytest.mark.parametrize('interference', [
+    'edit', 'replace', 'remove', 'manual', 'throw', 'reject', 'no_mutation',
+])
+async def test_pending_literal_input_preserves_intervention_and_cleanup(interference):
+    playwright = pytest.importorskip('playwright.async_api')
+    source = (Path(__file__).parents[1] /
+              'src/anywhere_computer/subchat_browser/subchat_input.js').read_text(
+                  encoding='utf-8')
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        try:
+            page = await browser.new_page()
+            await page.set_content('''<main></main><form data-chatgpt-composer>
+              <div data-composer-markdown role="textbox" contenteditable="plaintext-only"></div>
+              <button type="button" aria-label="Send"
+                onclick="window.sends=(window.sends||0)+1">Send</button></form>''')
+            await page.get_by_role('textbox').click()
+            result = await page.evaluate(source + '''
+                async interference => {
+                  const editor = document.querySelector(subchatEditorSelector);
+                  const original = document.execCommand;
+                  let inputs = 0, activeListeners = 0;
+                  const add = window.addEventListener.bind(window);
+                  window.addEventListener = (name, listener, options) => {
+                    if (options?.signal) {
+                      activeListeners++;
+                      options.signal.addEventListener('abort', () => activeListeners--,
+                                                      {once:true});
+                    }
+                    return add(name, listener, options);
+                  };
+                  editor.addEventListener('input', () => {
+                    inputs++;
+                    queueMicrotask(() => {
+                      if (interference === 'edit') editor.textContent = 'human edit';
+                      if (interference === 'replace') editor.replaceWith(editor.cloneNode(true));
+                      if (interference === 'remove') editor.remove();
+                      if (interference === 'manual') editor.dispatchEvent(
+                        new KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+                    });
+                  }, {once:true});
+                  if (interference === 'throw') document.execCommand = () => {
+                    throw new Error('native input failure');
+                  };
+                  if (interference === 'reject') document.execCommand = () => false;
+                  if (interference === 'no_mutation') document.execCommand = () => true;
+                  try {
+                    const guard = await insertObservedSubchatDraft(document, 'send once');
+                    try {
+                      return {draft: guard.draft, intervened: guard.intervened, inputs,
+                        outcome: submitObservedSubchatDraft(
+                          document, guard, location.href, 'send once', [])};
+                    } finally { guard.stop(); }
+                  } catch(error) {
+                    return {error:error.message, inputs, activeListeners};
+                  } finally {
+                    document.execCommand = original;
+                    window.addEventListener = add;
+                    window.remainingListeners = activeListeners;
+                  }
+                }''', interference)
+            if interference == 'throw':
+                assert result == {'error': 'native input failure', 'inputs': 0,
+                                  'activeListeners': 0}
+            elif interference == 'manual':
+                assert result['inputs'] == 1
+                assert result['intervened'] is True
+                assert result['outcome'] == 'intervened'
+            else:
+                assert result['inputs'] == (0 if interference in {'reject', 'no_mutation'} else 1)
+                assert result['draft'] == {'state': 'draft_unconfirmed', 'input_dispatched': True}
+                assert result['outcome'] == (
+                    'submission_unconfirmed' if interference in {'remove', 'replace'}
+                    else 'draft_rejected')
+            assert await page.evaluate('window.sends || 0') == 0
+            assert await page.evaluate('window.remainingListeners') == 0
         finally:
             await browser.close()

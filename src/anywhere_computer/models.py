@@ -257,19 +257,45 @@ class SessionId(Contract):
     session_id: str
 
 
-class BrowserSession(Contract):
+class BrowserSessionId(Contract):
     session_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
+class BrowserSession(BrowserSessionId):
     tab_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
-class BrowserObserve(BrowserSession):
+class BrowserDialogHandle(BrowserSession):
+    dialog_id: str = Field(pattern=r"^[0-9a-f]{32}$", description=(
+        "Exact pending dialog ID returned by browser_dialogs or browser_observe."
+    ))
+    action: Literal["accept", "dismiss"]
+    prompt_text: str | None = Field(default=None, max_length=4096, description=(
+        "Optional response for accepting an observed prompt. Invalid for other dialog types."
+    ))
+
+    @model_validator(mode="after")
+    def validate_prompt_action(self) -> "BrowserDialogHandle":
+        if self.prompt_text is not None and self.action != "accept":
+            raise ValueError("prompt_text requires action=accept")
+        return self
+
+
+class BrowserFrameSession(BrowserSession):
+    frame_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$", description=(
+        "Optional child frame ID returned by browser_observe. Omit for the main document. "
+        "Observe that frame before acting; a snapshot from another frame is rejected."
+    ))
+
+
+class BrowserObserve(BrowserFrameSession):
     include_image: bool = Field(default=False, description=(
         "Include a bounded rendered viewport image alongside the accessible page observation. "
         "The image is returned as an MCP image item, not embedded in model text."
     ))
 
 
-class BrowserSource(BrowserSession):
+class BrowserSource(BrowserFrameSession):
     selector: str | None = Field(default=None, min_length=1, max_length=1024, description=(
         "Optional CSS selector to inspect one exact element instead of the document element."
     ))
@@ -285,7 +311,7 @@ class BrowserConsole(BrowserSession):
     limit: int = Field(default=50, ge=1, le=100)
 
 
-class BrowserResearch(BrowserSession):
+class BrowserResearch(BrowserFrameSession):
     link_limit: int = Field(default=20, ge=1, le=30)
 
 
@@ -296,36 +322,6 @@ class BrowserNavigate(BrowserSession):
 BrowserRole = Literal["button", "link", "textbox", "searchbox", "combobox", "checkbox",
                       "radio", "switch", "tab", "menuitem", "option", "spinbutton",
                       "listbox", "region", "grid"]
-
-
-class BrowserClick(BrowserSession):
-    selector: str | None = Field(default=None, min_length=1, max_length=1024)
-    role: BrowserRole | None = None
-    name: str | None = Field(default=None, min_length=1, max_length=512)
-    label: str | None = Field(default=None, min_length=1, max_length=512)
-    snapshot_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
-
-    @model_validator(mode="after")
-    def one_target(self) -> "BrowserClick":
-        if sum(value is not None for value in (self.selector, self.role, self.label)) != 1:
-            raise ValueError("Choose exactly one browser selector, role, or label")
-        if self.name is not None and self.role is None:
-            raise ValueError("Browser name requires a role")
-        if (self.role is not None or self.label is not None) and self.snapshot_id is None:
-            raise ValueError("Semantic browser actions require an observed snapshot_id")
-        return self
-
-
-class BrowserFill(BrowserClick):
-    value: str = Field(max_length=100000)
-
-
-class BrowserKey(BrowserClick):
-    key: str = Field(min_length=1, max_length=80, description=(
-        "Playwright key or chord, such as Enter, Tab, Escape, or ControlOrMeta+A. "
-        "The key is sent to exactly one visible target; use selector='body' for "
-        "a page-level key."
-    ))
 
 
 class BrowserTarget(Contract):
@@ -343,13 +339,36 @@ class BrowserTarget(Contract):
         return self
 
 
-class BrowserDrag(BrowserSession):
+class BrowserClick(BrowserFrameSession, BrowserTarget):
+    snapshot_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{32}$")
+
+    @model_validator(mode="after")
+    def require_observed_snapshot(self) -> "BrowserClick":
+        if (self.role is not None or self.label is not None or self.frame_id is not None
+                ) and self.snapshot_id is None:
+            raise ValueError("Semantic browser actions require an observed snapshot_id")
+        return self
+
+
+class BrowserFill(BrowserClick):
+    value: str = Field(max_length=100000)
+
+
+class BrowserKey(BrowserClick):
+    key: str = Field(min_length=1, max_length=80, description=(
+        "Playwright key or chord, such as Enter, Tab, Escape, or ControlOrMeta+A. "
+        "The key is sent to exactly one visible target; use selector='body' for "
+        "a page-level key."
+    ))
+
+
+class BrowserDrag(BrowserFrameSession):
     source: BrowserTarget
     target: BrowserTarget
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
-class BrowserHover(BrowserSession):
+class BrowserHover(BrowserFrameSession):
     target: BrowserTarget
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
 
@@ -376,13 +395,13 @@ class BrowserScroll(BrowserHover):
         return self
 
 
-class BrowserFileUpload(BrowserSession):
+class BrowserFileUpload(BrowserFrameSession):
     target: BrowserTarget
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     path: str = Field(min_length=1, max_length=4096)
 
 
-class BrowserDownload(BrowserSession):
+class BrowserDownload(BrowserFrameSession):
     target: BrowserTarget
     snapshot_id: str = Field(pattern=r"^[0-9a-f]{32}$")
     path: str = Field(min_length=1, max_length=4096)

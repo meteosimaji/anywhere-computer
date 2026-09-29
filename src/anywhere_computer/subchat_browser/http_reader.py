@@ -34,6 +34,9 @@ if TYPE_CHECKING:
     from ..subchat_http_session import ObservedHTTPSession
 
 logger = logging.getLogger(__name__)
+_PAGE_CLOSE_TIMEOUT = 5.0
+_PAGE_CLOSE_RETRY_TIMEOUT = 5.0
+_CDP_DETACH_TIMEOUT = 1.0
 
 
 async def bounded_httpx_body(response: HTTPXResponse, limit: int, error: str) -> bytes:
@@ -89,12 +92,63 @@ class ChatHTTPReader:
         self._pending_closes: set[asyncio.Task[None]] = set()
 
     async def _retry_page_close(self, page: Page) -> None:
+        """Retry only this owned Chromium target, not its shared context.
+
+        Playwright 1.58 marks a page as closing before sending Target.closeTarget.
+        A second page.close() only waits on the same close promise; it does not
+        send another browser command if Chrome acknowledged but did not close it.
+        """
+        session = None
+        closed = asyncio.Event()
+
+        def on_close(_: Page) -> None:
+            closed.set()
+
+        page.on('close', on_close)
         try:
-            await asyncio.wait_for(page.close(), timeout=5)
-        except Exception:
-            # The read has already completed. Report cleanup failure without
-            # turning a successful read or its original error into a close error.
-            logger.warning('Temporary Chat read tab could not be closed', exc_info=True)
+            async with asyncio.timeout(_PAGE_CLOSE_RETRY_TIMEOUT):
+                if page.is_closed():
+                    return
+                session = await page.context.new_cdp_session(page)
+                info = (await session.send('Target.getTargetInfo'))['targetInfo']
+                target_id = info.get('targetId')
+                if info.get('type') != 'page' or not isinstance(target_id, str) or not target_id:
+                    raise ValueError('Temporary Chat tab target could not be identified')
+                await session.send('Target.closeTarget', {'targetId': target_id})
+                # Chrome's acknowledgement alone is not evidence of closure.
+                if not page.is_closed():
+                    await closed.wait()
+        finally:
+            page.remove_listener('close', on_close)
+            # Closing the page also detaches its CDP sessions. A stalled target
+            # must not retain our extra session or create another unbounded wait.
+            if session is not None and not page.is_closed():
+                try:
+                    await asyncio.wait_for(session.detach(), timeout=_CDP_DETACH_TIMEOUT)
+                except Exception as error:
+                    logger.warning('Temporary Chat tab cleanup detach failed: error_type=%s',
+                                   type(error).__name__)
+
+    async def close_owned_page(self, page: Page) -> None:
+        """Bound cleanup of a caller-owned page; caller verifies is_closed()."""
+        if page.is_closed():
+            return
+        try:
+            await asyncio.wait_for(page.close(), timeout=_PAGE_CLOSE_TIMEOUT)
+            if page.is_closed():
+                return
+        except Exception as error:
+            if page.is_closed():
+                return
+            # Deliberately omit exception text, URLs, request headers and content.
+            logger.warning('Temporary Chat tab close requires retry: error_type=%s closed=%s',
+                           type(error).__name__, page.is_closed())
+        try:
+            await self._retry_page_close(page)
+        except Exception as error:
+            if not page.is_closed():
+                logger.warning('Temporary Chat read tab could not be closed: '
+                               'error_type=%s closed=%s', type(error).__name__, page.is_closed())
 
     def can_read_without_browser(self, context: BrowserContext, *, catalog: bool = False
                                  ) -> bool:
@@ -159,14 +213,13 @@ class ChatHTTPReader:
                 self._access_status = error.status
                 raise
             finally:
-                try:
-                    await asyncio.wait_for(page.close(), timeout=5)
-                except TimeoutError:
-                    # Retry in the background so a stalled tab close cannot replace
-                    # the read result or its original error.
-                    task = asyncio.create_task(self._retry_page_close(page))
-                    self._pending_closes.add(task)
-                    task.add_done_callback(self._pending_closes.discard)
+                # Wait for bounded cleanup before returning normal results. If
+                # the caller cancels, retain the task until that same bound; no
+                # close failure may replace the read result or original error.
+                task = asyncio.create_task(self.close_owned_page(page))
+                self._pending_closes.add(task)
+                task.add_done_callback(self._pending_closes.discard)
+                await asyncio.shield(task)
         self._check_account(expected_account)
         if self._request_factory is not None:
             request = await self._request_factory()
@@ -316,6 +369,12 @@ class ChatHTTPReader:
         else:
             assert context is not None
             request = context.request
+        # A concurrent read can reject access while the factory is awaiting.
+        # Recheck before any destructive request, just as _read does for GET.
+        if self._access_status is not None:
+            raise SubchatAccessError(self._access_status)
+        if not self._headers:
+            raise ValueError('Deletion needs an observed authenticated session')
         self._check_account(submission.provider_account_id)
         url = self._origin + '/backend-api/conversation/' + str(submission.conversation_id)
         headers = {**self._headers, 'content-type': 'application/json'}

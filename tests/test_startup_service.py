@@ -1,3 +1,4 @@
+import os
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -455,3 +456,29 @@ def test_local_management_removal_rejects_remote_receipt_under_lock(registration
     assert calls == ['install']
     assert native['snapshot'].running
     assert (directory / 'autostart.json').read_bytes() == original
+
+
+@pytest.mark.skipif(not hasattr(os, 'mkfifo'), reason='POSIX named pipe')
+def test_startup_record_fifo_is_rejected_without_waiting_for_writer(tmp_path):
+    import subprocess
+    import sys
+
+    pipe = tmp_path / 'autostart.json'
+    os.mkfifo(pipe, 0o600)
+    script = '''
+import sys
+from pathlib import Path
+from anywhere_computer.startup_service import _read_file
+try:
+    _read_file(Path(sys.argv[1]))
+except ValueError as error:
+    assert str(error) == "Startup files must be regular files"
+else:
+    raise AssertionError("A named pipe was accepted as a startup record")
+'''
+    # The child must reject the real FIFO without any writer opening it. The
+    # timeout only bounds a regression that blocks inside open() before fstat().
+    result = subprocess.run([sys.executable, '-I', '-c', script, str(pipe)],
+                            capture_output=True, text=True, timeout=5)
+    assert result.returncode == 0, result.stderr
+    assert pipe.exists()

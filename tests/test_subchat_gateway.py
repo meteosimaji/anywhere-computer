@@ -1674,6 +1674,8 @@ async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same
     monkeypatch.setattr(subchat_mcp, "SEND_ACK_TIMEOUT", .02)
     entered = asyncio.Event()
     finish = asyncio.Event()
+    retry_entered = asyncio.Event()
+    retry_finish = asyncio.Event()
     attempts = 0
 
     class Backend(BrowserFixture):
@@ -1684,6 +1686,8 @@ async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same
                 entered.set()
                 await finish.wait()
                 raise ValueError("Ordinary Chat composer contains a draft")
+            retry_entered.set()
+            await retry_finish.wait()
             return await super().prepare(submission)
 
     ledger = Ledger(tmp_path / "ledger")
@@ -1743,17 +1747,17 @@ async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same
         # Only this explicit same-ID send may attempt preparation again.
         monkeypatch.setattr(subchat_mcp, "SEND_ACK_TIMEOUT", .0001)
         retried = await gateway.execute("grant", send, scopes)
-        if retried.state == "running":
-            # A slow worker may reach the ACK deadline before the deterministic
-            # fixture reports its uncertain dispatch. Await that same task;
-            # the same-ID lookup below checks its durable outcome without replay.
-            sending = core.sends.get(operation_id)
-            if sending is not None:
-                try:
-                    await asyncio.wait_for(asyncio.shield(sending), timeout=5)
-                except SubchatOutcomeUnknown:
-                    pass
-            retried = await gateway.execute("grant", send, scopes)
+        assert retried.state == "running"
+        await asyncio.wait_for(retry_entered.wait(), timeout=5)
+        # The idle gateway closed the original controller. Await the new
+        # controller's task before checking the same-ID durable outcome.
+        retry_core = gateway._gateway.cores["grant"]
+        assert retry_core is not core
+        sending = retry_core.sends[operation_id]
+        retry_finish.set()
+        with pytest.raises(SubchatOutcomeUnknown):
+            await asyncio.wait_for(asyncio.shield(sending), timeout=5)
+        retried = await gateway.execute("grant", send, scopes)
         assert (retried.state == "unknown" or
                 (retried.state == "completed" and retried.data.get("state") == "sending")), retried
         assert attempts == 2 and backend.sends == 1
@@ -1763,6 +1767,7 @@ async def test_delayed_preparation_failure_survives_ack_and_allows_explicit_same
         assert backend.sends == 1
     finally:
         finish.set()
+        retry_finish.set()
         await gateway.close()
         ledger.close()
 

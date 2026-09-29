@@ -243,3 +243,61 @@ async def test_delete_receipt_survives_ledger_restart_without_http_replay(
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+async def test_delete_rechecks_access_invalidated_while_client_factory_waits():
+    import asyncio
+    from types import SimpleNamespace
+
+    from anywhere_computer.subchat import SubchatAccessError
+    from anywhere_computer.subchat_state import SubchatSubmission
+
+    patch_waiting = asyncio.Event()
+    release_patch = asyncio.Event()
+    factory_calls = 0
+    requests = []
+
+    class RequestContext:
+        async def get(self, url, **_kwargs):
+            requests.append(('GET', url))
+
+            async def dispose():
+                return None
+
+            return SimpleNamespace(status=401, headers={}, dispose=dispose)
+
+        async def patch(self, *_args, **_kwargs):
+            pytest.fail('A latched authentication failure must prevent PATCH')
+
+    request_context = RequestContext()
+
+    async def factory():
+        nonlocal factory_calls
+        factory_calls += 1
+        if factory_calls == 1:
+            patch_waiting.set()
+            await release_patch.wait()
+        return request_context
+
+    context = object()
+    reader = ChatHTTPReader(factory)
+    reader.bind_verified_account(context, ACCOUNT)
+    reader._headers = {'authorization': SECRET, 'chatgpt-account-id': ACCOUNT}
+    reader._catalog_url = 'https://chatgpt.com/backend-api/models'
+    saved = SubchatSubmission(operation_id=OP, prompt=PROMPT, model='model', effort='effort',
+                              state='completed', conversation_id=CHAT,
+                              provider_account_id=ACCOUNT)
+    patch = asyncio.create_task(reader.patch_delete(context, saved))
+    try:
+        await asyncio.wait_for(patch_waiting.wait(), timeout=1)
+        with pytest.raises(SubchatAccessError):
+            await reader.catalog(context)
+        release_patch.set()
+        with pytest.raises(SubchatAccessError):
+            await patch
+        assert requests == [('GET', 'https://chatgpt.com/backend-api/models')]
+        assert factory_calls == 2
+    finally:
+        release_patch.set()
+        patch.cancel()
+        await asyncio.gather(patch, return_exceptions=True)
