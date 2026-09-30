@@ -326,8 +326,9 @@ def _assertion(private, credential_id, challenge, *, origin="https://computer.ex
 
 
 async def _enroll(browser, passkeys, *, origin="https://computer.example",
-                  rp_id="computer.example", uv=True, synced=False):
-    ticket = passkeys.issue_local_ticket("owner-password")
+                  rp_id="computer.example", uv=True, synced=False, ticket=None):
+    if ticket is None:
+        ticket = passkeys.issue_local_ticket("owner-password")
     status, body, headers = await browser.owner_passkey(
         "GET", {}, b"", urlencode({"ticket": ticket})
     )
@@ -347,6 +348,142 @@ async def _enroll(browser, passkeys, *, origin="https://computer.example",
     }
     result = await browser.owner_passkey("POST", request_headers, form)
     return result, private, credential_id, ticket, request_headers, form
+
+
+async def _registration_waiter(browser, ticket):
+    status, body, headers = await browser.owner_passkey(
+        "GET", {}, b"", urlencode({"ticket": ticket}))
+    assert status == 200
+    import re
+    fields = dict(re.findall(rb"name=(request_id|csrf|ticket) value='([^']+)'", body))
+    return (
+        {"origin": browser.origin, "content-type": "application/x-www-form-urlencoded",
+         "cookie": headers["Set-Cookie"].split(";", 1)[0]},
+        urlencode({key.decode(): value.decode() for key, value in fields.items()}).encode(),
+        fields[b"request_id"].decode(),
+    )
+
+
+async def test_phone_registration_notifies_bound_desktop_only_after_verified_save(setup):
+    browser, passkeys = setup
+    ticket = passkeys.issue_local_ticket("owner-password")
+    headers, form, identity = await _registration_waiter(browser, ticket)
+    handler = browser.routes()["/owner-passkey-status"]
+    waiting = await handler("POST", headers, form)
+    assert waiting[0] == 200
+    assert json.loads(waiting[1]) == {"status": "waiting"}
+    assert len(passkeys.list()) == 0
+    registered, _, _, _, _, _ = await _enroll(browser, passkeys, ticket=ticket)
+    assert registered[0] == 200
+    completed = await handler("POST", headers, form)
+    assert completed[0] == 200
+    assert json.loads(completed[1]) == {"status": "registered"}
+    assert completed[2]["Content-Type"] == "application/json"
+    assert completed[2]["Cache-Control"] == "no-store"
+    # An observer can reconcile a lost response without enrolling another key.
+    assert json.loads((await handler("POST", headers, form))[1]) == {"status": "registered"}
+    assert len(passkeys.list()) == 1
+    assert identity in browser.registrations
+
+
+@pytest.mark.parametrize("failure", ["origin", "cookie", "csrf", "ticket", "request_id"])
+async def test_phone_registration_status_rejects_unbound_observer(setup, failure):
+    browser, passkeys = setup
+    ticket = passkeys.issue_local_ticket("owner-password")
+    headers, form, _ = await _registration_waiter(browser, ticket)
+    if failure == "origin":
+        headers["origin"] = "https://untrusted.example"
+    elif failure == "cookie":
+        headers.pop("cookie")
+    else:
+        fields = dict(parse_qs(form.decode()))
+        fields[failure] = ["b" * 32]
+        form = urlencode({key: value[0] for key, value in fields.items()}).encode()
+    result = await browser.routes()["/owner-passkey-status"]("POST", headers, form)
+    assert result[0] == 403
+    assert len(passkeys.list()) == 0
+
+
+async def test_phone_registration_status_does_not_treat_consumed_ticket_as_success(setup):
+    browser, passkeys = setup
+    ticket = passkeys.issue_local_ticket("owner-password")
+    headers, form, _ = await _registration_waiter(browser, ticket)
+    assert passkeys.consume_ticket(ticket)
+    result = await browser.routes()["/owner-passkey-status"]("POST", headers, form)
+    assert result[0] == 410
+    assert len(passkeys.list()) == 0
+
+
+async def test_phone_registration_status_does_not_report_removed_key_as_registered(setup):
+    browser, passkeys = setup
+    ticket = passkeys.issue_local_ticket("owner-password")
+    headers, form, _ = await _registration_waiter(browser, ticket)
+    registered, _, credential_id, _, _, _ = await _enroll(browser, passkeys, ticket=ticket)
+    assert registered[0] == 200
+    passkeys.remove(b64(credential_id))
+    assert (await browser.routes()["/owner-passkey-status"]("POST", headers, form))[0] == 410
+
+
+@pytest.mark.parametrize("failure", ["expired", "replaced", "password_changed", "restarted"])
+async def test_phone_registration_status_stops_when_its_registration_is_unavailable(setup, failure):
+    browser, passkeys = setup
+    ticket = passkeys.issue_local_ticket("owner-password")
+    headers, form, identity = await _registration_waiter(browser, ticket)
+    expected = 410
+    if failure == "expired":
+        from dataclasses import replace
+        browser.registrations[identity] = replace(
+            browser.registrations[identity], expires=time.monotonic() - 1)
+    elif failure == "replaced":
+        passkeys.issue_local_ticket("owner-password")
+    elif failure == "password_changed":
+        passkeys.credentials.change_password("owner-password", "another owner password")
+    else:
+        browser = BrowserAuthorization(browser.store, browser.credentials, device=browser.device)
+        expected = 403
+    result = await browser.routes()["/owner-passkey-status"]("POST", headers, form)
+    assert result[0] == expected
+    assert len(passkeys.list()) == 0
+
+
+async def test_phone_registration_status_does_not_report_failed_vault_write_as_success(
+    setup, monkeypatch,
+):
+    browser, passkeys = setup
+    ticket = passkeys.issue_local_ticket("owner-password")
+    headers, form, _ = await _registration_waiter(browser, ticket)
+    def unavailable(_records):
+        raise ClientCredentialError("fixture vault failure")
+    monkeypatch.setattr(browser.passkeys, "_write", unavailable)
+    registered, _, _, _, _, _ = await _enroll(browser, passkeys, ticket=ticket)
+    assert registered[0] == 503
+    assert (await browser.routes()["/owner-passkey-status"]("POST", headers, form))[0] == 410
+    assert len(passkeys.list()) == 0
+
+
+async def test_phone_status_waits_for_registration_commit_and_notification(setup, monkeypatch):
+    browser, passkeys = setup
+    ticket = passkeys.issue_local_ticket("owner-password")
+    headers, form, _ = await _registration_waiter(browser, ticket)
+    entered, release = threading.Event(), threading.Event()
+    register = browser.passkeys.register_with_ticket
+    def delay_notification(token, record):
+        result = register(token, record)
+        entered.set()
+        assert release.wait(5)
+        return result
+    monkeypatch.setattr(browser.passkeys, "register_with_ticket", delay_notification)
+    enroll_task = asyncio.create_task(_enroll(browser, passkeys, ticket=ticket))
+    assert await asyncio.to_thread(entered.wait, 3)
+    poll_task = asyncio.create_task(
+        browser.routes()["/owner-passkey-status"]("POST", headers, form))
+    try:
+        await asyncio.sleep(0.05)
+        assert not poll_task.done()
+    finally:
+        release.set()
+    assert (await enroll_task)[0][0] == 200
+    assert json.loads((await poll_task)[1]) == {"status": "registered"}
 
 
 async def _consent(browser):

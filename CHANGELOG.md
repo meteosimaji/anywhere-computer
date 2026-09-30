@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b43 / Plugin 0.2.0-beta.43 — unpublished candidate (2026-09-30)
+
+- Add a phone-registration QR to the existing, locally authorized owner-passkey
+  page. The original browser observes the verified credential-store result,
+  removes the QR, clears the ticket and displays completion automatically.
+- Bind result checks to the browser cookie, CSRF, ticket and origin. Serialize
+  registration and observation so ticket consumption cannot race completion.
+  Failed saves, expired links, removed keys and network errors never imply success.
+- Exercise independent desktop and phone browser contexts with an isolated
+  WebAuthn authenticator; this does not claim physical phone-camera acceptance.
+
 ## 0.2.0b42 / Plugin 0.2.0-beta.42 — unpublished candidate (2026-09-30)
 
 - Classify non-timeout Playwright home-navigation errors as navigation_failed

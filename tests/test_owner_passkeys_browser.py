@@ -124,3 +124,87 @@ async def test_virtual_authenticator_registers_and_approves_consent(tmp_path):
                 await browser.close()
     finally:
         store.close()
+
+
+@pytest.mark.asyncio
+async def test_phone_registration_replaces_desktop_qr_after_verified_save(tmp_path):
+    origin = "https://localhost"
+    store = AuthorizationStore(tmp_path, resource=origin + "/mcp",
+                               known_tools=frozenset({"files_read"}))
+    store.enroll_device("owner", "device", frozenset({"files_read"}))
+    owner = OwnerCredentials(tmp_path, resource=origin + "/mcp", owner="owner",
+                             vault=MemoryVault())
+    owner.initialize("owner-password")
+    consent = BrowserAuthorization(store, owner, device="device")
+    ticket = consent.passkeys.issue_local_ticket("owner-password")
+    try:
+        async with async_playwright() as driver:
+            try:
+                browser = await driver.chromium.launch(channel="chrome", headless=True)
+            except Exception as exc:
+                pytest.skip(f"Chromium unavailable: {exc}")
+            try:
+                desktop_context = await browser.new_context()
+                phone_context = await browser.new_context()
+                status_requests = 0
+
+                async def route_request(route):
+                    nonlocal status_requests
+                    request = route.request
+                    parsed = urlsplit(request.url)
+                    if parsed.path == "/owner-passkey-status":
+                        status_requests += 1
+                        if status_requests == 1:
+                            # A failed observation, even with success-shaped
+                            # JSON, cannot remove the QR or claim enrollment.
+                            await route.fulfill(status=503, content_type="application/json",
+                                                body='{"status":"registered"}')
+                            return
+                    handler = consent.routes().get(parsed.path)
+                    assert handler is not None
+                    status, body, headers = await handler(
+                        request.method,
+                        {key.lower(): value for key, value in request.headers.items()},
+                        request.post_data_buffer or b"", parsed.query,
+                    )
+                    await route.fulfill(status=status, body=body or b"", headers=headers)
+
+                await desktop_context.route("https://**/*", route_request)
+                await phone_context.route("https://**/*", route_request)
+                desktop = await desktop_context.new_page()
+                await desktop.goto(origin + "/owner-passkey?" + urlencode({"ticket": ticket}))
+                await desktop.get_by_role("button", name="Register on your phone").click()
+                assert await desktop.locator("#phone-registration svg").is_visible()
+                await desktop.get_by_text(
+                    "Cannot confirm registration yet. Retrying; do not register again."
+                ).wait_for()
+                assert await desktop.locator("#phone-registration svg").is_visible()
+                assert len(consent.passkeys.list()) == 0
+                await desktop.get_by_text("Waiting for registration on your phone…").wait_for()
+                assert len(consent.passkeys.list()) == 0
+
+                phone_url = await desktop.locator("#phone-registration-link").get_attribute("href")
+                assert phone_url == origin + "/owner-passkey?" + urlencode({"ticket": ticket})
+                phone = await phone_context.new_page()
+                cdp = await phone_context.new_cdp_session(phone)
+                await cdp.send("WebAuthn.enable")
+                await cdp.send("WebAuthn.addVirtualAuthenticator", {"options": {
+                    "protocol": "ctap2", "transport": "internal", "hasResidentKey": True,
+                    "hasUserVerification": True, "isUserVerified": True,
+                    "automaticPresenceSimulation": True,
+                }})
+                await phone.goto(phone_url)
+                await phone.get_by_role("button", name="Register passkey", exact=True).click()
+                await phone.get_by_text("Passkey registered.", exact=True).wait_for(timeout=20000)
+                await desktop.get_by_text("Passkey registered. You can close this page.",
+                                          exact=True).wait_for(timeout=10000)
+                assert len(consent.passkeys.list()) == 1
+                assert not await desktop.locator("#phone-registration").is_visible()
+                assert await desktop.locator("#phone-registration svg").count() == 0
+                assert await desktop.locator("input[name=ticket]").input_value() == ""
+                assert desktop.url == origin + "/owner-passkey"
+                assert await desktop.locator("#register-on-phone").is_disabled()
+            finally:
+                await browser.close()
+    finally:
+        store.close()

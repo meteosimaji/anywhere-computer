@@ -21,6 +21,29 @@ with user verification (PIN, fingerprint, or equivalent). The passkey is bound
 to the service's HTTPS origin, RP ID, owner, and selected device. The public
 `/authorize` page never enrolls credentials.
 
+To store the passkey on a phone, open that same registration page on the owner
+computer and choose “Register on your phone”. Scan the displayed QR with your
+phone camera, open the HTTPS link, and register there. The QR is generated locally
+by the service from the existing, locally authorized one-use link; no QR service
+receives it. The browser registration challenge and its observer cookie expire
+after three minutes even if the original link's five-minute lifetime has not ended.
+
+The computer checks the result every two seconds while displaying the QR. After
+WebAuthn verification and confirmed credential-store save, it removes the QR and
+shows “Passkey registered. You can close this page.” It also clears the form's
+ticket and removes the ticket from the current URL. The phone's registration
+remains one credential; observing its result never creates a second credential.
+This status request is bound to the original browser cookie, CSRF value, ticket,
+and same-origin POST. It returns only waiting or registered, without credential
+IDs or public keys.
+
+A consumed ticket alone does not prove successful registration. Storage or network
+errors do not produce a completion message; temporary observation errors retry
+without registering again. Expiry, a new locally issued ticket, an owner reset,
+or an HTTP service restart can stop observation. Check `owner-passkey-list` locally
+before issuing another link when completion is uncertain. A key removed before
+the result check is not reported as registered.
+
 Register a second passkey while the first and the password are available if
 you want another recovery route. A synced passkey may work on multiple devices
 according to the passkey provider, but it remains one credential in Anywhere
@@ -80,3 +103,10 @@ code. Its owner credentials and authorization database live in a temporary
 test directory; it never uses a personal passkey or native credential store.
 Run it with `uv run pytest -q tests/test_owner_passkeys_browser.py` on a host
 with Google Chrome installed. A missing browser causes a reported skip.
+
+A second test uses separate computer and phone browser contexts. It injects a
+failed status response, verifies that the QR stays visible, registers through the
+phone's virtual authenticator, then checks the computer's completion message,
+removed QR, cleared ticket and URL. This establishes the browser flow with an
+isolated authenticator; physical phone camera and password-manager acceptance
+remain separate checks.
