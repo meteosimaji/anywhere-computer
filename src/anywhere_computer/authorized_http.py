@@ -468,7 +468,8 @@ class AuthorizedDeviceMCP:
                                         "limit": min(file_args.limit,
                                                      settings.file_read_line_limit),
                                     })
-                                    return delegated_read(file_args, active.read_roots)
+                                    return delegated_read(file_args, active.read_roots,
+                                                          files=active.read_files)
                                 file_args_write = WriteFile.model_validate(tool_request.arguments)
                                 if (len(file_args_write.text.splitlines())
                                         > settings.file_write_line_limit):

@@ -12,6 +12,8 @@ import pytest
 from anywhere_computer import browser_control as browser_control_module
 from anywhere_computer import engine as engine_module
 from anywhere_computer.browser_control import (
+    _CLEANUP_WAIT_SECONDS,
+    BrowserActionUnknown,
     BrowserControl,
     BrowserNavigationUnknown,
     BrowserStartupUnavailable,
@@ -39,6 +41,25 @@ from anywhere_computer.models import (
     Reply,
     Request,
 )
+
+
+async def _close_browser_control(control: BrowserControl) -> None:
+    """Wait for owned cleanup even after its shorter caller receipt expires."""
+    entries = list(control.entries.values())
+    try:
+        await control.close()
+    except BrowserActionUnknown:
+        assert entries
+        assert all(entry.tabs.closing and entry.tabs.close_task is not None
+                   for entry in entries)
+    finally:
+        # Await the real retained task: errors and unfinished cleanup still fail.
+        for entry in entries:
+            task = entry.tabs.close_task
+            assert task is not None
+            await asyncio.wait_for(asyncio.shield(task), 4 * _CLEANUP_WAIT_SECONDS)
+            assert not entry.browser.is_connected()
+        assert not control.entries
 
 
 async def _tracked_fixture_client(
@@ -295,7 +316,7 @@ async def test_browser_navigation_continuity_across_documents_and_spa(navigation
         }
         assert requests == ["/first", "/next"]
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_ambiguous_navigation_reconciles_observation_without_replay(
@@ -331,7 +352,7 @@ async def test_ambiguous_navigation_reconciles_observation_without_replay(
         }
         assert requests == ["/next"]
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_isolated_browser_exact_owner_tab_and_stale_references(local_page):
@@ -361,17 +382,26 @@ async def test_isolated_browser_exact_owner_tab_and_stale_references(local_page)
         with pytest.raises(ValueError, match="unavailable"):
             await control.observe(session, owner="owner-a")
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 @pytest.mark.parametrize("close_target", ["page", "browser"])
+@pytest.mark.parametrize("close_delay", [0, 5.1], ids=["normal", "slow-browser-close"])
 async def test_dead_browser_session_releases_capacity_without_touching_live_owners(
-    close_target,
+    close_target, close_delay, monkeypatch,
 ):
     pytest.importorskip("playwright.async_api")
     control = BrowserControl(channel="chrome")
     try:
         opened = [await control.open(owner=f"owner-{index}") for index in range(4)]
+        live_entry = control.entries[opened[2]["session_id"]]
+        browser_close = live_entry.browser.close
+
+        async def delayed_close():
+            await asyncio.sleep(close_delay)
+            await browser_close()
+
+        monkeypatch.setattr(live_entry.browser, "close", delayed_close)
         ended = opened[0]
         entry = control.entries[ended["session_id"]]
         if close_target == "page":
@@ -392,7 +422,7 @@ async def test_dead_browser_session_releases_capacity_without_touching_live_owne
                                              owner=f"owner-{index}")
             assert observed["session_id"] == session["session_id"]
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 @pytest.mark.parametrize("cancel_at", ["new_context", "new_page"])
@@ -715,7 +745,7 @@ async def test_browser_sessions_do_not_share_cookies(local_page):
         assert "isolated=owner-a" in first_page["text"]
         assert "isolated=owner-a" not in second_page["text"]
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_browser_click_fill_exact_target_owner_and_preflight(local_page):
@@ -741,7 +771,7 @@ async def test_browser_click_fill_exact_target_owner_and_preflight(local_page):
         with pytest.raises(ValueError, match="unavailable"):
             await control.click(BrowserClick(**ids, selector="#go"), owner="owner-a")
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_semantic_browser_targets_use_observed_snapshot_and_exact_role(local_page):
@@ -778,7 +808,7 @@ async def test_semantic_browser_targets_use_observed_snapshot_and_exact_role(loc
         assert by_label["value_verified"] is True
         assert "by label" in by_label["text"]
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_html_labels_and_rendered_viewport_reach_native_mcp_image(local_page):
@@ -838,15 +868,26 @@ async def test_html_labels_and_rendered_viewport_reach_native_mcp_image(local_pa
         assert wire["structuredContent"]["data"]["content"][0]["bytes"] == (
             observed["visual"]["bytes"])
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
-async def test_current_dom_and_network_metadata_are_bounded_and_owner_scoped(local_page):
+@pytest.mark.parametrize("close_delay", [0, 5.1], ids=["normal", "slow-browser-close"])
+async def test_current_dom_and_network_metadata_are_bounded_and_owner_scoped(
+    local_page, monkeypatch, close_delay,
+):
     pytest.importorskip("playwright.async_api")
     control = BrowserControl(channel="chrome")
     try:
         opened = await control.open(owner="owner-a")
         ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        entry = control.entries[ids["session_id"]]
+        browser_close = entry.browser.close
+
+        async def delayed_close():
+            await asyncio.sleep(close_delay)
+            await browser_close()
+
+        monkeypatch.setattr(entry.browser, "close", delayed_close)
         await control.navigate(BrowserNavigate(**ids, url=local_page +
             "?token=private-value&search=example"), owner="owner-a")
         source = await control.source(BrowserSource(**ids), owner="owner-a")
@@ -871,7 +912,7 @@ async def test_current_dom_and_network_metadata_are_bounded_and_owner_scoped(loc
         with pytest.raises(ValueError, match="unavailable"):
             await control.network(BrowserNetwork(**ids), owner="owner-b")
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_key_and_drag_recheck_observation_and_target(local_page):
@@ -921,7 +962,7 @@ async def test_key_and_drag_recheck_observation_and_target(local_page):
         with pytest.raises(ValueError, match="unavailable"):
             await control.key(BrowserKey(**ids, selector="#entry", key="Tab"), owner="owner-b")
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_console_hover_select_and_scroll_use_owned_observation(local_page):
@@ -1013,7 +1054,7 @@ async def test_console_hover_select_and_scroll_use_owned_observation(local_page)
         assert scrolled["scroll"]["after"]["y"] > 0
         assert scrolled["snapshot_id"] != selected["snapshot_id"]
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_file_input_and_download_are_bounded_and_do_not_replace(
@@ -1061,7 +1102,7 @@ async def test_file_input_and_download_are_bounded_and_do_not_replace(
                 snapshot_id=downloaded["snapshot_id"], path=str(source),
             ), owner="owner-b")
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_semantic_click_waits_for_observed_target_after_rerender(local_page):
@@ -1086,7 +1127,7 @@ async def test_semantic_click_waits_for_observed_target_after_rerender(local_pag
             snapshot_id=observed["snapshot_id"]), owner="owner-a")
         assert clicked["text"].count("clicked") == 1
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_frame_scope_is_owned_observed_and_invalidated_on_same_url_reload():
@@ -1144,7 +1185,7 @@ async def test_frame_scope_is_owned_observed_and_invalidated_on_same_url_reload(
         with pytest.raises(ValueError, match="frame unavailable"):
             await control.observe(BrowserObserve(**scoped), owner="frame-owner")
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_shadow_labels_match_semantic_actions_and_frame_images_keep_tab_coordinates():
@@ -1186,7 +1227,7 @@ async def test_shadow_labels_match_semantic_actions_and_frame_images_keep_tab_co
         assert child["form_control_coordinate_space"] == "frame_viewport_css_pixels"
         assert base64.b64decode(child["content"][0]["data"]).startswith(b"\xff\xd8")
     finally:
-        await control.close()
+        await _close_browser_control(control)
 
 
 async def test_snapshot_rejects_main_reload_even_when_url_is_unchanged(local_page):
@@ -1203,4 +1244,4 @@ async def test_snapshot_rejects_main_reload_even_when_url_is_unchanged(local_pag
                                snapshot_id=observed["snapshot_id"]), owner="reload-owner")
         assert await page.locator("#entry").input_value() == ""
     finally:
-        await control.close()
+        await _close_browser_control(control)

@@ -48,7 +48,9 @@ async def verify_connections(prepared, monkeypatch):
     agent = asyncio.create_task(serve(local, credential='migration-fixture', shutdown=stop))
     try:
         try:
-            async with asyncio.timeout(5):
+            # Match ensure_agent's 30-second startup budget. Migration verifies
+            # preserved state and login, not a five-second loopback-bind deadline.
+            async with asyncio.timeout(30):
                 while not (local / 'agent.json').exists():
                     if agent.done():
                         await agent
@@ -58,7 +60,7 @@ async def verify_connections(prepared, monkeypatch):
             # Record code locations only, never frame locals or credentials.
             locations = [f'{frame.f_code.co_name}:{frame.f_lineno}'
                          for frame in agent.get_stack(limit=8)]
-            pytest.fail(f'Agent startup exceeded 5 seconds; done={agent.done()}; '
+            pytest.fail(f'Agent startup exceeded 30 seconds; done={agent.done()}; '
                         f'cancelled={agent.cancelled()}; stack={locations}', pytrace=False)
         old = await exchange(local, 'operations_get', {'operation_id': 'a' * 32})
         assert old.data['state'] == 'completed'
@@ -129,7 +131,10 @@ async def test_cli_unifies_existing_state(prepared, monkeypatch, capsys):
 
 
 @pytest.mark.parametrize('fail_at', [5, 6])
-async def test_lost_completion_acknowledgment_never_rolls_back_data(prepared, monkeypatch, fail_at):
+@pytest.mark.parametrize('startup_delay', [0, 5.1], ids=['normal', 'slow-loopback-start'])
+async def test_lost_completion_acknowledgment_never_rolls_back_data(
+    prepared, monkeypatch, fail_at, startup_delay,
+):
     local, http, *_ = prepared
     original = migration._sync
     calls = 0
@@ -146,7 +151,19 @@ async def test_lost_completion_acknowledgment_never_rolls_back_data(prepared, mo
         migration.migrate_engine(local, http)
     monkeypatch.setattr(migration, '_sync', original)
     assert migration.migrate_engine(local, http)['state'] == 'selected'
+    start_server = asyncio.start_server
+    loopback_starts = 0
+
+    async def delayed_start(callback, host=None, port=None, **kwargs):
+        nonlocal loopback_starts
+        if host == '127.0.0.1' and port == 0:
+            loopback_starts += 1
+            await asyncio.sleep(startup_delay)
+        return await start_server(callback, host, port, **kwargs)
+
+    monkeypatch.setattr(asyncio, 'start_server', delayed_start)
     await verify_connections(prepared, monkeypatch)
+    assert loopback_starts == 1
 
 
 async def test_transfer_administration_follows_selected_store(prepared):

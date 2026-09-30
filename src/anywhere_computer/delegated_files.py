@@ -40,7 +40,7 @@ def _directory(path: str) -> Iterator[int]:
     _require_flags()
     current = os.open("/", os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW)
     try:
-        for component in _components(path):
+        for component in (() if path == "/" else _components(path)):
             following = os.open(component, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW,
                                 dir_fd=current)
             os.close(current)
@@ -51,8 +51,13 @@ def _directory(path: str) -> Iterator[int]:
 
 
 @contextmanager
-def _parent(path: str, roots: tuple[str, ...]) -> Iterator[tuple[int, str]]:
+def _parent(path: str, roots: tuple[str, ...], *,
+            files: tuple[str, ...] = ()) -> Iterator[tuple[int, str]]:
     parts = _components(path)
+    if path in files:
+        with _directory(str(Path(path).parent)) as parent:
+            yield parent, parts[-1]
+        return
     root_parts = sorted((_components(root) for root in roots), key=len, reverse=True)
     selected = next((root for root in root_parts
                      if len(parts) > len(root) and parts[:len(root)] == root), None)
@@ -85,13 +90,14 @@ def _read_at(parent: int, name: str) -> tuple[bytes, os.stat_result]:
     return content, metadata
 
 
-def read(args: ReadFile, roots: tuple[str, ...]) -> dict[str, JsonValue]:
+def read(args: ReadFile, roots: tuple[str, ...], *,
+         files: tuple[str, ...] = ()) -> dict[str, JsonValue]:
     if os.name == "nt":
         from .delegated_win32 import read_content
 
-        content = read_content(args.path, roots)
+        content = read_content(args.path, roots, files=files)
     else:
-        with _parent(args.path, roots) as (parent, name):
+        with _parent(args.path, roots, files=files) as (parent, name):
             content, _ = _read_at(parent, name)
     lines = content.decode("utf-8").splitlines(keepends=True)
     start = max(0, len(lines) + args.offset) if args.offset < 0 else args.offset

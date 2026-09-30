@@ -24,7 +24,15 @@ SERIAL_GROUPS = {
     'owner-pipe': ['tests/test_owner_json_pipe.py'],
     'terminal': ['tests/test_terminal_children.py', 'tests/test_terminal_pty.py',
                  'tests/test_terminal_conpty.py', 'tests/test_file_search_terminal_workflow.py'],
-    'reconnect': ['tests/test_shared_agent_reconnect.py'],
+    'reconnect': [
+        'tests/test_shared_agent_reconnect.py',
+        'tests/test_direct_mcp_sessions.py::test_shared_agent_receives_http_watch_authority',
+    ],
+    'browser-cleanup': [
+        'tests/test_browser_control.py',
+        'tests/test_browser_tabs_dialogs.py::test_failed_excess_popup_cleanup_closes_only_its_owned_session[normal]',
+        'tests/test_browser_tabs_dialogs.py::test_failed_excess_popup_cleanup_closes_only_its_owned_session[slow-browser-close]',
+    ],
 }
 COSTS = ROOT / 'scripts/ci/windows_test_costs.json'
 

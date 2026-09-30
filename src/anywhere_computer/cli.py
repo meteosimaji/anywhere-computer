@@ -166,6 +166,8 @@ def main() -> None:
                         help="Child device ID (default: local)")
     parser.add_argument("--read-root", action="append",
                         help="Existing absolute directory granted for reads")
+    parser.add_argument("--read-file", action="append",
+                        help="Existing absolute individual file granted for reads")
     parser.add_argument("--write-root", action="append",
                         help="Existing absolute directory granted for writes")
     parser.add_argument("--expires-in", type=int,
@@ -316,7 +318,7 @@ def main() -> None:
         parser.error("--scope is not valid for this command")
     delegation_options = (args.parent_grant_id, args.child_id, args.target_child_id,
                           args.delegated_device_id,
-                          args.read_root, args.write_root, args.expires_in)
+                          args.read_root, args.read_file, args.write_root, args.expires_in)
     if any(value is not None for value in delegation_options) and args.command not in {
         "http-delegate-issue", "http-delegate-revoke", "http-delegate-route",
         "http-delegate-unroute",
@@ -330,14 +332,14 @@ def main() -> None:
     if args.command == "http-delegate-revoke" and (
         not args.child_id or any(value is not None for value in (
             args.parent_grant_id, args.target_child_id, args.delegated_device_id, args.read_root,
-            args.write_root, args.expires_in,
+            args.read_file, args.write_root, args.expires_in,
         ))
     ):
         parser.error("Delegate revoke requires only --child-id")
     if args.command in {"http-delegate-route", "http-delegate-unroute"} and (
         not args.child_id or any(value is not None for value in (
             args.parent_grant_id, args.delegated_device_id, args.read_root,
-            args.write_root, args.expires_in,
+            args.read_file, args.write_root, args.expires_in,
         ))
     ):
         parser.error("Delegate route management requires only --child-id")
@@ -703,6 +705,7 @@ def main() -> None:
                 device_id=args.delegated_device_id or "local",
                 tools=frozenset(args.scope or ()),
                 read_roots=tuple(args.read_root or ()),
+                read_files=tuple(args.read_file or ()),
                 write_roots=tuple(args.write_root or ()),
                 expires_in=3600 if args.expires_in is None else args.expires_in,
                 target_bearer=target_bearer,

@@ -27,11 +27,25 @@ def _canonical_roots(values: tuple[str, ...]) -> tuple[str, ...]:
     return tuple(roots)
 
 
+def _canonical_files(values: tuple[str, ...]) -> tuple[str, ...]:
+    files: list[str] = []
+    for value in values:
+        path = Path(value).expanduser()
+        if not path.is_absolute() or not path.is_file():
+            raise ValueError("Delegated files must be existing absolute regular files")
+        resolved = path.resolve(strict=True)
+        if path != resolved:
+            raise ValueError("Delegated files must not contain symbolic links")
+        files.append(str(resolved))
+    return tuple(files)
+
+
 def manage_delegation(
     directory: Path, *, action: str, password: str,
     parent_grant_id: str | None = None, child_id: str | None = None,
     device_id: str = "local", tools: frozenset[str] = frozenset(),
     read_roots: tuple[str, ...] = (), write_roots: tuple[str, ...] = (),
+    read_files: tuple[str, ...] = (),
     expires_in: int = 3600,
     target_bearer: str | None = None,
     target_child_id: str | None = None,
@@ -115,6 +129,7 @@ def manage_delegation(
                          "device_id": grant.device_id,
                          "tools": cast(JsonValue, sorted(grant.tools)),
                          "read_roots": list(grant.read_roots),
+                         "read_files": list(grant.read_files),
                          "write_roots": list(grant.write_roots),
                          "expires_at": grant.expires_at, "active": active,
                          "target_child_id": (list_routes.target_child_id(
@@ -166,6 +181,7 @@ def manage_delegation(
                 owner=config.owner, child_id=new_id, parent_grant_id=parent_grant_id,
                 device_id=device_id, tools=tools,
                 read_roots=_canonical_roots(read_roots),
+                read_files=_canonical_files(read_files),
                 write_roots=_canonical_roots(write_roots),
                 expires_at=time.time() + expires_in,
             )
