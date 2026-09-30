@@ -16,10 +16,13 @@ import secrets
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from http.cookies import CookieError, SimpleCookie
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
+import qrcode
+from qrcode.image.svg import SvgPathFillImage
 from webauthn import (
     base64url_to_bytes,
     generate_authentication_options,
@@ -115,10 +118,93 @@ _PASSWORD_VISIBILITY_HASH = base64.b64encode(
 
 _PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
   const button = document.getElementById('register-passkey');
+  const phoneButton = document.getElementById('register-on-phone');
+  const phone = document.getElementById('phone-registration');
+  const status = document.getElementById('registration-status');
+  let stopped = false;
+  let paused = false;
+  let phoneStarted = false;
+  let generation = 0;
+  let timer;
+  let request;
+  const deadline = Date.now() + Number(phoneButton.dataset.remainingMs);
+  function finish(message, registered) {
+    stopped = true;
+    clearTimeout(timer);
+    if (request) request.abort();
+    phone.replaceChildren();
+    phone.hidden = true;
+    button.disabled = true;
+    phoneButton.disabled = true;
+    if (registered) {
+      button.form.hidden = true;
+      for (const input of button.form.querySelectorAll('input')) input.value = '';
+      history.replaceState(null, '', '/owner-passkey');
+    }
+    status.textContent = message;
+  }
+  async function poll() {
+    if (stopped || paused) return;
+    const currentGeneration = generation;
+    if (Date.now() >= deadline) {
+      finish('Registration link expired. Check enrolled keys before starting again locally.',
+        false);
+      return;
+    }
+    const controller = new AbortController();
+    request = controller;
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const form = button.form;
+      const body = new URLSearchParams();
+      for (const name of ['request_id', 'csrf', 'ticket']) {
+        body.set(name, form.elements.namedItem(name).value);
+      }
+      const response = await fetch('/owner-passkey-status', {
+        method: 'POST', body, credentials: 'same-origin', cache: 'no-store',
+        signal: controller.signal,
+      });
+      if (stopped || paused || currentGeneration !== generation) return;
+      if (response.status === 403 || response.status === 410) {
+        finish('Registration link is no longer available. Check enrolled keys locally.', false);
+        return;
+      }
+      if (!response.ok) throw new Error('Registration status unavailable');
+      const result = await response.json();
+      if (stopped || paused || currentGeneration !== generation) return;
+      if (result.status === 'registered') {
+        finish('Passkey registered. You can close this page.', true);
+        return;
+      }
+      if (result.status !== 'waiting') throw new Error('Registration status unavailable');
+      status.textContent = 'Waiting for registration on your phone…';
+    } catch (_) {
+      if (!stopped && !paused && currentGeneration === generation) status.textContent =
+        'Cannot confirm registration yet. Retrying; do not register again.';
+    } finally { clearTimeout(timeout); }
+    if (!stopped && !paused && currentGeneration === generation) timer = setTimeout(poll, 2000);
+  }
+  phoneButton.addEventListener('click', () => {
+    phoneStarted = true;
+    phone.hidden = false;
+    phoneButton.disabled = true;
+    button.disabled = true;
+    poll();
+  });
+  window.addEventListener('pagehide', () => {
+    paused = true;
+    generation += 1;
+    clearTimeout(timer);
+    if (request) request.abort();
+  });
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted || !paused || stopped) return;
+    paused = false;
+    if (phoneStarted) poll();
+  });
   button.addEventListener('click', async event => {
     if (document.getElementById('registration-response').value) return;
     event.preventDefault();
-    const status = document.getElementById('registration-status');
     try {
       const encoded = button.dataset.options;
       const options = JSON.parse(atob(encoded.replace(/-/g, '+').replace(/_/g, '/')));
@@ -167,6 +253,7 @@ class PendingRegistration:
     browser_hash: str = field(repr=False)
     csrf_hash: str = field(repr=False)
     expires: float
+    enrolled_credential_id: str | None = field(default=None, repr=False)
 
 
 def _digest(value: str) -> str:
@@ -214,13 +301,15 @@ class BrowserAuthorization:
         self.origin = urlunsplit((parsed.scheme, host, "", "", ""))
         self.pending: dict[str, PendingConsent] = {}
         self.registrations: dict[str, PendingRegistration] = {}
+        self.registration_lock = threading.Lock()
         self.attempts: dict[str, deque[float]] = {}
         # Acquire in the actual worker, so observer cancellation cannot release
         # a slot while password verification is still running.
         self.password_slots = threading.BoundedSemaphore(2)
 
     def routes(self) -> dict[str, HTTPRoute]:
-        return {"/authorize": self.authorize, "/owner-passkey": self.owner_passkey}
+        return {"/authorize": self.authorize, "/owner-passkey": self.owner_passkey,
+                "/owner-passkey-status": self.owner_passkey_status}
 
     @property
     def authorization_endpoint(self) -> str:
@@ -676,12 +765,18 @@ class BrowserAuthorization:
         options_b64 = base64.urlsafe_b64encode(
             options_to_json(options).encode()
         ).decode().rstrip("=")
+        registration_url = self.origin + "/owner-passkey?" + urlencode({"ticket": ticket})
+        qr_svg = qrcode.make(
+            registration_url, image_factory=SvgPathFillImage,
+        ).to_string(encoding="unicode")
+        remaining_ms = max(0, int((record.expires - time.monotonic()) * 1000))
         return (
             "<!doctype html><html lang=en><meta charset=utf-8>"
             "<meta name=viewport content='width=device-width, initial-scale=1'>"
             "<title>Register owner passkey — Anywhere Computer</title>"
             "<style>body{font:16px/1.6 system-ui;max-width:580px;margin:40px auto;padding:24px}"
-            "button,input{font:inherit;padding:10px}</style>"
+            "button,input{font:inherit;padding:10px}"
+            "svg{display:block;width:min(100%,340px);height:auto;background:white}</style>"
             "<h1>Register an owner passkey</h1>"
             f"<p>This passkey will approve future connection requests for "
             f"{html.escape(self.device)}. "
@@ -694,7 +789,15 @@ class BrowserAuthorization:
             "<label for=passkey-label>Passkey label</label>"
             "<input id=passkey-label name=label maxlength=80 value='Owner passkey' required>"
             f"<button id=register-passkey type=submit data-options='{options_b64}'>"
-            "Register passkey</button></form><p id=registration-status role=status></p>"
+            "Register passkey</button></form>"
+            f"<button id=register-on-phone type=button data-remaining-ms='{remaining_ms}'>"
+            "Register on your phone</button>"
+            "<section id=phone-registration hidden><h2>Scan with your phone</h2>"
+            "<p>Open this one-use registration link with your phone camera, then "
+            "register a passkey in its password manager. Only scan it with a phone you control. "
+            "This page confirms the result automatically.</p>"
+            f"{qr_svg}<a id=phone-registration-link href='{html.escape(registration_url)}'>"
+            "Registration link</a></section><p id=registration-status role=status></p>"
             f"<script>{_PASSKEY_REGISTRATION_SCRIPT}</script></html>"
         ).encode()
 
@@ -719,7 +822,7 @@ class BrowserAuthorization:
         headers = self._headers()
         headers["Content-Security-Policy"] = headers["Content-Security-Policy"].replace(
             f"sha256-{_PASSWORD_VISIBILITY_HASH}", f"sha256-{_PASSKEY_REGISTRATION_HASH}"
-        )
+        ) + "; connect-src 'self'"
         # The same-origin registration POST must carry its real Origin for the
         # strict check below. no-referrer makes Chrome send Origin: null.
         headers["Referrer-Policy"] = "same-origin"
@@ -786,6 +889,12 @@ class BrowserAuthorization:
             )
         if not enrolled:
             return self._error(403, "Registration was already processed or expired.")
+        # Other browser contexts holding this locally authorized link may be
+        # displaying its QR. Publish completion only after verified vault save.
+        for waiter_id, waiter in tuple(self.registrations.items()):
+            if hmac.compare_digest(waiter.ticket_digest, record.ticket_digest):
+                self.registrations[waiter_id] = replace(
+                    waiter, enrolled_credential_id=encoded_id)
         self.registrations.pop(identity, None)
         response_headers = self._headers()
         response_headers["Referrer-Policy"] = "no-referrer"
@@ -799,14 +908,71 @@ class BrowserAuthorization:
             response_headers,
         )
 
+    def _registration_status(self, headers: dict[str, str], body: bytes) -> HTTPResult:
+        if headers.get("origin") != self.origin:
+            return self._error(403, "Registration origin is invalid.")
+        if (len(body) > 4096 or headers.get("content-type", "").split(";")[0].strip().lower()
+                != "application/x-www-form-urlencoded"):
+            raise ValueError("Invalid registration status form")
+        params = _fields(body.decode())
+        if set(params) != {"request_id", "csrf", "ticket"}:
+            raise ValueError("Invalid registration status form")
+        identity = params["request_id"]
+        record = self.registrations.get(identity)
+        cookies = SimpleCookie()
+        cookies.load(headers.get("cookie", ""))
+        cookie = cookies.get(self._cookie_name("enroll-" + identity))
+        if (re.fullmatch(r"[a-f0-9]{32}", identity) is None or record is None or cookie is None
+                or not hmac.compare_digest(record.browser_hash, _digest(cookie.value))
+                or not hmac.compare_digest(record.csrf_hash, _digest(params["csrf"]))
+                or not hmac.compare_digest(record.ticket_digest, _digest(params["ticket"]))):
+            return self._error(403, "Registration status request is invalid.")
+        if record.expires <= time.monotonic():
+            return self._error(410, "Registration link expired. Check enrolled keys locally.")
+        if record.enrolled_credential_id is not None:
+            if self.passkeys.find(record.enrolled_credential_id) is None:
+                return self._error(410, "Registered passkey is no longer enrolled.")
+            status = "registered"
+        elif self.passkeys.ticket_valid(params["ticket"]):
+            status = "waiting"
+        else:
+            # Consumption, a replacement ticket, reset or failed vault write
+            # alone cannot establish that registration completed.
+            return self._error(410, "Registration link is no longer available.")
+        response_headers = self._headers()
+        response_headers["Content-Type"] = "application/json"
+        return 200, json.dumps({"status": status}).encode(), response_headers
+
+    def _registration_call(self, operation: Callable[[], HTTPResult]) -> HTTPResult:
+        # A poll must not see a consumed ticket between the vault commit and
+        # publication of completion to other browsers. Run the lock in workers,
+        # including GET, so keychain access cannot block the HTTP event loop.
+        with self.registration_lock:
+            return operation()
+
+    async def owner_passkey_status(
+        self, method: str, headers: dict[str, str], body: bytes, query: str = "",
+    ) -> HTTPResult:
+        try:
+            if method == "POST" and not query:
+                return await asyncio.to_thread(
+                    self._registration_call, lambda: self._registration_status(headers, body))
+            return 405, None, {"Allow": "POST", "Cache-Control": "no-store"}
+        except ClientCredentialError:
+            return self._error(503, "Passkey storage is unavailable. Check enrolled keys locally.")
+        except (ValueError, UnicodeError, CookieError):
+            return self._error(400, "Cannot verify registration status.")
+
     async def owner_passkey(
         self, method: str, headers: dict[str, str], body: bytes, query: str = "",
     ) -> HTTPResult:
         try:
             if method == "GET":
-                return self._registration_begin(query)
+                return await asyncio.to_thread(
+                    self._registration_call, lambda: self._registration_begin(query))
             if method == "POST" and not query:
-                return await asyncio.to_thread(self._registration_finish, headers, body)
+                return await asyncio.to_thread(
+                    self._registration_call, lambda: self._registration_finish(headers, body))
             return 405, None, {"Allow": "GET, POST", "Cache-Control": "no-store"}
         except ClientCredentialError:
             return self._error(503, "Passkey storage is unavailable. Try again later.")
