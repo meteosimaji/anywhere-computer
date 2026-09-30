@@ -782,6 +782,15 @@ class OwnerJsonPipeServer:
                         self._capacity.release()
                     if self._closing.is_set():
                         break
+                    if next_handle is None:
+                        try:
+                            next_handle = self._create_instance(first=False)
+                        except BaseException as error:
+                            if not self._closing.is_set():
+                                self._fatal = error
+                                self._closing.set()
+                                self._stopped.set()
+                            break
                 except BaseException as error:
                     if capacity_acquired:
                         self._capacity.release()

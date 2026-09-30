@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from test_client_tokens import MemoryVault
-from test_http_service import RESOURCE, authenticate, initialize, setup
+from test_http_service import RESOURCE, SCOPES, authenticate, initialize, setup
 
 from anywhere_computer import cli, subchat_chrome_profile
 from anywhere_computer.authorization import AuthorizationStore, pkce_s256
@@ -232,3 +232,48 @@ async def test_interrupted_config_publication_is_recoverable_by_same_upgrade(
     with pytest.raises(ValueError):
         await add_http_tools(tmp_path, frozenset({"invented_tool"}))
     assert json.loads((tmp_path / "http-server/config.json").read_text())["resource"] == RESOURCE
+
+
+@pytest.mark.parametrize("save_already_configured", [False, True])
+async def test_save_scope_upgrade_preserves_existing_grants(
+    tmp_path, unused_tcp_port, save_already_configured,
+):
+    selected = SubchatGatewayConfig(
+        profile=str(tmp_path / "selected-profile"),
+        ledger=str(tmp_path / "selected-ledger"), account_id="account-id",
+        consent="ordinary-chat-browser-control-approved",
+    )
+    scopes = SCOPES | ({"subchat_save_file"} if save_already_configured else set())
+    config = await setup(
+        tmp_path, unused_tcp_port, scopes=scopes,
+        subchat=selected if save_already_configured else None,
+    )
+    store = AuthorizationStore(
+        tmp_path / "http-server/authorization", resource=RESOURCE, known_tools=config.scopes,
+    )
+    try:
+        store.approve(
+            owner=config.owner, device=config.device, client=config.client,
+            redirect=next(iter(config.redirects)), resource=RESOURCE,
+            tools=frozenset({"files_read"}), challenge=pkce_s256("v" * 43),
+        )
+        before = store.db.execute("SELECT id,tools,expires,revoked FROM grants").fetchall()
+    finally:
+        store.close()
+    added = frozenset({"computer_status" if save_already_configured else "subchat_save_file"})
+    result = await add_http_tools(
+        tmp_path, added, subchat=None if save_already_configured else selected,
+    )
+    updated = load_http_config(tmp_path)
+    assert updated.subchat == selected
+    assert updated.scopes == config.scopes | added
+    assert result["new_consent_required"] is True
+    assert result["expanded_full_access_grants"] == 0
+    assert result["active_grants_missing_requested_tools"] == 1
+    store = AuthorizationStore(
+        tmp_path / "http-server/authorization", resource=RESOURCE, known_tools=updated.scopes,
+    )
+    try:
+        assert store.db.execute("SELECT id,tools,expires,revoked FROM grants").fetchall() == before
+    finally:
+        store.close()

@@ -176,7 +176,7 @@ async function refresh(start = false) {
     const snapshot = start ? result.snapshot : result;
     if (snapshot.schema_version !== 1) throw new Error("状態情報の版に対応していません。");
     render(snapshot);
-    startButton.disabled = snapshot.engine_state !== "stopped";
+    startButton.disabled = !["stopped", "stale_endpoint"].includes(snapshot.engine_state);
     field("status",start ? (result.state === "ready" ? "このPCのエンジンの応答を確認しました。AIからの接続は未確認です。" : "起動結果を確認できませんでした。表示された診断を確認してください。") : "状態を更新しました。登録端末への接続試験は行っていません。");
   } catch (error) { field("status",`更新できませんでした。表示が残っている場合は前回の確認結果です。${String(error)}`); }
   finally { button.disabled = false; }

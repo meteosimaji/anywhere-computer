@@ -17,6 +17,7 @@ from .device_router import ROUTER_TOOLS
 from .engine import Engine
 from .http_service import _check_enrollment, load_http_config
 from .locking import ProcessLock
+from .subchat_device_save import SUBCHAT_SAVE_TOOLS
 from .subchat_gateway import SUBCHAT_AUTH_SCOPES, SubchatGatewayConfig
 
 
@@ -34,10 +35,11 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
         if subchat is not None and config.subchat is not None and subchat != config.subchat:
             raise ValueError("Existing Subchat selection cannot be replaced by tool upgrade")
         selection = config.subchat or subchat
-        adding_subchat = bool(tools & SUBCHAT_AUTH_SCOPES)
+        subchat_tools = SUBCHAT_AUTH_SCOPES | SUBCHAT_SAVE_TOOLS
+        adding_subchat = bool(tools & subchat_tools)
         if adding_subchat and selection is None:
             raise ValueError("Subchat tools require an explicit gateway selection")
-        if subchat is not None and not (adding_subchat or config.scopes & SUBCHAT_AUTH_SCOPES):
+        if subchat is not None and not (adding_subchat or config.scopes & subchat_tools):
             raise ValueError("Subchat selection requires a Subchat tool scope")
         expanded = config.model_copy(update={"scopes": config.scopes | tools,
                                              "subchat": selection})
@@ -53,7 +55,7 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
             engine = Engine(Path(temporary) / "catalog-state")
             try:
                 known = (frozenset(engine.tools) | ROUTER_TOOLS
-                         | (SUBCHAT_AUTH_SCOPES if selection else frozenset())) - LOCAL_ONLY_TOOLS
+                         | (subchat_tools if selection else frozenset())) - LOCAL_ONLY_TOOLS
             finally:
                 await engine.close()
         if expanded.scopes - known:

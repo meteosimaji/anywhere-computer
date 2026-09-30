@@ -199,16 +199,25 @@ async def video_frames(args: MediaVideoFrames) -> dict[str, JsonValue]:
     path = _source(args.path)
     frames: list[JsonValue] = []
     images: list[JsonValue] = []
+    frame_budget = IMAGE_LIMIT // len(args.timestamps_seconds)
     for timestamp in args.timestamps_seconds:
-        output = await _decode([
-            "-ss", str(timestamp), "-protocol_whitelist", "file,pipe",
-            "-i", os.fspath(path), "-frames:v", "1",
-            "-vf", "scale=960:-2:force_original_aspect_ratio=decrease",
-            "-q:v", "5", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
-        ])
+        # Share the transport's aggregate image budget. Keep the existing
+        # first encoding when it fits; bound both dimensions on later attempts.
+        for dimensions, quality in [('960:-2', 5), ('960:960', 10),
+                                    ('720:720', 15), ('480:480', 20), ('320:320', 25)]:
+            output = await _decode([
+                '-ss', str(timestamp), '-protocol_whitelist', 'file,pipe',
+                '-i', os.fspath(path), '-frames:v', '1', '-vf',
+                f'scale={dimensions}:force_original_aspect_ratio=decrease:force_divisible_by=2',
+                '-q:v', str(quality), '-f', 'image2pipe', '-vcodec', 'mjpeg', 'pipe:1',
+            ])
+            if len(output) <= frame_budget:
+                break
+        else:
+            raise ValueError('Decoded video frames exceed the shared 2 MiB image limit')
         item: dict[str, JsonValue] = {"type": "image", "mimeType": "image/jpeg",
                                       "data": base64.b64encode(output).decode("ascii")}
-        validated, size = bounded_image(item, IMAGE_LIMIT)
+        validated, size = bounded_image(item, frame_budget)
         if validated is None:
             raise ValueError("Decoded video frame exceeds the 2 MiB image limit")
         images.append(validated)

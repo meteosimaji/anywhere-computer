@@ -136,6 +136,58 @@ emit(["id": "value-identity", "result": [
         ["same", "changed", "typed", "empty", "unsupported"], True)
 
 
+def test_full_observation_target_is_reachable_in_real_swift_traversal(tmp_path):
+    source = Path(__file__).resolve().parents[1] / 'native/macos/AXHelper.swift'
+    text = source.read_text().removesuffix('\nrunJSONLines()\n')
+    # Substitute AX child reads only; run the actual bounded locator on the
+    # same broad/deep tree whose first branch the full observer visits first.
+    text = text.replace('private func elementArray(', 'private func liveElementArray(', 1)
+    harness = text + r'''
+private let fixtureElements = (0..<1059).map { AXUIElementCreateApplication(pid_t(10000 + $0)) }
+private func elementArray(_ element: AXUIElement, attribute: CFString,
+                          maxCount: Int) throws -> ([AXUIElement], Bool) {
+    guard let index = fixtureElements.firstIndex(where: { cfElementsEqual($0, element) }) else {
+        return ([], false)
+    }
+    let indices: [Int]
+    if index == 0 { indices = Array(1...32) }
+    else if index <= 32 {
+        indices = Array((33 + (index - 1) * 32)..<(33 + index * 32))
+    } else if index == 33 { indices = [1057] }
+    else { indices = [] }
+    return (indices.prefix(maxCount).map { fixtureElements[$0] }, indices.count > maxCount)
+}
+private extension AXHelper {
+    func fixtureLocate(_ index: Int, breadthFirst: Bool = false) throws -> String {
+        switch try locateElement(root: fixtureElements[0], target: fixtureElements[index],
+                                 breadthFirst: breadthFirst,
+                                 deadline: RequestDeadline()) {
+        case .found: return "found"
+        case .absent: return "absent"
+        case .limitExceeded: return "limit"
+        }
+    }
+}
+private let helper = AXHelper()
+emit(["id": "reachability", "result": [
+    "early_deep_target": try helper.fixtureLocate(1057),
+    "late_target": try helper.fixtureLocate(1058),
+    "compact_toolbar": try helper.fixtureLocate(32, breadthFirst: true),
+    "compact_deep_limit": try helper.fixtureLocate(1057, breadthFirst: true),
+]])
+'''
+    program = tmp_path / 'ObservedTraversal.swift'
+    program.write_text(harness)
+    executable = tmp_path / 'observed-traversal'
+    subprocess.run(['swiftc', str(program), '-o', str(executable)],
+                   check=True, capture_output=True, timeout=90)
+    result = subprocess.run([str(executable)], check=True, capture_output=True, timeout=5)
+    assert json.loads(result.stdout)['result'] == {
+        'early_deep_target': 'found', 'late_target': 'limit',
+        'compact_toolbar': 'found', 'compact_deep_limit': 'limit',
+    }
+
+
 def test_semantic_target_selection_in_real_swift_source(tmp_path):
     source = Path(__file__).resolve().parents[1] / "native/macos/AXHelper.swift"
     text = source.read_text()
@@ -446,6 +498,45 @@ async def test_live_exact_window_image_and_secondary_action(
         current = next(node for node in nodes(refreshed["tree"])
                        if node.get("identifier") == "fixture-stepper")
         assert current["value"] == 1
+        process.stdin.write(b'broad\n')
+        await process.stdin.drain()
+        assert await asyncio.wait_for(process.stdout.readline(), 5) == b'broad\n'
+        broad = await gui.observe(native_gui.NativeObserve(**target), owner='fixture')
+        deep = next(node for node in nodes(broad['tree'])
+                    if node.get('identifier') == 'fixture-deep')
+        assert deep['value'] == 0
+        await gui.press(native_gui.NativePress(
+            **target, observation_id=broad['observation_id'], element_ref=deep['element_ref']),
+            owner='fixture')
+        changed = await gui.observe(native_gui.NativeObserve(**target), owner='fixture')
+        assert next(node for node in nodes(changed['tree'])
+                    if node.get('identifier') == 'fixture-deep')['value'] == 1
+        field = next(node for node in nodes(changed['tree'])
+                     if node.get('identifier') == 'fixture-deep-field')
+        await gui.set_value(native_gui.NativeSetValue(
+            **target, observation_id=changed['observation_id'], element_ref=field['element_ref'],
+            value='after'), owner='fixture')
+        changed = await gui.observe(native_gui.NativeObserve(**target), owner='fixture')
+        assert next(node for node in nodes(changed['tree'])
+                    if node.get('identifier') == 'fixture-deep-field')['value'] == 'after'
+        compact = await gui.observe(
+            native_gui.NativeObserve(**target, compact=True), owner='fixture')
+        assert any(node.get('identifier') == 'fixture-toolbar' for node in compact['targets']), {
+            'visited': compact['visited_elements'], 'truncated': compact['truncated'],
+            'targets': [(node.get('identifier'), node.get('label'), node.get('role'))
+                        for node in compact['targets']],
+        }
+        toolbar = next(node for node in compact['targets']
+                       if node.get('identifier') == 'fixture-toolbar')
+        await gui.press(native_gui.NativePress(
+            **target, observation_id=compact['observation_id'], element_ref=toolbar['element_ref']),
+            owner='fixture')
+        process.stdin.write(b'reveal-toolbar\n')
+        await process.stdin.drain()
+        assert await asyncio.wait_for(process.stdout.readline(), 5) == b'revealed\n'
+        changed = await gui.observe(native_gui.NativeObserve(**target), owner='fixture')
+        assert next(node for node in nodes(changed['tree'])
+                    if node.get('identifier') == 'fixture-toolbar')['value'] == 1
         process.stdin.write(b"ambiguous\n")
         await process.stdin.drain()
         assert await asyncio.wait_for(process.stdout.readline(), 5) == b"ambiguous\n"

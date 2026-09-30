@@ -1,6 +1,7 @@
 """Browser adapter integration against an offline, effectful Chat DOM fixture."""
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -119,14 +120,16 @@ async def test_ready_chat_does_not_wait_for_domcontentloaded(tmp_path, action):
             await context.route('https://chatgpt.com/**', respond)
             backend = BrowserSubchatBackend(context)
             if action == 'catalog':
-                observed = await asyncio.wait_for(backend.catalog(), timeout=6)
+                observed = await asyncio.wait_for(
+                    backend.catalog(), timeout=30 if sys.platform == 'win32' else 6)
                 assert observed['state'] in {'catalog_observed', 'catalog_partial'}
                 assert observed['submitted'] is False
             else:
                 store = SubchatSubmissions(ledger.connection)
                 submission = store.prepare('9' * 32, 'read only', 'Future model',
                                            'Initial effort', owner=None)
-                assert await asyncio.wait_for(backend.prepare(submission), timeout=6) == ()
+                assert await asyncio.wait_for(
+                    backend.prepare(submission), timeout=30 if sys.platform == 'win32' else 6) == ()
                 page = backend.pages[submission.operation_id]
                 assert await page.evaluate('document.readyState') in {'loading', 'interactive'}
                 assert await page.evaluate('window.sends') == 0

@@ -25,12 +25,16 @@ snapshot.update_blocker_details = [{
   resource: 'browser_sessions', id: 'fixture-browser', state: 'closing',
   reason: 'cleanup_in_progress', inspect_tool: 'browser_tabs',
 }];
-let calls = 0, response;
+let calls = 0, starts = 0, response;
 const observations = [];
 vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../desktop/ui/app.js'),'utf8'), {
   document:{getElementById:get,createElement:element},
   window:{__TAURI__:{core:{invoke:async (command,args)=>{
     if(command==='management_snapshot') {observations.push(command);return JSON.stringify(snapshot);}
+    if(command==='management_start') {
+      starts++; snapshot.engine_state = 'ready';
+      return JSON.stringify({state:'ready',snapshot});
+    }
     if(command==='management_startup_status') {observations.push(command);return JSON.stringify({schema_version:1,state:'not_installed',observed_at:snapshot.observed_at});}
     assert.equal(command,'management_device_check'); assert.equal(args.deviceId,device.device_id);
     calls++; if(response instanceof Error) throw response; return JSON.stringify(response);
@@ -61,6 +65,18 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../desktop/ui/app.js'),'
   await button.handlers.click(); assert.match(output.textContent,/確認できませんでした/);
   response=new Error('private diagnostic');
   await button.handlers.click(); assert.equal(calls,3); assert.doesNotMatch(output.textContent,/private/);
+  snapshot.engine_state = 'stale_endpoint';
+  await get('refresh').handlers.click();
+  assert.equal(get('start').disabled, false);
+  await get('start').handlers.click();
+  assert.equal(starts, 1);
+  assert.equal(get('start').disabled, true);
+  assert.match(get('status').textContent, /エンジンの応答を確認/);
+  for (const state of ['unresponsive', 'identity_mismatch']) {
+    snapshot.engine_state = state;
+    await get('refresh').handlers.click();
+    assert.equal(get('start').disabled, true);
+  }
   // Disabled buttons mostly mean "not applicable", not "busy"; status text reports progress.
   assert.doesNotMatch(fs.readFileSync(path.join(__dirname,'../desktop/ui/style.css'),'utf8'),/cursor:\s*wait/);
   console.log('management device UI passed');

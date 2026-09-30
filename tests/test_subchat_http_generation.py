@@ -12,13 +12,16 @@ from pydantic import SecretStr
 from test_subchat_http_catalog import catalog
 from test_subchat_http_history import sample
 from test_subchat_http_only import CATALOG_URL, SECRET, credentials, session_payload
+from test_subchat_http_only import seed as seed_history
 from test_subchat_http_only_cli import command, environment
 
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import (
     SubchatAccessError,
+    SubchatInterrupted,
     SubchatOutcomeUnknown,
+    SubchatOutputLimit,
     SubchatPreflightFailed,
     Subchats,
 )
@@ -87,6 +90,42 @@ def handoff():
     data = handoff_data()
     return ObservedHTTPGeneration.from_data(data, authorization=SECRET,
                                             account_id='fixture-account')
+
+
+@pytest.mark.parametrize('finish,exception,reason', [
+    ('interrupted', SubchatInterrupted, 'provider_interrupted'),
+    ('max_tokens', SubchatOutputLimit, 'output_limit'),
+])
+async def test_generation_recovery_persists_provider_terminal_reason(
+        tmp_path, finish, exception, reason):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        saved, payload = seed_history(store)
+        payload['messages'][1]['metadata']['finish_details'] = {'type': finish}
+        requests = []
+
+        def respond(request):
+            requests.append(request)
+            assert request.method == 'GET'
+            assert request.url.path == '/backend-api/conversations/' + saved.conversation_id
+            return httpx.Response(200, json=payload)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), generation=handoff(),
+                                             store=store)
+            service = Subchats(store, backend)
+            with pytest.raises(exception):
+                await service.recover(saved.operation_id, owner=None)
+            terminal = store.get(saved.operation_id, owner=None)
+            assert terminal.state == 'interrupted'
+            assert terminal.interruption_reason == reason
+            assert len(requests) == 1
+    finally:
+        ledger.close()
 
 
 @pytest.mark.parametrize('observer', ['find_submission', 'read_answer'])
