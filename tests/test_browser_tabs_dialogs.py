@@ -446,13 +446,17 @@ async def test_final_tab_cleanup_remains_an_update_blocker_until_driver_stops(
         await engine.close()
 
 
+@pytest.mark.parametrize("close_delay", [0, 3.2], ids=["normal", "slow-browser-close"])
 async def test_failed_excess_popup_cleanup_closes_only_its_owned_session(
-    dialog_site, monkeypatch,
+    dialog_site, monkeypatch, close_delay,
 ):
     pytest.importorskip("playwright.async_api")
     from playwright.async_api import Page
 
+    from anywhere_computer.browser_control import _CLEANUP_WAIT_SECONDS, _PAGE_WAIT_SECONDS
+
     control = BrowserControl(channel="chrome")
+    excess_attempted = asyncio.Event()
     entered = asyncio.Event()
     release = asyncio.Event()
     try:
@@ -472,12 +476,14 @@ async def test_failed_excess_popup_cleanup_closes_only_its_owned_session(
                 page is not owned.page for owned in entry.tabs.entries.values()
             ):
                 failures.append(True)
+                excess_attempted.set()
                 raise TimeoutError("synthetic excess page cleanup failure")
             return await page_close(page, *args, **kwargs)
 
         async def held_browser_close():
             entered.set()
             await release.wait()
+            await asyncio.sleep(close_delay)
             await browser_close()
 
         with monkeypatch.context() as patch:
@@ -486,6 +492,10 @@ async def test_failed_excess_popup_cleanup_closes_only_its_owned_session(
             # Closing this context can interrupt the triggering click's snapshot.
             click = asyncio.create_task(control.click(BrowserClick(**ids, selector="#popup"),
                                                        owner="owner-a"))
+            # First observe the real popup cleanup attempt. Click/actionability and
+            # popup creation have their own bounded browser action budget; they
+            # are not part of the three-second close-dispatch assertion.
+            await asyncio.wait_for(excess_attempted.wait(), _PAGE_WAIT_SECONDS)
             await asyncio.wait_for(entered.wait(), 3)
             assert failures == [True]
             assert ids["session_id"] in control.entries
@@ -496,7 +506,16 @@ async def test_failed_excess_popup_cleanup_closes_only_its_owned_session(
             assert (await control.observe(BrowserObserve(**other), owner="owner-b"))["tab_id"] == (
                 other["tab_id"])
             release.set()
-            await asyncio.wait_for(asyncio.gather(*entry.tabs.cleanup_tasks), 3)
+            assert entry.tabs.close_task is not None
+            # A retained close may outlive the caller receipt deadline. Observe
+            # the actual browser and driver cleanup before checking ownership.
+            await asyncio.wait_for(asyncio.shield(entry.tabs.close_task),
+                                   4 * _CLEANUP_WAIT_SECONDS)
+            results = await asyncio.gather(*entry.tabs.cleanup_tasks, return_exceptions=True)
+            for result in results:
+                if (isinstance(result, BaseException)
+                        and not isinstance(result, BrowserActionUnknown)):
+                    raise result
             await asyncio.gather(click, return_exceptions=True)
         assert ids["session_id"] not in control.entries
         assert not entry.browser.is_connected()
