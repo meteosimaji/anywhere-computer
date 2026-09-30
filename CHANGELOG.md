@@ -3,6 +3,13 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b42 / Plugin 0.2.0-beta.42 — unpublished candidate (2026-09-30)
+
+- Classify non-timeout Playwright home-navigation errors as navigation_failed
+  in UI catalog, HTTP catalog bootstrap and send preparation. Preserve the
+  distinct navigation_timeout result and known-unsent operation recovery.
+  Network errors before dispatch no longer produce an unknown send outcome.
+
 ## 0.2.0b41 / Plugin 0.2.0-beta.41 — unpublished candidate (2026-09-30)
 
 - In browser-prepared HTTPX Subchat sessions, retain the controller-owned

@@ -220,6 +220,58 @@ async def test_prepare_preserves_original_error_when_page_close_fails(monkeypatc
     assert submission.operation_id not in backend.pages
 
 
+@pytest.mark.parametrize('entrypoint', ['catalog', 'http_catalog', 'prepare'])
+@pytest.mark.parametrize('network_error', ['namenotresolved', 'connectionreset',
+                                         'connectionrefused'])
+async def test_navigation_network_errors_are_classified_before_dispatch(
+        tmp_path, entrypoint, network_error):
+    from playwright.async_api import async_playwright
+
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import SubchatPreparationFailed
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    requests = []
+
+    async def fail_navigation(route):
+        requests.append(route.request.method)
+        await route.abort(network_error)
+
+    async with async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            original = await context.new_page()
+            await original.set_content('<p>User-owned page</p>')
+            await context.route('https://chatgpt.com/**', fail_navigation)
+            backend = BrowserSubchatBackend(context)
+            if entrypoint == 'catalog':
+                observed = await backend.catalog()
+                assert observed == {'state': 'catalog_unavailable', 'submitted': False,
+                                    'reason': 'navigation_failed', 'failure_stage': 'navigation'}
+            else:
+                store = SubchatSubmissions(ledger.connection)
+                submission = store.prepare('9' * 32, 'never sent', 'Future model',
+                                           'Initial effort', owner=None)
+                with pytest.raises(SubchatPreparationFailed) as caught:
+                    if entrypoint == 'prepare':
+                        await backend.prepare(submission)
+                    else:
+                        await backend.http_catalog()
+                assert caught.value.reason == 'navigation_failed'
+                assert 'net::' not in str(caught.value)
+                assert store.get(submission.operation_id, owner=None).state == 'prepared'
+            assert requests and set(requests) == {'GET'}
+            assert context.pages == [original]
+            assert not original.is_closed()
+            assert backend.pages == {}
+        finally:
+            ledger.close()
+            await browser.close()
+
+
 async def test_baseline_uses_latest_user_identity_in_current_chat_markup():
     playwright = pytest.importorskip('playwright.async_api')
     from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend

@@ -274,6 +274,7 @@ class BrowserSubchatBackend:
             await locator.press(key)
 
     async def catalog(self, model: str | None = None) -> dict[str, object]:
+        from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
         if self._http_reader.blocked_navigation_reason is not None:
@@ -288,6 +289,9 @@ class BrowserSubchatBackend:
             except PlaywrightTimeoutError:
                 return {'state': 'catalog_unavailable', 'submitted': False,
                         'reason': 'navigation_timeout', 'failure_stage': 'navigation'}
+            except PlaywrightError:
+                return {'state': 'catalog_unavailable', 'submitted': False,
+                        'reason': 'navigation_failed', 'failure_stage': 'navigation'}
             failure = await navigation_failure(response)
             if failure == 'browser_challenge':
                 self._http_reader.blocked_navigation_reason = failure
@@ -661,6 +665,7 @@ class BrowserSubchatBackend:
 
     async def _prepare_page(self, page: Page, submission: SubchatSubmission,
                             url: str, *, reused: bool, picker_label: str) -> tuple[str, ...]:
+        from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
         page.set_default_timeout(15_000)
@@ -671,6 +676,10 @@ class BrowserSubchatBackend:
                 raise SubchatPreparationFailed(
                     'Ordinary Chat navigation timed out before dispatch',
                     reason='navigation_timeout') from error
+            except PlaywrightError as error:
+                raise SubchatPreparationFailed(
+                    'Ordinary Chat navigation failed before dispatch',
+                    reason='navigation_failed') from error
             failure = await navigation_failure(response)
             if failure == 'browser_challenge':
                 self._http_reader.blocked_navigation_reason = failure

@@ -212,7 +212,11 @@ bounded `reason`, `failure_stage`, and the observed `http_status` when available
 `browser_challenge` means the response contained Cloudflare's
 `cf-mitigated: challenge` header; an HTTP 403 without that header is
 `navigation_failed`. A visible login button is `authentication_required`.
-Navigation and picker timeouts have separate reasons. `source=compare` preserves
+Navigation and picker timeouts have separate reasons.
+`navigation_failed` also covers Playwright navigation errors without an HTTP
+response, including DNS failures and connection resets; it does not imply that
+the provider received a message. Navigation timeouts retain their own reason.
+`source=compare` preserves
 these fields as `ui_reason`, `ui_failure_stage`, and `ui_http_status`.
 Send preparation persists the same reason while the operation remains unsent;
 inspect its original operation ID instead of starting another send. These

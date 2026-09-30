@@ -274,13 +274,25 @@ async def navigation_failure(response: Response | None) -> str | None:
 
 async def observe_http_catalog(page: Page) -> Response:
     """Observe the app's own catalog GET on a dedicated page; no token copying."""
+    from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
     def catalog_response(response: Response) -> bool:
         url = urlsplit(response.url)
         return (url.scheme == 'https' and url.netloc == 'chatgpt.com'
                 and url.path == '/backend-api/models' and response.request.method == 'GET')
 
     async with page.expect_response(catalog_response, timeout=15_000) as pending:
-        home = await page.goto('https://chatgpt.com/', wait_until='commit')
+        try:
+            home = await page.goto('https://chatgpt.com/', wait_until='commit')
+        except PlaywrightTimeoutError as error:
+            raise SubchatPreparationFailed(
+                'Ordinary Chat navigation timed out before catalog observation',
+                reason='navigation_timeout') from error
+        except PlaywrightError as error:
+            raise SubchatPreparationFailed(
+                'Ordinary Chat navigation failed before catalog observation',
+                reason='navigation_failed') from error
         failure = await navigation_failure(home)
         if failure is not None:
             raise SubchatPreparationFailed(
