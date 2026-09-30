@@ -74,6 +74,11 @@ class CatalogCommand(Contract):
     action: Literal['catalog']
 
 
+class BrowserDiagnosticCommand(Contract):
+    action: Literal['browser_diagnostics']
+    mode: Literal['status', 'show', 'close'] = 'status'
+
+
 class ListCommand(SubchatList):
     action: Literal['list']
 
@@ -91,7 +96,7 @@ class DeleteCommand(DeleteRequest):
 
 async def dispatch(service: Subchats,
                    command: Command | ListCommand | QueueCommand | CatalogCommand
-                   | CapabilitiesCommand | DeleteCommand, *,
+                   | CapabilitiesCommand | DeleteCommand | BrowserDiagnosticCommand, *,
                    owner: str | None = None) -> str:
     if isinstance(command, CapabilitiesCommand):
         capabilities = getattr(service.backend, 'capabilities', None)
@@ -103,6 +108,11 @@ async def dispatch(service: Subchats,
         if observe is None:
             raise ValueError('HTTP catalog is unavailable')
         return json.dumps(await observe(), ensure_ascii=False)
+    if isinstance(command, BrowserDiagnosticCommand):
+        inspect_browser = getattr(service.backend, 'browser_diagnostics', None)
+        if inspect_browser is None:
+            raise ValueError('Browser diagnostics are unavailable')
+        return json.dumps(await inspect_browser(command.mode), ensure_ascii=False)
     if isinstance(command, ListCommand):
         return service.store.list(SubchatList(
             limit=command.limit, before=command.before,
@@ -157,11 +167,12 @@ async def process_lines(service: Subchats, source: TextIO, destination: TextIO, 
         if not line:
             return
         command: (Command | ListCommand | QueueCommand | CatalogCommand
-                  | CapabilitiesCommand | DeleteCommand | None) = None
+                  | CapabilitiesCommand | DeleteCommand | BrowserDiagnosticCommand | None) = None
         try:
             command = TypeAdapter(
                 Command | ListCommand | QueueCommand | CatalogCommand
-                | CapabilitiesCommand | DeleteCommand).validate_json(line)
+                | CapabilitiesCommand | DeleteCommand | BrowserDiagnosticCommand
+            ).validate_json(line)
             output = await dispatch(service, command, owner=owner)
         except Exception as error:
             # Do not print provider errors or invalid input: both can contain secrets.

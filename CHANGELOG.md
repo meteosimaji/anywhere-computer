@@ -3,7 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0b44 / Plugin 0.2.0-beta.44 — unpublished candidate (2026-09-30)
+## 0.2.0b45 / Plugin 0.2.0-beta.45 — unpublished candidate (2026-09-30)
+
+- Retain the exact newly created blocked Subchat tab for bounded local inspection
+  through status, show and close in the same send-capable Plugin session. Keep
+  normal operation in the background; expiry and session exit close the owned tab.
+- Preserve the rejection latch and original operation/receipt. Display requests
+  never solve a challenge, resend, open another profile, or claim OS foreground
+  visibility or authentication success. Do not expose this tool through read-only
+  mode or the HTTPS gateway.
+
+## 0.2.0b44 / Plugin 0.2.0-beta.44 — published (2026-09-30)
 
 - Resume phone result checks after history-cache restoration without extending
   expiry or processing responses from a paused poll.

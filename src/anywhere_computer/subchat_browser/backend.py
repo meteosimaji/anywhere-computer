@@ -48,6 +48,7 @@ from .catalog import (
     require_http_selection,
     resolve_picker_label,
 )
+from .diagnostics import BrowserDiagnostics, DiagnosticAction
 from .efforts import matches_effort, move_effort, snapshot
 from .http_reader import ChatHTTPReader
 from .httpx_generation import HTTPXGenerationPreflightError
@@ -187,7 +188,10 @@ class BrowserSubchatBackend:
         self._record_rejection = record_rejection
         self._http_reader = ChatHTTPReader(
             http_request_factory, page_factory=self._new_page if background_pages else None,
-            retain_catalog_page=httpx_generation)
+            retain_catalog_page=httpx_generation,
+            retain_challenge_page=self._retain_challenge_page if background_pages else None)
+        self.browser_diagnostics_available = background_pages
+        self._diagnostics = BrowserDiagnostics(self._close_diagnostic_page)
         self._context = None if callable(context) else context
         self._create_context = context if callable(context) else None
         self._context_lock = asyncio.Lock()
@@ -215,6 +219,12 @@ class BrowserSubchatBackend:
                        for operation_id in self._browser_generations
                        if (page := self.pages.get(operation_id)) is not None))
 
+    def has_live_diagnostics(self) -> bool:
+        return self._diagnostics.is_retained()
+
+    def has_live_transport(self) -> bool:
+        return self.has_live_generation() or self.has_live_diagnostics()
+
     async def close_generations(self) -> None:
         tasks = list(self._generation_tasks.values())
         for task in tasks:
@@ -224,6 +234,18 @@ class BrowserSubchatBackend:
         await asyncio.gather(*self._generation_tasks.values(), return_exceptions=True)
         self._browser_generations.clear()
         await self._http_reader.close_catalog_page()
+        await self._diagnostics.inspect('close')
+
+    async def _close_diagnostic_page(self, page: Page) -> None:
+        await self._http_reader.close_owned_page(page, prepare_target=True)
+
+    async def _retain_challenge_page(self, page: Page) -> None:
+        await self._diagnostics.retain(page)
+
+    async def browser_diagnostics(self, action: DiagnosticAction) -> dict[str, object]:
+        if not self.browser_diagnostics_available:
+            raise SubchatUnsupported('ui_unavailable')
+        return await self._diagnostics.inspect(action)
 
     def _browser_closed(self, context: BrowserContext) -> None:
         self._closed = True
@@ -283,6 +305,7 @@ class BrowserSubchatBackend:
                     'failure_stage': 'navigation', 'new_session_required': True}
         page = await self._new_page()
         page.set_default_timeout(15_000)
+        retained = False
         try:
             try:
                 response = await page.goto('https://chatgpt.com/', wait_until='commit')
@@ -295,6 +318,9 @@ class BrowserSubchatBackend:
             failure = await navigation_failure(response)
             if failure == 'browser_challenge':
                 self._http_reader.blocked_navigation_reason = failure
+                if self.browser_diagnostics_available:
+                    await self._retain_challenge_page(page)
+                    retained = True
             if failure is not None:
                 return {'state': 'catalog_unavailable', 'submitted': False,
                         'reason': failure, 'failure_stage': 'navigation',
@@ -312,7 +338,8 @@ class BrowserSubchatBackend:
             return await collect_page(page, model, background_input=self._background_pages)
         finally:
             # This is a separate observation tab, never a submission or user draft.
-            await page.close()
+            if not retained:
+                await page.close()
 
     async def _read_context(self, *, catalog: bool = False) -> BrowserContext:
         if (self._context is not None
@@ -645,7 +672,7 @@ class BrowserSubchatBackend:
                                                 picker_label=picker_label)
             self._preparation_touched_pages.discard(page)
             return baseline
-        except BaseException:
+        except BaseException as error:
             if page in self._preparation_touched_pages and candidates:
                 self._unreusable_pages.add(page)
             self._preparation_touched_pages.discard(page)
@@ -655,7 +682,11 @@ class BrowserSubchatBackend:
                 self.pages[submission.operation_id] = previous
                 if previous_kind is not None:
                     self._prepared_baseline_kinds[submission.operation_id] = previous_kind
-            if not candidates:
+            if (not candidates and self.browser_diagnostics_available
+                    and isinstance(error, SubchatPreparationFailed)
+                    and error.reason == 'browser_challenge'):
+                await self._retain_challenge_page(page)
+            elif not candidates:
                 try:
                     await page.close()
                 except Exception as error:

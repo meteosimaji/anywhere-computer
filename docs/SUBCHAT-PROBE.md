@@ -235,6 +235,24 @@ opening new sessions is not a recovery strategy. This guard does not solve or
 bypass provider challenges, and the provider can challenge a later navigation
 even after a successful catalog read.
 
+Background send sessions retain the actual newly created blocked tab for at
+most five minutes, without activating Chrome. In the same local MCP/Plugin
+session, `subchat_browser_diagnostics` accepts `action=status`, `show`, or
+`close`. Status opens nothing; show requests display of that exact owned tab;
+close releases it. This tool is absent in read-only mode and the HTTPS gateway.
+The JSON-lines CLI uses `{"action":"browser_diagnostics","mode":"show"}`.
+Keep the session open while inspecting; session shutdown also closes the tab.
+Expiry is not extended by inspection. Already owned conversation tabs are never
+transferred to diagnostics or closed by this tool.
+
+`display_requested` acknowledges the exact-target display request, not OS
+foreground visibility or successful verification. It never clicks a challenge,
+navigates, sends, retries, or clears the rejection latch. Human inspection and
+any explicitly confirmed challenge completion are separate actions. Preserve
+the original submission ID and receipt classification. A newly selected
+profile/session is still required for new preparation after a blocked session;
+this diagnostic tool does not establish durable challenge clearance.
+
 In browser-prepared HTTPX sessions, a successful HTTP catalog bootstrap retains
 only the empty tab created by this controller. New-conversation preparation can
 reuse that tab instead of navigating home again. Preparation still checks the

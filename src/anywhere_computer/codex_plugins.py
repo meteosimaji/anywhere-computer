@@ -29,7 +29,7 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.:/-]{1,200}$")
 _DENIED_TOOL_PREFIXES = ("codex_plugin_", "devices_", "connection_setup_", "mcp__codex_app__")
 STATEFUL_SUBCHAT_TOOLS = frozenset({
     "subchat_send", "subchat_message", "subchat_observe", "subchat_recover", "subchat_wait",
-    "subchat_queue_watch", "subchat_queue_auto",
+    "subchat_queue_watch", "subchat_queue_auto", "subchat_browser_diagnostics",
 })
 
 
