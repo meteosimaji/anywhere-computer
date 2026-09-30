@@ -12,6 +12,8 @@ import pytest
 from anywhere_computer import browser_control as browser_control_module
 from anywhere_computer import engine as engine_module
 from anywhere_computer.browser_control import (
+    _CLEANUP_WAIT_SECONDS,
+    BrowserActionUnknown,
     BrowserControl,
     BrowserNavigationUnknown,
     BrowserStartupUnavailable,
@@ -841,12 +843,23 @@ async def test_html_labels_and_rendered_viewport_reach_native_mcp_image(local_pa
         await control.close()
 
 
-async def test_current_dom_and_network_metadata_are_bounded_and_owner_scoped(local_page):
+@pytest.mark.parametrize("close_delay", [0, 5.1], ids=["normal", "slow-browser-close"])
+async def test_current_dom_and_network_metadata_are_bounded_and_owner_scoped(
+    local_page, monkeypatch, close_delay,
+):
     pytest.importorskip("playwright.async_api")
     control = BrowserControl(channel="chrome")
     try:
         opened = await control.open(owner="owner-a")
         ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        entry = control.entries[ids["session_id"]]
+        browser_close = entry.browser.close
+
+        async def delayed_close():
+            await asyncio.sleep(close_delay)
+            await browser_close()
+
+        monkeypatch.setattr(entry.browser, "close", delayed_close)
         await control.navigate(BrowserNavigate(**ids, url=local_page +
             "?token=private-value&search=example"), owner="owner-a")
         source = await control.source(BrowserSource(**ids), owner="owner-a")
@@ -871,7 +884,22 @@ async def test_current_dom_and_network_metadata_are_bounded_and_owner_scoped(loc
         with pytest.raises(ValueError, match="unavailable"):
             await control.network(BrowserNetwork(**ids), owner="owner-b")
     finally:
-        await control.close()
+        entries = list(control.entries.values())
+        try:
+            await control.close()
+        except BrowserActionUnknown:
+            assert entries
+            assert all(entry.tabs.closing and entry.tabs.close_task is not None
+                       for entry in entries)
+        finally:
+            # Confirm actual cleanup even when the short caller receipt expires.
+            # Real browser/driver failures and unfinished ownership still fail.
+            for entry in entries:
+                task = entry.tabs.close_task
+                assert task is not None
+                await asyncio.wait_for(asyncio.shield(task), 4 * _CLEANUP_WAIT_SECONDS)
+                assert not entry.browser.is_connected()
+            assert not control.entries
 
 
 async def test_key_and_drag_recheck_observation_and_target(local_page):
