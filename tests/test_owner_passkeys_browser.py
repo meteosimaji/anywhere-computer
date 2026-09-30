@@ -127,7 +127,8 @@ async def test_virtual_authenticator_registers_and_approves_consent(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_phone_registration_replaces_desktop_qr_after_verified_save(tmp_path):
+@pytest.mark.parametrize("history_resume", ["none", "before_qr", "while_waiting"])
+async def test_phone_registration_replaces_desktop_qr_after_verified_save(tmp_path, history_resume):
     origin = "https://localhost"
     store = AuthorizationStore(tmp_path, resource=origin + "/mcp",
                                known_tools=frozenset({"files_read"}))
@@ -173,15 +174,26 @@ async def test_phone_registration_replaces_desktop_qr_after_verified_save(tmp_pa
                 await phone_context.route("https://**/*", route_request)
                 desktop = await desktop_context.new_page()
                 await desktop.goto(origin + "/owner-passkey?" + urlencode({"ticket": ticket}))
+                async def restore_cached_page():
+                    # Exercise the browser lifecycle contract while preserving
+                    # the same script/DOM, as a persisted history entry does.
+                    await desktop.evaluate("""() => {
+                      window.dispatchEvent(new PageTransitionEvent('pagehide', {persisted: true}));
+                      window.dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
+                    }""")
+                if history_resume == "before_qr":
+                    await restore_cached_page()
                 await desktop.get_by_role("button", name="Register on your phone").click()
                 assert await desktop.locator("#phone-registration svg").is_visible()
                 await desktop.get_by_text(
                     "Cannot confirm registration yet. Retrying; do not register again."
-                ).wait_for()
+                ).wait_for(timeout=5000)
                 assert await desktop.locator("#phone-registration svg").is_visible()
                 assert len(consent.passkeys.list()) == 0
                 await desktop.get_by_text("Waiting for registration on your phone…").wait_for()
                 assert len(consent.passkeys.list()) == 0
+                if history_resume == "while_waiting":
+                    await restore_cached_page()
 
                 phone_url = await desktop.locator("#phone-registration-link").get_attribute("href")
                 assert phone_url == origin + "/owner-passkey?" + urlencode({"ticket": ticket})

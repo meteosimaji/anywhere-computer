@@ -44,6 +44,11 @@ or an HTTP service restart can stop observation. Check `owner-passkey-list` loca
 before issuing another link when completion is uncertain. A key removed before
 the result check is not reported as registered.
 
+Leaving the page pauses observation. If the browser restores the same page from
+its history cache, observation resumes when the phone QR had already been chosen;
+the original deadline remains unchanged. Registration completion or expiry stays
+terminal, and responses from the previous paused poll are ignored.
+
 Register a second passkey while the first and the password are available if
 you want another recovery route. A synced passkey may work on multiple devices
 according to the passkey provider, but it remains one credential in Anywhere
@@ -110,3 +115,6 @@ phone's virtual authenticator, then checks the computer's completion message,
 removed QR, cleared ticket and URL. This establishes the browser flow with an
 isolated authenticator; physical phone camera and password-manager acceptance
 remain separate checks.
+The test also dispatches persisted pagehide/pageshow lifecycle events before QR
+selection and during observation. It preserves the same script and DOM to exercise
+history-cache restoration; it does not establish each browser's cache eligibility.

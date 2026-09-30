@@ -122,6 +122,9 @@ _PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
   const phone = document.getElementById('phone-registration');
   const status = document.getElementById('registration-status');
   let stopped = false;
+  let paused = false;
+  let phoneStarted = false;
+  let generation = 0;
   let timer;
   let request;
   const deadline = Date.now() + Number(phoneButton.dataset.remainingMs);
@@ -141,14 +144,16 @@ _PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
     status.textContent = message;
   }
   async function poll() {
-    if (stopped) return;
+    if (stopped || paused) return;
+    const currentGeneration = generation;
     if (Date.now() >= deadline) {
       finish('Registration link expired. Check enrolled keys before starting again locally.',
         false);
       return;
     }
-    request = new AbortController();
-    const timeout = setTimeout(() => request.abort(), 5000);
+    const controller = new AbortController();
+    request = controller;
+    const timeout = setTimeout(() => controller.abort(), 5000);
     try {
       const form = button.form;
       const body = new URLSearchParams();
@@ -157,15 +162,16 @@ _PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
       }
       const response = await fetch('/owner-passkey-status', {
         method: 'POST', body, credentials: 'same-origin', cache: 'no-store',
-        signal: request.signal,
+        signal: controller.signal,
       });
-      if (stopped) return;
+      if (stopped || paused || currentGeneration !== generation) return;
       if (response.status === 403 || response.status === 410) {
         finish('Registration link is no longer available. Check enrolled keys locally.', false);
         return;
       }
       if (!response.ok) throw new Error('Registration status unavailable');
       const result = await response.json();
+      if (stopped || paused || currentGeneration !== generation) return;
       if (result.status === 'registered') {
         finish('Passkey registered. You can close this page.', true);
         return;
@@ -173,21 +179,28 @@ _PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
       if (result.status !== 'waiting') throw new Error('Registration status unavailable');
       status.textContent = 'Waiting for registration on your phone…';
     } catch (_) {
-      if (!stopped) status.textContent =
+      if (!stopped && !paused && currentGeneration === generation) status.textContent =
         'Cannot confirm registration yet. Retrying; do not register again.';
     } finally { clearTimeout(timeout); }
-    if (!stopped) timer = setTimeout(poll, 2000);
+    if (!stopped && !paused && currentGeneration === generation) timer = setTimeout(poll, 2000);
   }
   phoneButton.addEventListener('click', () => {
+    phoneStarted = true;
     phone.hidden = false;
     phoneButton.disabled = true;
     button.disabled = true;
     poll();
   });
   window.addEventListener('pagehide', () => {
-    stopped = true;
+    paused = true;
+    generation += 1;
     clearTimeout(timer);
     if (request) request.abort();
+  });
+  window.addEventListener('pageshow', event => {
+    if (!event.persisted || !paused || stopped) return;
+    paused = false;
+    if (phoneStarted) poll();
   });
   button.addEventListener('click', async event => {
     if (document.getElementById('registration-response').value) return;
