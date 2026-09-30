@@ -42,6 +42,7 @@ from .catalog import (
     TOGGLE,
     TRIGGER,
     collect_page,
+    navigation_failure,
     observed_chat_surface,
     picker_ready,
     require_http_selection,
@@ -58,7 +59,6 @@ if TYPE_CHECKING:
         BrowserContext,
         Locator,
         Page,
-        Response,
         Route,
     )
 
@@ -77,15 +77,6 @@ _GENERATION_REQUEST_TIMEOUT = 120.0
 
 class _DraftNotSubmitted(ValueError):
     """The guarded browser task refused input before its Send click."""
-
-
-async def _navigation_failure(response: Response | None) -> str | None:
-    """Classify navigation without retaining response content or credentials."""
-    if response is None:
-        return 'navigation_failed'
-    if await response.header_value('cf-mitigated') == 'challenge':
-        return 'browser_challenge'
-    return None if response.ok else 'navigation_failed'
 
 
 async def _abort_unclaimed_generation_request(route: Route) -> None:
@@ -283,6 +274,10 @@ class BrowserSubchatBackend:
     async def catalog(self, model: str | None = None) -> dict[str, object]:
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
+        if self._http_reader.blocked_navigation_reason is not None:
+            return {'state': 'catalog_unavailable', 'submitted': False,
+                    'reason': self._http_reader.blocked_navigation_reason,
+                    'failure_stage': 'navigation', 'new_session_required': True}
         page = await self._new_page()
         page.set_default_timeout(15_000)
         try:
@@ -291,7 +286,9 @@ class BrowserSubchatBackend:
             except PlaywrightTimeoutError:
                 return {'state': 'catalog_unavailable', 'submitted': False,
                         'reason': 'navigation_timeout', 'failure_stage': 'navigation'}
-            failure = await _navigation_failure(response)
+            failure = await navigation_failure(response)
+            if failure == 'browser_challenge':
+                self._http_reader.blocked_navigation_reason = failure
             if failure is not None:
                 return {'state': 'catalog_unavailable', 'submitted': False,
                         'reason': failure, 'failure_stage': 'navigation',
@@ -318,6 +315,10 @@ class BrowserSubchatBackend:
         return await self._browser()
 
     async def http_catalog(self) -> dict[str, object]:
+        if self._http_reader.blocked_navigation_reason is not None:
+            raise SubchatPreparationFailed(
+                'Browser challenge blocked this session; inspect the login browser '
+                'before restarting', reason=self._http_reader.blocked_navigation_reason)
         async with asyncio.timeout(20):
             result = await self._http_reader.catalog(await self._read_context(catalog=True))
             result['http_selection_send_supported'] = self.http_read
@@ -600,6 +601,11 @@ class BrowserSubchatBackend:
 
     async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
         self.validate_send_selection(submission.http_selection)
+        if self._http_reader.blocked_navigation_reason is not None:
+            raise SubchatPreparationFailed(
+                'Browser challenge blocked this session; inspect the login browser '
+                'before restarting',
+                reason=self._http_reader.blocked_navigation_reason)
         picker_label = submission.model
         if self.http_read:
             assert submission.http_selection is not None
@@ -657,7 +663,9 @@ class BrowserSubchatBackend:
                 raise SubchatPreparationFailed(
                     'Ordinary Chat navigation timed out before dispatch',
                     reason='navigation_timeout') from error
-            failure = await _navigation_failure(response)
+            failure = await navigation_failure(response)
+            if failure == 'browser_challenge':
+                self._http_reader.blocked_navigation_reason = failure
             if failure is not None:
                 raise SubchatPreparationFailed(
                     'Ordinary Chat navigation was blocked before dispatch', reason=failure)

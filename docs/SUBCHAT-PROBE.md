@@ -220,6 +220,17 @@ diagnostics retain no response body, cookies, or authentication headers. A
 successful HTTP catalog or a previous successful UI visit does not establish
 that the next browser navigation will pass a challenge.
 
+The HTTP catalog bootstrap checks the home navigation too: a challenge stops
+before waiting for a model response that the challenge page cannot produce.
+After a challenge, this controller refuses further UI catalog observations,
+HTTP catalog bootstraps, and new send preparation without opening another tab.
+UI results then report `new_session_required: true`. Already authenticated
+history recovery remains available when it does not need browser bootstrap.
+Inspect the login browser before explicitly starting a fresh session; repeatedly
+opening new sessions is not a recovery strategy. This guard does not solve or
+bypass provider challenges, and the provider can challenge a later navigation
+even after a successful catalog read.
+
 On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` exposes the
 same send tools with a different generation transport. Use the dedicated logged-in
 profile, or select an ordinary Chrome profile through

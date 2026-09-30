@@ -12,6 +12,7 @@ from ..subchat import (
     SubchatAccessError,
     SubchatAnswer,
     SubchatPendingObservation,
+    SubchatPreparationFailed,
     SubchatPreview,
     SubchatReceipt,
     SubchatUnsupported,
@@ -95,6 +96,7 @@ class ChatHTTPReader:
                                          if session is not None else {})
         self._catalog_url: str | None = session.catalog_url if session is not None else None
         self._access_status: int | None = access_status
+        self.blocked_navigation_reason: str | None = None
         self._denied_urls: set[str] = set()
         self._pending_closes: set[asyncio.Task[None]] = set()
 
@@ -197,6 +199,7 @@ class ChatHTTPReader:
             self._headers = {}
             self._catalog_url = None
             self._access_status = None
+            self.blocked_navigation_reason = None
             self._denied_urls.clear()
         observed = self._headers.get('chatgpt-account-id')
         if observed is not None and observed != account_id:
@@ -218,12 +221,17 @@ class ChatHTTPReader:
             self._headers = {}
             self._catalog_url = None
             self._access_status = None
+            self.blocked_navigation_reason = None
             self._denied_urls.clear()
         if self._access_status is not None:
             raise SubchatAccessError(self._access_status)
         if url in self._denied_urls:
             raise SubchatAccessError(403)
         if not self._headers or url is None:
+            if self.blocked_navigation_reason is not None:
+                raise SubchatPreparationFailed(
+                    'Browser challenge blocked this session; inspect the login browser '
+                    'before restarting', reason=self.blocked_navigation_reason)
             if self._browser_free:
                 raise SubchatUnsupported('http_session_required')
             assert context is not None
@@ -243,6 +251,10 @@ class ChatHTTPReader:
             except SubchatAccessError as error:
                 self._headers = {}
                 self._access_status = error.status
+                raise
+            except SubchatPreparationFailed as error:
+                if error.reason == 'browser_challenge':
+                    self.blocked_navigation_reason = error.reason
                 raise
             finally:
                 # Wait for bounded cleanup before returning normal results. If

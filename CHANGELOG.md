@@ -23,6 +23,9 @@
   timeouts in Subchat preparation and UI catalog diagnostics. This reports a
   blocked browser navigation; it does not bypass challenges or establish that
   generation has been restored.
+- Detect challenged home navigation during HTTP catalog bootstrap immediately
+  and stop new catalog/preparation attempts in the same controller session.
+  Preserve existing authenticated history recovery without browser bootstrap.
 
 ## 0.2.0b39 / Plugin 0.2.0-beta.39 — development prerelease (2026-09-30)
 

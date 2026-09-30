@@ -17,7 +17,7 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from ..subchat import SubchatAccessError
+from ..subchat import SubchatAccessError, SubchatPreparationFailed
 from ..subchat_state import SubchatHTTPSelection, SubchatSelectionError
 from .efforts import collect_efforts
 
@@ -263,6 +263,15 @@ def compare_http_and_ui_catalog(http: dict[str, object],
             'generation_http_verified': False, 'submitted': False}
 
 
+async def navigation_failure(response: Response | None) -> str | None:
+    """Classify navigation without retaining response content or credentials."""
+    if response is None:
+        return 'navigation_failed'
+    if await response.header_value('cf-mitigated') == 'challenge':
+        return 'browser_challenge'
+    return None if response.ok else 'navigation_failed'
+
+
 async def observe_http_catalog(page: Page) -> Response:
     """Observe the app's own catalog GET on a dedicated page; no token copying."""
     def catalog_response(response: Response) -> bool:
@@ -271,7 +280,12 @@ async def observe_http_catalog(page: Page) -> Response:
                 and url.path == '/backend-api/models' and response.request.method == 'GET')
 
     async with page.expect_response(catalog_response, timeout=15_000) as pending:
-        await page.goto('https://chatgpt.com/', wait_until='commit')
+        home = await page.goto('https://chatgpt.com/', wait_until='commit')
+        failure = await navigation_failure(home)
+        if failure is not None:
+            raise SubchatPreparationFailed(
+                'Ordinary Chat navigation was blocked before catalog observation',
+                reason=failure)
     response = await pending.value
     if response.status in (401, 403):
         raise SubchatAccessError(response.status)

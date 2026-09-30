@@ -1,6 +1,7 @@
 """HTTP catalog identities are dynamic, authenticated and distinct from UI labels."""
 import asyncio
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -308,6 +309,62 @@ async def test_actual_http_catalog_request_without_picker_or_send(authenticated,
             assert requests == [('GET', 'https://chatgpt.com/'),
                                 ('GET', 'https://chatgpt.com/backend-api/models')]
         finally:
+            await browser.close()
+
+
+@pytest.mark.parametrize('status', [200, 403])
+@pytest.mark.parametrize('first_observation', ['http', 'ui'])
+async def test_http_catalog_challenge_stops_without_reopening_pages(
+        tmp_path, status, first_observation):
+    from playwright.async_api import async_playwright
+
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import SubchatPreparationFailed
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmissions
+
+    requests = []
+
+    async def challenge(route):
+        requests.append((route.request.method, route.request.url))
+        await route.fulfill(status=status, headers={'cf-mitigated': 'challenge'},
+                            content_type='text/html', body='<p>Private challenge</p>')
+
+    async with async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            original = await context.new_page()
+            await context.route('https://chatgpt.com/**', challenge)
+            backend = BrowserSubchatBackend(context, http_read=True)
+            if first_observation == 'ui':
+                observed = await backend.catalog()
+                assert observed['reason'] == 'browser_challenge'
+            for _ in range(2):
+                with pytest.raises(SubchatPreparationFailed) as caught:
+                    await asyncio.wait_for(
+                        backend.http_catalog(), timeout=30 if sys.platform == 'win32' else 5)
+                assert caught.value.reason == 'browser_challenge'
+                assert 'Private' not in str(caught.value)
+            observed = await backend.catalog()
+            assert observed['reason'] == 'browser_challenge'
+            assert observed['submitted'] is False
+            selection = SubchatHTTPSelection.model_validate(
+                project_http_catalog(json.dumps(catalog()).encode())[
+                    'versions'][0]['choices'][0]['http_selection'])
+            store = SubchatSubmissions(ledger.connection)
+            submission = store.prepare('7' * 32, 'not dispatched', 'Future Chat',
+                                       'Future effort', owner=None, http_selection=selection)
+            with pytest.raises(SubchatPreparationFailed) as caught:
+                await backend.prepare(submission)
+            assert caught.value.reason == 'browser_challenge'
+            assert store.get(submission.operation_id, owner=None).state == 'prepared'
+            assert requests == [('GET', 'https://chatgpt.com/')]
+            assert context.pages == [original] and not original.is_closed()
+            assert backend.pages == {}
+        finally:
+            ledger.close()
             await browser.close()
 
 
