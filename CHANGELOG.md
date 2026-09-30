@@ -3,6 +3,56 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b42 / Plugin 0.2.0-beta.42 — unpublished candidate (2026-09-30)
+
+- Classify non-timeout Playwright home-navigation errors as navigation_failed
+  in UI catalog, HTTP catalog bootstrap and send preparation. Preserve the
+  distinct navigation_timeout result and known-unsent operation recovery.
+  Network errors before dispatch no longer produce an unknown send outcome.
+
+## 0.2.0b41 / Plugin 0.2.0-beta.41 — unpublished candidate (2026-09-30)
+
+- In browser-prepared HTTPX Subchat sessions, retain the controller-owned
+  authenticated catalog bootstrap page for new-conversation preparation.
+  Revalidate its URL, empty idle composer, conversation history and exact
+  model/effort selection before sending. This avoids an unnecessary second
+  home navigation; it does not bypass provider challenges.
+- Close unused bootstrap pages on session shutdown and invalid catalogs.
+  Preserve separate pages for read-only and ordinary browser-send adapters,
+  and never discover or claim existing user tabs.
+
+## 0.2.0b40 / Plugin 0.2.0-beta.40 — unpublished candidate (2026-09-30)
+
+- Include Subchat device-save scopes in HTTP tool upgrades while retaining
+  explicit consent for existing restricted grants. Enable desktop Start when
+  diagnostics confirm a stale endpoint left by a stopped engine.
+- Give each sandbox file its own device-save identity, preserving legacy
+  transfer checkpoints and duplicate protections. Accept verified matching
+  JSON/HTML artifacts and empty files while rejecting mismatched responses.
+- Share the 2 MiB image budget across video frames and reduce quality/size when
+  necessary so HTTP/SSH delivery and operation recovery accept the result.
+- Recreate the Windows owner-pipe listener after transient accept failures;
+  report a fatal error if a replacement listener cannot be created.
+- Revalidate macOS AX elements in the traversal order used by their full or
+  compact observation. Preserve bounded traversal and process/window identity.
+- Preserve provider interruption/output-limit exceptions in HTTP-only recovery
+  so terminal state and its reason are saved instead of leaving a turn reserved.
+- Distinguish browser challenges, login requirements, navigation errors and
+  timeouts in Subchat preparation and UI catalog diagnostics. This reports a
+  blocked browser navigation; it does not bypass challenges or establish that
+  generation has been restored.
+- Detect challenged home navigation during HTTP catalog bootstrap immediately
+  and stop new catalog/preparation attempts in the same controller session.
+  Preserve existing authenticated history recovery without browser bootstrap.
+
+## 0.2.0b39 / Plugin 0.2.0-beta.39 — development prerelease (2026-09-30)
+
+- Report how many active HTTP grants still lack the tools requested by
+  `http-add-tools`, including deliberately restricted grants. Mark fresh
+  consent as required in that case without expanding or replacing those grants.
+- Explain that updating a ChatGPT developer plugin's tool list does not change
+  the connected account's OAuth grant; the owner must review any new consent.
+
 ## 0.2.0b38 / Plugin 0.2.0-beta.38 — development prerelease (2026-09-30)
 
 - Prepare an exact temporary Chat tab CDP target before closing read-only

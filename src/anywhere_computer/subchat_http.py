@@ -17,6 +17,7 @@ import httpx
 from .subchat import (
     SubchatAccessError,
     SubchatAnswer,
+    SubchatInterrupted,
     SubchatPendingObservation,
     SubchatPreparedSend,
     SubchatPreview,
@@ -383,6 +384,10 @@ class HTTPOnlySubchatBackend:
                     return await reader.history(None, submission)
 
             answer = await self._authenticated_read(read)
+        except SubchatInterrupted:
+            # Provider termination must reach Subchats.recover so it releases
+            # the conversation reservation and persists the terminal reason.
+            raise
         except (SubchatAccessError, SubchatAccountMismatch):
             if self._generation is not None and self._store is not None:
                 self._store.record_http_event(submission.operation_id, 'history_failed',

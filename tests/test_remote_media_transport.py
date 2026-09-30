@@ -3,6 +3,9 @@
 import base64
 import copy
 import json
+import random
+import shutil
+import subprocess
 import sys
 import uuid
 from types import SimpleNamespace
@@ -12,12 +15,75 @@ from test_http_client import http_remote as http_remote
 from test_plugin_image_results import image
 
 from anywhere_computer.models import Request
+from anywhere_computer.plugin_images import IMAGE_LIMIT
 from anywhere_computer.ssh_client import SSHBackend
 
 AUDIO = {'type': 'audio', 'mimeType': 'audio/wav',
          'data': base64.b64encode(b'RIFF\x04\x00\x00\x00WAVE').decode()}
 MEDIA = [image(), AUDIO]
 SCOPES = frozenset({'mcp_call', 'operations_get'})
+
+
+@pytest.fixture(scope='module')
+def noisy_video(tmp_path_factory):
+    if shutil.which('ffmpeg') is None:
+        pytest.skip('Real video acceptance requires FFmpeg')
+    path = tmp_path_factory.mktemp('video-budget') / 'noise.mkv'
+    subprocess.run([
+        'ffmpeg', '-hide_banner', '-loglevel', 'error', '-nostdin',
+        '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-s', '960x1600', '-r', '1',
+        '-i', 'pipe:0', '-frames:v', '1', '-c:v', 'ffv1', '-pix_fmt', 'yuv444p', str(path),
+    ], input=random.Random(39).randbytes(960 * 1600 * 3), check=True, timeout=30)
+    return path
+
+
+@pytest.fixture
+async def video_peer(request, http_remote, tmp_path, monkeypatch):
+    if request.param == 'http':
+        yield http_remote[0]
+        return
+    program = tmp_path / 'video-peer.py'
+    program.write_text('''import asyncio, sys
+from pathlib import Path
+from anywhere_computer.engine import Engine
+from anywhere_computer.mcp_server import MCPSession, serve_stdio
+async def main():
+    engine = Engine(Path(sys.argv[1]))
+    async def catalog():
+        return engine.catalog()
+    try:
+        await serve_stdio(MCPSession(catalog, engine.execute), sys.stdin.buffer, sys.stdout.buffer)
+    finally:
+        await engine.close()
+asyncio.run(main())
+''')
+    monkeypatch.setattr('anywhere_computer.ssh_client.ssh_command', lambda host: [
+        sys.executable, '-I', str(program), str(tmp_path / 'agent'),
+    ])
+    backend = SSHBackend('fixture')
+    try:
+        yield backend
+    finally:
+        await backend.close()
+
+
+@pytest.mark.parametrize('http_remote', [frozenset({'media_video_frames', 'operations_get'})],
+                         indirect=True)
+@pytest.mark.parametrize('video_peer', ['http', 'ssh'], indirect=True)
+@pytest.mark.parametrize('count', [2, 4])
+async def test_real_noisy_video_frames_roundtrip_and_recovery(video_peer, noisy_video, count):
+    request = operation('media_video_frames', path=str(noisy_video), timestamps_seconds=[0] * count)
+    reply = await video_peer.execute(request)
+    assert reply.state == 'completed', reply.error
+    assert len(reply.data['content']) == len(reply.data['frames']) == count
+    raw_sizes = [len(base64.b64decode(item['data'], validate=True))
+                 for item in reply.data['content']]
+    assert sum(raw_sizes) <= IMAGE_LIMIT
+    assert raw_sizes == [frame['bytes'] for frame in reply.data['frames']]
+    recovered = await video_peer.execute(operation(
+        'operations_get', operation_id=request.operation_id))
+    assert recovered.data['state'] == 'completed'
+    assert recovered.data['data']['content'] == reply.data['content']
 
 
 def operation(tool_name='mcp_call', **arguments):

@@ -149,6 +149,108 @@ async def test_download_rejects_other_account_and_oversize(tmp_path):
     await _case(tmp_path / 'size', size=16 * 1024 * 1024 + 1)
 
 
+@pytest.mark.parametrize('mime,received', [
+    ('text/csv', 'application/json'), ('application/json', 'text/html'),
+    ('text/html', 'application/json'), ('application/json', 'text/csv'),
+    ('application/octet-stream', 'Text/HTML; charset=UTF-8'),
+])
+async def test_download_rejects_mismatched_text_formats(tmp_path, mime, received):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, payload = completed(store)
+
+        def serve(request):
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            if request.url.path.endswith('/interpreter/download'):
+                return streamed_json({
+                    'download_url': CONTENT_URL, 'file_name': 'report.csv',
+                    'file_size_bytes': 3, 'mime_type': mime, 'status': 'ready'})
+            return streamed_content(b'abc', content_type=received)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            with pytest.raises(ValueError, match='content type'):
+                await backend.download_sandbox_file(submission.operation_id, LINK)
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('size,body,offset,expected', [
+    (0, b'', 0, None), (None, b'', 0, None), (0, b'x', 0, 'metadata'),
+    (0, b'', 1, 'outside'), (None, b'', 1, 'requested range'),
+])
+async def test_empty_download_verifies_body_and_offset(tmp_path, size, body, offset, expected):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, payload = completed(store)
+
+        def serve(request):
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            if request.url.path.endswith('/interpreter/download'):
+                return streamed_json({
+                    'download_url': CONTENT_URL, 'file_name': 'empty.txt',
+                    'file_size_bytes': size, 'mime_type': 'text/plain', 'status': 'ready'})
+            return streamed_content(body)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            if expected is not None:
+                with pytest.raises(ValueError, match=expected):
+                    await backend.download_sandbox_file(submission.operation_id, LINK,
+                                                       offset=offset)
+            else:
+                result = await backend.download_sandbox_file(submission.operation_id, LINK)
+                assert result.content == b'' and result.file_size_bytes == 0 and result.eof
+    finally:
+        ledger.close()
+
+
+@pytest.mark.parametrize('mime,body', [
+    ('application/json', b'{"result": 1}'),
+    ('text/html', b'<!doctype html><title>Result</title>'),
+    ('application/octet-stream', b''),
+])
+async def test_download_accepts_expected_text_formats_and_empty_file(tmp_path, mime, body):
+    ledger = Ledger(tmp_path)
+    try:
+        store = SubchatSubmissions(ledger.connection)
+        submission, payload = completed(store)
+
+        def serve(request):
+            if request.url.path.startswith('/backend-api/conversations/'):
+                return httpx.Response(200, json=payload)
+            if request.url.path.endswith('/interpreter/download'):
+                return streamed_json({
+                    'download_url': CONTENT_URL, 'file_name': 'report.csv',
+                    'file_size_bytes': len(body), 'mime_type': mime, 'status': 'ready'})
+            return streamed_content(body, content_type=mime)
+
+        async with httpx.AsyncClient(transport=httpx.MockTransport(serve)) as client:
+            async def factory():
+                return client
+
+            backend = HTTPOnlySubchatBackend(factory, credentials(), store=store)
+            result = await backend.download_sandbox_file(submission.operation_id, LINK)
+            assert result.content == body
+            assert result.file_size_bytes == len(body)
+            assert result.eof
+            with pytest.raises(ValueError, match='outside'):
+                await backend.download_sandbox_file(submission.operation_id, LINK,
+                                                    offset=max(1, len(body)))
+    finally:
+        ledger.close()
+
+
 @pytest.mark.parametrize('case', ['success', 'pending', 'missing_link', 'oversize'])
 async def test_browser_download_uses_fresh_pinned_account_and_final_history(
         tmp_path, monkeypatch, case):

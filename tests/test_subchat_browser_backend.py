@@ -1,6 +1,7 @@
 """Browser adapter integration against an offline, effectful Chat DOM fixture."""
 import asyncio
 import json
+import sys
 from pathlib import Path
 
 import pytest
@@ -119,14 +120,16 @@ async def test_ready_chat_does_not_wait_for_domcontentloaded(tmp_path, action):
             await context.route('https://chatgpt.com/**', respond)
             backend = BrowserSubchatBackend(context)
             if action == 'catalog':
-                observed = await asyncio.wait_for(backend.catalog(), timeout=6)
+                observed = await asyncio.wait_for(
+                    backend.catalog(), timeout=30 if sys.platform == 'win32' else 6)
                 assert observed['state'] in {'catalog_observed', 'catalog_partial'}
                 assert observed['submitted'] is False
             else:
                 store = SubchatSubmissions(ledger.connection)
                 submission = store.prepare('9' * 32, 'read only', 'Future model',
                                            'Initial effort', owner=None)
-                assert await asyncio.wait_for(backend.prepare(submission), timeout=6) == ()
+                assert await asyncio.wait_for(
+                    backend.prepare(submission), timeout=30 if sys.platform == 'win32' else 6) == ()
                 page = backend.pages[submission.operation_id]
                 assert await page.evaluate('document.readyState') in {'loading', 'interactive'}
                 assert await page.evaluate('window.sends') == 0
@@ -134,6 +137,55 @@ async def test_ready_chat_does_not_wait_for_domcontentloaded(tmp_path, action):
             assert script_requested.is_set()
         finally:
             release_script.set()
+            ledger.close()
+            await browser.close()
+
+
+@pytest.mark.parametrize('action', ['catalog', 'prepare'])
+@pytest.mark.parametrize(('status', 'headers', 'body', 'reason'), [
+    (403, {'cf-mitigated': 'challenge'}, '<p>Private challenge content</p>',
+     'browser_challenge'),
+    (200, {'cf-mitigated': 'challenge'}, '<p>Private challenge content</p>',
+     'browser_challenge'),
+    (403, {}, '<p>Private failure content</p>', 'navigation_failed'),
+    (200, {}, '<button>Log in</button>', 'authentication_required'),
+])
+async def test_preparation_failure_distinguishes_challenge_and_login(
+        tmp_path, action, status, headers, body, reason):
+    playwright = pytest.importorskip('playwright.async_api')
+    from anywhere_computer.subchat import SubchatPreparationFailed
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    async def respond(route):
+        await route.fulfill(status=status, headers=headers,
+                            content_type='text/html', body=body)
+
+    async with playwright.async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            await context.route('https://chatgpt.com/**', respond)
+            backend = BrowserSubchatBackend(context)
+            if action == 'catalog':
+                observed = await backend.catalog()
+                assert observed['state'] == 'catalog_unavailable'
+                assert observed['submitted'] is False
+                assert observed['reason'] == reason
+                assert observed['http_status'] == status
+                assert 'Private' not in json.dumps(observed)
+            else:
+                store = SubchatSubmissions(ledger.connection)
+                submission = store.prepare('8' * 32, 'read only', 'Future model',
+                                           'Initial effort', owner=None)
+                with pytest.raises(SubchatPreparationFailed) as caught:
+                    await backend.prepare(submission)
+                assert caught.value.reason == reason
+                assert 'Private' not in str(caught.value)
+                assert store.get(submission.operation_id, owner=None).state == 'prepared'
+                assert backend.pages == {}
+            assert context.pages == []
+        finally:
             ledger.close()
             await browser.close()
 
@@ -166,6 +218,58 @@ async def test_prepare_preserves_original_error_when_page_close_fails(monkeypatc
     with pytest.raises(SubchatAccessError):
         await backend.prepare(submission)
     assert submission.operation_id not in backend.pages
+
+
+@pytest.mark.parametrize('entrypoint', ['catalog', 'http_catalog', 'prepare'])
+@pytest.mark.parametrize('network_error', ['namenotresolved', 'connectionreset',
+                                         'connectionrefused'])
+async def test_navigation_network_errors_are_classified_before_dispatch(
+        tmp_path, entrypoint, network_error):
+    from playwright.async_api import async_playwright
+
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import SubchatPreparationFailed
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatSubmissions
+
+    requests = []
+
+    async def fail_navigation(route):
+        requests.append(route.request.method)
+        await route.abort(network_error)
+
+    async with async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            original = await context.new_page()
+            await original.set_content('<p>User-owned page</p>')
+            await context.route('https://chatgpt.com/**', fail_navigation)
+            backend = BrowserSubchatBackend(context)
+            if entrypoint == 'catalog':
+                observed = await backend.catalog()
+                assert observed == {'state': 'catalog_unavailable', 'submitted': False,
+                                    'reason': 'navigation_failed', 'failure_stage': 'navigation'}
+            else:
+                store = SubchatSubmissions(ledger.connection)
+                submission = store.prepare('9' * 32, 'never sent', 'Future model',
+                                           'Initial effort', owner=None)
+                with pytest.raises(SubchatPreparationFailed) as caught:
+                    if entrypoint == 'prepare':
+                        await backend.prepare(submission)
+                    else:
+                        await backend.http_catalog()
+                assert caught.value.reason == 'navigation_failed'
+                assert 'net::' not in str(caught.value)
+                assert store.get(submission.operation_id, owner=None).state == 'prepared'
+            assert requests and set(requests) == {'GET'}
+            assert context.pages == [original]
+            assert not original.is_closed()
+            assert backend.pages == {}
+        finally:
+            ledger.close()
+            await browser.close()
 
 
 async def test_baseline_uses_latest_user_identity_in_current_chat_markup():

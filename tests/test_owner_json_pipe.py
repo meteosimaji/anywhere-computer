@@ -8,6 +8,9 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -19,6 +22,64 @@ from anywhere_computer.owner_json_pipe import (  # noqa: E402
     OwnerPipeTimeout,
     request_owner_json_pipe_async,
 )
+
+
+@pytest.mark.parametrize('replacement_fails', [False, True])
+def test_accept_error_replaces_listener_or_reports_fatal(monkeypatch, replacement_fails):
+    from anywhere_computer import owner_json_pipe as transport
+
+    server = object.__new__(OwnerJsonPipeServer)
+    server._closing = threading.Event()
+    server._stopped = threading.Event()
+    server._fatal = None
+    server._capacity = threading.BoundedSemaphore(1)
+    server._handles_lock = threading.Lock()
+    server._handles = {1}
+    server._connections_lock = threading.Lock()
+    server._connections = set()
+    attempts, released, requests = [], [], []
+
+    def connect(handle):
+        attempts.append(handle)
+        if len(attempts) == 1:
+            raise OSError(232, 'Client disconnected before accept')
+
+    def create(*, first):
+        assert first is False
+        if replacement_fails:
+            raise OSError(8, 'Cannot create replacement listener')
+        handle = max(server._handles, default=1) + 1
+        server._handles.add(handle)
+        return handle
+
+    class Worker:
+        def __init__(self, *, target, args, **_kwargs):
+            self.handle = args[0]
+
+        def start(self):
+            requests.append(self.handle)
+            server._release_handle(self.handle)
+            server._capacity.release()
+            server._connections.discard(self)
+            server._closing.set()
+
+    monkeypatch.setattr(transport, '_WINDOWS', SimpleNamespace(
+        kernel=SimpleNamespace(OpenThread=lambda *_: 9, DisconnectNamedPipe=lambda *_: None),
+        connect_server=connect, close=released.append), raising=False)
+    monkeypatch.setattr(server, '_create_instance', create)
+    monkeypatch.setattr(server, '_connection_worker', lambda _: None)
+    monkeypatch.setattr(transport.threading, 'Thread', Worker)
+    server._serve(1)
+    if replacement_fails:
+        assert isinstance(server._fatal, OSError)
+        assert server._stopped.is_set() and server._closing.is_set()
+        assert attempts == [1]
+    else:
+        assert attempts == [1, 2] and requests == [2]
+        assert server._fatal is None
+    assert server._handles == set()
+    assert len(released) == len(set(released))
+    assert server._capacity.acquire(blocking=False)
 
 
 @unittest.skipUnless(sys.platform == "win32", "Windows native named-pipe test")
@@ -60,6 +121,32 @@ class OwnerJsonPipeNativeTests(unittest.IsolatedAsyncioTestCase):
         parsed = json.loads(reply)
         self.assertIsInstance(parsed, dict)
         return parsed
+
+    async def test_accept_error_and_immediate_disconnect_allow_next_request(self) -> None:
+        from unittest.mock import patch
+
+        from anywhere_computer import owner_json_pipe as transport
+
+        original = transport._WINDOWS.connect_server
+        injected = threading.Event()
+
+        def disconnected_accept(handle):
+            if not injected.is_set():
+                injected.set()
+                raise OSError(232, 'Synthetic ERROR_NO_DATA before accept')
+            return original(handle)
+
+        with patch.object(transport._WINDOWS, 'connect_server', disconnected_accept):
+            self.assertTrue((await self.request('before'))['ok'])
+            self.assertTrue(await asyncio.to_thread(injected.wait, 2))
+            for _ in range(5):
+                handle = await asyncio.to_thread(
+                    transport._WINDOWS.open_client, self.endpoint.pipe_name, 2)
+                transport._WINDOWS.close(handle)
+            self.assertTrue((await self.request('after', timeout=2))['ok'])
+        self.assertIsNone(self.server._fatal)
+        self.assertTrue(self.server.worker_alive)
+        self.assertEqual(self.calls, ['before', 'after'])
 
     async def test_client_identity_does_not_require_process_query_access(self) -> None:
         from unittest.mock import patch

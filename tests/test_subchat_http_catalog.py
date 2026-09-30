@@ -1,6 +1,7 @@
 """HTTP catalog identities are dynamic, authenticated and distinct from UI labels."""
 import asyncio
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -111,8 +112,12 @@ def test_catalog_comparison_keeps_ui_pickability_separate_from_generation():
         'models': [{'label': version['label'], 'disabled': True}]})
     assert missing['versions'][0]['choices'][0]['ui_picker_status'] == 'not_confirmed'
     unavailable = compare_http_and_ui_catalog(projected,
-                                               {'state': 'catalog_unavailable'})
+        {'state': 'catalog_unavailable', 'reason': 'browser_challenge',
+         'failure_stage': 'navigation', 'http_status': 403})
     assert unavailable['versions'][0]['choices'][0]['ui_picker_status'] == 'unknown'
+    assert unavailable['ui_reason'] == 'browser_challenge'
+    assert unavailable['ui_failure_stage'] == 'navigation'
+    assert unavailable['ui_http_status'] == 403
 
 
 def test_pro_choice_cannot_use_same_version_sol_picker_row():
@@ -304,6 +309,174 @@ async def test_actual_http_catalog_request_without_picker_or_send(authenticated,
             assert requests == [('GET', 'https://chatgpt.com/'),
                                 ('GET', 'https://chatgpt.com/backend-api/models')]
         finally:
+            await browser.close()
+
+
+@pytest.mark.parametrize('status', [200, 403])
+@pytest.mark.parametrize('first_observation', ['http', 'ui'])
+async def test_http_catalog_challenge_stops_without_reopening_pages(
+        tmp_path, status, first_observation):
+    from playwright.async_api import async_playwright
+
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import SubchatPreparationFailed
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmissions
+
+    requests = []
+
+    async def challenge(route):
+        requests.append((route.request.method, route.request.url))
+        await route.fulfill(status=status, headers={'cf-mitigated': 'challenge'},
+                            content_type='text/html', body='<p>Private challenge</p>')
+
+    async with async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            original = await context.new_page()
+            await context.route('https://chatgpt.com/**', challenge)
+            backend = BrowserSubchatBackend(context, http_read=True)
+            if first_observation == 'ui':
+                observed = await backend.catalog()
+                assert observed['reason'] == 'browser_challenge'
+            for _ in range(2):
+                with pytest.raises(SubchatPreparationFailed) as caught:
+                    await asyncio.wait_for(
+                        backend.http_catalog(), timeout=30 if sys.platform == 'win32' else 5)
+                assert caught.value.reason == 'browser_challenge'
+                assert 'Private' not in str(caught.value)
+            observed = await backend.catalog()
+            assert observed['reason'] == 'browser_challenge'
+            assert observed['submitted'] is False
+            selection = SubchatHTTPSelection.model_validate(
+                project_http_catalog(json.dumps(catalog()).encode())[
+                    'versions'][0]['choices'][0]['http_selection'])
+            store = SubchatSubmissions(ledger.connection)
+            submission = store.prepare('7' * 32, 'not dispatched', 'Future Chat',
+                                       'Future effort', owner=None, http_selection=selection)
+            with pytest.raises(SubchatPreparationFailed) as caught:
+                await backend.prepare(submission)
+            assert caught.value.reason == 'browser_challenge'
+            assert store.get(submission.operation_id, owner=None).state == 'prepared'
+            assert requests == [('GET', 'https://chatgpt.com/')]
+            assert context.pages == [original] and not original.is_closed()
+            assert backend.pages == {}
+        finally:
+            ledger.close()
+            await browser.close()
+
+
+@pytest.mark.parametrize('changed_page', [None, 'draft', 'generating', 'history',
+                                         'close', 'malformed_catalog'])
+async def test_send_preparation_reuses_only_owned_empty_catalog_page(tmp_path, changed_page):
+    import httpx
+    from playwright.async_api import async_playwright
+    from test_subchat_browser_backend import HTML
+
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmissions
+
+    browser_requests = []
+    http_requests = []
+    fixture = HTML.replace('Future model', 'Future Chat') + (
+        '<script>fetch("/backend-api/models",'
+        '{headers:{Authorization:"Bearer test-fixture"}})</script>')
+
+    async def respond(route):
+        browser_requests.append((route.request.method, route.request.url))
+        if '/backend-api/models' in route.request.url:
+            payload = {} if changed_page == 'malformed_catalog' else catalog()
+            await route.fulfill(content_type='application/json', body=json.dumps(payload))
+        else:
+            await route.fulfill(content_type='text/html', body=fixture)
+
+    def http_response(request):
+        http_requests.append(request)
+        assert request.method == 'GET'
+        assert request.url.path == '/backend-api/models'
+        return httpx.Response(200, json=catalog())
+
+    async with async_playwright() as driver:
+        browser = await driver.chromium.launch(channel='chrome', headless=True)
+        ledger = Ledger(tmp_path)
+        try:
+            context = await browser.new_context()
+            user_page = await context.new_page()
+            await user_page.set_content('<p>User-owned page</p>')
+            await context.route('https://chatgpt.com/**', respond)
+            async with httpx.AsyncClient(transport=httpx.MockTransport(http_response)) as client:
+                class RequestContext:
+                    async def get(self, url, *, headers, timeout, max_redirects, max_retries):
+                        assert max_redirects == max_retries == 0
+                        response = await client.get(url, headers=headers)
+
+                        async def body():
+                            return response.content
+
+                        async def dispose():
+                            await response.aclose()
+
+                        return SimpleNamespace(status=response.status_code,
+                                               headers=dict(response.headers),
+                                               url=str(response.url), body=body, dispose=dispose)
+
+                async def http_factory():
+                    return RequestContext()
+
+                backend = BrowserSubchatBackend(
+                    context, http_read=True, httpx_generation=True,
+                    http_request_factory=http_factory)
+                if changed_page == 'malformed_catalog':
+                    with pytest.raises(ValueError):
+                        await backend.http_catalog()
+                    assert context.pages == [user_page]
+                    assert backend._http_reader._catalog_page is None
+                    assert not http_requests
+                    return
+                observed = await backend.http_catalog()
+                owned = [page for page in context.pages if page is not user_page]
+                assert len(owned) == 1, 'Authenticated bootstrap page was discarded'
+                page = owned[0]
+                if changed_page == 'close':
+                    await backend.close_generations()
+                    assert page.is_closed()
+                    assert context.pages == [user_page]
+                    assert backend._http_reader._catalog_page is None
+                    assert not http_requests
+                    return
+                if changed_page == 'draft':
+                    await page.get_by_role('textbox').fill('Private existing draft')
+                elif changed_page == 'generating':
+                    await page.evaluate("document.body.insertAdjacentHTML('beforeend', "
+                                        "'<button>Stop generating</button>')")
+                elif changed_page == 'history':
+                    await page.evaluate("document.querySelector('main').innerHTML = "
+                                        "'<div data-turn-key=existing>Existing message</div>'")
+                selection = SubchatHTTPSelection.model_validate(
+                    observed['versions'][0]['choices'][0]['http_selection'])
+                store = SubchatSubmissions(ledger.connection)
+                submission = store.prepare('6' * 32, 'not dispatched', 'Future Chat',
+                                           'Future effort', owner=None, http_selection=selection)
+                if changed_page is None:
+                    assert await backend.prepare(submission) == ()
+                    assert backend.pages[submission.operation_id] is page
+                    assert await page.evaluate('window.sends') == 0
+                    assert context.pages == [user_page, page]
+                else:
+                    with pytest.raises(ValueError):
+                        await backend.prepare(submission)
+                    assert backend.pages == {}
+                assert store.get(submission.operation_id, owner=None).state == 'prepared'
+                assert browser_requests == [('GET', 'https://chatgpt.com/'),
+                                            ('GET', 'https://chatgpt.com/backend-api/models')]
+                assert len(http_requests) == 1
+                assert not user_page.is_closed()
+                assert await user_page.locator('p').inner_text() == 'User-owned page'
+        finally:
+            ledger.close()
             await browser.close()
 
 

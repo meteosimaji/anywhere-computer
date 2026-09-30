@@ -2,6 +2,7 @@ import asyncio
 import base64
 import hashlib
 import os
+import sqlite3
 from dataclasses import replace
 
 import httpx
@@ -31,6 +32,16 @@ def test_remote_save_accepts_canonical_posix_destination():
                       sandbox_link="sandbox:/result.bin", device_id="b" * 32,
                       destination_path="/home/owner/result.bin")
     assert args.destination_path == "/home/owner/result.bin"
+
+
+@pytest.mark.parametrize('link', [
+    'sandbox:/dir//one.csv', 'sandbox:/dir/../one.csv', 'sandbox:/dir/./one.csv',
+    'sandbox:relative.csv', 'sandbox:/one.csv?copy=1',
+])
+def test_save_source_rejects_ambiguous_file_identity(link):
+    with pytest.raises(ValueError, match='canonical sandbox'):
+        DeviceSave(source_operation_id='a' * 32, sandbox_link=link,
+                   device_id='b' * 32, destination_path='/tmp/result.csv')
 
 
 @pytest.mark.skipif(os.name != "nt", reason="POSIX paths are local on POSIX")
@@ -85,6 +96,96 @@ def test_remote_save_reconciles_target_canonical_path_from_original_request(tmp_
             journal.reconciled("c" * 32, target_operation_id="e" * 32,
                                observed={**observed, "requested_path": "/other/result.bin"})
         journal.reconciled("c" * 32, target_operation_id="e" * 32, observed=observed)
+    finally:
+        journal.close()
+
+
+@pytest.mark.parametrize('stage', ['claimed', 'completed', 'failed'])
+def test_journal_allows_different_files_from_one_answer_across_restart(tmp_path, stage):
+    grant = GrantIdentity(grant_id='grant', owner='owner', device='device', client='client',
+                          resource='https://example.test/mcp',
+                          tools=frozenset({'subchat_save_file'}))
+    first = DeviceSave(source_operation_id='a' * 32, sandbox_link='sandbox:/one.csv',
+                       device_id='b' * 32, destination_path='/tmp/one.csv')
+    second = first.model_copy(update={'sandbox_link': 'sandbox:/two.csv',
+                                      'destination_path': '/tmp/two.csv'})
+    database = tmp_path / 'saves.sqlite3'
+    journal = SaveJournal(database)
+    try:
+        journal.claim('c' * 32, first, grant=grant, account_id='account', route_digest='d' * 64)
+        with journal.connection:
+            journal.connection.execute('UPDATE subchat_device_saves SET stage=? WHERE id=?',
+                                       (stage, 'c' * 32))
+        journal.claim('e' * 32, second, grant=grant, account_id='account', route_digest='d' * 64)
+    finally:
+        journal.close()
+    journal = SaveJournal(database)
+    try:
+        assert journal.claim('c' * 32, first, grant=grant, account_id='account',
+                             route_digest='d' * 64)['stage'] == stage
+        assert journal.claim('e' * 32, second, grant=grant, account_id='account',
+                             route_digest='d' * 64)['stage'] == 'claimed'
+        with pytest.raises(ValueError, match='another save ID'):
+            journal.claim('f' * 32, first.model_copy(update={'destination_path': '/tmp/copy'}),
+                          grant=grant, account_id='account', route_digest='d' * 64)
+    finally:
+        journal.close()
+
+
+def test_journal_migrates_legacy_file_identity_without_replaying_old_save(tmp_path):
+    grant = GrantIdentity(grant_id='grant', owner='owner', device='device', client='client',
+                          resource='https://example.test/mcp',
+                          tools=frozenset({'subchat_save_file'}))
+    args = DeviceSave(source_operation_id='a' * 32, sandbox_link='sandbox:/one.csv',
+                      device_id='b' * 32, destination_path='/tmp/one.csv')
+    database = tmp_path / 'saves.sqlite3'
+    with sqlite3.connect(database) as old:
+        old.execute('CREATE TABLE subchat_device_saves ('
+                    'id TEXT PRIMARY KEY, principal TEXT, account_id TEXT, '
+                    'arguments_digest TEXT, route_digest TEXT, stage TEXT, transfer_id TEXT, '
+                    'target_operation_id TEXT, bytes_total INTEGER, sha256 TEXT, '
+                    'source_operation_id TEXT, device_id TEXT, destination_path TEXT)')
+        old.execute('CREATE UNIQUE INDEX subchat_device_save_source_device '
+                    'ON subchat_device_saves(principal,account_id,source_operation_id,device_id)')
+        old.execute('INSERT INTO subchat_device_saves VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)', (
+            'c' * 32, SaveJournal._principal(grant), 'account',
+            hashlib.sha256(args.model_dump_json().encode()).hexdigest(), 'd' * 64,
+            'uploading', 'e' * 32, 'f' * 32, 3, hashlib.sha256(b'abc').hexdigest(),
+            args.source_operation_id, args.device_id, args.destination_path))
+    journal = SaveJournal(database)
+    try:
+        second = args.model_copy(update={'sandbox_link': 'sandbox:/two.csv',
+                                        'destination_path': '/tmp/two.csv'})
+        journal.claim('1' * 32, second, grant=grant, account_id='account', route_digest='d' * 64)
+        with pytest.raises(ValueError, match='another save ID'):
+            journal.claim('2' * 32, args.model_copy(update={'destination_path': '/tmp/copy'}),
+                          grant=grant, account_id='account', route_digest='d' * 64)
+        resumed = journal.claim('c' * 32, args, grant=grant, account_id='account',
+                                route_digest='d' * 64)
+        assert (resumed['stage'], resumed['target_operation_id']) == ('uploading', 'f' * 32)
+        with sqlite3.connect(database) as old_client:
+            old_client.execute(
+                'INSERT OR IGNORE INTO subchat_device_saves '
+                '(id,principal,account_id,arguments_digest,route_digest,stage,transfer_id,'
+                'source_operation_id,device_id,destination_path) VALUES(?,?,?,?,?,?,?,?,?,?)', (
+                    'c' * 32, SaveJournal._principal(grant), 'account',
+                    hashlib.sha256(args.model_dump_json().encode()).hexdigest(),
+                    'd' * 64, 'claimed', '4' * 32, args.source_operation_id,
+                    args.device_id, args.destination_path))
+            assert old_client.execute('SELECT stage FROM subchat_device_saves WHERE id=?',
+                                      ('c' * 32,)).fetchone() == ('uploading',)
+            with pytest.raises(sqlite3.IntegrityError, match='upgraded client'):
+                old_client.execute(
+                    'INSERT OR IGNORE INTO subchat_device_saves '
+                    '(id,principal,account_id,arguments_digest,route_digest,stage,transfer_id,'
+                    'source_operation_id,device_id,destination_path) VALUES(?,?,?,?,?,?,?,?,?,?)', (
+                        '3' * 32, SaveJournal._principal(grant), 'account',
+                        hashlib.sha256(args.model_dump_json().encode()).hexdigest(),
+                        'd' * 64, 'claimed', '4' * 32, args.source_operation_id,
+                        args.device_id, args.destination_path))
+        with pytest.raises(ValueError, match='bound'):
+            journal.claim('c' * 32, second, grant=grant, account_id='account',
+                          route_digest='d' * 64)
     finally:
         journal.close()
 
@@ -296,13 +397,16 @@ async def test_runner_publishes_via_real_local_router_and_uploads(tmp_path):
     args = DeviceSave(source_operation_id="a" * 32,
                       sandbox_link="sandbox:/answer.bin", device_id="local",
                       destination_path=str(destination))
+    second = args.model_copy(update={'sandbox_link': 'sandbox:/second.bin',
+                                     'destination_path': str(tmp_path / 'second.bin')})
+    contents = {args.sandbox_link: content, second.sandbox_link: b'second verified file'}
 
     async def authorize():
         return grant, await target.authorize()
 
     async def download(actual, offset, limit):
-        assert actual == args
-        return content[offset:offset + limit], len(content), True
+        data = contents[actual.sandbox_link]
+        return data[offset:offset + limit], len(data), True
 
     journal = SaveJournal(tmp_path / "saves.sqlite3")
     try:
@@ -318,6 +422,13 @@ async def test_runner_publishes_via_real_local_router_and_uploads(tmp_path):
         assert states == ["running", "running", "unknown", "completed"]
         assert destination.read_bytes() == content
         assert "content_base64" not in result
+        for _ in range(5):
+            result = await runner.advance('d' * 32, second)
+            if result['state'] == 'completed':
+                break
+        assert result['state'] == 'completed'
+        assert (tmp_path / 'second.bin').read_bytes() == contents[second.sandbox_link]
+        assert destination.read_bytes() == content
     finally:
         journal.close()
         await engine.close()

@@ -207,6 +207,44 @@ label when available. This checks only the model row; it does not verify the
 effort control, quota, generation request, or final answer. The HTTPS gateway
 and read-only Plugin mode continue to provide the HTTP catalog alone.
 
+If UI navigation is blocked, `source=ui` reports `catalog_unavailable` with a
+bounded `reason`, `failure_stage`, and the observed `http_status` when available.
+`browser_challenge` means the response contained Cloudflare's
+`cf-mitigated: challenge` header; an HTTP 403 without that header is
+`navigation_failed`. A visible login button is `authentication_required`.
+Navigation and picker timeouts have separate reasons.
+`navigation_failed` also covers Playwright navigation errors without an HTTP
+response, including DNS failures and connection resets; it does not imply that
+the provider received a message. Navigation timeouts retain their own reason.
+`source=compare` preserves
+these fields as `ui_reason`, `ui_failure_stage`, and `ui_http_status`.
+Send preparation persists the same reason while the operation remains unsent;
+inspect its original operation ID instead of starting another send. These
+diagnostics retain no response body, cookies, or authentication headers. A
+successful HTTP catalog or a previous successful UI visit does not establish
+that the next browser navigation will pass a challenge.
+
+The HTTP catalog bootstrap checks the home navigation too: a challenge stops
+before waiting for a model response that the challenge page cannot produce.
+After a challenge, this controller refuses further UI catalog observations,
+HTTP catalog bootstraps, and new send preparation without opening another tab.
+UI results then report `new_session_required: true`. Already authenticated
+history recovery remains available when it does not need browser bootstrap.
+Inspect the login browser before explicitly starting a fresh session; repeatedly
+opening new sessions is not a recovery strategy. This guard does not solve or
+bypass provider challenges, and the provider can challenge a later navigation
+even after a successful catalog read.
+
+In browser-prepared HTTPX sessions, a successful HTTP catalog bootstrap retains
+only the empty tab created by this controller. New-conversation preparation can
+reuse that tab instead of navigating home again. Preparation still checks the
+current URL, ordinary Chat mode, idle empty composer, absence of conversation
+history, and exact model/effort selection. A draft, active generation or existing
+history causes preparation to fail before sending. Unused tabs close on session
+shutdown; malformed catalogs close their bootstrap tab. Existing user tabs are
+never discovered or claimed. Read-only and ordinary browser-send sessions keep
+their existing cleanup behavior.
+
 On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` exposes the
 same send tools with a different generation transport. Use the dedicated logged-in
 profile, or select an ordinary Chrome profile through

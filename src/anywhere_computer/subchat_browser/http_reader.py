@@ -12,6 +12,7 @@ from ..subchat import (
     SubchatAccessError,
     SubchatAnswer,
     SubchatPendingObservation,
+    SubchatPreparationFailed,
     SubchatPreview,
     SubchatReceipt,
     SubchatUnsupported,
@@ -71,6 +72,7 @@ class ChatHTTPReader:
                  [], Awaitable[APIRequestContext | AsyncClient]] | None = None,
                  *, browser_free: bool = False, session: ObservedHTTPSession | None = None,
                  page_factory: Callable[[], Awaitable[Page]] | None = None,
+                 retain_catalog_page: bool = False,
                  use_client_cookies: bool = False,
                  test_origin: str | None = None,
                  access_status: int | None = None) -> None:
@@ -88,6 +90,8 @@ class ChatHTTPReader:
         self._origin = test_origin or 'https://chatgpt.com'
         self._request_factory = request_factory
         self._page_factory = page_factory
+        self._retain_catalog_page = retain_catalog_page
+        self._catalog_page: Page | None = None
         self._browser_free = browser_free
         self._context: BrowserContext | None = None
         self._verified_account_id: str | None = None
@@ -95,6 +99,7 @@ class ChatHTTPReader:
                                          if session is not None else {})
         self._catalog_url: str | None = session.catalog_url if session is not None else None
         self._access_status: int | None = access_status
+        self.blocked_navigation_reason: str | None = None
         self._denied_urls: set[str] = set()
         self._pending_closes: set[asyncio.Task[None]] = set()
 
@@ -189,6 +194,21 @@ class ChatHTTPReader:
                 and (self._access_status is not None
                      or bool(self._headers) and (not catalog or self._catalog_url is not None)))
 
+    async def close_catalog_page(self) -> None:
+        page, self._catalog_page = self._catalog_page, None
+        if page is not None and not page.is_closed():
+            await self.close_owned_page(page, prepare_target=True)
+
+    async def take_catalog_page(self, context: BrowserContext) -> Page | None:
+        """Transfer only this reader's owned bootstrap page to send preparation."""
+        page, self._catalog_page = self._catalog_page, None
+        if page is None or page.is_closed():
+            return None
+        if page.context is not context:
+            await self.close_owned_page(page, prepare_target=True)
+            raise ValueError('Catalog page belongs to another browser context')
+        return page
+
     def bind_verified_account(self, context: BrowserContext, account_id: str) -> None:
         """Bind a fresh auth GET identity when current app GETs omit its header."""
         if self._browser_free or not account_id or len(account_id) > 256:
@@ -197,6 +217,7 @@ class ChatHTTPReader:
             self._headers = {}
             self._catalog_url = None
             self._access_status = None
+            self.blocked_navigation_reason = None
             self._denied_urls.clear()
         observed = self._headers.get('chatgpt-account-id')
         if observed is not None and observed != account_id:
@@ -206,29 +227,37 @@ class ChatHTTPReader:
 
     async def _read(self, context: BrowserContext | None, url: str | None,
                     observe: Callable[[Page], Awaitable[Response]],
-                    expected_account: str | None = None) -> bytes:
+                    expected_account: str | None = None, *,
+                    retain_observation_page: bool = False) -> bytes:
         if self._browser_free:
             if context is not None:
                 raise ValueError('A browser-free reader cannot accept a browser context')
         elif context is None:
             raise ValueError('Browser bootstrap requires an explicit context')
         elif self._context is not context:
+            await self.close_catalog_page()
             self._context = context
             self._verified_account_id = None
             self._headers = {}
             self._catalog_url = None
             self._access_status = None
+            self.blocked_navigation_reason = None
             self._denied_urls.clear()
         if self._access_status is not None:
             raise SubchatAccessError(self._access_status)
         if url in self._denied_urls:
             raise SubchatAccessError(403)
         if not self._headers or url is None:
+            if self.blocked_navigation_reason is not None:
+                raise SubchatPreparationFailed(
+                    'Browser challenge blocked this session; inspect the login browser '
+                    'before restarting', reason=self.blocked_navigation_reason)
             if self._browser_free:
                 raise SubchatUnsupported('http_session_required')
             assert context is not None
             page = (await self._page_factory() if self._page_factory is not None
                     else await context.new_page())
+            retained = False
             try:
                 response = await observe(page)
                 headers = {}
@@ -239,19 +268,28 @@ class ChatHTTPReader:
                 # Both observers require an authenticated exact-origin GET.
                 self._headers = headers
                 self._check_account(expected_account)
-                return await response.body()
+                payload = await response.body()
+                if retain_observation_page:
+                    self._catalog_page = page
+                    retained = True
+                return payload
             except SubchatAccessError as error:
                 self._headers = {}
                 self._access_status = error.status
+                raise
+            except SubchatPreparationFailed as error:
+                if error.reason == 'browser_challenge':
+                    self.blocked_navigation_reason = error.reason
                 raise
             finally:
                 # Wait for bounded cleanup before returning normal results. If
                 # the caller cancels, retain the task until that same bound; no
                 # close failure may replace the read result or original error.
-                task = asyncio.create_task(self.close_owned_page(page, prepare_target=True))
-                self._pending_closes.add(task)
-                task.add_done_callback(self._pending_closes.discard)
-                await asyncio.shield(task)
+                if not retained:
+                    task = asyncio.create_task(self.close_owned_page(page, prepare_target=True))
+                    self._pending_closes.add(task)
+                    task.add_done_callback(self._pending_closes.discard)
+                    await asyncio.shield(task)
         self._check_account(expected_account)
         if self._request_factory is not None:
             request = await self._request_factory()
@@ -378,8 +416,13 @@ class ChatHTTPReader:
             self._catalog_url = response.url  # Preserve observed query parameters.
             return response
 
-        payload = await self._read(context, self._catalog_url, observe)
-        result = project_http_catalog(payload)
+        try:
+            payload = await self._read(context, self._catalog_url, observe,
+                                       retain_observation_page=self._retain_catalog_page)
+            result = project_http_catalog(payload)
+        except BaseException:
+            await self.close_catalog_page()
+            raise
         result['source'] = 'preauthenticated_http' if self._browser_free else 'browser_session_http'
         return result
 

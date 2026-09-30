@@ -109,7 +109,8 @@ async def download_verified_sandbox_file(
     metadata = _DownloadMetadata.model_validate_json(metadata_bytes)
     if metadata.file_size_bytes is not None and metadata.file_size_bytes > MAX_FILE_BYTES:
         raise SandboxFileTooLarge('Chat file exceeds the size limit')
-    if metadata.file_size_bytes is not None and offset >= metadata.file_size_bytes:
+    if (metadata.file_size_bytes is not None and offset >= metadata.file_size_bytes
+            and not (metadata.file_size_bytes == 0 and offset == 0)):
         raise ValueError('File offset is outside the file')
     # Chat may omit display metadata for a generated sandbox file. The verified
     # sandbox path supplies a basename; unknown MIME is reported generically.
@@ -135,8 +136,12 @@ async def download_verified_sandbox_file(
             raise SandboxFileTooLarge('Chat file exceeds the size limit')
         if file_response.status_code == 200 and offset != 0:
             raise ValueError('Chat file server did not honor the requested range')
-        received_type = file_response.headers.get('content-type', '').split(';', 1)[0].strip()
-        if received_type in {'text/html', 'application/json'}:
+        received_type = (file_response.headers.get('content-type', '')
+                         .split(';', 1)[0].strip().lower())
+        expected_type = mime_type.split(';', 1)[0].strip().lower()
+        text_formats = {'text/html', 'application/json'}
+        if ((received_type in text_formats or expected_type in text_formats)
+                and received_type != expected_type):
             raise ValueError('Chat file response has an unexpected content type')
         if file_response.headers.get('content-encoding', 'identity').lower() != 'identity':
             raise ValueError('Compressed Chat file response is unsupported')

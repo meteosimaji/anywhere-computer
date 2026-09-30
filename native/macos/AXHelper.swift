@@ -273,6 +273,7 @@ private struct ObservationRecord {
     let windowID: Int
     let process: ProcessIdentity
     let elements: [String: ObservedElement]
+    let breadthFirst: Bool
     let expiresAtUptime: TimeInterval
 }
 
@@ -993,17 +994,17 @@ private final class AXHelper {
     private func locateElement(
         root: AXUIElement,
         target: AXUIElement,
+        breadthFirst: Bool = false,
         deadline: RequestDeadline
     ) throws -> LocatedElement {
         var visited: [AXUIElement] = []
         var limitExceeded = false
         var queue: [(AXUIElement, Int)] = [(root, 0)]
         var cursor = 0
-        while cursor < queue.count {
+        while breadthFirst ? cursor < queue.count : !queue.isEmpty {
             try deadline.check()
-            let (element, depth) = queue[cursor]
-            cursor += 1
-            if cfElementsEqual(element, target) { return .found(element) }
+            let (element, depth) = breadthFirst ? queue[cursor] : queue.removeLast()
+            if breadthFirst { cursor += 1 }
             if visited.contains(where: { cfElementsEqual($0, element) }) {
                 continue
             }
@@ -1012,6 +1013,7 @@ private final class AXHelper {
                 break
             }
             visited.append(element)
+            if cfElementsEqual(element, target) { return .found(element) }
             if depth >= maxTreeDepth {
                 var childCount: CFIndex = 0
                 let status = AXUIElementGetAttributeValueCount(
@@ -1033,9 +1035,10 @@ private final class AXHelper {
                 maxCount: maxChildrenPerElement
             )
             if children.1 { limitExceeded = true }
-            queue.append(contentsOf: children.0.map { ($0, depth + 1) })
+            let next = children.0.map { ($0, depth + 1) }
+            queue.append(contentsOf: breadthFirst ? next : Array(next.reversed()))
         }
-        if cursor < queue.count { limitExceeded = true }
+        if breadthFirst ? cursor < queue.count : !queue.isEmpty { limitExceeded = true }
         return limitExceeded ? .limitExceeded : .absent
     }
 
@@ -1165,6 +1168,7 @@ private final class AXHelper {
             windowID: windowID,
             process: record.process,
             elements: refs,
+            breadthFirst: false,
             expiresAtUptime: uptime() + observationTTL
         )
         return [
@@ -1283,6 +1287,7 @@ private final class AXHelper {
         observations[observationID] = ObservationRecord(
             id: observationID, app: app, windowID: windowID,
             process: record.process, elements: refs,
+            breadthFirst: true,
             expiresAtUptime: uptime() + observationTTL
         )
         return [
@@ -1455,7 +1460,8 @@ private final class AXHelper {
 
         let window = try revalidateWindow(record, deadline: deadline)
         let currentElement: AXUIElement
-        switch try locateElement(root: window, target: observedElement.element, deadline: deadline) {
+        switch try locateElement(root: window, target: observedElement.element,
+                                 breadthFirst: observation.breadthFirst, deadline: deadline) {
         case .found(let element):
             currentElement = element
         case .absent:

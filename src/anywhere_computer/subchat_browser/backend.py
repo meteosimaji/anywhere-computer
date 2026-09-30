@@ -42,6 +42,7 @@ from .catalog import (
     TOGGLE,
     TRIGGER,
     collect_page,
+    navigation_failure,
     observed_chat_surface,
     picker_ready,
     require_http_selection,
@@ -53,7 +54,13 @@ from .httpx_generation import HTTPXGenerationPreflightError
 from .request_content import add_resources, generation_input
 
 if TYPE_CHECKING:
-    from playwright.async_api import APIRequestContext, BrowserContext, Locator, Page, Route
+    from playwright.async_api import (
+        APIRequestContext,
+        BrowserContext,
+        Locator,
+        Page,
+        Route,
+    )
 
     from anywhere_computer.subchat_http_image import ImageDownload
 
@@ -179,7 +186,8 @@ class BrowserSubchatBackend:
         self._record_conversation = record_conversation
         self._record_rejection = record_rejection
         self._http_reader = ChatHTTPReader(
-            http_request_factory, page_factory=self._new_page if background_pages else None)
+            http_request_factory, page_factory=self._new_page if background_pages else None,
+            retain_catalog_page=httpx_generation)
         self._context = None if callable(context) else context
         self._create_context = context if callable(context) else None
         self._context_lock = asyncio.Lock()
@@ -215,6 +223,7 @@ class BrowserSubchatBackend:
         await asyncio.gather(*tasks, return_exceptions=True)
         await asyncio.gather(*self._generation_tasks.values(), return_exceptions=True)
         self._browser_generations.clear()
+        await self._http_reader.close_catalog_page()
 
     def _browser_closed(self, context: BrowserContext) -> None:
         self._closed = True
@@ -265,12 +274,41 @@ class BrowserSubchatBackend:
             await locator.press(key)
 
     async def catalog(self, model: str | None = None) -> dict[str, object]:
+        from playwright.async_api import Error as PlaywrightError
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+        if self._http_reader.blocked_navigation_reason is not None:
+            return {'state': 'catalog_unavailable', 'submitted': False,
+                    'reason': self._http_reader.blocked_navigation_reason,
+                    'failure_stage': 'navigation', 'new_session_required': True}
         page = await self._new_page()
         page.set_default_timeout(15_000)
         try:
-            response = await page.goto('https://chatgpt.com/', wait_until='commit')
-            if response is None or not response.ok or not await picker_ready(page):
-                return {'state': 'catalog_unavailable', 'submitted': False}
+            try:
+                response = await page.goto('https://chatgpt.com/', wait_until='commit')
+            except PlaywrightTimeoutError:
+                return {'state': 'catalog_unavailable', 'submitted': False,
+                        'reason': 'navigation_timeout', 'failure_stage': 'navigation'}
+            except PlaywrightError:
+                return {'state': 'catalog_unavailable', 'submitted': False,
+                        'reason': 'navigation_failed', 'failure_stage': 'navigation'}
+            failure = await navigation_failure(response)
+            if failure == 'browser_challenge':
+                self._http_reader.blocked_navigation_reason = failure
+            if failure is not None:
+                return {'state': 'catalog_unavailable', 'submitted': False,
+                        'reason': failure, 'failure_stage': 'navigation',
+                        'http_status': response.status if response is not None else None}
+            try:
+                ready = await picker_ready(page)
+            except PlaywrightTimeoutError:
+                ready = False
+                failure = 'picker_timeout'
+            if not ready:
+                return {'state': 'catalog_unavailable', 'submitted': False,
+                        'reason': failure or 'authentication_required',
+                        'failure_stage': 'picker',
+                        'http_status': response.status if response is not None else None}
             return await collect_page(page, model, background_input=self._background_pages)
         finally:
             # This is a separate observation tab, never a submission or user draft.
@@ -283,6 +321,10 @@ class BrowserSubchatBackend:
         return await self._browser()
 
     async def http_catalog(self) -> dict[str, object]:
+        if self._http_reader.blocked_navigation_reason is not None:
+            raise SubchatPreparationFailed(
+                'Browser challenge blocked this session; inspect the login browser '
+                'before restarting', reason=self._http_reader.blocked_navigation_reason)
         async with asyncio.timeout(20):
             result = await self._http_reader.catalog(await self._read_context(catalog=True))
             result['http_selection_send_supported'] = self.http_read
@@ -565,6 +607,11 @@ class BrowserSubchatBackend:
 
     async def prepare(self, submission: SubchatSubmission) -> tuple[str, ...]:
         self.validate_send_selection(submission.http_selection)
+        if self._http_reader.blocked_navigation_reason is not None:
+            raise SubchatPreparationFailed(
+                'Browser challenge blocked this session; inspect the login browser '
+                'before restarting',
+                reason=self._http_reader.blocked_navigation_reason)
         picker_label = submission.model
         if self.http_read:
             assert submission.http_selection is not None
@@ -575,7 +622,8 @@ class BrowserSubchatBackend:
             raise ValueError('Resource sends require HTTP history verification')
         url = self._url(submission)
         # Only reuse tabs already owned by this adapter, never discover or claim
-        # arbitrary user tabs. New conversations must always start separately.
+        # arbitrary user tabs. A new conversation may use our own, still empty
+        # catalog bootstrap page; preparation rechecks its URL/composer/history.
         candidates = list(dict.fromkeys(
             page for page in self.pages.values()
             if submission.requested_conversation_id is not None
@@ -583,12 +631,17 @@ class BrowserSubchatBackend:
             and page not in self._unreusable_pages))
         if len(candidates) > 1:
             raise ValueError('Multiple owned tabs match the requested conversation')
-        page = candidates[0] if candidates else await self._new_page()
+        catalog_page = (await self._http_reader.take_catalog_page(await self._browser())
+                        if self._httpx_generation and not candidates
+                        and submission.requested_conversation_id is None
+                        else None)
+        page = candidates[0] if candidates else catalog_page or await self._new_page()
         previous = self.pages.get(submission.operation_id)
         previous_kind = self._prepared_baseline_kinds.pop(submission.operation_id, None)
         self.pages[submission.operation_id] = page
         try:
-            baseline = await self._prepare_page(page, submission, url, reused=bool(candidates),
+            baseline = await self._prepare_page(page, submission, url,
+                                                reused=bool(candidates) or catalog_page is not None,
                                                 picker_label=picker_label)
             self._preparation_touched_pages.discard(page)
             return baseline
@@ -612,6 +665,7 @@ class BrowserSubchatBackend:
 
     async def _prepare_page(self, page: Page, submission: SubchatSubmission,
                             url: str, *, reused: bool, picker_label: str) -> tuple[str, ...]:
+        from playwright.async_api import Error as PlaywrightError
         from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
         page.set_default_timeout(15_000)
@@ -622,10 +676,25 @@ class BrowserSubchatBackend:
                 raise SubchatPreparationFailed(
                     'Ordinary Chat navigation timed out before dispatch',
                     reason='navigation_timeout') from error
-            if response is None or not response.ok:
-                raise ConnectionError('Authenticated ordinary Chat is unavailable')
-        if not await picker_ready(page):
-            raise ConnectionError('Authenticated ordinary Chat is unavailable')
+            except PlaywrightError as error:
+                raise SubchatPreparationFailed(
+                    'Ordinary Chat navigation failed before dispatch',
+                    reason='navigation_failed') from error
+            failure = await navigation_failure(response)
+            if failure == 'browser_challenge':
+                self._http_reader.blocked_navigation_reason = failure
+            if failure is not None:
+                raise SubchatPreparationFailed(
+                    'Ordinary Chat navigation was blocked before dispatch', reason=failure)
+        try:
+            ready = await picker_ready(page)
+        except PlaywrightTimeoutError as error:
+            raise SubchatPreparationFailed(
+                'Ordinary Chat picker did not appear before dispatch',
+                reason='picker_timeout') from error
+        if not ready:
+            raise SubchatPreparationFailed('Ordinary Chat requires login before dispatch',
+                                           reason='authentication_required')
         await self._wait_for_composer(page, submission)
         self._preparation_touched_pages.add(page)
         await self._click(page.locator(TRIGGER))

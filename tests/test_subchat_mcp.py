@@ -1097,11 +1097,15 @@ async def test_preparation_failure_reports_only_a_known_local_reason(
         ledger.close()
 
 
-async def test_explicit_preparation_reason_survives_dispatch_and_status(tmp_path):
+@pytest.mark.parametrize('reason', [
+    'navigation_timeout', 'browser_challenge', 'navigation_failed',
+    'authentication_required', 'picker_timeout',
+])
+async def test_explicit_preparation_reason_survives_dispatch_and_status(tmp_path, reason):
     class TimedOutBrowser(BrowserFixture):
         async def prepare(self, submission):
             raise SubchatPreparationFailed('private navigation details',
-                                           reason='navigation_timeout')
+                                           reason=reason)
 
     ledger = Ledger(tmp_path)
     backend = TimedOutBrowser()
@@ -1111,7 +1115,7 @@ async def test_explicit_preparation_reason_survives_dispatch_and_status(tmp_path
         sent = await server.execute(Request(operation_id=operation, tool='subchat_send',
             arguments={'prompt': 'work', 'model': 'model', 'effort': 'effort'}))
         assert sent.state == 'failed'
-        assert sent.data['reason'] == 'navigation_timeout'
+        assert sent.data['reason'] == reason
         assert sent.data['submission_operation_id'] == operation
         assert sent.data['provider_receipt'] == 'not_sent'
         assert sent.data['dispatched'] is False
@@ -1119,7 +1123,7 @@ async def test_explicit_preparation_reason_survives_dispatch_and_status(tmp_path
         status = await server.execute(Request(operation_id='b' * 32, tool='subchat_status',
             arguments={'operation_id': operation}))
         assert status.state == 'failed'
-        assert status.data['reason'] == 'navigation_timeout'
+        assert status.data['reason'] == reason
         assert status.data['submission_operation_id'] == operation
         assert status.data['provider_receipt'] == 'not_sent'
         assert backend.sends == 0

@@ -38,6 +38,12 @@ class DeviceSave(Contract):
 
     @model_validator(mode="after")
     def canonical_absolute_path(self) -> Self:
+        source_path = self.sandbox_link.removeprefix('sandbox:')
+        source = PurePosixPath(source_path)
+        if (not self.sandbox_link.startswith('sandbox:/') or not source.is_absolute()
+                or str(source) != source_path or '..' in source.parts
+                or any(ord(char) < 32 or char in '?#%\\' for char in source_path)):
+            raise ValueError('Save source must be a canonical sandbox file link')
         value = self.destination_path
         posix = PurePosixPath(value)
         native = ((os.name != "nt" or self.device_id != "local")
@@ -100,6 +106,7 @@ class SaveJournal:
         self.connection = sqlite3.connect(database, timeout=10)
         self.connection.execute("PRAGMA journal_mode=WAL")
         with self.connection:
+            self.connection.execute('BEGIN IMMEDIATE')
             self.connection.execute(
                 "CREATE TABLE IF NOT EXISTS subchat_device_saves ("
                 "id TEXT PRIMARY KEY, principal TEXT NOT NULL, account_id TEXT NOT NULL, "
@@ -108,21 +115,40 @@ class SaveJournal:
                 "target_operation_id TEXT, bytes_total INTEGER, sha256 TEXT, "
                 "target_offset INTEGER, target_length INTEGER, "
                 "lease_owner TEXT, lease_until REAL, source_operation_id TEXT, "
-                "device_id TEXT, destination_path TEXT)"
+                "device_id TEXT, destination_path TEXT, source_file TEXT)"
             )
             columns = {row[1] for row in self.connection.execute(
                 "PRAGMA table_info(subchat_device_saves)")}
             for name in ("target_offset", "target_length", "lease_owner", "lease_until",
-                         "source_operation_id", "device_id", "destination_path"):
+                         "source_operation_id", "device_id", "destination_path", "source_file"):
                 if name not in columns:
                     kind = ("REAL" if name == "lease_until" else
                             "INTEGER" if name in {"target_offset", "target_length"}
                             else "TEXT")
                     self.connection.execute(
                         f"ALTER TABLE subchat_device_saves ADD COLUMN {name} {kind}")
+            self.connection.execute('DROP INDEX IF EXISTS subchat_device_save_source_device')
             self.connection.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS subchat_device_save_source_device "
-                "ON subchat_device_saves(principal,account_id,source_operation_id,device_id)")
+                'CREATE UNIQUE INDEX IF NOT EXISTS subchat_device_save_source_file_device '
+                'ON subchat_device_saves('
+                'principal,account_id,source_operation_id,source_file,device_id)')
+            self.connection.execute(
+                'CREATE UNIQUE INDEX IF NOT EXISTS subchat_device_save_legacy_source_device '
+                'ON subchat_device_saves(principal,account_id,source_operation_id,device_id) '
+                'WHERE source_file IS NULL')
+            # An already running older client omits source_file. Fence a new
+            # claim that cannot distinguish files after this journal is upgraded;
+            # its exact existing-ID retries and transfer checkpoints still work.
+            self.connection.execute(
+                'CREATE TRIGGER IF NOT EXISTS subchat_device_save_legacy_claim '
+                'BEFORE INSERT ON subchat_device_saves WHEN NEW.source_file IS NULL '
+                'AND NOT EXISTS(SELECT 1 FROM subchat_device_saves WHERE id=NEW.id) '
+                'AND EXISTS(SELECT 1 FROM subchat_device_saves WHERE principal=NEW.principal '
+                'AND account_id=NEW.account_id AND id<>NEW.id AND source_file IS NOT NULL '
+                'AND (source_operation_id=NEW.source_operation_id '
+                'OR NEW.source_operation_id IS NULL) '
+                'AND (device_id=NEW.device_id OR NEW.device_id IS NULL)) '
+                "BEGIN SELECT RAISE(ABORT,'Save journal requires an upgraded client'); END")
             self.connection.execute(
                 "CREATE TABLE IF NOT EXISTS subchat_device_save_steps ("
                 "save_id TEXT NOT NULL, operation_id TEXT NOT NULL UNIQUE, "
@@ -149,15 +175,46 @@ class SaveJournal:
         transfer_id = secrets.token_hex(16)
         with self.connection:
             self.connection.execute("BEGIN IMMEDIATE")
+            existing = self.connection.execute(
+                'SELECT principal,account_id,arguments_digest,route_digest '
+                'FROM subchat_device_saves WHERE id=?', (save_id,)).fetchone()
+            if existing is not None:
+                if existing != (principal, account_id, digest, route_digest):
+                    raise ValueError('Save ID is bound to another principal, source or device')
+                # An exact retry supplies the missing legacy identity without
+                # changing its stage, transfer or unresolved target operation.
+                self.connection.execute(
+                    'UPDATE subchat_device_saves SET source_file=?,source_operation_id=?, '
+                    'device_id=?,destination_path=? WHERE id=? AND source_file IS NULL',
+                    (args.sandbox_link, args.source_operation_id, args.device_id,
+                     args.destination_path, save_id))
+            legacy = self.connection.execute(
+                'SELECT arguments_digest,source_operation_id,device_id,destination_path '
+                'FROM subchat_device_saves WHERE principal=? AND account_id=? '
+                'AND source_file IS NULL '
+                'AND (source_operation_id=? OR source_operation_id IS NULL) '
+                'AND (device_id=? OR device_id IS NULL)',
+                (principal, account_id, args.source_operation_id, args.device_id)).fetchall()
+            for old_digest, old_source, old_device, old_destination in legacy:
+                if (old_source != args.source_operation_id or old_device != args.device_id
+                        or not isinstance(old_destination, str)):
+                    raise ValueError('Legacy save identity is incomplete; resume its original ID')
+                # Only the old link is missing. Reconstruct its immutable
+                # argument digest with the candidate link to detect a duplicate,
+                # including one requested at a different destination.
+                candidate = args.model_copy(update={'destination_path': old_destination})
+                if hashlib.sha256(candidate.model_dump_json().encode()).hexdigest() == old_digest:
+                    raise ValueError('Source file and device already belong to another save ID')
             self.connection.execute(
                 "INSERT OR IGNORE INTO subchat_device_saves "
                 "(id,principal,account_id,arguments_digest,route_digest,stage,"
                 "transfer_id,target_operation_id,bytes_total,sha256,"
-                "source_operation_id,device_id,destination_path) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "source_operation_id,device_id,destination_path,source_file) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (save_id, principal, account_id, digest, route_digest,
                  "claimed", transfer_id, None, None, None,
-                 args.source_operation_id, args.device_id, args.destination_path),
+                 args.source_operation_id, args.device_id, args.destination_path,
+                 args.sandbox_link),
             )
             row = self.connection.execute(
                 "SELECT principal,account_id,arguments_digest,route_digest,stage,"
