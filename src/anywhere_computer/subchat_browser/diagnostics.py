@@ -89,7 +89,8 @@ class BrowserDiagnostics:
                 result['state'] = 'cleanup_pending'
                 return result
             result.update(state='retained',
-                          remaining_seconds=max(0.0, self._expires_at - time.monotonic()))
+                          remaining_seconds=min(RETENTION_SECONDS,
+                              max(0.0, self._expires_at - time.monotonic())))
             if action == 'show':
                 # Resolve the window through this exact owned page, not a global
                 # Chrome window/profile selector. No navigation or challenge click.

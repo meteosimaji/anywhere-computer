@@ -2,12 +2,45 @@
 
 import asyncio
 import time
+from types import SimpleNamespace
 
 import pytest
 from playwright.async_api import async_playwright
 
 from anywhere_computer.subchat import SubchatPreparationFailed
 from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+
+async def test_retention_seconds_stays_bounded_after_clock_rounding(monkeypatch):
+    from anywhere_computer.subchat_browser import diagnostics
+
+    class Page:
+        closed = False
+
+        def is_closed(self):
+            return self.closed
+
+    page = Page()
+    clock = [212.18]
+    # Patch only this module's clock; asyncio must retain its real clock.
+    monkeypatch.setattr(diagnostics, 'time', SimpleNamespace(monotonic=lambda: clock[0]))
+
+    async def close_owned(candidate):
+        assert candidate is page
+        candidate.closed = True
+
+    retained = diagnostics.BrowserDiagnostics(close_owned)
+    await retained.retain(page)
+    try:
+        status = await retained.inspect('status')
+        assert status['remaining_seconds'] == diagnostics.RETENTION_SECONDS
+        clock[0] += diagnostics.RETENTION_SECONDS + 1
+        expired = await retained.inspect('status')
+        assert expired['state'] == 'unavailable'
+        assert expired['cleanup_confirmed'] is True
+        assert page.is_closed()
+    finally:
+        await retained.inspect('close')
 
 
 @pytest.mark.parametrize('expired', [False, True])
