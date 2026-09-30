@@ -53,7 +53,14 @@ from .httpx_generation import HTTPXGenerationPreflightError
 from .request_content import add_resources, generation_input
 
 if TYPE_CHECKING:
-    from playwright.async_api import APIRequestContext, BrowserContext, Locator, Page, Route
+    from playwright.async_api import (
+        APIRequestContext,
+        BrowserContext,
+        Locator,
+        Page,
+        Response,
+        Route,
+    )
 
     from anywhere_computer.subchat_http_image import ImageDownload
 
@@ -70,6 +77,15 @@ _GENERATION_REQUEST_TIMEOUT = 120.0
 
 class _DraftNotSubmitted(ValueError):
     """The guarded browser task refused input before its Send click."""
+
+
+async def _navigation_failure(response: Response | None) -> str | None:
+    """Classify navigation without retaining response content or credentials."""
+    if response is None:
+        return 'navigation_failed'
+    if await response.header_value('cf-mitigated') == 'challenge':
+        return 'browser_challenge'
+    return None if response.ok else 'navigation_failed'
 
 
 async def _abort_unclaimed_generation_request(route: Route) -> None:
@@ -265,12 +281,31 @@ class BrowserSubchatBackend:
             await locator.press(key)
 
     async def catalog(self, model: str | None = None) -> dict[str, object]:
+        from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
         page = await self._new_page()
         page.set_default_timeout(15_000)
         try:
-            response = await page.goto('https://chatgpt.com/', wait_until='commit')
-            if response is None or not response.ok or not await picker_ready(page):
-                return {'state': 'catalog_unavailable', 'submitted': False}
+            try:
+                response = await page.goto('https://chatgpt.com/', wait_until='commit')
+            except PlaywrightTimeoutError:
+                return {'state': 'catalog_unavailable', 'submitted': False,
+                        'reason': 'navigation_timeout', 'failure_stage': 'navigation'}
+            failure = await _navigation_failure(response)
+            if failure is not None:
+                return {'state': 'catalog_unavailable', 'submitted': False,
+                        'reason': failure, 'failure_stage': 'navigation',
+                        'http_status': response.status if response is not None else None}
+            try:
+                ready = await picker_ready(page)
+            except PlaywrightTimeoutError:
+                ready = False
+                failure = 'picker_timeout'
+            if not ready:
+                return {'state': 'catalog_unavailable', 'submitted': False,
+                        'reason': failure or 'authentication_required',
+                        'failure_stage': 'picker',
+                        'http_status': response.status if response is not None else None}
             return await collect_page(page, model, background_input=self._background_pages)
         finally:
             # This is a separate observation tab, never a submission or user draft.
@@ -622,10 +657,19 @@ class BrowserSubchatBackend:
                 raise SubchatPreparationFailed(
                     'Ordinary Chat navigation timed out before dispatch',
                     reason='navigation_timeout') from error
-            if response is None or not response.ok:
-                raise ConnectionError('Authenticated ordinary Chat is unavailable')
-        if not await picker_ready(page):
-            raise ConnectionError('Authenticated ordinary Chat is unavailable')
+            failure = await _navigation_failure(response)
+            if failure is not None:
+                raise SubchatPreparationFailed(
+                    'Ordinary Chat navigation was blocked before dispatch', reason=failure)
+        try:
+            ready = await picker_ready(page)
+        except PlaywrightTimeoutError as error:
+            raise SubchatPreparationFailed(
+                'Ordinary Chat picker did not appear before dispatch',
+                reason='picker_timeout') from error
+        if not ready:
+            raise SubchatPreparationFailed('Ordinary Chat requires login before dispatch',
+                                           reason='authentication_required')
         await self._wait_for_composer(page, submission)
         self._preparation_touched_pages.add(page)
         await self._click(page.locator(TRIGGER))

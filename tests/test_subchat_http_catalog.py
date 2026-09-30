@@ -111,8 +111,12 @@ def test_catalog_comparison_keeps_ui_pickability_separate_from_generation():
         'models': [{'label': version['label'], 'disabled': True}]})
     assert missing['versions'][0]['choices'][0]['ui_picker_status'] == 'not_confirmed'
     unavailable = compare_http_and_ui_catalog(projected,
-                                               {'state': 'catalog_unavailable'})
+        {'state': 'catalog_unavailable', 'reason': 'browser_challenge',
+         'failure_stage': 'navigation', 'http_status': 403})
     assert unavailable['versions'][0]['choices'][0]['ui_picker_status'] == 'unknown'
+    assert unavailable['ui_reason'] == 'browser_challenge'
+    assert unavailable['ui_failure_stage'] == 'navigation'
+    assert unavailable['ui_http_status'] == 403
 
 
 def test_pro_choice_cannot_use_same_version_sol_picker_row():

@@ -257,6 +257,8 @@ def compare_http_and_ui_catalog(http: dict[str, object],
                                    'ui_picker_label': picker_label})
         result_versions.append({**version, 'choices': result_choices})
     return {**http, 'versions': result_versions, 'ui_catalog_state': ui.get('state'),
+            **{f'ui_{key}': ui[key] for key in ('reason', 'failure_stage', 'http_status')
+               if key in ui},
             'ui_picker_observation': 'observed' if ui_observed else 'unknown',
             'generation_http_verified': False, 'submitted': False}
 

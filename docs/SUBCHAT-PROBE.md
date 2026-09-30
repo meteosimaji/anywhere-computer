@@ -207,6 +207,19 @@ label when available. This checks only the model row; it does not verify the
 effort control, quota, generation request, or final answer. The HTTPS gateway
 and read-only Plugin mode continue to provide the HTTP catalog alone.
 
+If UI navigation is blocked, `source=ui` reports `catalog_unavailable` with a
+bounded `reason`, `failure_stage`, and the observed `http_status` when available.
+`browser_challenge` means the response contained Cloudflare's
+`cf-mitigated: challenge` header; an HTTP 403 without that header is
+`navigation_failed`. A visible login button is `authentication_required`.
+Navigation and picker timeouts have separate reasons. `source=compare` preserves
+these fields as `ui_reason`, `ui_failure_stage`, and `ui_http_status`.
+Send preparation persists the same reason while the operation remains unsent;
+inspect its original operation ID instead of starting another send. These
+diagnostics retain no response body, cookies, or authentication headers. A
+successful HTTP catalog or a previous successful UI visit does not establish
+that the next browser navigation will pass a challenge.
+
 On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` exposes the
 same send tools with a different generation transport. Use the dedicated logged-in
 profile, or select an ordinary Chrome profile through
