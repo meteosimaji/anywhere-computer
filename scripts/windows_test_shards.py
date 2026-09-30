@@ -29,8 +29,7 @@ SERIAL_GROUPS = {
         'tests/test_direct_mcp_sessions.py::test_shared_agent_receives_http_watch_authority',
     ],
     'browser-cleanup': [
-        'tests/test_browser_control.py::test_current_dom_and_network_metadata_are_bounded_and_owner_scoped[normal]',
-        'tests/test_browser_control.py::test_current_dom_and_network_metadata_are_bounded_and_owner_scoped[slow-browser-close]',
+        'tests/test_browser_control.py',
         'tests/test_browser_tabs_dialogs.py::test_failed_excess_popup_cleanup_closes_only_its_owned_session[normal]',
         'tests/test_browser_tabs_dialogs.py::test_failed_excess_popup_cleanup_closes_only_its_owned_session[slow-browser-close]',
     ],
