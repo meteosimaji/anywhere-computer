@@ -45,17 +45,18 @@ def _canonical_parts(path: str) -> tuple[str, ...]:
     return tuple(part.casefold() for part in pieces)
 
 
-def _parent(path: str, roots: tuple[str, ...]) -> Path:
+def _parent(path: str, roots: tuple[str, ...], *, files: tuple[str, ...] = ()) -> Path:
     parts = _canonical_parts(path)
-    if not any(len(parts) > len(root_parts)
+    if not (any(parts == _canonical_parts(value) for value in files)
+            or any(len(parts) > len(root_parts)
                and parts[:len(root_parts)] == root_parts
-               for root_parts in (_canonical_parts(root) for root in roots)):
+               for root_parts in (_canonical_parts(root) for root in roots))):
         raise ValueError("Delegated path is outside the permitted roots")
     return Path(path).parent
 
 
-def read_content(path: str, roots: tuple[str, ...]) -> bytes:
-    parent = _parent(path, roots)
+def read_content(path: str, roots: tuple[str, ...], *, files: tuple[str, ...] = ()) -> bytes:
+    parent = _parent(path, roots, files=files)
     with pin_directory(parent):
         descriptor = open_regular_nofollow(Path(path))
         with os.fdopen(descriptor, "rb") as source:

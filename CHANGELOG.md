@@ -3,7 +3,19 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0b46 / Plugin 0.2.0-beta.46 — unpublished candidate (2026-09-30)
+## 0.2.0b47 / Plugin 0.2.0-beta.47 — unpublished candidate (2026-10-01)
+
+- Issue delegated read-only access to individual files with repeatable
+  `--read-file` entries. Do not grant the containing directory or descendants.
+- Confine selected-file reads through POSIX directory descriptors or Windows
+  pinned handles, rejecting ancestor and leaf symlink substitutions. Preserve
+  existing root grants, per-operation revocation, expiry and reconnect checks.
+- Verify owner issuance, HTTP authentication, selected-file reads, sibling and
+  write refusal, reconnect and revocation with isolated real HTTP sessions.
+  Ordinary Subchat credential handoff and cloud computer registration remain
+  separate acceptance requirements.
+
+## 0.2.0b46 / Plugin 0.2.0-beta.46 — published (2026-09-30)
 
 - Preserve blocked-tab ownership and activity after an unconfirmed close. Report
   cleanup_pending, forbid further display and allow explicit cleanup to finish.

@@ -28,6 +28,7 @@ class DelegatedTaskGrant(BaseModel):
     device_id: str = Field(pattern=r"^(local|[a-f0-9]{32})$")
     tools: frozenset[str] = Field(min_length=1)
     read_roots: tuple[str, ...] = ()
+    read_files: tuple[str, ...] = ()
     write_roots: tuple[str, ...] = ()
     expires_at: float = Field(gt=0, allow_inf_nan=False)
 
@@ -66,7 +67,13 @@ def _paths_allowed(tool: str, arguments: dict[str, JsonValue],
         paths = arguments.get("paths")
         return isinstance(paths, list) and bool(paths) and all(
             _inside(path, roots) for path in paths)
-    return _inside(arguments.get("path"), roots)
+    path_value = arguments.get("path")
+    if _inside(path_value, roots):
+        return True
+    # An individual file never authorizes its parent directory or descendants.
+    return (tool == "files_read" and isinstance(path_value, str)
+            and path_value in grant.read_files
+            and str(Path(path_value).resolve(strict=False)) == path_value)
 
 
 class DelegatedTaskStore:
@@ -159,9 +166,10 @@ class DelegatedTaskStore:
                 or bool(grant.tools & PATH_TOOLS - {"files_read", "files_write"})
                 or ("files_write" in grant.tools and "operations_get" not in grant.tools)
                 # Remote file roots are validated by the target child executor.
-                or (grant.device_id != "local" and bool(grant.read_roots or grant.write_roots))
+                or (grant.device_id != "local"
+                    and bool(grant.read_roots or grant.read_files or grant.write_roots))
                 or (grant.device_id == "local" and bool(grant.tools & READ_PATH_TOOLS)
-                    and not grant.read_roots)
+                    and not (grant.read_roots or grant.read_files))
                 or (grant.device_id == "local" and bool(grant.tools & WRITE_PATH_TOOLS)
                     and not grant.write_roots)
                 or not (grant.tools <= parent.tools if grant.device_id == "local"
@@ -171,6 +179,11 @@ class DelegatedTaskStore:
             path = Path(root)
             if not path.is_absolute() or str(path.resolve(strict=False)) != root:
                 raise ValueError("Delegated roots must be canonical absolute paths")
+        for value in grant.read_files:
+            path = Path(value)
+            if (not path.is_absolute() or not path.is_file()
+                    or str(path.resolve(strict=True)) != value):
+                raise ValueError("Delegated files must be existing canonical absolute files")
         token = secrets.token_urlsafe(48)
         with self.db:
             self.db.execute("INSERT INTO grants VALUES (?,?,?,0)",

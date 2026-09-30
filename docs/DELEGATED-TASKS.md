@@ -8,6 +8,8 @@ child credential, and revoke it:
 anywhere http-delegate-list
 anywhere http-delegate-issue --parent-grant-id PARENT_ID --scope files_read \
   --read-root /absolute/existing/directory --expires-in 3600
+anywhere http-delegate-issue --parent-grant-id PARENT_ID --scope files_read \
+  --read-file /absolute/existing/file.txt --expires-in 3600
 anywhere http-delegate-revoke --child-id CHILD_ID
 ```
 
@@ -15,13 +17,20 @@ Each action prompts for the current owner password. The issue command prints the
 bearer once; keep it out of logs and chat prompts. `DelegatedTaskStore.issue` returns
 the bearer once; only its SHA-256 digest is saved. The child bearer is bound to a
 parent OAuth grant, owner, child ID, one device ID, allowed tools, canonical file
-read/write roots, and an expiry. Revocation and parent grant state are read from
-storage on each delegated operation. A refusal is recorded in the separate
+read/write roots, individual read files, and an expiry. Revocation and parent
+grant state are read from storage on each delegated operation. A refusal is recorded in the separate
 delegated operation ledger and an audit table without paths, tokens, or argument
 values. The bearer must be delivered to a child MCP client through a trusted
 owner-controlled channel. `--delegated-device-id` selects one device; the
-default is `local`. Repeat `--scope`, `--read-root`, and `--write-root` as
-needed. Local roots must be existing canonical absolute directories. The maximum
+default is `local`. Repeat `--scope`, `--read-root`, `--read-file`, and `--write-root` as
+needed. Local roots must be existing canonical absolute directories. Individual
+read files must be existing canonical absolute regular files. A `--read-file`
+entry grants only that path to `files_read`, never siblings, the containing
+directory, or descendants if the file is replaced by a directory. Symlinks in
+the file or any ancestor are rejected by the executor, including substitutions
+after the policy check. File contents can change at the selected path; this is
+path access, not a hash-pinned content grant. Old grants without `read_files`
+retain their existing roots with no additional paths. The maximum
 lifetime is 24 hours, and the parent grant may end access earlier.
 Every child grant containing `files_write` must also contain `operations_get`,
 with both tools present in the parent grant for a local child. An older local
