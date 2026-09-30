@@ -93,6 +93,40 @@ async def test_persistent_requests_and_recovery_after_invalid_input(native_gui_h
             await process.wait()
 
 
+@pytest.mark.parametrize('method', ['browser_status', 'browser_reveal'])
+async def test_browser_display_rejects_wrong_identity_before_ui_mutation(
+    native_gui_helper, method,
+):
+    import psutil
+
+    process = await asyncio.create_subprocess_exec(
+        str(native_gui_helper), stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+    assert process.stdin and process.stdout
+    request = {'id': 'identity', 'method': method, 'app': 'com.google.Chrome',
+               'process_id': os.getpid(),
+               'process_started': psutil.Process().create_time()}
+    try:
+        # The exact live test process is not Chrome. A valid PID/start pair
+        # must not fall back to activating any app selected by bundle ID.
+        process.stdin.write(json.dumps(request).encode() + b'\n')
+        await process.stdin.drain()
+        result = json.loads(await asyncio.wait_for(process.stdout.readline(), 5))
+        assert result == {'id': 'identity',
+                          'error': {'code': 'process_identity_changed'}}
+        request['process_started'] = True
+        process.stdin.write(json.dumps(request).encode() + b'\n')
+        await process.stdin.drain()
+        result = json.loads(await asyncio.wait_for(process.stdout.readline(), 5))
+        assert result['error']['code'] == 'invalid_input'
+        process.stdin.close()
+        assert await asyncio.wait_for(process.wait(), 5) == 0
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.wait()
+
+
 def test_observation_budget_and_value_identity_in_real_swift_source(tmp_path):
     source = Path(__file__).resolve().parents[1] / "native/macos/AXHelper.swift"
     text = source.read_text()

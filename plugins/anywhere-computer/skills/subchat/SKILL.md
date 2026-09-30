@@ -34,6 +34,21 @@ bridge context rejects stateful Subchat calls before dispatch. A long running
 send or queue watch keeps the explicit session alive during idle periods;
 `subchat_activity` reports live work without opening Chrome.
 
+For a browser challenge in a background send session, inspect the actual blocked
+tab with `subchat_browser_diagnostics` when advertised. In the same Plugin
+session use `action=status`, then `action=show` only for requested local human
+inspection, and `action=close` when finished. The tab expires after five minutes
+and closes on session exit. Showing a tab does not clear a challenge or authorize
+retrying a send; keep its original operation ID. The display acknowledgement
+does not prove OS foreground visibility. This local tool is absent in read-only
+mode and the HTTPS gateway. Never solve a challenge without the host's required
+confirmation or claim that another Chrome tab cleared this session's challenge.
+On macOS, the separate `native_display.foreground_verified` result can confirm
+the exact owned Chrome process is active, not hidden and has an onscreen window.
+An unavailable native result leaves display unverified. `cleanup_pending`
+retains ownership after an unconfirmed close; show is disabled and explicit
+close may retry cleanup. Neither result changes the send receipt or challenge.
+
 For an unattended follow-up, first queue it with `subchat_message`, then call
 `subchat_queue_auto` for its saved operation ID. This opt-in is durable for a
 bounded lease and can reopen the selected browser when a send-capable

@@ -11,6 +11,16 @@ import pytest
 from anywhere_computer.subchat_browser import background, background_guardian
 
 
+async def test_browser_display_refuses_unowned_context_without_helper(monkeypatch):
+    def forbidden(*args):
+        pytest.fail('An unowned browser must not acquire any native helper')
+
+    monkeypatch.setattr(background, '_diagnostic_helper', forbidden)
+    page = SimpleNamespace(context=object(), is_closed=lambda: False)
+    assert await background.reveal_background_page(page) == {
+        'state': 'unavailable', 'reason': 'not_owned_context'}
+
+
 async def test_background_page_uses_nonactivating_cdp_target():
     page = object()
     context = SimpleNamespace(pages=[])

@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 import logging
 import os
 import secrets
 import stat
 import sys
 import time
+import uuid
 from collections.abc import AsyncIterator, Coroutine, Iterator
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
@@ -22,6 +24,62 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 _BROWSER_CLOSE_TIMEOUT = 5.0
+_OWNED_CONTEXTS: dict[int, tuple[BrowserContext, Path, str]] = {}
+
+
+def _diagnostic_helper() -> Path:
+    from ..native_gui import verified_gui_helper
+    from ..runtime_selection import load_runtime_selection
+    from ..state import state_directory
+
+    selected = load_runtime_selection(state_directory())
+    if selected is None:
+        raise ValueError('A verified portable runtime is required for browser display')
+    return verified_gui_helper(Path(selected.executable).parents[2])
+
+
+async def reveal_background_page(page: Page) -> dict[str, object]:
+    """Reveal only a live context launched with this process's ownership marker."""
+    owned = _OWNED_CONTEXTS.get(id(page.context))
+    if owned is None or owned[0] is not page.context or page.is_closed():
+        return {'state': 'unavailable', 'reason': 'not_owned_context'}
+    processes = _owned_processes(owned[1], owned[2])
+    if len(processes) != 1:
+        return {'state': 'unavailable', 'reason': 'process_identity_unavailable'}
+    target = processes[0]
+    try:
+        helper = _diagnostic_helper()
+    except ValueError:
+        return {'state': 'unavailable', 'reason': 'verified_helper_required'}
+    request_id = uuid.uuid4().hex
+    request = {'id': request_id, 'method': 'browser_reveal', 'app': 'com.google.Chrome',
+               'process_id': target.pid, 'process_started': target.create_time()}
+    # A single bounded helper call, with no fallback to another Chrome instance.
+    process = await asyncio.create_subprocess_exec(
+        str(helper), stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL, limit=65_536)
+    try:
+        async with asyncio.timeout(4):
+            output, _ = await process.communicate(json.dumps(request).encode() + b'\n')
+        if process.returncode != 0 or len(output) > 65_536:
+            raise ValueError('Invalid browser display response')
+        response = json.loads(output)
+        if not isinstance(response, dict):
+            raise ValueError('Invalid browser display response')
+        result = response.get('result')
+        if response.get('id') != request_id or not isinstance(result, dict):
+            return {'state': 'unavailable', 'reason': 'helper_rejected'}
+        if (result.get('process_id') != target.pid
+                or type(result.get('foreground_verified')) is not bool
+                or type(result.get('onscreen_window_count')) is not int
+                or type(result.get('process_hidden')) is not bool
+                or type(result.get('process_active')) is not bool):
+            raise ValueError('Invalid browser display identity')
+        return {'state': 'observed', **result}
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await asyncio.wait_for(process.wait(), timeout=2)
 
 
 if sys.platform == 'win32':
@@ -189,6 +247,7 @@ async def background_chrome_context(
                    '--no-first-run', '--no-default-browser-check', '--no-startup-window',
                    *launch_args]
         browser = None
+        context = None
         launch_attempted = False
         ownership_confirmed = False
         guardian = await _start_guardian(profile, token)
@@ -218,8 +277,12 @@ async def background_chrome_context(
             browser = await driver.chromium.connect_over_cdp(f'http://127.0.0.1:{port}')
             if len(browser.contexts) != 1:
                 raise ConnectionError('Background Chrome context is ambiguous')
-            yield browser.contexts[0]
+            context = browser.contexts[0]
+            _OWNED_CONTEXTS[id(context)] = (context, profile, token)
+            yield context
         finally:
+            if context is not None:
+                _OWNED_CONTEXTS.pop(id(context), None)
             async def cleanup() -> None:
                 clean = False
                 try:

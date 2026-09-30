@@ -467,6 +467,7 @@ m.run(transport='stdio')
 
 @pytest.mark.parametrize('tool', [
     'subchat_send', 'subchat_recover', 'subchat_wait', 'subchat_message',
+    'subchat_catalog', 'subchat_browser_diagnostics',
 ])
 async def test_idle_expiry_preserves_subchat_background_work(tmp_path, monkeypatch, tool):
     from anywhere_computer import direct_mcp_sessions

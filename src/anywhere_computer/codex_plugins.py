@@ -29,15 +29,17 @@ _SAFE_NAME = re.compile(r"^[A-Za-z0-9_.:/-]{1,200}$")
 _DENIED_TOOL_PREFIXES = ("codex_plugin_", "devices_", "connection_setup_", "mcp__codex_app__")
 STATEFUL_SUBCHAT_TOOLS = frozenset({
     "subchat_send", "subchat_message", "subchat_observe", "subchat_recover", "subchat_wait",
-    "subchat_queue_watch", "subchat_queue_auto",
+    "subchat_queue_watch", "subchat_queue_auto", "subchat_browser_diagnostics",
 })
 
 
-def _subchat_activity_tool(tool: str) -> str | None:
+def _subchat_activity_tool(tool: str, *, include_catalog: bool = False) -> str | None:
     """Find the matching activity tool for a stateful Subchat route."""
-    if tool in STATEFUL_SUBCHAT_TOOLS:
+    actions = (STATEFUL_SUBCHAT_TOOLS | {'subchat_catalog'} if include_catalog
+               else STATEFUL_SUBCHAT_TOOLS)
+    if tool in actions:
         return "subchat_activity"
-    for action in STATEFUL_SUBCHAT_TOOLS:
+    for action in actions:
         if tool.endswith(action):
             prefix = tool[:-len(action)]
             if "subchat" in re.split(r"[._:/-]+", prefix):

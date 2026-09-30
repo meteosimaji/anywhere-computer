@@ -88,6 +88,10 @@ class Send(Contract):
     http_selection: SubchatHTTPSelection | None = None
 
 
+class BrowserDiagnostic(Contract):
+    action: Literal['status', 'show', 'close'] = 'status'
+
+
 class Message(Contract):
     mode: Literal['queue', 'steer']
     target_operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
@@ -921,6 +925,18 @@ def session(service: Subchats, *,
     if capabilities is not None:
         definitions['subchat_capabilities'] = _CAPABILITIES_DEFINITION
 
+    browser_diagnostics = getattr(service.backend, 'browser_diagnostics', None)
+    if (not read_only and browser_diagnostics is not None
+            and getattr(service.backend, 'browser_diagnostics_available', False)):
+        definitions['subchat_browser_diagnostics'] = (
+            BrowserDiagnostic,
+            'Inspect this local session\'s actual blocked owned Chrome tab. status opens '
+            'nothing; show requests display of that existing tab for human inspection; '
+            'close releases it. Retained for at most 5 minutes and closed on session exit. '
+            'Never navigates, solves a challenge, sends, retries, or clears the blocked latch. '
+            'Display acknowledgement is not proof of an OS foreground window. '
+            'Keep this same plugin session open while inspecting.')
+
     refresh_auth = getattr(service.backend, 'refresh_auth', None)
     if (read_only and refresh_auth is not None and capabilities is not None
             and capabilities().get('credential_refresh') is True):
@@ -990,6 +1006,14 @@ def session(service: Subchats, *,
                          error='This Subchat session permits observation only.',
                          data={'error_code': 'read_only', 'dispatched': False})
         try:
+            if (request.tool == 'subchat_browser_diagnostics'
+                    and request.tool in definitions):
+                diagnostic = BrowserDiagnostic.model_validate(request.arguments)
+                assert browser_diagnostics is not None
+                async with browser_lock:
+                    inspected = await browser_diagnostics(diagnostic.action)
+                return Reply(operation_id=request.operation_id, state='completed',
+                             data=TypeAdapter(dict[str, JsonValue]).validate_python(inspected))
             if request.tool == 'subchat_refresh_auth' and 'subchat_refresh_auth' in definitions:
                 assert refresh_auth is not None
                 Contract.model_validate(request.arguments)
@@ -1183,23 +1207,28 @@ def session(service: Subchats, *,
                                      server.queue_watches.values())
                 auto_active = sum(not task.done() for task in
                                   server.auto_queue_tasks.values())
-                generation_active = (server.live_transport is not None
-                                     and server.live_transport())
+                generation_probe = getattr(service.backend, 'has_live_generation',
+                                           server.live_transport)
+                generation_active = generation_probe is not None and generation_probe()
+                diagnostic_probe = getattr(service.backend, 'has_live_diagnostics', None)
+                diagnostic_active = diagnostic_probe is not None and diagnostic_probe()
                 return Reply(operation_id=request.operation_id, state='completed',
                              data={'state': 'active' if (sends_active or recoveries_active
                                                         or watches_active or auto_active
-                                                        or generation_active)
+                                                        or generation_active or diagnostic_active)
                                               else 'idle',
                                    'active_count': sends_active + recoveries_active
                                                    + watches_active + auto_active
-                                                   + int(generation_active),
+                                                   + int(generation_active)
+                                                   + int(diagnostic_active),
                                    'active_sends': sends_active,
                                    'failed_send_workers': sum(
                                        send_worker(key)['state'] == 'failed' for key in sends),
                                    'active_recoveries': recoveries_active,
                                    'active_queue_watches': watches_active,
                                    'active_auto_queues': auto_active,
-                                   'live_generation': generation_active})
+                                   'live_generation': generation_active,
+                                   'live_browser_diagnostics': diagnostic_active})
             if request.tool == 'subchat_capabilities' and capabilities is not None:
                 Contract.model_validate(request.arguments)
                 reported = capabilities()
@@ -1717,7 +1746,8 @@ def session(service: Subchats, *,
         catalog, execute, recoveries, sends,
         instructions=INSTRUCTIONS if instructions is None else instructions,
         require_send_intent=require_send_intent,
-        live_transport=getattr(service.backend, 'has_live_generation', None),
+        live_transport=getattr(service.backend, 'has_live_transport',
+                               getattr(service.backend, 'has_live_generation', None)),
         close_transport=getattr(service.backend, 'close_generations', None))
     if not read_only:
         for operation_id in service.store.active_auto_queues(owner=owner)[:8]:

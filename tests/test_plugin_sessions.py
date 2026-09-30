@@ -195,6 +195,7 @@ async def test_busy_session_cannot_be_closed_or_expired(contexts, tmp_path):
 @pytest.mark.parametrize("tool", [
     "subchat_send", "subchat_wait", "subchat_recover", "subchat_queue_watch",
     "subchat_queue_auto",
+    "subchat_catalog", "subchat_browser_diagnostics",
 ])
 async def test_idle_session_keeps_background_subchat_alive_until_work_ends(
     tmp_path, monkeypatch, tool,

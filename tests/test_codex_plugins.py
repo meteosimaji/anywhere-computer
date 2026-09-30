@@ -279,7 +279,7 @@ async def test_preflight_failure_unsubscribes_without_dispatch(stub_catalog, tmp
 @pytest.mark.parametrize("server", ["anywhere-subchat", "chat-subchat"])
 @pytest.mark.parametrize("tool", [
     "subchat_send", "subchat_message", "subchat_recover", "subchat_wait",
-    "subchat_queue_watch", "subchat_queue_auto",
+    "subchat_queue_watch", "subchat_queue_auto", "subchat_browser_diagnostics",
 ])
 async def test_stateful_subchat_requires_persistent_plugin_session(
     stub_catalog, tmp_path, server, tool,

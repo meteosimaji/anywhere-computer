@@ -157,7 +157,11 @@ class NativeGUICleanupUnconfirmed(RuntimeError):
 def installed_helper() -> Path:
     if sys.platform != "darwin":
         raise ValueError("Native GUI requires macOS")
-    root = Path(sys.prefix).parent
+    return verified_gui_helper(Path(sys.prefix).parent)
+
+
+def verified_gui_helper(root: Path) -> Path:
+    """Use only the executable recorded by this exact portable installation."""
     helper = root / "native/anywhere-gui"
     manifest = root / "manifest.json"
     if (not helper.is_file() or helper.is_symlink() or not manifest.is_file()
