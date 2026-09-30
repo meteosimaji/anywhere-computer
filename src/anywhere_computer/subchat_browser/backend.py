@@ -186,7 +186,8 @@ class BrowserSubchatBackend:
         self._record_conversation = record_conversation
         self._record_rejection = record_rejection
         self._http_reader = ChatHTTPReader(
-            http_request_factory, page_factory=self._new_page if background_pages else None)
+            http_request_factory, page_factory=self._new_page if background_pages else None,
+            retain_catalog_page=httpx_generation)
         self._context = None if callable(context) else context
         self._create_context = context if callable(context) else None
         self._context_lock = asyncio.Lock()
@@ -222,6 +223,7 @@ class BrowserSubchatBackend:
         await asyncio.gather(*tasks, return_exceptions=True)
         await asyncio.gather(*self._generation_tasks.values(), return_exceptions=True)
         self._browser_generations.clear()
+        await self._http_reader.close_catalog_page()
 
     def _browser_closed(self, context: BrowserContext) -> None:
         self._closed = True
@@ -616,7 +618,8 @@ class BrowserSubchatBackend:
             raise ValueError('Resource sends require HTTP history verification')
         url = self._url(submission)
         # Only reuse tabs already owned by this adapter, never discover or claim
-        # arbitrary user tabs. New conversations must always start separately.
+        # arbitrary user tabs. A new conversation may use our own, still empty
+        # catalog bootstrap page; preparation rechecks its URL/composer/history.
         candidates = list(dict.fromkeys(
             page for page in self.pages.values()
             if submission.requested_conversation_id is not None
@@ -624,12 +627,17 @@ class BrowserSubchatBackend:
             and page not in self._unreusable_pages))
         if len(candidates) > 1:
             raise ValueError('Multiple owned tabs match the requested conversation')
-        page = candidates[0] if candidates else await self._new_page()
+        catalog_page = (await self._http_reader.take_catalog_page(await self._browser())
+                        if self._httpx_generation and not candidates
+                        and submission.requested_conversation_id is None
+                        else None)
+        page = candidates[0] if candidates else catalog_page or await self._new_page()
         previous = self.pages.get(submission.operation_id)
         previous_kind = self._prepared_baseline_kinds.pop(submission.operation_id, None)
         self.pages[submission.operation_id] = page
         try:
-            baseline = await self._prepare_page(page, submission, url, reused=bool(candidates),
+            baseline = await self._prepare_page(page, submission, url,
+                                                reused=bool(candidates) or catalog_page is not None,
                                                 picker_label=picker_label)
             self._preparation_touched_pages.discard(page)
             return baseline

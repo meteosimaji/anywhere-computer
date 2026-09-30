@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b41 / Plugin 0.2.0-beta.41 — unpublished candidate (2026-09-30)
+
+- In browser-prepared HTTPX Subchat sessions, retain the controller-owned
+  authenticated catalog bootstrap page for new-conversation preparation.
+  Revalidate its URL, empty idle composer, conversation history and exact
+  model/effort selection before sending. This avoids an unnecessary second
+  home navigation; it does not bypass provider challenges.
+- Close unused bootstrap pages on session shutdown and invalid catalogs.
+  Preserve separate pages for read-only and ordinary browser-send adapters,
+  and never discover or claim existing user tabs.
+
 ## 0.2.0b40 / Plugin 0.2.0-beta.40 — unpublished candidate (2026-09-30)
 
 - Include Subchat device-save scopes in HTTP tool upgrades while retaining

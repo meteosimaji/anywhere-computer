@@ -231,6 +231,16 @@ opening new sessions is not a recovery strategy. This guard does not solve or
 bypass provider challenges, and the provider can challenge a later navigation
 even after a successful catalog read.
 
+In browser-prepared HTTPX sessions, a successful HTTP catalog bootstrap retains
+only the empty tab created by this controller. New-conversation preparation can
+reuse that tab instead of navigating home again. Preparation still checks the
+current URL, ordinary Chat mode, idle empty composer, absence of conversation
+history, and exact model/effort selection. A draft, active generation or existing
+history causes preparation to fail before sending. Unused tabs close on session
+shutdown; malformed catalogs close their bootstrap tab. Existing user tabs are
+never discovered or claimed. Read-only and ordinary browser-send sessions keep
+their existing cleanup behavior.
+
 On macOS, `ANYWHERE_SUBCHAT_PLUGIN_TRANSPORT=browser-prepared-httpx` exposes the
 same send tools with a different generation transport. Use the dedicated logged-in
 profile, or select an ordinary Chrome profile through
