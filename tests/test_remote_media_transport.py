@@ -297,8 +297,10 @@ async def test_sdk_receives_native_media_through_device_gateway(
     port = await adapter.start()
     request_id = uuid.uuid4().hex
     try:
+        # HTTPMCP permits 60 seconds for dispatch; a custom SDK client must
+        # outlive that response budget instead of inheriting HTTPX's five seconds.
         async with httpx.AsyncClient(headers={'Authorization': 'Bearer fixture-only-token'},
-                                     trust_env=False) as http:
+                                     trust_env=False, timeout=httpx.Timeout(5, read=65)) as http:
             async with streamable_http_client(
                 f'http://127.0.0.1:{port}/mcp', http_client=http,
             ) as (reader, writer, _):
@@ -378,9 +380,12 @@ async def test_router_keeps_invalid_media_unknown_and_recovers_without_reexecuti
                          indirect=True)
 @pytest.mark.parametrize('media_peer', ['http', 'ssh'], indirect=True)
 @pytest.mark.parametrize('routed', [False, True], ids=['direct', 'device'])
+@pytest.mark.parametrize('peer_delay', [0, 5.1], ids=['normal', 'slow-peer'])
 async def test_document_preview_native_image_and_recovery_cross_real_wire(
-    media_peer, tmp_path, routed,
+    media_peer, tmp_path, routed, peer_delay,
 ):
+    import asyncio
+
     import httpx
     from mcp import ClientSession
     from mcp.client.streamable_http import streamable_http_client
@@ -389,6 +394,18 @@ async def test_document_preview_native_image_and_recovery_cross_real_wire(
     from anywhere_computer.device_router import DeviceRouter
     from anywhere_computer.http_mcp import HTTPMCP
     from anywhere_computer.mcp_server import MCPSession
+
+    execute = media_peer.backend.execute
+    executions = 0
+
+    async def delayed_execute(request):
+        nonlocal executions
+        executions += 1
+        if executions == 1:
+            await asyncio.sleep(peer_delay)
+        return await execute(request)
+
+    media_peer.backend.execute = delayed_execute
 
     async def no_local_catalog():
         return []
@@ -409,8 +426,10 @@ async def test_document_preview_native_image_and_recovery_cross_real_wire(
     request_id = uuid.uuid4().hex
     preview_args = {'path': str(tmp_path / 'document.docx'), 'expected_sha256': 'a' * 64, 'page': 1}
     try:
+        # Retain bounded connect/write waits while allowing the server's full
+        # 60-second dispatch budget, including cold remote subprocess startup.
         async with httpx.AsyncClient(headers={'Authorization': 'Bearer fixture-document-token'},
-                                     trust_env=False) as http:
+                                     trust_env=False, timeout=httpx.Timeout(5, read=65)) as http:
             async with streamable_http_client(
                 f'http://127.0.0.1:{port}/mcp', http_client=http,
             ) as (reader, writer, _):
@@ -441,6 +460,7 @@ async def test_document_preview_native_image_and_recovery_cross_real_wire(
                         assert image()['data'] not in json.dumps(result.structuredContent)
                         assert image()['data'] not in result.content[0].text
         assert media_peer.invoked() == 1
+        assert executions == 2
         assert media_peer.calls() == ['documents_preview', 'operations_get']
     finally:
         await adapter.close()
