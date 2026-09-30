@@ -220,7 +220,7 @@ class BrowserSubchatBackend:
                        if (page := self.pages.get(operation_id)) is not None))
 
     def has_live_diagnostics(self) -> bool:
-        return self._diagnostics.is_retained()
+        return self._diagnostics.has_resources()
 
     def has_live_transport(self) -> bool:
         return self.has_live_generation() or self.has_live_diagnostics()

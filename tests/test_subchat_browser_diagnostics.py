@@ -1,12 +1,52 @@
 """Keep the actual blocked owned tab inspectable without replaying its request."""
 
 import asyncio
+import time
 
 import pytest
 from playwright.async_api import async_playwright
 
 from anywhere_computer.subchat import SubchatPreparationFailed
 from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+
+@pytest.mark.parametrize('expired', [False, True])
+@pytest.mark.parametrize('close_raises', [False, True])
+async def test_unconfirmed_close_retains_ownership_until_explicit_cleanup(expired, close_raises):
+    from anywhere_computer.subchat_browser.diagnostics import BrowserDiagnostics
+
+    class Page:
+        closed = False
+
+        def is_closed(self):
+            return self.closed
+
+    page = Page()
+    attempts = []
+
+    async def close_owned(candidate):
+        assert candidate is page
+        attempts.append(candidate)
+        if len(attempts) > 1:
+            candidate.closed = True
+        elif close_raises:
+            raise ConnectionError('close transport unavailable')
+
+    diagnostics = BrowserDiagnostics(close_owned)
+    await diagnostics.retain(page)
+    if expired:
+        diagnostics._expires_at = time.monotonic() - 1
+    result = await diagnostics.inspect('status' if expired else 'close')
+    assert result['state'] == 'cleanup_pending'
+    assert result['cleanup_confirmed'] is False
+    assert diagnostics.has_resources()
+    # A failed close must never make an expired/closing tab displayable.
+    assert (await diagnostics.inspect('show'))['state'] == 'cleanup_pending'
+    assert len(attempts) == 1
+    result = await diagnostics.inspect('close')
+    assert result['state'] == 'unavailable'
+    assert result['cleanup_confirmed'] is True
+    assert not diagnostics.has_resources()
 
 
 @pytest.mark.parametrize('source', ['http', 'ui'])
@@ -111,7 +151,12 @@ async def test_diagnostic_retention_expires_and_shutdown_closes_it(tmp_path, mon
         try:
             page = await backend._new_page()
             await backend._diagnostics.retain(page)
-            await asyncio.sleep(.1)
+            # Wait for the actual close, not a guessed 100 ms scheduler budget.
+            # The retention deadline remains 50 ms; only the test observation
+            # allows a bounded CDP round trip on a loaded CI machine.
+            async with asyncio.timeout(5):
+                while not page.is_closed():
+                    await asyncio.sleep(.01)
             assert page.is_closed()
             another = await backend._new_page()
             await backend._diagnostics.retain(another)

@@ -282,7 +282,10 @@ class PluginSessions:
     ) -> dict[str, JsonValue]:
         codex_plugins._validate_call(server, tool, catalog_sha256)
         async with self._lease(session_id, owner=owner, cwd=cwd) as entry:
-            activity_tool = codex_plugins._subchat_activity_tool(tool)
+            # A catalog failure can retain its newly created challenge tab in
+            # an explicit session. Ephemeral catalog calls remain read-only
+            # routes whose context is closed when the call returns.
+            activity_tool = codex_plugins._subchat_activity_tool(tool, include_catalog=True)
             if activity_tool is not None:
                 await self._activity_digest(entry, server, activity_tool)
                 # A wait can start a background recovery, even when this

@@ -3,6 +3,19 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b46 / Plugin 0.2.0-beta.46 — unpublished candidate (2026-09-30)
+
+- Preserve blocked-tab ownership and activity after an unconfirmed close. Report
+  cleanup_pending, forbid further display and allow explicit cleanup to finish.
+- Protect diagnostic tabs from both direct MCP and explicit Plugin session idle
+  expiry, including a catalog failure that creates the blocked tab.
+- Reveal the exact owned background Chrome process on macOS using a verified
+  native helper. Check PID, process start and bundle identity before and after
+  activation; report OS foreground evidence separately from CDP acknowledgement
+  and challenge completion. Ordinary Chrome profiles are never a fallback.
+- Observe expiry completion with a bounded close check in the regression test,
+  preserving the retention deadline instead of relying on 100 ms CI scheduling.
+
 ## 0.2.0b45 / Plugin 0.2.0-beta.45 — unpublished candidate (2026-09-30)
 
 - Retain the exact newly created blocked Subchat tab for bounded local inspection

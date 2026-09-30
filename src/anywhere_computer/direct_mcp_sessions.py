@@ -19,6 +19,7 @@ ACTIVITY_PROBE_TIMEOUT = 15.0
 BACKGROUND_SUBCHAT_TOOLS = frozenset({
     'subchat_send', 'subchat_message', 'subchat_observe', 'subchat_recover', 'subchat_wait',
     'subchat_queue_watch', 'subchat_queue_auto',
+    'subchat_catalog', 'subchat_browser_diagnostics',
 })
 
 

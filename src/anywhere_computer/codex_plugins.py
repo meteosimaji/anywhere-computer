@@ -33,11 +33,13 @@ STATEFUL_SUBCHAT_TOOLS = frozenset({
 })
 
 
-def _subchat_activity_tool(tool: str) -> str | None:
+def _subchat_activity_tool(tool: str, *, include_catalog: bool = False) -> str | None:
     """Find the matching activity tool for a stateful Subchat route."""
-    if tool in STATEFUL_SUBCHAT_TOOLS:
+    actions = (STATEFUL_SUBCHAT_TOOLS | {'subchat_catalog'} if include_catalog
+               else STATEFUL_SUBCHAT_TOOLS)
+    if tool in actions:
         return "subchat_activity"
-    for action in STATEFUL_SUBCHAT_TOOLS:
+    for action in actions:
         if tool.endswith(action):
             prefix = tool[:-len(action)]
             if "subchat" in re.split(r"[._:/-]+", prefix):

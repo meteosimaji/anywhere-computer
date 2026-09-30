@@ -245,6 +245,13 @@ Keep the session open while inspecting; session shutdown also closes the tab.
 Expiry is not extended by inspection. Already owned conversation tabs are never
 transferred to diagnostics or closed by this tool.
 
+If the close cannot be confirmed, status returns `cleanup_pending` and
+`cleanup_confirmed=false`. The controller keeps ownership and activity until
+the actual page is closed. Show remains disabled, even after expiry; explicit
+close can retry cleanup. Both direct MCP and explicit Plugin sessions protect
+this retained work from idle expiry. A temporary catalog call still closes its
+temporary context, so inspection requires the same explicit session.
+
 `display_requested` acknowledges the exact-target display request, not OS
 foreground visibility or successful verification. It never clicks a challenge,
 navigates, sends, retries, or clears the rejection latch. Human inspection and
@@ -252,6 +259,14 @@ any explicitly confirmed challenge completion are separate actions. Preserve
 the original submission ID and receipt classification. A newly selected
 profile/session is still required for new preparation after a blocked session;
 this diagnostic tool does not establish durable challenge clearance.
+
+On macOS, `native_display.foreground_verified=true` additionally confirms that
+the exact owned Chrome PID is active, not hidden and has an onscreen window.
+The verified native helper checks the process start time and Chrome bundle
+identity before and after activation. It never substitutes another Chrome
+profile. A missing, older or rejected helper reports unavailable native display;
+CDP acknowledgement alone remains insufficient. This evidence concerns display
+only and never means a CAPTCHA was solved or a send was authorized.
 
 In browser-prepared HTTPX sessions, a successful HTTP catalog bootstrap retains
 only the empty tab created by this controller. New-conversation preparation can

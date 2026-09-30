@@ -1562,8 +1562,59 @@ private final class AXHelper {
         ]
     }
 
+    private func browserApplicationResult(_ object: [String: Any], reveal: Bool,
+                                          deadline: RequestDeadline) throws -> [String: Any] {
+        guard Set(object.keys) == Set(["id", "method", "app", "process_id", "process_started"]),
+              object["app"] as? String == "com.google.Chrome",
+              let started = object["process_started"] as? NSNumber,
+              !isBooleanNSNumber(started), started.doubleValue.isFinite,
+              started.doubleValue > 0 else {
+            throw helperError("invalid_input")
+        }
+        let rawPID = try positiveInt(object["process_id"])
+        guard rawPID <= Int(Int32.max) else { throw helperError("invalid_input") }
+        let pid = pid_t(rawPID)
+        let start = try processStart(pid)
+        let created = Double(start.seconds) + Double(start.microseconds) / 1_000_000
+        guard abs(created - started.doubleValue) < 0.000002,
+              let running = NSRunningApplication(processIdentifier: pid),
+              !running.isTerminated, running.bundleIdentifier == "com.google.Chrome" else {
+            throw helperError("process_identity_changed")
+        }
+        if reveal {
+            try deadline.check()
+            guard try processStart(pid) == start else {
+                throw helperError("process_identity_changed")
+            }
+            // AppKit addresses this exact process. Never activate whichever
+            // unrelated Chrome profile happens to be selected by a bundle lookup.
+            _ = running.unhide()
+            _ = running.activate(options: [])
+            while (running.isHidden || !running.isActive) && deadline.remaining > 0.05 {
+                RunLoop.current.run(until: Date(timeIntervalSinceNow: 0.05))
+            }
+        }
+        guard !running.isTerminated, try processStart(pid) == start else {
+            throw helperError("process_identity_changed")
+        }
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
+                                                kCGNullWindowID) as? [[String: Any]] ?? []
+        let count = windows.filter {
+            ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid
+                && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0
+        }.count
+        return ["process_id": rawPID, "process_hidden": running.isHidden,
+                "process_active": running.isActive, "onscreen_window_count": count,
+                "foreground_verified": !running.isHidden && running.isActive && count > 0]
+    }
+
     func handle(_ object: [String: Any]) throws -> [String: Any] {
         let deadline = RequestDeadline()
+        if let method = object["method"] as? String,
+           ["browser_status", "browser_reveal"].contains(method) {
+            return try browserApplicationResult(object, reveal: method == "browser_reveal",
+                                                deadline: deadline)
+        }
         let allowedKeys: Set<String> = [
             "id", "method", "app", "window_id", "observation_id", "element_ref", "value",
             "role", "label", "identifier", "action", "include_image",
