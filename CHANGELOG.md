@@ -11,6 +11,8 @@
 - Document the unverified actual-dot credential handoff and client acceptance.
 - Observe the rendered folder-row hover background with a bounded assertion
   after one pointer action, instead of reading CSS immediately after dispatch.
+- Exercise owned-browser cleanup beyond its receipt deadline and wait for the
+  same retained task before verifying capacity recovery; live owners stay open.
 - Use a new candidate number so CI can verify it without reusing the published
   beta.52 tag. This candidate is not installed or published by this change.
 
