@@ -9,7 +9,7 @@ import httpx
 import pytest
 from pydantic import Field
 
-from anywhere_computer import authorized_http, connection, delegated_tasks
+from anywhere_computer import authorization, authorized_http, connection, delegated_tasks
 from anywhere_computer.authorization import AuthorizationStore, pkce_s256
 from anywhere_computer.authorized_http import AuthorizedDeviceMCP
 from anywhere_computer.delegated_tasks import DelegatedTaskGrant, DelegatedTaskStore
@@ -34,7 +34,9 @@ class LegacyGrantedRequest(Contract):
 
 
 @pytest.mark.parametrize("legacy", [False, True])
-@pytest.mark.parametrize("interruption", [None, "child_revoke", "parent_revoke", "expiry"])
+@pytest.mark.parametrize("interruption", [
+    None, "child_revoke", "parent_revoke", "expiry", "parent_expiry",
+])
 async def test_delegated_http_reuses_engine_and_negotiates_bound_receipts(
     tmp_path, monkeypatch, legacy, interruption,
 ):
@@ -75,15 +77,24 @@ async def test_delegated_http_reuses_engine_and_negotiates_bound_receipts(
         parent_id = await backend.authenticate(parent_token)
         assert parent_id is not None
         source = tmp_path / "source.txt"
-        source.write_text("child read\n", encoding="utf-8")
+        source.write_bytes(b"child read\n")
         forbidden = tmp_path / "forbidden.txt"
         forbidden.write_text("not granted", encoding="utf-8")
         child_id = uuid.uuid4().hex
         clock = time.time()
+        parent_clock = clock
+        child_expires_at = clock + 600
+        if interruption == "parent_expiry":
+            # New consent is permanent. Retained pre-permanent grants can
+            # still have deadlines; represent one in the isolated fixture DB.
+            with authority.db:
+                authority.db.execute("UPDATE grants SET expires=? WHERE id=?",
+                                     (clock + 60, parent_id))
         monkeypatch.setattr(delegated_tasks, "time", SimpleNamespace(time=lambda: clock))
+        monkeypatch.setattr(authorization, "time", SimpleNamespace(time=lambda: parent_clock))
         token = delegation.issue(DelegatedTaskGrant(owner="owner", child_id=child_id,
             parent_grant_id=parent_id, device_id="local", tools=tools,
-            read_files=(str(source.resolve()),), expires_at=clock + 600))
+            read_files=(str(source.resolve()),), expires_at=child_expires_at))
         adapter = HTTPMCP(backend.authenticate, backend.session)
         port = await adapter.start()
         async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{port}", headers={
@@ -124,7 +135,7 @@ async def test_delegated_http_reuses_engine_and_negotiates_bound_receipts(
             forwarded_lookups = []
 
             async def probe(directory, tool, *args, **kwargs):
-                nonlocal clock
+                nonlocal clock, parent_clock
                 result = await real_probe(directory, tool, *args, **kwargs)
                 if tool == "__status":
                     if interruption == "child_revoke":
@@ -133,6 +144,12 @@ async def test_delegated_http_reuses_engine_and_negotiates_bound_receipts(
                         authority.revoke(owner="owner", grant=parent_id)
                     elif interruption == "expiry":
                         clock += 601
+                    elif interruption == "parent_expiry":
+                        deadline = authority.db.execute(
+                            "SELECT expires FROM grants WHERE id=?", (parent_id,),
+                        ).fetchone()[0]
+                        assert deadline > parent_clock
+                        parent_clock = deadline + 1
                 return result
 
             async def remote(directory, identity, allowed, request, **kwargs):
@@ -149,6 +166,9 @@ async def test_delegated_http_reuses_engine_and_negotiates_bound_receipts(
                 assert lookup["data"]["reason"] != "engine_feature_unavailable"
                 assert forwarded_lookups == []
                 assert delegation.current(child_id) is None
+                if interruption == "parent_expiry":
+                    assert authority.current_grant(parent_id) is None
+                    assert clock < child_expires_at
             elif legacy:
                 assert lookup["state"] == "failed"
                 assert lookup["data"] == {

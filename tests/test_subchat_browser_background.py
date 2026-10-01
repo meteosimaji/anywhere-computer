@@ -1,6 +1,7 @@
 """Background Chrome launch and owned-tab allocation contracts."""
 
 import asyncio
+import json
 import sys
 import threading
 from contextlib import nullcontext
@@ -121,20 +122,104 @@ async def test_background_page_uses_real_persistent_chrome_context(tmp_path, pag
             raise
         try:
             anchor = context.pages[0]
+            page_closes = []
+
+            def watch_close(page):
+                page.on('close', lambda _: page_closes.append(page is anchor))
+
+            for page in context.pages:
+                watch_close(page)
+            context.on('page', watch_close)
+
+            class ObservedSession:
+                def __init__(self, session, allocation, role):
+                    self.session, self.allocation, self.role = session, allocation, role
+
+                async def send(self, method, params=None):
+                    stage = f'{self.role}:{method}'
+                    self.allocation.observation['stage'] = stage
+                    try:
+                        result = await self.session.send(method, params)
+                    except BaseException:
+                        self.allocation.record_failure(stage)
+                        raise
+                    if method == 'Target.createTarget':
+                        self.allocation.target_id = result['targetId']
+                        self.allocation.observation['target_created'] = True
+                    elif method == 'Target.getTargetInfo':
+                        self.allocation.observation['target_matches'] = (
+                            result.get('targetInfo', {}).get('targetId')
+                            == self.allocation.target_id)
+                    self.allocation.observation['stage'] = stage + ':completed'
+                    return result
+
+                async def detach(self):
+                    stage = f'{self.role}:detach'
+                    self.allocation.observation['stage'] = stage
+                    try:
+                        await self.session.detach()
+                    except BaseException:
+                        self.allocation.record_failure(stage)
+                        raise
+                    self.allocation.observation['stage'] = stage + ':completed'
 
             class PersistentContextProxy:
                 browser = None
+
+                def __init__(self, index):
+                    self.target_id = None  # Compare internally; never include IDs in the note.
+                    self.observation = {
+                        'allocation': index, 'stage': 'start', 'first_failure_stage': None,
+                        'target_created': False, 'target_matches': None,
+                        'page_close_count_at_first_failure': None,
+                        'created_page_close_count_at_first_failure': None,
+                        'anchor_closed_at_first_failure': None,
+                    }
+
+                def record_failure(self, stage):
+                    if self.observation['first_failure_stage'] is None:
+                        self.observation['first_failure_stage'] = stage
+                        self.observation['page_close_count_at_first_failure'] = len(page_closes)
+                        self.observation['created_page_close_count_at_first_failure'] = (
+                            page_closes.count(False))
+                        self.observation['anchor_closed_at_first_failure'] = anchor.is_closed()
 
                 @property
                 def pages(self):
                     return context.pages
 
                 async def new_cdp_session(self, page):
-                    return await context.new_cdp_session(page)
+                    role = 'anchor' if page is anchor else 'inspector'
+                    if role == 'inspector':
+                        self.observation['target_matches'] = None
+                    stage = f'{role}:attach'
+                    self.observation['stage'] = stage
+                    try:
+                        session = await context.new_cdp_session(page)
+                    except BaseException:
+                        self.record_failure(stage)
+                        raise
+                    self.observation['stage'] = stage + ':completed'
+                    return ObservedSession(session, self, role)
 
-            pages = await asyncio.gather(*(
-                background.new_background_page(PersistentContextProxy())
-                for _ in range(page_count)))
+            allocations = [PersistentContextProxy(index) for index in range(page_count)]
+            try:
+                pages = await asyncio.gather(*(
+                    background.new_background_page(allocation) for allocation in allocations))
+            except BaseException as error:
+                # asyncio.timeout replaces the inner CancelledError. Add the note
+                # to the final exception, before context.close changes page state.
+                # These are cached/event observations: no URLs, secrets or probes.
+                error.add_note('Controlled background fixture: ' + json.dumps({
+                    'requested_page_count': page_count,
+                    'allocations': [allocation.observation for allocation in allocations],
+                    'context_page_count': len(context.pages),
+                    'context_pages_closed': [page.is_closed() for page in context.pages],
+                    'anchor_closed': anchor.is_closed(),
+                    'page_close_count_before_teardown': len(page_closes),
+                    'created_page_close_count_before_teardown': page_closes.count(False),
+                }, sort_keys=True))
+                raise
             assert len(set(pages)) == page_count
             try:
                 for index, page in enumerate(pages):
