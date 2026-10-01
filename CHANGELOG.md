@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b54 / Plugin 0.2.0-beta.54 — unpublished candidate (2026-10-01)
+
+- Include the unpublished beta.53 native GUI diagnosis with a new immutable
+  package version.
+- Preserve `authentication_required` and `access_denied` when selected-account
+  startup is refused, instead of masking those responses as gateway unavailable.
+- Keep unconfirmed sends bound to their original operation and intent; restoring
+  access never relabels them as unsent or permits an automatic replay.
+- Add controlled-fixture diagnostics for owned-page closure, picker actions and
+  OAuth upload lifecycle without changing deadlines, retries or assertions.
+
 ## 0.2.0b53 / Plugin 0.2.0-beta.53 — unpublished candidate (2026-10-01)
 
 - Declare the native macOS GUI adapter unavailable on Windows and Linux, matching
@@ -10,7 +21,7 @@
 - Keep external MCP GUI providers independent of that native adapter's OS check;
   macOS helper verification, OS permission and actual acceptance remain separate.
 
-## 0.2.0b52 / Plugin 0.2.0-beta.52 — unpublished candidate (2026-10-01)
+## 0.2.0b52 / Plugin 0.2.0-beta.52 — published beta (2026-10-01)
 
 - Include the unpublished beta.51 repairs with a new immutable package version.
 - Preserve delegated catalog and ordinary calls through the strict beta.48

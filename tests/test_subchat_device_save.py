@@ -3,6 +3,7 @@ import base64
 import hashlib
 import os
 import sqlite3
+import sys
 from dataclasses import replace
 
 import httpx
@@ -721,7 +722,24 @@ async def test_https_save_scope_catalog_and_same_id_delivery(tmp_path, monkeypat
 
 @pytest.mark.asyncio
 async def test_real_oauth_http_save_requires_own_scope_and_publishes_verified_bytes(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, capsys):
+    def phase(name):
+        # This must survive a worker's faulthandler exit: phase names only,
+        # without buffered pytest capture or transport/authorization contents.
+        with capsys.disabled():
+            print('Controlled OAuth save fixture: ' + name, file=sys.stderr, flush=True)
+
+    async def observed(name, call, *args, **kwargs):
+        phase(name + ':started')
+        try:
+            result = await call(*args, **kwargs)
+        except BaseException:
+            phase(name + ':failed')
+            raise
+        phase(name + ':completed')
+        return result
+
+    phase('setup:started')
     content = b"authenticated HTTP save"
     scopes = frozenset({"subchat_save_file", "upload_begin", "upload_chunk",
                         "upload_status", "upload_commit", "operations_get"})
@@ -763,6 +781,13 @@ async def test_real_oauth_http_save_requires_own_scope_and_publishes_verified_by
         authority, engine, owner="owner", device="device", client="client",
         device_directory=tmp_path / "devices", subchat_gateway=gateway)
     server = HTTPMCP(backend.authenticate, backend.session)
+    observations = pytest.MonkeyPatch()
+    real_handler = server._handle
+
+    async def handler(*args, **kwargs):
+        return await observed('http_handler', real_handler, *args, **kwargs)
+
+    observations.setattr(server, '_handle', handler)
     destination = tmp_path / "http-result.bin"
     operation_id = "d" * 32
     args = {"request_id": operation_id, "source_operation_id": "a" * 32,
@@ -771,49 +796,63 @@ async def test_real_oauth_http_save_requires_own_scope_and_publishes_verified_by
     initialize = {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
         "protocolVersion": "2025-11-25", "capabilities": {},
         "clientInfo": {"name": "save-test", "version": "1"}}}
+    phase('setup:completed')
     try:
-        port = await server.start()
+        port = await observed('server_start', server.start)
+        phase('http_client_enter:started')
         async with httpx.AsyncClient(
             base_url=f"http://127.0.0.1:{port}", trust_env=False,
             headers={"Accept": "application/json, text/event-stream"},
         ) as http:
-            async def connect(token):
-                http.headers["Authorization"] = f"Bearer {token}"
-                started = await http.post("/mcp", json=initialize)
-                assert started.status_code == 200
-                http.headers["MCP-Session-Id"] = started.headers["mcp-session-id"]
-                initialized = await http.post("/mcp", json={
-                    "jsonrpc": "2.0", "method": "notifications/initialized"})
-                assert initialized.status_code in {200, 202}
+            phase('http_client_enter:completed')
+            try:
+                async def connect(token):
+                    http.headers["Authorization"] = f"Bearer {token}"
+                    started = await observed('initialize_http', http.post, "/mcp", json=initialize)
+                    assert started.status_code == 200
+                    http.headers["MCP-Session-Id"] = started.headers["mcp-session-id"]
+                    initialized = await observed('initialized_http', http.post, "/mcp", json={
+                        "jsonrpc": "2.0", "method": "notifications/initialized"})
+                    assert initialized.status_code in {200, 202}
 
-            async def call():
-                response = await http.post("/mcp", json={
-                    "jsonrpc": "2.0", "id": 2, "method": "tools/call",
-                    "params": {"name": "subchat_save_file", "arguments": args}})
-                assert response.status_code == 200
-                return response.json()
+                async def call():
+                    response = await observed('save_http', http.post, "/mcp", json={
+                        "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                        "params": {"name": "subchat_save_file", "arguments": args}})
+                    assert response.status_code == 200
+                    return response.json()
 
-            await connect(limited_token)
-            refused = await call()
-            assert refused["error"]["code"] == -32602
-            assert not destination.exists()
-            http.headers.pop("MCP-Session-Id")
-            await connect(save_token)
-            async with asyncio.timeout(10):
-                while True:
-                    result = (await call())["result"]["structuredContent"]
-                    if result["state"] == "completed":
-                        break
-                    assert result["state"] in {"running", "unknown"}, result
-                    await asyncio.sleep(0.02)
-            assert result["operation_id"] == operation_id
-            assert result["data"]["sha256"] == hashlib.sha256(content).hexdigest()
-            assert destination.read_bytes() == content
-            assert "content_base64" not in str(result)
-            assert (await call())["result"]["structuredContent"] == result
+                await observed('limited_connect', connect, limited_token)
+                refused = await call()
+                assert refused["error"]["code"] == -32602
+                assert not destination.exists()
+                http.headers.pop("MCP-Session-Id")
+                await observed('authorized_connect', connect, save_token)
+                phase('save_poll:started')
+                async with asyncio.timeout(10):
+                    while True:
+                        result = (await call())["result"]["structuredContent"]
+                        if result["state"] == "completed":
+                            break
+                        assert result["state"] in {"running", "unknown"}, result
+                        await asyncio.sleep(0.02)
+                phase('save_poll:completed')
+                assert result["operation_id"] == operation_id
+                assert result["data"]["sha256"] == hashlib.sha256(content).hexdigest()
+                assert destination.read_bytes() == content
+                assert "content_base64" not in str(result)
+                assert (await call())["result"]["structuredContent"] == result
+            finally:
+                phase('http_client_exit:started')
+        phase('http_client_exit:completed')
     finally:
-        await server.close()
-        await backend.close()
-        await gateway.close()
-        authority.close()
-        await engine.close()
+        try:
+            await observed('server_close', server.close)
+            await observed('backend_close', backend.close)
+            await observed('gateway_close', gateway.close)
+            phase('authority_close:started')
+            authority.close()
+            phase('authority_close:completed')
+            await observed('engine_close', engine.close)
+        finally:
+            observations.undo()
