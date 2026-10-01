@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import JsonValue, ValidationError
 
 from .authorization import AuthorizationStore, GrantIdentity
-from .connection import ensure_agent, exchange_remote
+from .connection import ensure_agent, exchange, exchange_remote
 from .delegated_files import read as delegated_read
 from .delegated_files import write as delegated_write
 from .delegated_routes import DelegatedRouteStore
@@ -24,6 +24,7 @@ from .mcp_server import INSTRUCTIONS as MCP_INSTRUCTIONS
 from .mcp_server import OPERATION_META, REQUEST_ID_SCHEMA, MCPSession, rpc_error
 from .models import OperationId, ReadFile, Reply, Request, RuntimeSettings, WriteFile
 from .remote_bridge import RemoteAgent
+from .runtime_identity import REMOTE_RECEIPT_METADATA
 from .ssh_client import SSHBackend
 from .state import Ledger
 from .subchat_device_adapters import RoutedSaveTarget, SubchatSaveSource
@@ -586,6 +587,32 @@ class AuthorizedDeviceMCP:
                 "arguments": arguments,
             })
             if device_id == "local":
+                if lookup is not None and self.agent_directory is not None:
+                    # A selected older engine may be reused without changing the
+                    # API version. Authenticate its live feature declaration for
+                    # every engine receipt, rather than trusting version labels
+                    # or a cache that can survive an engine replacement.
+                    status = await exchange(self.agent_directory, "__status")
+                    # The probe awaited I/O. Recheck the child, parent and expiry
+                    # before allowing the lookup; parent_session checks its own
+                    # current tool grant again immediately before forwarding.
+                    denied = delegation.check(child_id, "local", tool_request,
+                                              ledger=delegation.ledger,
+                                              recorded_request=request)
+                    if denied is not None:
+                        return denied
+                    features = status.data.get("engine_protocol_features")
+                    if (status.state != "completed" or not isinstance(features, list)
+                            or REMOTE_RECEIPT_METADATA not in features):
+                        return Reply(
+                            operation_id=request.operation_id, state="failed",
+                            error="The selected engine cannot authenticate delegated operation "
+                                  "receipts. Update it through its launcher, then look up the "
+                                  "original operation ID; do not resend the original request.",
+                            data={"dispatched": False, "reason": "engine_feature_unavailable",
+                                  "required_feature": REMOTE_RECEIPT_METADATA,
+                                  "next_action": "update_engine", "automatic_retry": False},
+                        )
                 result = await parent_session.execute(forwarded)
             else:
                 try:

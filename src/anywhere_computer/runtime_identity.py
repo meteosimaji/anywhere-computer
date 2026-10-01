@@ -4,6 +4,8 @@ import hashlib
 from pathlib import Path
 
 ENGINE_API_VERSION = 1
+REMOTE_RECEIPT_METADATA = "remote_receipt_metadata"
+ENGINE_PROTOCOL_FEATURES = (REMOTE_RECEIPT_METADATA,)
 
 
 def runtime_identity() -> str:

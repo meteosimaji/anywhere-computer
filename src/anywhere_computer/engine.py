@@ -132,7 +132,7 @@ from .native_gui import (
 )
 from .plugin_sessions import PluginSessions
 from .processes import list_processes, stop_process
-from .runtime_identity import ENGINE_API_VERSION, runtime_identity
+from .runtime_identity import ENGINE_API_VERSION, ENGINE_PROTOCOL_FEATURES, runtime_identity
 from .search import Searches
 from .sessions import Sessions, TerminalInputOutcomeUnknown
 from .state import Ledger
@@ -1716,6 +1716,7 @@ class Engine:
             "state": "ready",
             "version": __version__,
             "engine_api_version": ENGINE_API_VERSION,
+            "engine_protocol_features": list(ENGINE_PROTOCOL_FEATURES),
             "instance_id": self.instance_id,
             "runtime_id": self.runtime_id,
             "uptime_seconds": time.monotonic() - self.started,
