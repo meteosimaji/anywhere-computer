@@ -182,6 +182,7 @@ async def open_workspace(browser, session, folder, *, width, height=860, scheme=
     context = await browser.new_context(viewport={"width": width, "height": height},
                                         color_scheme=scheme, reduced_motion="reduce")
     page = await context.new_page()
+    page.rpc_replies = []
 
     async def route(handler):
         url = handler.request.url
@@ -190,7 +191,9 @@ async def open_workspace(browser, session, folder, *, width, height=860, scheme=
                 await handler.fulfill(content_type="text/html; charset=utf-8",
                                       body=str(workspace_resource()["text"]))
             elif url.endswith("/rpc"):
-                reply = await session.handle(json.loads(handler.request.post_data))
+                packet = json.loads(handler.request.post_data)
+                reply = await session.handle(packet)
+                page.rpc_replies.append((packet, reply))
                 await handler.fulfill(content_type="application/json", body=json.dumps(reply))
             else:
                 await handler.fulfill(content_type="text/html; charset=utf-8", body=HOST)
@@ -360,7 +363,18 @@ async def test_connection_settings_review_and_save_with_real_input(
             await browser.close()
 
 
-async def test_image_and_document_are_really_read_and_displayed(backend):
+@pytest.mark.parametrize("preview_mode", ["installed", "unavailable"])
+async def test_image_and_document_are_really_read_and_displayed(backend, monkeypatch, preview_mode):
+    if preview_mode == "unavailable":
+        from anywhere_computer import engine as engine_module
+        from anywhere_computer.document_preview import DocumentPreviewUnavailable
+
+        def unavailable_renderer(_request):
+            raise DocumentPreviewUnavailable("Fixture adapter is unavailable")
+
+        # Exercise the unsupported-platform outcome even on a Mac with an adapter.
+        # Source reads, extraction, MCP transport and browser rendering remain real.
+        monkeypatch.setattr(engine_module, "preview_document", unavailable_renderer)
     folder, session = backend
     async with async_playwright() as driver:
         browser = await launch(driver)
@@ -382,7 +396,33 @@ async def test_image_and_document_are_really_read_and_displayed(backend):
             inner = page.frames[-1]
             assert await inner.evaluate(NO_SIDEWAYS)
             await frame.locator("#files-tab:enabled").wait_for(timeout=10000)
-            assert "抽出した本文" in await frame.locator("#notice").text_content()
+            assert await frame.locator("#document-title:visible").text_content() == "抽出した本文"
+            # The real renderer's availability varies by platform. Require the UI to
+            # match the actual MCP outcome, rather than assuming macOS's failure text.
+            previews = [reply["result"]["structuredContent"]
+                        for packet, reply in page.rpc_replies
+                        if packet.get("method") == "tools/call"
+                        and packet.get("params", {}).get("name") == "documents_preview"]
+            assert len(previews) == 1
+            preview = previews[0]
+            if preview_mode == "unavailable":
+                assert preview["state"] == "failed"
+                assert preview["data"]["error_code"] == "preview_unavailable"
+            notice = await frame.locator("#notice").text_content()
+            if preview["state"] == "failed":
+                if preview["data"].get("error_code") == "preview_unavailable":
+                    assert notice == ("書式プレビューはこの端末で利用できません。"
+                                      "抽出した文字情報を表示しています。")
+                    assert await frame.locator("#notice").get_attribute("data-error") == "false"
+                else:
+                    assert notice == ("書式プレビューを生成できませんでした。"
+                                      "抽出した本文は表示しています。")
+                    assert await frame.locator("#notice").get_attribute("data-error") == "true"
+                assert not await frame.locator("#image").is_visible()
+            else:
+                assert preview["state"] == "completed"
+                assert await frame.locator("#formatted-preview").is_visible()
+                assert "抽出した本文を表示しています" in notice
             await context.close()
         finally:
             await browser.close()
