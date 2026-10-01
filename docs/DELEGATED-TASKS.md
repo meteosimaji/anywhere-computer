@@ -33,6 +33,22 @@ after the policy check. File contents can change at the selected path; this is
 path access, not a hash-pinned content grant. Old grants without `read_files`
 retain their existing roots with no additional paths. The maximum
 lifetime is 24 hours, and the parent grant may end access earlier.
+An individual-file child also uses the currently selected Engine's read-line
+limit. The shared-agent path reads that Engine's settings on each operation;
+it does not use the older control ledger's defaults. A pending Engine migration,
+missing selected Engine, or invalid settings denies the read before the file
+executor runs, and its failed receipt remains available through `operations_get`
+when that recovery scope is granted.
+
+The isolated regressions in `tests/test_delegated_selected_files.py` and
+`test_shared_delegated_files_use_selected_engine_limits` cover the file boundary,
+HTTP reconnect/revocation, selected-Engine limits and refusal during settings
+failures. They do not establish an actual ChatGPT dot's credential handoff or
+end-to-end acceptance. A normal OAuth grant with `files_read` alone remains
+tool-scoped; it does not acquire the child grant's path restrictions. Delivering
+a child bearer to a dot still requires a supported, trusted client configuration
+path, without putting the bearer in prompts or chat.
+
 Every child grant containing `files_write` must also contain `operations_get`,
 with both tools present in the parent grant for a local child. An older local
 child grant lacking recovery scope becomes inactive and must be reissued. The

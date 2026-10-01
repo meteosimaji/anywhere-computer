@@ -131,8 +131,14 @@ async def test_ssh_child_shutdown_drains_cancelled_observers_before_closing_stor
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('root_grant', [False, True])
-async def test_shared_delegated_files_use_selected_engine_limits(tmp_path, root_grant):
+@pytest.mark.parametrize('read_scope,engine_state', [
+    ('directory', 'ready'), ('filesystem_root', 'ready'), ('selected_file', 'ready'),
+    ('selected_file', 'migration_pending'), ('selected_file', 'missing_engine'),
+    ('selected_file', 'corrupt_settings'),
+])
+async def test_shared_delegated_files_use_selected_engine_limits(
+    tmp_path, read_scope, engine_state,
+):
     control = tmp_path / "control"
     old_engine = Engine(control)
     selected_directory = control / "engines" / "selected"
@@ -171,22 +177,81 @@ async def test_shared_delegated_files_use_selected_engine_limits(tmp_path, root_
     source = allowed / "source.txt"
     source.write_bytes(b"one\ntwo\n")
     child_id = uuid.uuid4().hex
+    selected_file = read_scope == 'selected_file'
+    root_grant = read_scope == 'filesystem_root'
+    roots = (allowed.anchor,) if root_grant else (str(allowed.resolve()),)
     delegation.issue(DelegatedTaskGrant(
         owner="owner", child_id=child_id, parent_grant_id=parent_id,
-        device_id="local", tools=tools,
-        read_roots=("/", str(allowed.resolve())) if root_grant and os.name != 'nt'
-        else (str(allowed.resolve()),),
-        write_roots=("/", str(allowed.resolve())) if root_grant and os.name != 'nt'
-        else (str(allowed.resolve()),),
+        device_id="local", tools=tools - {'files_write'} if selected_file else tools,
+        read_roots=() if selected_file else roots,
+        read_files=(str(source.resolve()),) if selected_file else (),
+        write_roots=() if selected_file else roots,
         expires_at=time.time() + 600,
     ))
     child = backend.session("child:" + child_id)
     try:
+        if engine_state != 'ready':
+            if engine_state == 'migration_pending':
+                (control / 'engine-migration.pending.json').write_text('{}', encoding='utf-8')
+            elif engine_state == 'missing_engine':
+                (control / 'engine-selection.json').write_text(
+                    EngineSelection(directory=str(control / 'missing')).model_dump_json(),
+                    encoding='utf-8',
+                )
+            else:
+                with selected.ledger.connection:
+                    selected.ledger.connection.execute(
+                        'UPDATE runtime_settings SET value=? WHERE id=1', ('invalid JSON',),
+                    )
+            failed_id = uuid.uuid4().hex
+            with patch('anywhere_computer.authorized_http.delegated_read') as file_read:
+                refused = await child.execute(Request(
+                    operation_id=failed_id, tool='files_read',
+                    arguments={'path': str(source)},
+                ))
+                file_read.assert_not_called()
+            assert refused.state == 'failed' and refused.data == {'dispatched': False}
+            recovered = await child.execute(Request(
+                operation_id=uuid.uuid4().hex, tool='operations_get',
+                arguments={'operation_id': failed_id},
+            ))
+            assert recovered.state == 'completed'
+            assert recovered.data['state'] == 'failed'
+            assert recovered.data['data'] == {'dispatched': False}
+            return
         read = await child.execute(Request(
             operation_id=uuid.uuid4().hex, tool="files_read",
             arguments={"path": str(source), "limit": 2},
         ))
         assert read.state == "completed" and read.data["text"] == "one\n"
+        if selected_file:
+            for path in (allowed, allowed / 'sibling.txt'):
+                denied = await child.execute(Request(
+                    operation_id=uuid.uuid4().hex, tool='files_read',
+                    arguments={'path': str(path)},
+                ))
+                assert denied.state == 'failed'
+                assert denied.data == {'dispatched': False, 'reason': 'path_out_of_scope'}
+            denied_write = await child.execute(Request(
+                operation_id=uuid.uuid4().hex, tool='files_write',
+                arguments={'path': str(source), 'text': 'must not replace'},
+            ))
+            assert denied_write.state == 'failed'
+            assert denied_write.data == {'dispatched': False, 'reason': 'tool_out_of_scope'}
+            assert source.read_bytes() == b'one\ntwo\n'
+            # Reuse the child session after the selected engine's policy changes.
+            # The legacy control ledger still has the more permissive defaults.
+            with selected.ledger.connection:
+                selected.ledger.connection.execute(
+                    'UPDATE runtime_settings SET value=? WHERE id=1',
+                    (RuntimeSettings(file_read_line_limit=2).model_dump_json(),),
+                )
+            changed = await child.execute(Request(
+                operation_id=uuid.uuid4().hex, tool='files_read',
+                arguments={'path': str(source), 'limit': 2},
+            ))
+            assert changed.state == 'completed' and changed.data['text'] == 'one\ntwo\n'
+            return
         valid = await child.execute(Request(
             operation_id=uuid.uuid4().hex, tool="files_write",
             arguments={"path": str(allowed / "valid.txt"), "text": "one"}))
@@ -201,6 +266,7 @@ async def test_shared_delegated_files_use_selected_engine_limits(tmp_path, root_
     finally:
         await backend.close()
         delegation.close()
+        authority.close()
         await selected.close()
         await old_engine.close()
 
