@@ -42,6 +42,11 @@
     const saved = snapshot?.registration;
     for (const method of methods) {
       element(method).disabled = busy || !canInvoke(method, phase, saved);
+      // A blank name disables the current registration action without hiding it.
+      // Busy controls remain in place while their original request is pending.
+      element(method).hidden = method === "register"
+        ? !!saved?.device || phase !== "grant_saved"
+        : !canInvoke(method, phase, saved);
     }
     element("name").disabled = busy || !!saved;
   }
@@ -67,6 +72,7 @@
     const auth = value.authorization;
     const saved = value.registration;
     element("state").textContent = describeState(auth, saved);
+    element("recovery-help").hidden = auth.phase !== "credential_error";
     if (saved) element("name").value = saved.name;
     const showCode = auth.phase === "waiting" && !!auth.user_code && !!auth.verification_uri;
     element("code-area").hidden = !showCode;
@@ -88,6 +94,7 @@
       snapshot = null;
       element("state").textContent = "現在の登録状態は未確認です";
       element("code-area").hidden = true;
+      element("recovery-help").hidden = true;
       element("code").value = "";
       element("url").value = "";
       element("result").textContent = typeof error === "string"

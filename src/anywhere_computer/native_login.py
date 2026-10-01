@@ -1,6 +1,8 @@
 """Native browser authorization with a temporary, bounded IP-loopback callback."""
 
 import asyncio
+import base64
+import hashlib
 import hmac
 import http.client
 import re
@@ -62,6 +64,43 @@ def https_code_exchange(
         ) from None
     finally:
         connection.close()
+
+
+# Static presentation only. The CSP admits exactly this stylesheet by hash; there is no
+# script, image, font, form or other external resource.
+_CALLBACK_STYLE = (
+    ":root{color-scheme:light dark;--ink:#1a1a1a;--muted:#595959;"
+    "--line:#e0e0e0;--bg:#fff;--canvas:#f4f4f4}"
+    "@media(prefers-color-scheme:dark){:root{--ink:#ededed;--muted:#a6a6a6;"
+    "--line:#383838;--bg:#1b1b1b;--canvas:#141414}}"
+    "body{margin:0;padding:48px 16px;color:var(--ink);background:var(--canvas);"
+    'font:16px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI","Hiragino Sans",'
+    '"Yu Gothic UI",Meiryo,sans-serif}'
+    "main{max-width:30rem;margin:0 auto;padding:32px;background:var(--bg);"
+    "border:1px solid var(--line);border-radius:14px}"
+    "h1{margin:0 0 16px;font-size:24px;font-weight:600;line-height:1.35}"
+    "p{margin:0 0 16px}.next{padding-top:16px;color:var(--muted);border-top:1px solid var(--line)}"
+)
+_CALLBACK_STYLE_SOURCE = "sha256-" + base64.b64encode(
+    hashlib.sha256(_CALLBACK_STYLE.encode("ascii")).digest()
+).decode("ascii")
+# Receipt of a code is all this server can prove; the token exchange happens afterwards.
+_CALLBACK_RECEIVED = (
+    "認証コードを受け取りました",
+    "この画面で確認できたのは、認証コードの受け取りまでです。"
+    "接続が完了したかどうかは、まだ確認していません。",
+    "端末の設定画面に戻って、接続状態を確認してください。このタブは閉じて構いません。",
+)
+_CALLBACK_DENIED = (
+    "接続は承認されませんでした",
+    "認証コードは受け取っていません。接続は完了していません。",
+    "必要な場合は、端末の設定画面から接続をやり直してください。",
+)
+_CALLBACK_REJECTED = (
+    "この要求は確認できません",
+    "この要求を検証できなかったため、受け付けていません。接続は完了していません。",
+    "端末の設定画面で、接続の状態を確認してください。",
+)
 
 
 class _LoopbackCallback:
@@ -165,20 +204,24 @@ class _LoopbackCallback:
                         denied = True
                     self.consumed = True
                     status = "200 OK"
-                    message = "接続要求を受け取りました。端末の設定画面に戻ってください。"
+                    view = _CALLBACK_DENIED if denied else _CALLBACK_RECEIVED
                 except (ValueError, UnicodeError, asyncio.LimitOverrunError):
                     status = "400 Bad Request"
-                    message = "この接続要求は確認できません。"
+                    view = _CALLBACK_REJECTED
                 body = (
                     "<!doctype html><html lang=ja><meta charset=utf-8>"
-                    "<title>Anywhere Computer</title><p>" + message + "</p></html>"
+                    '<meta name=viewport content="width=device-width,initial-scale=1">'
+                    "<title>Anywhere Computer</title><style>" + _CALLBACK_STYLE + "</style>"
+                    f"<main><h1>{view[0]}</h1><p>{view[1]}</p><p class=next>{view[2]}</p></main>"
+                    "</html>"
                 ).encode()
                 writer.write(
                     (
                         f"HTTP/1.1 {status}\r\nContent-Length: {len(body)}\r\n"
                         "Content-Type: text/html; charset=utf-8\r\nConnection: close\r\n"
                         "Cache-Control: no-store\r\nReferrer-Policy: no-referrer\r\n"
-                        "Content-Security-Policy: default-src 'none'; frame-ancestors 'none'\r\n"
+                        "Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; "
+                        f"style-src '{_CALLBACK_STYLE_SOURCE}'\r\n"
                         "X-Content-Type-Options: nosniff\r\n\r\n"
                     ).encode()
                     + body

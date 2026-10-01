@@ -3,6 +3,24 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b50 / Plugin 0.2.0-beta.50 — unpublished candidate (2026-10-01)
+
+- Include the unpublished beta.49 connection, delegation, Subchat and upload repairs.
+- Validate the POSIX upload verification flags at runtime without referencing
+  unavailable Windows constants. Missing flags stop verification instead of
+  falling back to an unsafe open.
+- Give connection consent, passkey enrollment and authentication outcomes a
+  consistent offline layout. Keep exact tool scopes inspectable, show passkey
+  waiting and cancellation truthfully, and separate phone enrollment links from
+  browser-owned cross-device authentication prompts.
+- Keep permission inspection before mobile approval, prevent duplicate passkey
+  submissions and stale completion after denial or expiry, and explain the
+  distinct credential and registration-history limits without unnecessary resets.
+- Align file, settings, connection and desktop management pages around their
+  controls. Wrap long file names, distinguish disabled actions, and preserve
+  uncertain-write recovery. Native callbacks report code receipt separately from
+  completed connection, with a hash-pinned static stylesheet.
+
 ## 0.2.0b49 / Plugin 0.2.0-beta.49 — unpublished candidate (2026-10-01)
 
 - Preserve existing OAuth scopes when publishing additional HTTP tools. Existing

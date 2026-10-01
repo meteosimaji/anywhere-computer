@@ -36,7 +36,7 @@ const documentStub = {body, activeElement:body, getElementById(id) {
 const context = vm.createContext({
   crypto:webcrypto, TextEncoder, setTimeout, clearTimeout, atob, btoa, Blob, URL,
   document:documentStub,
-  window:{parent,addEventListener:(_, callback)=>{listener=callback;}}
+  window:{parent,addEventListener:(_, callback)=>{listener=callback;},matchMedia:()=>({matches:false})}
 });
 const settle = () => new Promise(resolve=>setTimeout(resolve,0));
 const summaryText = () => elements.get('setup-summary').children.map(item=>item.textContent).join('\n');
@@ -244,6 +244,8 @@ function completed(packet,data) {
     };
     await ui.openPath('/fixture.docx');
     assert.equal(elements.get('image').hidden,false,'Native and older engines both display preview');
+    assert.equal(elements.get('formatted-preview').hidden,false);
+    assert.equal(elements.get('formatted-preview').open,true,'A desktop preview opens with its format');
     assert.ok(elements.get('image').src.startsWith('blob:'));
     assert.equal(elements.get('image').alt,'文書の1ページ目');
     assert.match(elements.get('document').textContent,/Kept text/);

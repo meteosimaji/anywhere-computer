@@ -398,7 +398,13 @@ class Uploads:
     @staticmethod
     def _verify_posix_publication(parent: int, name: str, source: int,
                                   row: sqlite3.Row) -> None:
-        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        if os.name == "nt":
+            raise ValueError("Descriptor-relative publication verification requires POSIX")
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        nonblock = getattr(os, "O_NONBLOCK", None)
+        if not isinstance(nofollow, int) or not isinstance(nonblock, int):
+            raise ValueError("Safe upload verification flags are unavailable")
+        flags = os.O_RDONLY | nofollow | nonblock
         descriptor = os.open(name, flags, dir_fd=parent)
         with os.fdopen(descriptor, "rb") as published:
             before = os.fstat(published.fileno())
