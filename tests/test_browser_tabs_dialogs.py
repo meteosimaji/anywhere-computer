@@ -1,6 +1,7 @@
 """Disposable Chrome acceptance for owned tabs, popups and explicit page dialogs."""
 
 import asyncio
+import json
 import time
 import uuid
 
@@ -68,9 +69,97 @@ def tab_args(opened):
     return {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
 
 
-async def test_tabs_popups_share_only_the_owned_context_and_close_exact_tab(dialog_site):
+@pytest.fixture
+def browser_cleanup_diagnostics():
+    """Observe existing calls in these disposable fixtures, without a new browser query."""
+    observations = pytest.MonkeyPatch()
+    trace, entries, listeners = [], [], []
+    started_at = time.monotonic()
+
+    def observe(stage, call):
+        async def observed(*args, **kwargs):
+            started = time.monotonic()
+            event = {"stage": stage, "started_seconds": round(started - started_at, 3)}
+            trace.append(event)
+            try:
+                result = await call(*args, **kwargs)
+                event["completed"] = True
+                return result
+            except BaseException as error:
+                event["error_type"] = type(error).__name__
+                raise
+            finally:
+                event["elapsed_seconds"] = round(time.monotonic() - started, 3)
+
+        return observed
+
+    def watch(control):
+        real_open = control.open
+
+        async def opened(*args, **kwargs):
+            result = await observe("open", real_open)(*args, **kwargs)
+            for entry in control.entries.values():
+                if any(known.tabs is entry.tabs for known in entries):
+                    continue
+                entries.append(entry)
+                index = len(entries) - 1
+                observations.setattr(entry.browser, "close",
+                                     observe(f"session_{index}:browser_close", entry.browser.close))
+                observations.setattr(entry.playwright, "stop",
+                                     observe(f"session_{index}:driver_stop", entry.playwright.stop))
+
+                def page_opened(page, index=index):
+                    observations.setattr(page, "close",
+                                         observe(f"session_{index}:page_close", page.close))
+
+                    def closed(_):
+                        trace.append({"stage": f"session_{index}:page_close_event"})
+
+                    page.on("close", closed)
+                    listeners.append((page, "close", closed))
+
+                entry.context.on("page", page_opened)
+                listeners.append((entry.context, "page", page_opened))
+                for page in entry.context.pages:
+                    page_opened(page)
+            return result
+
+        observations.setattr(control, "open", opened)
+        for name in ("tab_close", "_request_close", "_close_session", "close"):
+            observations.setattr(control, name, observe(name, getattr(control, name)))
+
+    def note(error, **events):
+        error.add_note("Controlled browser cleanup fixture: " + json.dumps({
+            "trace": trace, "elapsed_seconds": round(time.monotonic() - started_at, 3), **events,
+            "sessions": [{
+                "browser_connected": entry.browser.is_connected(),
+                "context_page_count": len(entry.context.pages),
+                "registered_tab_count": len(entry.tabs.entries),
+                "closed_tab_count": sum(
+                    tab.page.is_closed() for tab in entry.tabs.entries.values()),
+                "closing": entry.tabs.closing,
+                "lock_held": entry.tabs.lock.locked(),
+                "close_task_started": entry.tabs.close_task is not None,
+                "close_task_done": (entry.tabs.close_task.done()
+                                    if entry.tabs.close_task is not None else None),
+            } for entry in entries],
+        }, sort_keys=True))
+
+    try:
+        yield watch, note
+    finally:
+        observations.undo()
+        for emitter, event, listener in listeners:
+            emitter.remove_listener(event, listener)
+
+
+async def test_tabs_popups_share_only_the_owned_context_and_close_exact_tab(
+    dialog_site, browser_cleanup_diagnostics,
+):
     pytest.importorskip("playwright.async_api")
     control = BrowserControl(channel="chrome")
+    watch, note = browser_cleanup_diagnostics
+    watch(control)
     try:
         primary = tab_args(await control.open(owner="owner-a"))
         session = BrowserSessionId(session_id=primary["session_id"])
@@ -110,8 +199,15 @@ async def test_tabs_popups_share_only_the_owned_context_and_close_exact_tab(dial
         assert final["session_closed"] is True
         assert primary["session_id"] not in control.entries
         assert other["session_id"] in control.entries
+    except BaseException as error:
+        note(error)
+        raise
     finally:
-        await control.close()
+        try:
+            await control.close()
+        except BaseException as error:
+            note(error)
+            raise
 
 
 @pytest.mark.parametrize(("button", "action", "prompt_text", "expected"), [
@@ -404,11 +500,13 @@ async def test_confirmed_dialog_receipt_survives_unavailable_post_observation(
 
 
 async def test_final_tab_cleanup_remains_an_update_blocker_until_driver_stops(
-    tmp_path, monkeypatch,
+    tmp_path, monkeypatch, browser_cleanup_diagnostics,
 ):
     pytest.importorskip("playwright.async_api")
     engine = Engine(tmp_path / "state")
     engine.browser.channel = "chrome"
+    watch, note = browser_cleanup_diagnostics
+    watch(engine.browser)
     entered = asyncio.Event()
     release = asyncio.Event()
     closing = None
@@ -439,11 +537,20 @@ async def test_final_tab_cleanup_remains_an_update_blocker_until_driver_stops(
             release.set()
             assert (await asyncio.wait_for(closing, 3))["session_closed"] is True
         assert engine.status(owner="owner-a")["active_sessions"] == 0
+    except BaseException as error:
+        note(error, driver_hold_entered=entered.is_set(), driver_hold_released=release.is_set(),
+             caller_close_started=closing is not None,
+             caller_close_done=closing.done() if closing is not None else None)
+        raise
     finally:
         release.set()
         if closing is not None:
             await asyncio.gather(closing, return_exceptions=True)
-        await engine.close()
+        try:
+            await engine.close()
+        except BaseException as error:
+            note(error, driver_hold_entered=entered.is_set(), driver_hold_released=release.is_set())
+            raise
 
 
 @pytest.mark.parametrize("close_delay", [0, 3.2], ids=["normal", "slow-browser-close"])
