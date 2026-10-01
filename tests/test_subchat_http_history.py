@@ -532,6 +532,7 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
     """Real APIRequestContext transport against a controlled local HTTP server."""
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
     from threading import Thread
+    from time import perf_counter
 
     from playwright.async_api import Error, async_playwright
 
@@ -605,8 +606,26 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                     assert url in ('https://chatgpt.com' + path,
                                    'https://chatgpt.com/backend-api/conversations/other')
                     assert kwargs['max_redirects'] == kwargs['max_retries'] == 0
-                    return await real_get(f'http://127.0.0.1:{server.server_port}' +
-                                          url.removeprefix('https://chatgpt.com'), **kwargs)
+                    before = len(calls)
+                    started = perf_counter()
+                    try:
+                        return await real_get(f'http://127.0.0.1:{server.server_port}' +
+                                              url.removeprefix('https://chatgpt.com'), **kwargs)
+                    except Error as error:
+                        # Only controlled-fixture facts: no URLs, headers, response
+                        # bodies or a new CDP request which could also be stalled.
+                        error.add_note('Controlled HTTP fixture: ' + json.dumps({
+                            'resource': resource,
+                            'independent_request': independent,
+                            'fixture_status': status[0],
+                            'handler_arrivals': len(calls) - before,
+                            'elapsed_seconds': round(perf_counter() - started, 3),
+                            'browser_connected': browser.is_connected(),
+                            'context_page_count': len(context.pages),
+                            'original_page_closed': original.is_closed(),
+                            'bootstrap_get_count': len(tab_gets),
+                        }, sort_keys=True))
+                        raise
 
                 monkeypatch.setattr(request, 'get', local_get)
                 backend = BrowserSubchatBackend(context, http_read=True,
