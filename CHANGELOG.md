@@ -3,7 +3,19 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0b52 / Plugin 0.2.0-beta.52 — unpublished candidate (2026-10-01)
+## 0.2.0b55 / Plugin 0.2.0-beta.55 — unpublished candidate (2026-10-01)
+
+- Build from published beta.52 with the connection draft repair only; the
+  separate unpublished beta.53/54 diagnostics remain under review.
+- Keep edited connection fields across status refreshes and requests to show
+  the already open local connection view. Require explicit discard on navigation.
+- Preserve reviewed fields when a save conflicts or its response is unknown,
+  alongside the actual saved configuration. A later status resolves the held
+  fields only when it confirms the exact reviewed configuration as configured.
+- Retain existing uncertain-operation recovery without automatically resending
+  a save, and cover refresh and real configuration conflicts in Chrome tests.
+
+## 0.2.0b52 / Plugin 0.2.0-beta.52 — published (2026-10-01)
 
 - Include the unpublished beta.51 repairs with a new immutable package version.
 - Preserve delegated catalog and ordinary calls through the strict beta.48
