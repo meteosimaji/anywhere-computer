@@ -49,19 +49,23 @@ class GrantedRequest(Contract):
     identity: str = Field(min_length=1, max_length=128, pattern=r"^[\x21-\x7e]+$")
     tools: list[str] = Field(max_length=MAX_TOOL_SCOPES)
     authorization_database: str | None = Field(default=None, max_length=4096)
+    receipt_metadata: bool = False
     request: Request
 
 
 async def exchange_remote(
     directory: Path, identity: str, allowed: frozenset[str], request: Request,
     *, credential: str | None = None, authorization_database: Path | None = None,
+    receipt_metadata: bool = False,
 ) -> Reply:
     envelope = GrantedRequest(
         identity=identity, tools=sorted(allowed), request=request,
         authorization_database=str(authorization_database) if authorization_database else None,
+        receipt_metadata=receipt_metadata,
     )
     return await exchange(
-        directory, "__remote", cast(dict[str, JsonValue], envelope.model_dump(mode="json")),
+        directory, "__remote", cast(dict[str, JsonValue], envelope.model_dump(
+            mode="json", exclude=set() if receipt_metadata else {"receipt_metadata"})),
         operation_id=request.operation_id, credential=credential,
     )
 
@@ -169,6 +173,7 @@ async def serve(
                         )
                     bridge = RemoteAgent(
                         engine, {granted.identity: frozenset(granted.tools)}, transport="http",
+                        receipt_metadata=granted.receipt_metadata,
                     )
                 except ValueError:
                     reply = Reply(operation_id=request.operation_id, state="failed",

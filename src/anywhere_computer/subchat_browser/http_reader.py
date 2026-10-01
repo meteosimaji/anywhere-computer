@@ -238,12 +238,15 @@ class ChatHTTPReader:
             raise ValueError('Browser bootstrap requires an explicit context')
         elif self._context is not context:
             await self.close_catalog_page()
+            # UI catalog can latch a challenge before the first HTTP bootstrap.
+            # Initial association is not a fresh session or permission to navigate.
+            if self._context is not None:
+                self.blocked_navigation_reason = None
             self._context = context
             self._verified_account_id = None
             self._headers = {}
             self._catalog_url = None
             self._access_status = None
-            self.blocked_navigation_reason = None
             self._denied_urls.clear()
         if self._access_status is not None:
             raise SubchatAccessError(self._access_status)

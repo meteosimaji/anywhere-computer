@@ -3,7 +3,24 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0b48 / Plugin 0.2.0-beta.48 — unpublished candidate (2026-10-01)
+## 0.2.0b49 / Plugin 0.2.0-beta.49 — unpublished candidate (2026-10-01)
+
+- Preserve existing OAuth scopes when publishing additional HTTP tools. Existing
+  clients can rotate their tokens; expanded access requires fresh owner consent.
+- Allow canonical POSIX root grants and serialize delegated writes with ordinary
+  file writes. Authenticate recovery receipts for engine-backed delegated tools
+  without changing ordinary operation lookup responses.
+- Preserve the Subchat challenge rejection across the first HTTP association.
+  Record authentication failures before any draft as known-unsent, retain page
+  ownership until closure is verified, and match background pages to the exact
+  Chrome target created by that operation.
+- Allow an explicit, separately verified fresh enrollment grant for a recovered
+  registration's first TLS channel while retaining its original request identity.
+- Verify POSIX upload destination identity and content before recording success.
+  Changed or unverified publication stays unknown with recovery data retained;
+  this does not isolate other processes running as the same OS user.
+
+## 0.2.0b48 / Plugin 0.2.0-beta.48 — published (2026-10-01)
 
 - Clamp blocked-tab diagnostic remaining time to the configured retention limit,
   avoiding a floating-point display above 300 seconds. Keep the original expiry

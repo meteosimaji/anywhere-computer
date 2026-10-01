@@ -307,6 +307,7 @@ class Uploads:
                 created = False
                 source_guard = ExitStack()
                 source_handle: PinnedRegular | None = None
+                source_descriptor: int | None = None
                 try:
                     digest = hashlib.sha256()
                     received = 0
@@ -341,6 +342,11 @@ class Uploads:
                                 pin_regular_handle_nofollow(Path(name)))
                             if file_identity_fd(destination.fileno()) != source_handle.identity:
                                 raise ValueError("Upload staging file changed")
+                        else:
+                            # Retain the verified inode until publication and
+                            # its destination identity/content have been checked.
+                            source_descriptor = os.dup(destination.fileno())
+                            source_guard.callback(os.close, source_descriptor)
                     with db:
                         db.execute(
                             "UPDATE uploads SET state='publishing' WHERE id=?", (args.transfer_id,)
@@ -359,6 +365,9 @@ class Uploads:
                     else:
                         os.link(Path(name).name, target.name,
                                 src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                        assert source_descriptor is not None
+                        self._verify_posix_publication(parent_fd, target.name,
+                                                      source_descriptor, row)
                     if not self._parent_path_matches(row, parent_fd):
                         raise ValueError("Upload parent directory changed after publication")
                     with db:
@@ -385,6 +394,32 @@ class Uploads:
                         except OSError:
                             pass  # Status retains the recorded path for explicit cleanup.
                 return self._describe(self._row(db, args.transfer_id))
+
+    @staticmethod
+    def _verify_posix_publication(parent: int, name: str, source: int,
+                                  row: sqlite3.Row) -> None:
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+        descriptor = os.open(name, flags, dir_fd=parent)
+        with os.fdopen(descriptor, "rb") as published:
+            before = os.fstat(published.fileno())
+            original = os.fstat(source)
+            if (not stat.S_ISREG(before.st_mode) or before.st_size != row["total"]
+                    or (before.st_dev, before.st_ino) != (original.st_dev, original.st_ino)):
+                raise ValueError("Published upload differs from the verified staging file")
+            digest = hashlib.sha256()
+            received = 0
+            while block := published.read(262144):
+                received += len(block)
+                if received > row["total"]:
+                    raise ValueError("Published upload changed during verification")
+                digest.update(block)
+            after = os.fstat(published.fileno())
+            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (received != row["total"] or digest.hexdigest() != row["digest"]
+                    or (after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                    != (before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+                    or (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)):
+                raise ValueError("Published upload changed during verification")
 
     def resolve(self, args: ResolveUpload) -> dict[str, JsonValue]:
         """Confirm matching published content or discard only database staging."""

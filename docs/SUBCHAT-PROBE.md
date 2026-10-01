@@ -668,3 +668,13 @@ correlated saved receipt and final answer, not by a successful submission call
 alone. New-Chat creation still requires a confirmed conversation identity;
 when it is unknown after a crash, recover the original operation rather than
 searching broadly or resending.
+
+
+In browser-prepared HTTPX mode, a failed authentication GET before route installation
+and draft entry is recorded as `preflight_failed`, including cancellation and account
+mismatch. Recover the original ID to inspect that known-unsent result. Only a new,
+explicit operation can send later; the failed original is never replayed. Unconfirmed
+page closure retains ownership for cleanup. Once a UI challenge has been observed,
+initial HTTP association and answer recovery do not clear its navigation rejection.
+Background page allocation verifies the exact CDP target ID even when other operations
+create tabs concurrently in the same context.

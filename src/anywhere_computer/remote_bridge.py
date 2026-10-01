@@ -34,10 +34,12 @@ class RemoteAgent:
         *,
         transport: Literal["mutual-tls", "http"] = "mutual-tls",
         clock: Callable[[], float] = time.time,
+        receipt_metadata: bool = False,
     ) -> None:
         self.engine = engine
         self.transport = transport
         self._clock = clock
+        self._receipt_metadata = receipt_metadata
         self._expires: dict[str, float] = {}
         self.grants: dict[str, frozenset[str]] = {}
         for identity, tools in grants.items():
@@ -153,6 +155,12 @@ class RemoteAgent:
         data = dict(result.data)
         if target_id is not None and result.state == "completed":
             data["operation_id"] = target_id
+            # Recovery must authenticate the recorded request, including tools
+            # executed by the engine rather than the delegated file ledger.
+            if self._receipt_metadata:
+                recorded_id = self.internal_id(identity, target_id)
+                data["recorded_tool"] = self.engine.ledger.tool_for(recorded_id)
+                data["request_digest"] = self.engine.ledger.digest_for(recorded_id)
         if request.tool == "computer_status" and result.state == "completed":
             data["transport"] = self.transport
             # This establishes this channel, not NAT/internet reachability or HTTP MCP.

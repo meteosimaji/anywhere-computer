@@ -12,6 +12,102 @@ from anywhere_computer.subchat_browser.httpx_generation import (
 from anywhere_computer.subchat_state import SubchatSubmission
 
 
+@pytest.mark.parametrize('failure', ['network', 'account', 'binding', 'cancelled'])
+@pytest.mark.parametrize('existing', [False, True])
+async def test_pre_draft_auth_failure_releases_durable_send_reservation(
+        tmp_path, monkeypatch, failure, existing):
+    from anywhere_computer import subchat_chrome_login
+    from anywhere_computer.state import Ledger
+    from anywhere_computer.subchat import SubchatPreflightFailed, Subchats
+    from anywhere_computer.subchat_browser import backend as backend_module
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_state import (
+        SubchatAccountMismatch,
+        SubchatHTTPSelection,
+        SubchatSubmissions,
+    )
+
+    class Client:
+        closed = False
+
+        async def aclose(self):
+            self.closed = True
+
+    class Page:
+        closed = False
+
+        def is_closed(self):
+            return self.closed
+
+        async def route(self, *_args):
+            pytest.fail('Pre-draft authentication must not install generation routes')
+
+        async def close(self):
+            self.closed = True
+
+    ledger = Ledger(tmp_path)
+    store = SubchatSubmissions(ledger.connection)
+    client = Client()
+    page = Page()
+    context = object()
+    selection = SubchatHTTPSelection(version_id='fixture', preset_id=1,
+                                    model_slug='fixture', thinking_effort=None)
+    calls = 0
+
+    async def browser():
+        return context
+
+    async def verify(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if failure == 'network':
+            raise ConnectionError('synthetic GET failure')
+        if failure == 'account':
+            raise SubchatAccountMismatch('synthetic account mismatch')
+        if failure == 'cancelled':
+            raise asyncio.CancelledError()
+        return SimpleNamespace(account_id='account-a', authorization=SimpleNamespace(
+            get_secret_value=lambda: 'Bearer synthetic'))
+
+    backend = BrowserSubchatBackend(
+        browser, http_read=True, httpx_generation=True, store=store,
+        record_preflight_failure=lambda op: store.fail_http_before_dispatch(op, owner=None))
+
+    async def prepare(submission):
+        backend.pages[submission.operation_id] = page
+        backend._prepared_baseline_kinds[submission.operation_id] = (
+            'message_id' if existing else 'empty')
+        return ('earlier-turn',) if existing else ()
+
+    monkeypatch.setattr(backend, 'prepare', prepare)
+    monkeypatch.setattr(backend, '_browser', browser)
+    monkeypatch.setattr(backend_module.httpx, 'AsyncClient', lambda **kwargs: client)
+    monkeypatch.setattr(subchat_chrome_login, 'chrome_http_session', verify)
+    if failure == 'binding':
+        monkeypatch.setattr(backend._http_reader, 'bind_verified_account',
+                            lambda *args: (_ for _ in ()).throw(ValueError('synthetic binding')))
+    service = Subchats(store, backend)
+    conversation = '11111111-2222-3333-4444-555555555555' if existing else None
+    try:
+        with pytest.raises(asyncio.CancelledError if failure == 'cancelled'
+                           else SubchatPreflightFailed):
+            await service.send('d' * 32, 'not exposed', 'fixture', 'fixture', owner=None,
+                               conversation_id=conversation, http_selection=selection)
+        saved = store.get('d' * 32, owner=None)
+        assert saved.state == 'preflight_failed'
+        assert saved.conversation_id == conversation and saved.user_message_id is None
+        assert client.closed and page.closed and not backend.pages
+        assert (await service.recover(saved.operation_id, owner=None)).state == 'preflight_failed'
+        # A fresh explicit operation can reserve the same conversation after this
+        # known-unsent failure. The failed original remains terminal, never replayed.
+        following = store.prepare('f' * 32, 'later', 'fixture', 'fixture', owner=None,
+                                  conversation_id=conversation, http_selection=selection)
+        assert store.begin_send(following.operation_id, owner=None).state == 'sending'
+        assert calls == 1
+    finally:
+        ledger.close()
+
+
 async def test_pinned_account_mismatch_stops_before_browser_generation(
     monkeypatch,
 ):
@@ -730,3 +826,32 @@ async def test_invalid_browser_generation_marks_preflight_without_http_post(monk
         await backend.send(submission)
     assert route.aborted and failures == [submission.operation_id]
     assert page in backend._unreusable_pages
+
+
+async def test_discard_prepared_retains_ownership_until_close_is_verified(monkeypatch):
+    from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+
+    closed = False
+    # Real Playwright pages are hashable; this fixture uses object identity too.
+    class OwnedPage:
+        def is_closed(self):
+            return closed
+
+    page = OwnedPage()
+    backend = BrowserSubchatBackend(None)
+    submission = SimpleNamespace(operation_id='a' * 32)
+    backend.pages[submission.operation_id] = page
+    backend._preparation_touched_pages.add(page)
+
+    async def close(_page):
+        assert _page is page
+
+    monkeypatch.setattr(backend._http_reader, 'close_owned_page', close)
+    with pytest.raises(ConnectionError, match='unconfirmed'):
+        await backend.discard_prepared(submission)
+    assert backend.pages[submission.operation_id] is page
+    assert page in backend._preparation_touched_pages and page in backend._unreusable_pages
+    closed = True
+    await backend.discard_prepared(submission)
+    assert not backend.pages and page not in backend._preparation_touched_pages
+    assert page not in backend._unreusable_pages

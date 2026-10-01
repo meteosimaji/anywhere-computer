@@ -332,10 +332,16 @@ async def new_background_page(context: BrowserContext) -> Page:
         async with asyncio.timeout(10):
             while True:
                 added = [page for page in context.pages if page not in previous]
-                if len(added) == 1:
-                    return added[0]
-                if len(added) > 1:
-                    raise ConnectionError('Background Chrome tab is ambiguous')
+                for page in added:
+                    # Several gateway operations share this context. A page
+                    # list delta is not evidence of ownership of our target.
+                    inspector = await context.new_cdp_session(page)
+                    try:
+                        info = await inspector.send('Target.getTargetInfo')
+                        if info.get('targetInfo', {}).get('targetId') == target_id:
+                            return page
+                    finally:
+                        await inspector.detach()
                 await asyncio.sleep(.05)
     except BaseException:
         if target_id is not None:

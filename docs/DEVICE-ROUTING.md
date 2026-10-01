@@ -93,3 +93,16 @@ Changing authorization or removing a tool is reflected on the next request.
 No prior schema response grants permission for a later operation.
 
 The caller can request an exact schema directly when it already knows the name.
+
+
+## 登録回収後の初回 TLS チャネル
+
+ネイティブ登録クライアントの `RegistrationClient.enroll_channel` は、元の登録リクエスト ID と
+別の認可試行 ID を分けて扱います。登録を新しい認可で回収し、元の資格情報が期限切れの場合、
+信頼された呼出元が OS vault から復元した `credentials` と、その `attempt_id` を両方明示します。
+provider・client・登録済み owner を確認してからチャネルを登録し、元の登録記録は変更しません。
+新しい資格情報はチャネルの receipt を確認するまで保持します。登録の receipt だけを理由に
+先に回収用 vault を削除すると、初回チャネル登録に必要な認可を失います。
+通常の常駐接続は保存済み TLS identity で再接続し、登録用 bearer を繰り返し使いません。
+この経路の機械試験は、実際の dot クラウド環境に常駐プロセス・永続保存・vault が
+用意されていることや、実クラウド接続が成立したことを示すものではありません。

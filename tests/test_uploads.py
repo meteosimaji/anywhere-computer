@@ -489,3 +489,42 @@ async def test_http_upload_resumes_after_lost_chunk_response(http_remote, tmp_pa
         "state"
     ] == "complete"
     assert target.read_bytes() == b"abcdef"
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX staging path publication')
+@pytest.mark.parametrize('change', ['replace', 'same_inode', 'replace_after_link'])
+def test_posix_staging_tampering_never_reports_verified_publication(
+        uploads, tmp_path, monkeypatch, change):
+    content = b'original'
+    target = tmp_path / 'tampered.bin'
+    args = begin(uploads, target, content)
+    chunk(uploads, args.transfer_id, 0, content)
+    original_link = os.link
+
+    def tampered_link(source, destination, **kwargs):
+        parent = kwargs['src_dir_fd']
+        if change == 'replace':
+            os.unlink(source, dir_fd=parent)
+        if change != 'replace_after_link':
+            descriptor = os.open(source, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                                 0o600, dir_fd=parent)
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(b'modified')
+        original_link(source, destination, **kwargs)
+        if change == 'replace_after_link':
+            os.unlink(destination, dir_fd=kwargs['dst_dir_fd'])
+            descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                                 0o600, dir_fd=kwargs['dst_dir_fd'])
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(b'modified')
+
+    monkeypatch.setattr(os, 'link', tampered_link)
+    with pytest.raises(UploadOutcomeUnknown):
+        uploads.commit(args)
+    status = uploads.status(args)
+    assert status['state'] == 'unknown' and not status['publication_verified']
+    with pytest.raises(ValueError):
+        uploads.resolve(ResolveUpload(transfer_id=args.transfer_id, action='confirm_published'))
+    with sqlite3.connect(uploads.database) as db:
+        assert db.execute('SELECT COUNT(*) FROM chunks WHERE id=?',
+                          (args.transfer_id,)).fetchone()[0] == 1
