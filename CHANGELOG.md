@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b56 / Plugin 0.2.0-beta.56 — unpublished candidate (2026-10-01)
+
+- Extend selected-file child regressions to the selected Engine's current limits,
+  parent/sibling and write refusal, settings failures and failed-receipt recovery.
+  Exercise a filesystem-root grant without a narrower directory grant masking it.
+- Document the unverified actual-dot credential handoff and client acceptance.
+- Observe the rendered folder-row hover background with a bounded assertion
+  after one pointer action, instead of reading CSS immediately after dispatch.
+- Use a new candidate number so CI can verify it without reusing the published
+  beta.52 tag. This candidate is not installed or published by this change.
+
 ## 0.2.0b52 / Plugin 0.2.0-beta.52 — unpublished candidate (2026-10-01)
 
 - Include the unpublished beta.51 repairs with a new immutable package version.

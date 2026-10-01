@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, expect
 
 from anywhere_computer.engine import Engine
 from anywhere_computer.mcp_server import MCPSession
@@ -233,7 +233,9 @@ async def test_folder_list_fits_shows_whole_names_and_stays_readable(backend, wi
             background = "e=>getComputedStyle(e).backgroundColor"
             assert await first.evaluate(background) == "rgba(0, 0, 0, 0)"
             await first.hover()
-            assert await first.evaluate(background) != "rgba(0, 0, 0, 0)"
+            await expect(first).not_to_have_css(
+                "background-color", "rgba(0, 0, 0, 0)", timeout=5000,
+            )
             assert await frame.locator(".file-columns").is_visible()
             # Touch users have no hover title, so the version and extension must not be
             # cut off: names wrap instead of being truncated.
