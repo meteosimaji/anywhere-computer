@@ -107,7 +107,8 @@ async def test_background_page_rejects_persistent_context_without_anchor():
         await background.new_background_page(context)
 
 
-async def test_background_page_uses_real_persistent_chrome_context(tmp_path):
+@pytest.mark.parametrize('page_count', [1, 2])
+async def test_background_page_uses_real_persistent_chrome_context(tmp_path, page_count):
     playwright = pytest.importorskip('playwright.async_api')
 
     async with playwright.async_playwright() as driver:
@@ -131,13 +132,17 @@ async def test_background_page_uses_real_persistent_chrome_context(tmp_path):
                 async def new_cdp_session(self, page):
                     return await context.new_cdp_session(page)
 
-            page = await background.new_background_page(PersistentContextProxy())
+            pages = await asyncio.gather(*(
+                background.new_background_page(PersistentContextProxy())
+                for _ in range(page_count)))
+            assert len(set(pages)) == page_count
             try:
-                await page.goto('data:text/html,<title>background probe</title>')
-                assert await page.title() == 'background probe'
+                for index, page in enumerate(pages):
+                    await page.goto(f'data:text/html,<title>background probe {index}</title>')
+                    assert await page.title() == f'background probe {index}'
                 assert anchor in context.pages
             finally:
-                await page.close()
+                await asyncio.gather(*(page.close() for page in pages))
         finally:
             await context.close()
 

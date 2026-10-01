@@ -339,3 +339,36 @@ async def test_shutdown_transport_error_still_closes_engine_and_metadata(tmp_pat
         await connection.serve(tmp_path, credential='synthetic-test', shutdown=shutdown)
     assert closed == [True]
     assert not (tmp_path / 'agent.json').exists()
+
+
+async def test_shared_engine_receipt_metadata_is_opt_in_and_request_bound(agent):
+    from anywhere_computer.connection import exchange_remote
+    from anywhere_computer.models import Request
+    from anywhere_computer.state import Ledger
+
+    directory, credential = agent
+    tools = frozenset({'computer_status', 'operations_get'})
+    request = Request(operation_id='a' * 32, tool='computer_status')
+    result = await exchange_remote(directory, 'grant-a', tools, request, credential=credential)
+    assert result.state == 'completed'
+    ordinary_receipt = None
+    for receipt_metadata in (False, True):
+        lookup = Request(operation_id=('b' if receipt_metadata else 'c') * 32,
+                         tool='operations_get', arguments={'operation_id': request.operation_id})
+        recovered = await exchange_remote(directory, 'grant-a', tools, lookup,
+                                          credential=credential, receipt_metadata=receipt_metadata)
+        assert recovered.state == 'completed'
+        assert recovered.data['operation_id'] == result.operation_id
+        assert recovered.data['state'] == 'completed' and recovered.data['error'] is None
+        assert recovered.data['data']['instance_id'] == result.data['instance_id']
+        assert recovered.data['data']['version'] == result.data['version']
+        if receipt_metadata:
+            assert {key: recovered.data[key] for key in ordinary_receipt} == ordinary_receipt
+            assert recovered.data['recorded_tool'] == request.tool
+            assert recovered.data['request_digest'] == Ledger.request_digest(request)
+        else:
+            assert set(recovered.data) == set(result.model_dump())
+            ordinary_receipt = recovered.data.copy()
+    denied = await exchange_remote(directory, 'grant-b', tools, lookup,
+                                   credential=credential, receipt_metadata=True)
+    assert denied.state == 'failed'
