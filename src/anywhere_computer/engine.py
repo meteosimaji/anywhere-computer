@@ -1507,7 +1507,7 @@ class Engine:
             },
             "gui": False,
             "gui_native_adapter": {
-                "available": True, "provider": "macos_ax",
+                "available": platform.system() == "Darwin", "provider": "macos_ax",
                 "requires": "verified portable helper and existing Accessibility permission",
                 "runtime_verified": False,
             },
@@ -1598,6 +1598,13 @@ class Engine:
             if helper_status == "unsupported_platform":
                 details["runtime_available"] = False
                 details["next_action"] = "This helper requires macOS; no helper was run."
+                if capability == "gui_native":
+                    adapter_details = capability_diagnostics["gui_native_adapter"]
+                    assert isinstance(adapter_details, dict)
+                    adapter_details.update({
+                        "runtime_available": False, "helper": helper_status,
+                        "next_action": details["next_action"],
+                    })
             elif helper_status in {"unavailable", "verification_failed"}:
                 details["runtime_available"] = False
                 details["next_action"] = (

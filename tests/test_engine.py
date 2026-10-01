@@ -7,6 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from anywhere_computer import engine as engine_module
+from anywhere_computer import native_gui
 from anywhere_computer.engine import Engine
 from anywhere_computer.files import Files, sha256
 from anywhere_computer.models import EditFile, ReadFile, Request, WriteFile
@@ -84,6 +86,99 @@ def test_status_separates_capability_evidence_without_claiming_acceptance(tmp_pa
         assert diagnostics["gui_mcp_adapter"]["os_permission"] == "not_checked"
     finally:
         asyncio.run(engine.close())
+
+
+@pytest.mark.parametrize("system,sys_platform", [("Windows", "win32"), ("Linux", "linux")])
+async def test_status_native_adapter_matches_unsupported_platform(
+    tmp_path, monkeypatch, system, sys_platform,
+):
+    engine = Engine(tmp_path / "state")
+    monkeypatch.setattr(engine_module, "platform", SimpleNamespace(system=lambda: system))
+    monkeypatch.setattr(native_gui, "sys", SimpleNamespace(platform=sys_platform))
+
+    def unexpected_helper_check():
+        pytest.fail("Unsupported platforms must not verify a macOS helper")
+
+    async def unexpected_process(*args, **kwargs):
+        pytest.fail("Unsupported native GUI must not start a helper process")
+
+    monkeypatch.setattr(engine_module, "installed_helper", unexpected_helper_check)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_process)
+    try:
+        reply = await engine.execute(request("computer_status"), peer="fixture")
+        assert reply.state == "completed"
+        status = reply.data
+        assert status["platform"] == system
+        adapter = status["capabilities"]["gui_native_adapter"]
+        assert adapter["available"] is False
+        assert adapter["provider"] == "macos_ax"
+        assert adapter["runtime_verified"] is False
+        for name in ("gui_native", "gui_native_adapter"):
+            details = status["capability_diagnostics"][name]
+            assert details["running_implementation"] == "present"
+            assert details["runtime_available"] is False
+            assert details["helper"] == "unsupported_platform"
+            assert details["os_permission"] == "not_checked"
+            assert details["acceptance"] == "not_verified"
+            assert details["next_action"] == "This helper requires macOS; no helper was run."
+        assert status["capabilities"]["gui_mcp_adapter"] == {
+            "available": True, "provider": "peekaboo",
+            "requires": "explicit direct MCP session and provider OS permissions",
+            "runtime_verified": False,
+        }
+        assert status["capability_diagnostics"]["gui_mcp"]["runtime_available"] == "unknown"
+        assert status["capability_diagnostics"]["gui_mcp_adapter"]["helper"] == "not_checked"
+        refused = await engine.execute(
+            request("gui_native_windows", app="fixture"), peer="fixture",
+        )
+        assert refused.state == "failed"
+        assert refused.data["error_code"] == "unsupported_platform"
+        assert refused.data["dispatched"] is False
+        assert engine.native_gui.entries == {}
+    finally:
+        await engine.close()
+
+
+@pytest.mark.parametrize("helper_state", [
+    "unavailable", "verification_failed", "verified_available",
+])
+async def test_status_macos_native_adapter_does_not_claim_runtime_acceptance(
+    tmp_path, monkeypatch, helper_state,
+):
+    engine = Engine(tmp_path / "state")
+    monkeypatch.setattr(engine_module, "platform", SimpleNamespace(system=lambda: "Darwin"))
+    helper_checks = []
+
+    def helper():
+        helper_checks.append(helper_state)
+        if helper_state == "verification_failed":
+            raise ValueError("Fixture helper manifest does not match")
+        return tmp_path / "fixture-helper" if helper_state == "verified_available" else None
+
+    async def unexpected_process(*args, **kwargs):
+        pytest.fail("Status must not execute a helper or request OS permission")
+
+    monkeypatch.setattr(engine_module, "installed_helper", helper)
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", unexpected_process)
+    try:
+        status = (await engine.execute(request("computer_status"), peer="fixture")).data
+        adapter = status["capabilities"]["gui_native_adapter"]
+        assert adapter["available"] is True
+        assert adapter["runtime_verified"] is False
+        details = status["capability_diagnostics"]["gui_native"]
+        assert details["helper"] == helper_state
+        assert details["runtime_available"] == (
+            "unknown" if helper_state == "verified_available" else False
+        )
+        assert details["os_permission"] == "not_checked"
+        assert details["acceptance"] == "not_verified"
+        adapter_details = status["capability_diagnostics"]["gui_native_adapter"]
+        assert adapter_details["runtime_available"] == "unknown"
+        assert adapter_details["os_permission"] == "not_checked"
+        assert adapter_details["acceptance"] == "not_verified"
+        assert helper_checks == [helper_state]
+    finally:
+        await engine.close()
 
 
 @pytest.mark.parametrize("capability,missing_tool", [
