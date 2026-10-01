@@ -99,7 +99,9 @@ async def test_virtual_authenticator_registers_and_approves_consent(tmp_path):
                 await page.goto(origin + "/authorize?" + query)
                 identity = await page.locator("input[name=request_id]").input_value()
                 await page.locator("#passkey-approve").click()
-                await page.get_by_text("approved").wait_for()
+                # The pending UI also says "nothing is approved". Only the
+                # completed callback document is the approval receipt.
+                await page.get_by_text("approved", exact=True).wait_for()
                 assert [item[0] for item in approvals] == [403, 303]
                 result = parse_qs(urlsplit(approvals[1][1]["Location"]).query)
                 assert result["state"] == ["browser-state"]
