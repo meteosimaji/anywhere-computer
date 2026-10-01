@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b52 / Plugin 0.2.0-beta.52 — unpublished candidate (2026-10-01)
+
+- Include the unpublished beta.51 repairs with a new immutable package version.
+- Preserve delegated catalog and ordinary calls through the strict beta.48
+  loopback schema by limiting the receipt extension to operation recovery.
+- Negotiate authenticated Engine receipt metadata before child recovery;
+  unsupported engines require a launcher update and lookup of the original ID,
+  without replacing active work or accepting an unbound result.
+- Recheck child and parent authorization and expiry after the feature probe;
+  revocation during that wait prevents forwarding the operation lookup.
+
 ## 0.2.0b51 / Plugin 0.2.0-beta.51 — unpublished candidate (2026-10-01)
 
 - Include the unpublished beta.50 UI and connection repairs without replacing

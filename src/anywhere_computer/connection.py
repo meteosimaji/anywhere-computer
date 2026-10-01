@@ -58,14 +58,17 @@ async def exchange_remote(
     *, credential: str | None = None, authorization_database: Path | None = None,
     receipt_metadata: bool = False,
 ) -> Reply:
+    # This extension only changes operation receipts. Old strict envelopes must
+    # still accept catalog and ordinary calls from a newer delegated gateway.
+    include_metadata = receipt_metadata and request.tool == "operations_get"
     envelope = GrantedRequest(
         identity=identity, tools=sorted(allowed), request=request,
         authorization_database=str(authorization_database) if authorization_database else None,
-        receipt_metadata=receipt_metadata,
+        receipt_metadata=include_metadata,
     )
     return await exchange(
         directory, "__remote", cast(dict[str, JsonValue], envelope.model_dump(
-            mode="json", exclude=set() if receipt_metadata else {"receipt_metadata"})),
+            mode="json", exclude=set() if include_metadata else {"receipt_metadata"})),
         operation_id=request.operation_id, credential=credential,
     )
 

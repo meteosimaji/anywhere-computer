@@ -143,6 +143,19 @@ to recover an uncertain target result. The source also checks that the target ch
 publishes `operations_get` before forwarding a write. Never retry a write with
 a new ID.
 
+A newer HTTP gateway can reuse a selected older Engine without replacing its
+active work. Catalog and ordinary calls omit the optional receipt extension so
+the beta.48 strict loopback schema still accepts them. Before requesting an
+Engine-backed child receipt, the gateway authenticates the live Engine's
+`engine_protocol_features` declaration and requires `remote_receipt_metadata`.
+It checks child expiry and child/parent revocation again after that probe.
+An absent or unsupported declaration returns `engine_feature_unavailable` with
+`dispatched=false`; update the selected Engine through its launcher and look
+up the original operation ID. Never resend the original request to bypass this
+refusal. A failed probe does not select an older protocol or accept an unbound
+receipt. The child's file ledger can still recover its own local file results
+without that Engine extension.
+
 Local child `files_read` and `files_write`
 (create, replace, append) use descriptor-relative traversal from a configured
 root through the target parent, reject symlinks in every component, and update
