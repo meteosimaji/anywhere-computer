@@ -79,6 +79,15 @@ macOSのAccessibility権限とmanifest検証済みのnative helperが必要で�
 `capabilities.gui=false` だけで別登録の `gui_native_*` の可否を判断せず、
 稼働中のツール一覧、helper、権限、対象アプリを個別に確認してください。
 
+`computer_status` の `capabilities.gui_native_adapter.available` は macOS 向け
+アダプターの OS 対応を示します。Windows／Linux では `false` となり、
+`capability_diagnostics` の `gui_native` と `gui_native_adapter` はともに
+`runtime_available=false`、`helper=unsupported_platform` を返します。
+macOS で `available=true` でも、helper の検証結果、既存の OS 権限、実操作の受入は
+別に確認します。status は helper を実行せず、権限を要求しません。
+明示的に選択した外部 MCP provider を使う `gui_mcp` の可否は、この native の
+OS 判定とは独立しています。
+
 ネイティブ画像と副操作の実機確認には、既存の両 OS 権限を持つ GUI ホストで次を実行します。
 一時的なテストアプリの赤／青ウィンドウを作り、赤い方だけの画像と stepper の 0→1 を
 検証して終了します。ユーザーの文書は開きません。通常の CI では明示的な opt-in がないため

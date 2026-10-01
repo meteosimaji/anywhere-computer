@@ -91,6 +91,9 @@ window.finish=()=>{
 async def test_ready_chat_does_not_wait_for_domcontentloaded(tmp_path, action):
     """A deferred resource must not block an already usable Chat composer."""
     playwright = pytest.importorskip('playwright.async_api')
+    from time import perf_counter
+
+    from anywhere_computer.subchat_browser import backend as backend_module
     from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
 
     release_script = asyncio.Event()
@@ -115,8 +118,39 @@ async def test_ready_chat_does_not_wait_for_domcontentloaded(tmp_path, action):
     async with playwright.async_playwright() as driver:
         browser = await driver.chromium.launch(channel='chrome', headless=True)
         ledger = Ledger(tmp_path)
+        trace, pages = [], []
+        observations = pytest.MonkeyPatch()
+
+        def observe_call(stage, call):
+            async def observed(*args, **kwargs):
+                event = {'stage': stage}
+                trace.append(event)
+                started = perf_counter()
+                try:
+                    result = await call(*args, **kwargs)
+                    event['completed'] = True
+                    return result
+                except BaseException as error:
+                    event['error_type'] = type(error).__name__
+                    event['owned_pages_closed'] = [page.is_closed() for page in pages]
+                    raise
+                finally:
+                    event['elapsed_seconds'] = round(perf_counter() - started, 3)
+
+            return observed
+
+        def watch_page(page):
+            pages.append(page)
+            observations.setattr(page, 'goto', observe_call('navigation', page.goto))
+            observations.setattr(page, 'close', observe_call('page_close', page.close))
+
+        observations.setattr(backend_module, 'picker_ready',
+                             observe_call('picker_ready', backend_module.picker_ready))
+        observations.setattr(playwright.Locator, 'click',
+                             observe_call('locator_click', playwright.Locator.click))
         try:
             context = await browser.new_context()
+            context.on('page', watch_page)
             await context.route('https://chatgpt.com/**', respond)
             backend = BrowserSubchatBackend(context)
             if action == 'catalog':
@@ -135,10 +169,30 @@ async def test_ready_chat_does_not_wait_for_domcontentloaded(tmp_path, action):
                 assert await page.evaluate('window.sends') == 0
                 assert store.get(submission.operation_id, owner=None).state == 'prepared'
             assert script_requested.is_set()
+        except BaseException as error:
+            error.add_note('Controlled ready Chat fixture: ' + json.dumps({
+                'action': action, 'trace': trace, 'script_requested': script_requested.is_set(),
+                'script_released': release_script.is_set(),
+                'browser_connected': browser.is_connected(),
+                'owned_pages_closed': [page.is_closed() for page in pages],
+            }, sort_keys=True))
+            raise
         finally:
             release_script.set()
             ledger.close()
-            await browser.close()
+            try:
+                await observe_call('browser_close', browser.close)()
+            except BaseException as error:
+                error.add_note('Controlled ready Chat cleanup fixture: ' + json.dumps({
+                    'action': action, 'trace': trace,
+                    'browser_connected': browser.is_connected(),
+                    'owned_pages_closed': [page.is_closed() for page in pages],
+                }, sort_keys=True))
+                raise
+            finally:
+                observations.undo()
+                if 'context' in locals():
+                    context.remove_listener('page', watch_page)
 
 
 @pytest.mark.parametrize('action', ['catalog', 'prepare'])

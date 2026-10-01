@@ -534,12 +534,14 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
     from threading import Thread
     from time import perf_counter
 
-    from playwright.async_api import Error, async_playwright
+    from playwright.async_api import CDPSession, Error, async_playwright
 
     from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
+    from anywhere_computer.subchat_browser.http_reader import ChatHTTPReader
 
     submission, payload = sample()
     status, calls, tab_gets = [200], [], []
+    handler_receipts, events = [], []
     path = '/backend-api/conversations/' + submission.conversation_id
     if resource == 'catalog':
         from test_subchat_http_catalog import catalog
@@ -549,6 +551,8 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            receipt = {'status': status[0], 'headers_sent': False, 'body_written': False}
+            handler_receipts.append(receipt)
             calls.append((self.path, self.headers.get('Authorization') == 'Bearer fixture'
                           and self.headers.get('oai-language') == 'ja'
                           and self.headers.get('chatgpt-account-id') == 'fixture-account'
@@ -560,7 +564,9 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
             self.send_header('Content-Type', 'application/json')
             self.send_header('Location', '/must-not-follow')
             self.end_headers()
+            receipt['headers_sent'] = True
             self.wfile.write(json.dumps(payload).encode())
+            receipt['body_written'] = True
 
         def log_message(self, *_):
             pass
@@ -576,9 +582,99 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                 if 'not found' in str(error) or "doesn't exist" in str(error):
                     pytest.skip('Chrome required')
                 raise
+            observations = pytest.MonkeyPatch()
+            context = original = None
+            page_close_listeners = []
             try:
                 context = await browser.new_context()
                 original = await context.new_page()
+                owned_pages = []
+
+                def owned_page(page):
+                    owned_pages.append(page)
+                    index = len(owned_pages) - 1
+                    def closed(_):
+                        events.append({'stage': 'owned_page:close_event', 'page': index})
+
+                    page.on('close', closed)
+                    page_close_listeners.append((page, closed))
+                    real_close = page.close
+
+                    async def close(*args, **kwargs):
+                        event = {'stage': 'owned_page:close', 'page': index}
+                        events.append(event)
+                        try:
+                            result = await real_close(*args, **kwargs)
+                            event['completed'] = True
+                            return result
+                        except BaseException as error:
+                            event['error_type'] = type(error).__name__
+                            raise
+                        finally:
+                            event['closed'] = page.is_closed()
+
+                    observations.setattr(page, 'close', close)
+
+                context.on('page', owned_page)
+                real_cleanup = ChatHTTPReader.close_owned_page
+                real_send, real_detach = CDPSession.send, CDPSession.detach
+                identified_targets = {}
+
+                async def cleanup(reader, page, *args, **kwargs):
+                    event = {'stage': 'owned_page:cleanup',
+                             'page': owned_pages.index(page) if page in owned_pages else None}
+                    events.append(event)
+                    started = perf_counter()
+                    try:
+                        return await real_cleanup(reader, page, *args, **kwargs)
+                    finally:
+                        event.update(closed=page.is_closed(),
+                                     elapsed_seconds=round(perf_counter() - started, 3))
+
+                async def send(session, method, *args, **kwargs):
+                    event = {'stage': method}
+                    if method == 'Target.closeTarget':
+                        params = args[0] if args else kwargs.get('params', {})
+                        event['target_matches_observation'] = (
+                            session in identified_targets
+                            and params.get('targetId') == identified_targets[session])
+                    events.append(event)
+                    started = perf_counter()
+                    try:
+                        result = await real_send(session, method, *args, **kwargs)
+                        event['completed'] = True
+                        if method == 'Target.getTargetInfo':
+                            info = result.get('targetInfo', {})
+                            event['page_target_identified'] = (
+                                info.get('type') == 'page' and bool(info.get('targetId')))
+                            if event['page_target_identified']:
+                                identified_targets[session] = info['targetId']
+                        elif method == 'Target.closeTarget':
+                            event['acknowledged'] = result.get('success') is True
+                        return result
+                    except BaseException as error:
+                        event['error_type'] = type(error).__name__
+                        raise
+                    finally:
+                        event['elapsed_seconds'] = round(perf_counter() - started, 3)
+
+                async def detach(session, *args, **kwargs):
+                    event = {'stage': 'cleanup:cdp_detach'}
+                    events.append(event)
+                    started = perf_counter()
+                    try:
+                        result = await real_detach(session, *args, **kwargs)
+                        event['completed'] = True
+                        return result
+                    except BaseException as error:
+                        event['error_type'] = type(error).__name__
+                        raise
+                    finally:
+                        event['elapsed_seconds'] = round(perf_counter() - started, 3)
+
+                observations.setattr(ChatHTTPReader, 'close_owned_page', cleanup)
+                observations.setattr(CDPSession, 'send', send)
+                observations.setattr(CDPSession, 'detach', detach)
 
                 async def route(r):
                     tab_gets.append(r.request.method)
@@ -631,8 +727,16 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                 backend = BrowserSubchatBackend(context, http_read=True,
                     http_request_factory=request_factory if independent else None)
                 async def read():
-                    return (await backend.http_catalog() if resource == 'catalog'
-                            else await backend.read_answer(submission))
+                    event = {'stage': 'read', 'fixture_status': status[0]}
+                    events.append(event)
+                    try:
+                        result = (await backend.http_catalog() if resource == 'catalog'
+                                  else await backend.read_answer(submission))
+                        event['completed'] = True
+                        return result
+                    finally:
+                        event.update(context_page_count=len(context.pages),
+                                     owned_pages_closed=[page.is_closed() for page in owned_pages])
 
                 first = await read()
                 legacy_submission = submission
@@ -713,7 +817,23 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                     with pytest.raises(SubchatAccessError):
                         await read()
                     assert len(calls) == before and len(tab_gets) == 4
+            except BaseException as error:
+                # Preserve the original error, including a final isolation assertion.
+                # Cached lifecycle observations only; no additional browser requests.
+                error.add_note('Controlled tab cleanup fixture: ' + json.dumps({
+                    'resource': resource, 'independent_request': independent,
+                    'events': events, 'handler_receipts': handler_receipts,
+                    'browser_connected': browser.is_connected(),
+                    'context_page_count': len(context.pages) if context is not None else None,
+                    'original_page_closed': original.is_closed() if original is not None else None,
+                }, sort_keys=True))
+                raise
             finally:
+                observations.undo()
+                if context is not None and 'owned_page' in locals():
+                    context.remove_listener('page', owned_page)
+                for page, listener in page_close_listeners:
+                    page.remove_listener('close', listener)
                 if independent and 'request' in locals():
                     await request.dispose()
                 await browser.close()

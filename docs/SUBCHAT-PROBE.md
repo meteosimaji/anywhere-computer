@@ -495,6 +495,13 @@ reported by `subchat_capabilities` before recovering account-bound data. If
 login is missing or denied, or the selected profile is missing or locked, the
 server still exposes capabilities and saved operations. A missing or locked
 profile reports `authentication_required`; an HTTP 403 reports `access_denied`.
+The service-owned HTTPS gateway preserves these same codes when its selected
+account bootstrap is rejected, rather than reporting a generic
+`gateway_unavailable`. A 401 from the model catalog does not by itself establish
+why access was rejected, or that a CAPTCHA is present. Check the selected
+account's login and catalog access. The saved submission ledger remains readable;
+recover original operation IDs after restoring access, without replaying an
+unconfirmed send. A startup refusal must not mark an existing send as unsent.
 If the observed account differs from a configured pin, capabilities and HTTP
 reads report `account_mismatch` without exposing the observed account identity.
 The pin remains in force for `subchat_refresh_auth`; select the intended account
