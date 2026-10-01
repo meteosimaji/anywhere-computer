@@ -7,7 +7,7 @@ const {webcrypto,createHash} = require('node:crypto');
 const html = fs.readFileSync(process.argv[2], 'utf8');
 let script = html.split('<script>')[1].split('</script>')[0];
 script = script.replace('  controls();\n  if(window.parent',
-  '  globalThis.testUI={state,pending,call,openPath,resolveMutation,listDevices,selectDevice,setupCall,planSetup,confirmSetup,controls};return;\n  if(window.parent');
+  '  globalThis.testUI={state,pending,call,openPath,resolveMutation,listDevices,selectDevice,setupCall,planSetup,confirmSetup,controls,consume};return;\n  if(window.parent');
 const elements = new Map();
 let listener;
 let responder;
@@ -176,6 +176,223 @@ function completed(packet,data) {
     return completed(packet,{...review,configuration});
   };
   await ui.planSetup();
+  // An unsaved setup draft survives same-target status refreshes and notifications.
+  const draftUrl='https://draft.example/mcp';
+  const editDraft=()=>{elements.get('setup-resource').value=draftUrl;elements.get('setup-resource').oninput();};
+  const sameReview=packet=>completed(packet,{...review,configuration});
+  const notification={structuredContent:{state:'completed',data:{workspace:{view:'connection'}}},
+    _meta:{workspaceTools:['connection_setup_status','connection_setup_plan','connection_setup_confirm']}};
+  documentStub.getElementById('setup').hidden=false;
+  // Each reproduction runs independently so one failure cannot hide the other.
+  const failures=[];
+  for(const refresh of ['status_refresh','same_target_notification']) {
+    try {
+      editDraft();
+      assert.equal(ui.state.setup.plan_id,null);
+      responder=sameReview;
+      if(refresh==='status_refresh') await ui.setupCall('connection_setup_status');
+      else await ui.consume(notification);
+      assert.equal(elements.get('setup-resource').value,draftUrl,`${refresh} must keep the unsaved URL`);
+      assert.equal(ui.state.setup.plan_id,null,`${refresh} must not revive the invalidated plan`);
+      assert.equal(elements.get('setup-review').hidden,true,`${refresh} must not show the old review`);
+      assert.equal(elements.get('setup-confirm').disabled,true);
+      before=calls;await assert.rejects(ui.confirmSetup());
+      assert.equal(calls,before,'An invalidated plan cannot be saved: no save RPC');
+    } catch(error) {
+      failures.push(refresh);process.stderr.write(`workspace fixture: ${refresh} failed: ${error.message}\n`);
+    }
+    // Back to the adopted value through the form, as a person would retype it.
+    elements.get('setup-resource').value=configuration.resource;
+  }
+  assert.deepEqual(failures,[],'Setup draft reproductions must pass independently');
+  // Another target is never navigated to silently; leaving setup uses the discard dialog.
+  editDraft();before=calls;
+  await ui.consume({...notification,structuredContent:{state:'completed',data:{workspace:{view:'settings'}}}});
+  assert.equal(calls,before,'A different view must not replace the draft');
+  assert.equal(elements.get('setup-resource').value,draftUrl);
+  elements.get('files-tab').onclick();
+  assert.equal(elements.get('discard').open,true,'Leaving a setup draft needs confirmation');
+  elements.get('keep').onclick();
+  assert.equal(elements.get('setup-resource').value,draftUrl);
+  elements.get('setup-tab').onclick();await settle();
+  assert.equal(elements.get('discard').open,false,'Refreshing the open setup screen is not a move');
+  assert.equal(elements.get('setup-resource').value,draftUrl);
+  // A lost reply still resolves through status without losing the draft or resending.
+  responder=packet=>({structuredContent:{operation_id:'wrong',state:'completed',data:review}});
+  await assert.rejects(ui.setupCall('connection_setup_plan',{resource:draftUrl,mode:'files'}));
+  assert.equal(ui.state.setupUncertain,true);
+  responder=sameReview;
+  await ui.setupCall('connection_setup_status');
+  assert.equal(ui.state.setupUncertain,false,'Status still resolves an unconfirmed save');
+  assert.equal(elements.get('setup-resource').value,draftUrl);
+  assert.equal(ui.state.setup.plan_id,null);
+  // The draft is adopted only from this request's own matching plan reply.
+  elements.get('setup-mode').value='files';
+  responder=packet=>completed(packet,{...review,configuration:{...configuration,resource:'https://other.example/mcp'}});
+  await ui.planSetup();
+  assert.equal(elements.get('setup-resource').value,draftUrl,'A plan reply for other values must not replace the draft');
+  assert.equal(ui.state.setup.plan_id,null);
+  responder=packet=>completed(packet,{...review,configuration:{...configuration,resource:draftUrl,client:'chosen-native-client'}});
+  await ui.planSetup();
+  assert.equal(ui.state.setup.plan_id,review.plan_id,'A matching reply to the user\'s own plan is adopted');
+  assert.equal(elements.get('setup-resource').value,draftUrl);
+  editDraft();
+  elements.get('setup-resource').value=draftUrl+'/2';elements.get('setup-resource').oninput();
+  // Backend phases that no longer accept edits: the report is shown as is, the draft is kept.
+  for(const [phase,title] of [['configured','保存済みの接続設定'],['conflict','保存済みの接続設定'],['saving','保存中の接続設定']]) {
+    responder=packet=>completed(packet,{phase,plan_id:phase==='saving'?review.plan_id:null,configuration});
+    await ui.setupCall('connection_setup_status');
+    assert.equal(ui.state.setup.phase,phase,'The reported phase is not disguised');
+    assert.equal(elements.get('setup-resource').value,draftUrl+'/2',`${phase} must keep the unsaved URL`);
+    assert.equal(elements.get('setup-form').hidden,false,'The kept draft stays visible');
+    assert.equal(elements.get('setup-resource').readOnly,true,'The kept draft is selectable but not editable');
+    assert.equal(elements.get('setup-resource').disabled,false);
+    assert.equal(elements.get('setup-plan').disabled,true);
+    assert.equal(elements.get('setup-confirm').disabled,true);
+    assert.equal(elements.get('setup-review-title').textContent,title);
+    assert.ok(summaryText().includes(configuration.resource),'The summary is the backend configuration');
+    assert.match(elements.get('setup-status').textContent,/入力中の内容は保存されていません/);
+    before=calls;await assert.rejects(ui.confirmSetup());
+    assert.equal(calls,before,`${phase}: the old plan cannot be saved`);
+  }
+  // Explicit discard replaces the draft with the backend's reported state.
+  elements.get('files-tab').onclick();
+  assert.equal(elements.get('discard').open,true);
+  elements.get('discard-go').onclick();
+  assert.equal(elements.get('setup-resource').value,configuration.resource,'Explicit discard adopts the backend state');
+  assert.equal(elements.get('setup-resource').readOnly,false);
+  // A confirm reply replaces the draft only when it is the configuration the user reviewed.
+  const multi={...configuration,scopes:['files_write','files_edit'],redirects:['http://127.0.0.1/callback','http://localhost/callback']};
+  const showReview=async config=>{
+    responder=packet=>completed(packet,{...review,configuration:config});
+    await ui.setupCall('connection_setup_status');
+    assert.equal(ui.state.setup.phase,'review');
+  };
+  // As a person would: leave setup; a held or edited draft must raise the discard dialog.
+  const leaveDraft=expectDialog=>{
+    elements.get('files-tab').onclick();
+    assert.equal(elements.get('discard').open,expectDialog,'discard dialog for an unsaved draft');
+    if(expectDialog) elements.get('discard-go').onclick();
+  };
+  const confirmWith=async(reply,midFlightDraft=null)=>{
+    responder=packet=>{if(midFlightDraft!==null) elements.get('setup-resource').value=midFlightDraft;return completed(packet,reply(packet));};
+    before=calls;await ui.confirmSetup();assert.equal(calls,before+1);
+  };
+  // A normal submit, without any further edit, must not lose the reviewed form when the save did not land as reviewed.
+  const other={...multi,resource:'https://other.example/mcp'};
+  for(const [label,reply,shown] of [
+    ['conflict',{phase:'conflict',plan_id:null,configuration:other},'https://other.example/mcp'],
+    ['different configured',{phase:'configured',plan_id:null,configuration:{...multi,scopes:['files_write']}},multi.resource],
+    ['invalid',{phase:'invalid',plan_id:null,configuration:null},null],
+  ]) {
+    await showReview(multi);
+    await confirmWith(()=>reply);
+    assert.equal(ui.state.setup.phase,reply.phase,`${label}: the backend phase is shown as reported`);
+    assert.equal(elements.get('setup-resource').value,multi.resource,`${label}: the reviewed form is kept`);
+    assert.equal(elements.get('setup-resource').readOnly,true);
+    assert.equal(elements.get('setup-form').hidden,false);
+    if(shown) assert.ok(summaryText().includes(shown),`${label}: the summary is the backend configuration`);
+    assert.match(elements.get('setup-status').textContent,/確認していた内容を入力欄に残しています/);
+    assert.equal(ui.state.setupUncertain,false);
+    before=calls;await assert.rejects(ui.confirmSetup());
+    assert.equal(calls,before,`${label}: no new save`);
+    await ui.setupCall('connection_setup_status'); // a refresh keeps it too
+    assert.equal(elements.get('setup-resource').value,multi.resource,`${label}: status refresh keeps the form`);
+    leaveDraft(true);
+    if(reply.configuration) assert.equal(elements.get('setup-resource').value,reply.configuration.resource,`${label}: discard shows the saved state`);
+  }
+  // An unknown reply (wrong operation, no edit) holds the reviewed form too; status never discards it.
+  for(const [label,reply] of [
+    ['conflict',{phase:'conflict',plan_id:null,configuration:other}],
+    ['different configured',{phase:'configured',plan_id:null,configuration:{...multi,scopes:['files_write']}}],
+    ['invalid',{phase:'invalid',plan_id:null,configuration:null}],
+  ]) {
+    await showReview(multi);
+    responder=packet=>({structuredContent:{operation_id:'wrong',state:'completed',data:{}}});
+    await assert.rejects(ui.confirmSetup());
+    assert.equal(ui.state.setupUncertain,true);
+    before=calls;await assert.rejects(ui.confirmSetup());
+    assert.equal(calls,before,`${label}: an unknown save is not resent`);
+    responder=packet=>completed(packet,reply);
+    await ui.setupCall('connection_setup_status');
+    assert.equal(ui.state.setupUncertain,false,`${label}: status resolves the unknown save`);
+    assert.equal(ui.state.setup.phase,reply.phase);
+    assert.equal(elements.get('setup-resource').value,multi.resource,`${label}: the reviewed form survives status`);
+    assert.equal(elements.get('setup-resource').readOnly,true);
+    before=calls;await assert.rejects(ui.confirmSetup());
+    assert.equal(calls,before,`${label}: no save RPC`);
+    await ui.setupCall('connection_setup_status');
+    assert.equal(elements.get('setup-resource').value,multi.resource,`${label}: a second status keeps it`);
+    leaveDraft(true);
+  }
+  // The same configuration found by status is adopted without any new save.
+  for(const extra of [{shared_agent_directory:'/different-fixture'}, {subchat:{provider:'fixture-different'}}]) {
+    await showReview(multi);
+    responder=packet=>({structuredContent:{operation_id:'wrong',state:'completed',data:{}}});
+    await assert.rejects(ui.confirmSetup());
+    responder=packet=>completed(packet,{phase:'configured',plan_id:null,configuration:{...multi,...extra}});
+    await ui.setupCall('connection_setup_status');
+    assert.equal(ui.state.setupHeld,true,'Other saved configuration fields cannot confirm this reviewed save');
+    leaveDraft(true);
+  }
+  await showReview(multi);
+  responder=packet=>({structuredContent:{operation_id:'wrong',state:'completed',data:{}}});
+  await assert.rejects(ui.confirmSetup());
+  responder=packet=>completed(packet,{phase:'saving',plan_id:review.plan_id,configuration:multi});
+  await ui.setupCall('connection_setup_status');
+  assert.equal(ui.state.setupHeld,true,'Saving is not confirmation that the reviewed config was saved');
+  responder=packet=>completed(packet,{phase:'conflict',plan_id:review.plan_id,configuration:other});
+  await ui.setupCall('connection_setup_status');
+  assert.equal(elements.get('setup-resource').value,multi.resource,'A pending save must not erase the reviewed form');
+  leaveDraft(true);
+  await showReview(multi);
+  responder=packet=>({structuredContent:{operation_id:'wrong',state:'completed',data:{}}});
+  await assert.rejects(ui.confirmSetup());
+  before=calls;responder=packet=>completed(packet,{phase:'configured',plan_id:null,configuration:multi});
+  await ui.setupCall('connection_setup_status');
+  assert.equal(calls,before+1,'Only the status query was sent');
+  assert.equal(ui.state.setup.phase,'configured');
+  assert.equal(ui.state.setupUncertain,false);
+  leaveDraft(false);
+  await showReview(multi);
+  await confirmWith(()=>({phase:'conflict',plan_id:null,configuration:other}),draftUrl);
+  assert.equal(elements.get('setup-resource').value,draftUrl,'A conflict reply must not replace an edited draft');
+  assert.ok(summaryText().includes('https://other.example/mcp'),'The conflicting backend configuration is shown');
+  leaveDraft(true);
+  await showReview(multi);
+  await confirmWith(()=>({phase:'configured',plan_id:null,
+    configuration:{...multi,scopes:[...multi.scopes].reverse(),redirects:[...multi.redirects].reverse()}}));
+  assert.equal(elements.get('setup-resource').value,multi.resource,'The reviewed configuration, in any list order, is adopted');
+  assert.equal(ui.state.setup.phase,'configured');
+  // Status that reveals a lost save resolves uncertainty but is not the user's own reply.
+  await showReview(multi);
+  responder=packet=>({structuredContent:{operation_id:'wrong',state:'completed',data:{}}});
+  await assert.rejects(ui.confirmSetup());
+  assert.equal(ui.state.setupUncertain,true);
+  elements.get('setup-resource').value=draftUrl;
+  responder=packet=>completed(packet,{phase:'configured',plan_id:null,configuration:multi});
+  await ui.setupCall('connection_setup_status');
+  assert.equal(ui.state.setupUncertain,false);
+  assert.equal(elements.get('setup-resource').value,draftUrl,'Restoring status does not adopt over the draft');
+  leaveDraft(true);
+  // A plan reply must also match the client the user asked for.
+  const planReply=(client,redirects)=>packet=>completed(packet,{...review,configuration:{...configuration,resource:draftUrl,client,redirects}});
+  const chatgptRedirect='https://chatgpt.com/connector_platform_oauth_redirect';
+  for(const [kind,reply,adopted] of [
+    ['chatgpt',planReply('anywhere-native',['http://127.0.0.1/callback']),false],
+    ['chatgpt',planReply('anywhere-chatgpt',[chatgptRedirect,'http://127.0.0.1/callback']),false],
+    ['chatgpt',planReply('anywhere-chatgpt',[chatgptRedirect]),true],
+    ['native',planReply('other-client',['http://127.0.0.1/callback']),false],
+    ['native',planReply('chosen-native-client',['http://127.0.0.1/callback']),true],
+  ]) {
+    await showReview(configuration);
+    elements.get('setup-resource').value=draftUrl;
+    elements.get('setup-kind').value=kind;elements.get('setup-client').value='chosen-native-client';elements.get('setup-mode').value='files';
+    responder=reply;await ui.planSetup();
+    assert.equal(ui.state.setup.plan_id,adopted?review.plan_id:null,`${kind} plan reply adopted=${adopted}`);
+    if(!adopted) assert.equal(elements.get('setup-resource').value,draftUrl);
+    elements.get('setup-resource').value=draftUrl;leaveDraft(!adopted);
+  }
   ui.state.rootTools.clear();ui.controls();
   assert.equal(elements.get('setup-tab').hidden,true);
   before=calls;await assert.rejects(ui.setupCall('connection_setup_status'));
