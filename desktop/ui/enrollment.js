@@ -1,10 +1,11 @@
 "use strict";
 (() => {
   const methods = [
-    "progress", "start", "restart", "reauthorize", "poll", "retry_save", "register", "cancel", "cleanup",
+    "progress", "start", "open_page", "restart", "reauthorize", "poll", "retry_save", "register", "cancel", "cleanup",
   ];
   const element = id => document.getElementById(`enrollment-${id}`);
   let busy = false;
+  let copying = false;
   let snapshot = null;
   const phases = {
     new: "認証を開始できます",
@@ -28,6 +29,7 @@
       case "start": return phase === "new" && !saved;
       case "restart": return ["denied", "expired", "cancelled", "failed"].includes(phase) && !saved;
       case "poll": return phase === "waiting";
+      case "open_page": return phase === "waiting" && !!snapshot?.authorization.verification_uri;
       case "retry_save":
         return phase === "credential_error" && snapshot.authorization.can_retry_save === true;
       case "register":
@@ -49,6 +51,8 @@
         : !canInvoke(method, phase, saved);
     }
     element("name").disabled = busy || !!saved;
+    element("copy-code").disabled = busy || copying || phase !== "waiting"
+      || !snapshot?.authorization.user_code;
   }
 
   function describeState(auth, saved) {
@@ -88,7 +92,9 @@
       const args = {method, name: method === "register" ? element("name").value.trim() : null};
       const value = JSON.parse(await window.__TAURI__.core.invoke("management_enrollment", args));
       render(value);
-      element("result").textContent = "";
+      element("result").textContent = method === "open_page"
+        ? "ブラウザーへ認証ページを開く要求を送りました。本人認証を終えたら、結果を確認してください。"
+        : "";
     } catch (error) {
       // Do not imply the previous snapshot is current, or resend a mutation.
       snapshot = null;
@@ -104,7 +110,28 @@
       controls();
     }
   }
+  async function copyCode() {
+    if (busy || copying || snapshot?.authorization.phase !== "waiting"
+        || !snapshot.authorization.user_code) return;
+    const selected = snapshot;
+    copying = true;
+    controls();
+    try {
+      await navigator.clipboard.writeText(selected.authorization.user_code);
+      if (snapshot === selected) element("result").textContent = "コードをコピーしました。";
+    } catch (_) {
+      if (snapshot === selected) {
+        element("code").focus();
+        element("code").select();
+        element("result").textContent = "コピーできませんでした。選択されたコードを手動でコピーしてください。";
+      }
+    } finally {
+      copying = false;
+      controls();
+    }
+  }
   for (const method of methods) element(method).addEventListener("click", () => invoke(method));
+  element("copy-code").addEventListener("click", copyCode);
   element("name").addEventListener("input", controls);
   controls();
 })();

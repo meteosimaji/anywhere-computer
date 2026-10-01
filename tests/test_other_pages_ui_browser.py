@@ -250,6 +250,34 @@ async def test_folder_list_fits_shows_whole_names_and_stays_readable(backend, wi
             await browser.close()
 
 
+@pytest.mark.parametrize("width", [320, 1000])
+async def test_file_kind_handles_extensionless_names_and_long_extensions(backend, width):
+    folder, session = backend
+    examples = {
+        "n" * 100: "ファイル",
+        "draft." + "suffix" * 20: ("suffix" * 20).upper() + " ファイル",
+    }
+    for name in examples:
+        (folder / name).write_text("fixture\n", encoding="utf-8")
+    async with async_playwright() as driver:
+        browser = await launch(driver)
+        try:
+            context, page, frame = await open_workspace(browser, session, folder, width=width)
+            await frame.locator("#entries li").first.wait_for(timeout=10000)
+            assert await page.frames[-1].evaluate(NO_SIDEWAYS)
+            for name, kind in examples.items():
+                row = frame.locator("#entries button").filter(has_text=name)
+                assert await row.locator(".kind").inner_text() == kind
+                assert await row.locator(".kind").evaluate(
+                    "e=>e.scrollWidth<=e.clientWidth+1"), name
+                assert await row.locator(".file-name").inner_text() == name
+                assert await row.locator(".file-name").evaluate(
+                    "e=>e.scrollWidth<=e.clientWidth+1"), name
+            await context.close()
+        finally:
+            await browser.close()
+
+
 async def test_keyboard_reaches_rows_and_focus_is_visible(backend):
     folder, session = backend
     async with async_playwright() as driver:
@@ -558,7 +586,8 @@ def management_fixture(authorization, *, registration=None, engine_state="ready"
     }
 
 
-INIT = """window.__TAURI__={core:{invoke:async(command)=>{
+INIT = """window.nativeCalls=[];window.__TAURI__={core:{invoke:async(command,args)=>{
+  window.nativeCalls.push({command,args});
   const f=%s;
   if(command==='management_snapshot') return JSON.stringify(f.snapshot);
   if(command==='management_startup_status') return JSON.stringify(f.startup);
@@ -633,6 +662,51 @@ async def test_management_page_fits_and_emphasises_only_the_available_recovery_s
             for selector in ("#status", ".muted", "summary", "#engine"):
                 ratio = await page.evaluate(CONTRAST, selector)
                 assert ratio >= 4.5, (selector, ratio)
+            await context.close()
+        finally:
+            await browser.close()
+
+
+@pytest.mark.parametrize("width", [390, 1280])
+async def test_waiting_enrollment_opens_native_page_and_copies_code_in_order(width):
+    fixture = management_fixture({"phase": "waiting", "user_code": "TEST-CODE",
+                                  "verification_uri": "https://auth.example/verify"})
+    async with async_playwright() as driver:
+        browser = await launch(driver)
+        try:
+            context, page = await open_management(
+                browser, fixture, width=width, height=800, scheme="light")
+            assert await page.evaluate(NO_SIDEWAYS)
+            accent = await page.evaluate(BACKGROUND, "#enrollment-open_page")
+            assert accent != await page.evaluate(BACKGROUND, "#enrollment-poll")
+            assert await page.locator("#enrollment-open_page").is_enabled()
+            await page.locator("#enrollment-open_page").click()
+            await page.locator("#enrollment-result").get_by_text(
+                "ブラウザーへ認証ページを開く要求を送りました。本人認証を終えたら、結果を確認してください。",
+                exact=True).wait_for()
+            calls = await page.evaluate("window.nativeCalls")
+            assert calls[-1] == {"command": "management_enrollment",
+                                 "args": {"method": "open_page", "name": None}}
+            # Simulate Clipboard permission outcomes; never modify the owner's OS clipboard.
+            await page.evaluate("""() => {
+              window.copied=[];
+              Object.defineProperty(navigator, 'clipboard', {configurable:true,
+                value:{writeText:async text=>window.copied.push(text)}});
+            }""")
+            await page.locator("#enrollment-copy-code").click()
+            assert await page.evaluate("window.copied") == ["TEST-CODE"]
+            assert await page.evaluate("window.nativeCalls") == calls
+            assert await page.locator("#enrollment-result").inner_text() == (
+                "コードをコピーしました。")
+            await page.evaluate("""() => {
+              navigator.clipboard.writeText=async()=>{throw new Error('permission denied');};
+            }""")
+            await page.locator("#enrollment-copy-code").click()
+            assert "手動でコピー" in await page.locator("#enrollment-result").inner_text()
+            assert await page.locator("#enrollment-code").evaluate(
+                "e=>document.activeElement===e && e.selectionStart===0 && e.selectionEnd===9")
+            assert await page.evaluate("window.nativeCalls") == calls
+            assert await page.locator("#enrollment-poll").is_enabled()
             await context.close()
         finally:
             await browser.close()

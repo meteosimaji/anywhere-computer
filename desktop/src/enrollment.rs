@@ -18,6 +18,7 @@ fn request(method: &str, name: Option<&str>) -> Result<Vec<u8>, String> {
     if !matches!(
         method,
         "progress"
+            | "open_page"
             | "start"
             | "restart"
             | "reauthorize"
@@ -257,6 +258,8 @@ mod tests {
 
     #[test]
     fn fixed_commands_and_names_only() {
+        assert!(request("open_page", None).is_ok());
+        assert!(request("open_page", Some("https://other.example")).is_err());
         assert!(request("cleanup", None).is_ok());
         assert!(request("cleanup", Some("unexpected")).is_err());
         assert!(request("reauthorize", None).is_ok());

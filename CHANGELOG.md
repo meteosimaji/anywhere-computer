@@ -3,6 +3,18 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b51 / Plugin 0.2.0-beta.51 — unpublished candidate (2026-10-01)
+
+- Include the unpublished beta.50 UI and connection repairs without replacing
+  its versioned wheel. Update the management preview to alpha.11.
+- Identify files without an extension correctly and wrap long type labels at
+  narrow widths while retaining the complete file name.
+- Put opening the enrollment page and copying its displayed code before the
+  result check. The native host chooses the active, verified provider URL;
+  cancelled, expired and completed attempts cannot dispatch a browser request.
+- Preserve the existing attempt on browser dispatch failure and provide a
+  selected-code fallback when clipboard permission is unavailable.
+
 ## 0.2.0b50 / Plugin 0.2.0-beta.50 — unpublished candidate (2026-10-01)
 
 - Include the unpublished beta.49 connection, delegation, Subchat and upload repairs.

@@ -17,7 +17,7 @@ from anywhere_computer.registration_client import RegistrationClient
 
 
 def worker_for(tmp_path, *, vault=None, clock=None, account_binding=False,
-               registration_losses=None):
+               registration_losses=None, browser_open=lambda _url: True):
     provider = EnrollmentProvider(issuer="https://auth.example",
         device_authorization_endpoint="https://auth.example/device",
         token_endpoint="https://auth.example/token", client_id="desktop", scope="device:enroll")
@@ -63,8 +63,64 @@ def worker_for(tmp_path, *, vault=None, clock=None, account_binding=False,
         return DeviceAuthorizationClient(provider, recovery, wire=auth_wire,
                                           clock=clock.monotonic, wall_clock=clock.wall), recovery
 
-    return EnrollmentWorker(auth, registration, reauthorization=reauthorization
+    return EnrollmentWorker(auth, registration, browser_open=browser_open,
+                            reauthorization=reauthorization
                             if account_binding else None), clock, calls
+
+
+def test_open_verification_page_uses_active_native_url_without_polling_or_saving(tmp_path):
+    opened, vault = [], MemoryVault()
+    worker, _, calls = worker_for(
+        tmp_path, vault=vault, browser_open=lambda url: opened.append(url) or True)
+    try:
+        waiting = worker.handle("start")
+        with pytest.raises(ValueError, match="Unexpected enrollment argument"):
+            worker.handle("open_page", name="https://other.example")
+        assert opened == []
+        result = worker.handle("open_page")
+        assert opened == ["https://auth.example/verify"]
+        assert result == waiting
+        assert calls == ["https://auth.example/device"]
+        assert vault.writes == 0
+    finally:
+        worker.close()
+
+
+@pytest.mark.parametrize("phase", ["new", "cancelled", "expired", "grant_saved"])
+def test_open_verification_page_rejects_inactive_attempt_without_dispatch(tmp_path, phase):
+    opened = []
+    worker, clock, calls = worker_for(
+        tmp_path, browser_open=lambda url: opened.append(url) or True)
+    try:
+        if phase != "new":
+            worker.handle("start")
+        if phase == "cancelled":
+            worker.handle("cancel")
+        elif phase == "expired":
+            clock.value = 121
+        elif phase == "grant_saved":
+            clock.value = 6
+            worker.handle("poll")
+        before = calls.copy()
+        with pytest.raises(ValueError, match="No active verification page"):
+            worker.handle("open_page")
+        assert opened == [] and calls == before
+    finally:
+        worker.close()
+
+
+def test_browser_dispatch_failure_keeps_same_waiting_attempt(tmp_path):
+    opened = []
+    worker, _, _ = worker_for(
+        tmp_path, browser_open=lambda url: opened.append(url) or False)
+    try:
+        waiting = worker.handle("start")
+        with pytest.raises(ValueError, match="Browser open request was not accepted"):
+            worker.handle("open_page")
+        assert opened == ["https://auth.example/verify"]
+        assert worker.handle("progress") == waiting
+    finally:
+        worker.close()
 
 
 def test_worker_reauthorizes_expired_pending_registration_and_reopens_new_grant(

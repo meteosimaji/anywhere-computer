@@ -11,11 +11,11 @@
 <section><h2>このPC</h2><p id="engine" class="state">未確認</p><p id="action" class="muted"></p><button id="start" class="primary" disabled>エンジンを起動</button><details><summary>機能の対応状況</summary><dl id="features"></dl></details></section>
 <section><h2>このPCを登録</h2>
 <p id="enrollment-state" class="state" role="status" aria-live="polite">未確認</p>
-<div id="enrollment-code-area" hidden><p>認証ページをブラウザーで開き、コードを入力してください。</p><label>認証ページ<input id="enrollment-url" readonly></label><label>コード<input id="enrollment-code" class="code" readonly></label></div>
+<div id="enrollment-code-area" hidden><p>認証ページを開き、コードを入力してください。認証を終えたら、下の「認証結果を確認」を押してください。</p><label>認証ページ<input id="enrollment-url" readonly></label><button id="enrollment-open_page" class="primary" disabled>認証ページを開く</button><label>コード<input id="enrollment-code" class="code" readonly></label><button id="enrollment-copy-code" disabled>コードをコピー</button></div>
 <label>端末名<input id="enrollment-name" maxlength="120" placeholder="例：自宅のMac"></label>
-<p class="muted enrollment-path">認証を開始 → 認証結果を確認 → 端末名を登録</p>
+<p class="muted enrollment-path">認証ページで本人認証 → 結果を確認 → 端末名を登録</p>
 <p id="enrollment-recovery-help" class="muted" hidden>資格情報ストアを利用できる状態に戻したら、保存を再試行してください。認証し直す場合は、元の登録を引き継ぎます。</p>
-<div class="enrollment-actions"><div class="steps"><button id="enrollment-start" class="primary" disabled>認証を開始</button><button id="enrollment-poll" class="primary" disabled>認証結果を確認</button><button id="enrollment-register" class="primary" disabled>この名前で登録</button></div>
+<div class="enrollment-actions"><div class="steps"><button id="enrollment-start" class="primary" disabled>認証を開始</button><button id="enrollment-poll" disabled>認証結果を確認</button><button id="enrollment-register" class="primary" disabled>この名前で登録</button></div>
 <div class="more"><button id="enrollment-progress">状態を確認</button><button id="enrollment-restart" class="primary" disabled>認証をやり直す</button><button id="enrollment-reauthorize" disabled>元の登録を引き継いで再認証</button><button id="enrollment-retry_save" class="primary" disabled>認証情報の保存を再試行</button><button id="enrollment-cleanup" class="danger" disabled>不要な再認証情報を削除</button><button id="enrollment-cancel" class="danger" disabled>認証を中止</button></div></div>
 <p id="enrollment-result" role="status" aria-live="polite"></p><p class="muted">端末登録だけではAIから操作できません。接続状態は別途確認します。</p></section>
 <section><h2>登録端末</h2><div id="devices"></div></section>

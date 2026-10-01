@@ -31,7 +31,7 @@ h1{width:fit-content;margin:0 0 16px;font-size:24px;font-weight:600;line-height:
 .file-list{max-height:640px;margin:0;padding:0;overflow:auto;list-style:none;scrollbar-width:thin}.file-list li{min-width:0}
 .file-list button{display:grid;grid-template-columns:20px minmax(0,1fr) 7.5rem 16px;grid-template-areas:"icon name kind go";align-items:center;column-gap:12px;width:100%;min-height:48px;padding:10px 12px;text-align:left;border:0;border-radius:6px;background:transparent}.file-list button:focus-visible{outline-offset:-2px}
 .file-name,.kind{align-self:baseline}.file-name{grid-area:name;overflow-wrap:anywhere}.file-list button:has(.file-visual[data-kind=folder]) .file-name{font-weight:500}
-.kind{grid-area:kind;font-size:14px;color:var(--muted);white-space:nowrap}.file-open{grid-area:go;color:var(--muted);font-size:18px;line-height:1;text-align:center}
+.kind{grid-area:kind;min-width:0;font-size:14px;color:var(--muted);white-space:normal;overflow-wrap:anywhere}.file-open{grid-area:go;color:var(--muted);font-size:18px;line-height:1;text-align:center}
 .file-visual{grid-area:icon;position:relative;display:block;width:15px;height:19px;border:1.5px solid var(--muted);border-radius:2px}
 .file-visual[data-kind=folder]{width:19px;height:14px}.file-visual[data-kind=folder]::before{content:"";position:absolute;left:-1.5px;top:-5px;width:9px;height:4px;border:1.5px solid var(--muted);border-bottom:0;border-radius:2px 2px 0 0}
 .file-columns{display:grid;grid-template-columns:20px minmax(0,1fr) 7.5rem 16px;column-gap:12px;padding:8px 12px;font-size:13px;color:var(--muted);border-bottom:1px solid var(--line)}.file-columns span:first-child{grid-column:2}.file-columns span:last-child{grid-column:3}
@@ -268,9 +268,10 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
       const entries=[...listing.entries].sort((a,b)=>Number(b.directory)-Number(a.directory)||a.path.localeCompare(b.path));
       for(const item of entries) {
         const li=document.createElement("li"),button=document.createElement("button"),tag=document.createElement("span"),label=document.createElement("span");
-        const extension=fileName(item.path).split(".").pop().toLowerCase();
+        const name=fileName(item.path),dot=name.lastIndexOf(".");
+        const extension=dot>0 && dot<name.length-1?name.slice(dot+1).toLowerCase():"";
         const category=item.directory?"folder":["png","jpg","jpeg","gif","webp"].includes(extension)?"image":["xlsx","csv"].includes(extension)?"sheet":["html","js","ts","py","json","css"].includes(extension)?"code":"text";
-        tag.className="kind";tag.textContent=item.symlink?"リンク":item.directory?"フォルダー":extension.toUpperCase()+" ファイル";
+        tag.className="kind";tag.textContent=item.symlink?"リンク":item.directory?"フォルダー":extension?extension.toUpperCase()+" ファイル":"ファイル";
         label.className="file-name";label.textContent=fileName(item.path);button.title=fileName(item.path);
         const visual=document.createElement("span"),arrow=document.createElement("span");
         visual.className="file-visual";visual.dataset.kind=category;visual.setAttribute("aria-hidden","true");
