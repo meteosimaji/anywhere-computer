@@ -21,6 +21,19 @@ async def test_browser_display_refuses_unowned_context_without_helper(monkeypatc
         'state': 'unavailable', 'reason': 'not_owned_context'}
 
 
+class TargetInspector:
+    def __init__(self, target_id):
+        self.target_id = target_id
+        self.detached = False
+
+    async def send(self, method):
+        assert method == 'Target.getTargetInfo'
+        return {'targetInfo': {'targetId': self.target_id}}
+
+    async def detach(self):
+        self.detached = True
+
+
 async def test_background_page_uses_nonactivating_cdp_target():
     page = object()
     context = SimpleNamespace(pages=[])
@@ -43,6 +56,12 @@ async def test_background_page_uses_nonactivating_cdp_target():
             return Session()
 
     context.browser = Browser()
+
+    async def inspect(selected):
+        assert selected is page
+        return TargetInspector('owned-target')
+
+    context.new_cdp_session = inspect
     assert await background.new_background_page(context) is page
     assert commands == [
         ('Target.createTarget', {'url': 'about:blank', 'background': True}),
@@ -69,8 +88,10 @@ async def test_background_page_uses_persistent_context_cdp_anchor():
         pages = [anchor]
 
         async def new_cdp_session(self, page):
-            assert page is anchor
-            return Session()
+            if page is anchor:
+                return Session()
+            assert page is created
+            return TargetInspector('created-target')
 
     context = Context()
     assert await background.new_background_page(context) is created
@@ -86,7 +107,8 @@ async def test_background_page_rejects_persistent_context_without_anchor():
         await background.new_background_page(context)
 
 
-async def test_background_page_uses_real_persistent_chrome_context(tmp_path):
+@pytest.mark.parametrize('page_count', [1, 2])
+async def test_background_page_uses_real_persistent_chrome_context(tmp_path, page_count):
     playwright = pytest.importorskip('playwright.async_api')
 
     async with playwright.async_playwright() as driver:
@@ -110,13 +132,17 @@ async def test_background_page_uses_real_persistent_chrome_context(tmp_path):
                 async def new_cdp_session(self, page):
                     return await context.new_cdp_session(page)
 
-            page = await background.new_background_page(PersistentContextProxy())
+            pages = await asyncio.gather(*(
+                background.new_background_page(PersistentContextProxy())
+                for _ in range(page_count)))
+            assert len(set(pages)) == page_count
             try:
-                await page.goto('data:text/html,<title>background probe</title>')
-                assert await page.title() == 'background probe'
+                for index, page in enumerate(pages):
+                    await page.goto(f'data:text/html,<title>background probe {index}</title>')
+                    assert await page.title() == f'background probe {index}'
                 assert anchor in context.pages
             finally:
-                await page.close()
+                await asyncio.gather(*(page.close() for page in pages))
         finally:
             await context.close()
 
@@ -514,3 +540,51 @@ async def test_background_input_prepares_model_and_draft_on_offline_chat_fixture
                 await background.background_key_press(editor, 'Enter')
         finally:
             await browser.close()
+
+
+async def test_background_page_waits_for_its_exact_target_during_concurrent_creation():
+    foreign, owned = object(), object()
+    context = SimpleNamespace(pages=[], browser=None)
+    commands, inspectors = [], []
+    owner_observed = asyncio.Event()
+
+    class Session:
+        async def send(self, method, params):
+            commands.append((method, params))
+            if method == 'Target.createTarget':
+                context.pages.append(foreign)
+                return {'targetId': 'owned-target'}
+            pytest.fail('Only the owned target may be closed on failure')
+
+        async def detach(self):
+            pass
+
+    class Browser:
+        def is_connected(self):
+            return True
+
+        async def new_browser_cdp_session(self):
+            return Session()
+
+    async def inspect(page):
+        inspector = TargetInspector('owned-target' if page is owned else 'foreign-target')
+        inspectors.append(inspector)
+        if page is owned:
+            owner_observed.set()
+        return inspector
+
+    context.browser = Browser()
+    context.new_cdp_session = inspect
+    task = asyncio.create_task(background.new_background_page(context))
+    try:
+        # Allow the foreign target to appear first. An owned target is then
+        # exposed while two additions exist in the shared context.
+        await asyncio.sleep(0)
+        context.pages.append(owned)
+        assert await task is owned
+        assert owner_observed.is_set()
+        assert all(session.detached for session in inspectors)
+        assert foreign in context.pages
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

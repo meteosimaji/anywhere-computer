@@ -23,7 +23,8 @@ delegated operation ledger and an audit table without paths, tokens, or argument
 values. The bearer must be delivered to a child MCP client through a trusted
 owner-controlled channel. `--delegated-device-id` selects one device; the
 default is `local`. Repeat `--scope`, `--read-root`, `--read-file`, and `--write-root` as
-needed. Local roots must be existing canonical absolute directories. Individual
+needed. Local roots must be existing canonical absolute directories, including `/` on POSIX.
+A root grant still rejects symlinks in every component. Individual
 read files must be existing canonical absolute regular files. A `--read-file`
 entry grants only that path to `files_read`, never siblings, the containing
 directory, or descendants if the file is replaced by a directory. Symlinks in
@@ -129,7 +130,8 @@ of sending the call again. Remote failures are audited with a generic reason
 that does not store target paths or error text.
 Before target dispatch, the source saves the selected device, tool,
 authenticated target child ID, and digest of the exact target request.
-The target's `operations_get` reports its saved tool and request digest to
+The target's `operations_get` reports its saved tool and request digest for both
+file-ledger and engine-backed tools, such as `computer_status`, to
 the authenticated child. When those and the operation ID agree, the source
 can reconcile a terminal target result with
 its running or unknown original record; an exact retry then returns the saved
@@ -144,7 +146,10 @@ a new ID.
 Local child `files_read` and `files_write`
 (create, replace, append) use descriptor-relative traversal from a configured
 root through the target parent, reject symlinks in every component, and update
-inside that pinned parent directory. This prevents an ancestor symlink swap
+inside that pinned parent directory. Delegated writes use the selected engine's
+ordinary file mutation locks across hash checking and publication, preventing
+both callers from acknowledging conflicting writes against the same original hash.
+This prevents an ancestor symlink swap
 after the policy precheck from reaching another tree. Other path tools are
 refused for delegated children until they have equivalent executor confinement;
 issuing a new grant with those scopes is also refused. On hosts without the

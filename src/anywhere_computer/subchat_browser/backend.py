@@ -550,13 +550,20 @@ class BrowserSubchatBackend:
 
     async def discard_prepared(self, submission: SubchatSubmission) -> None:
         """Drop a draft that lost the durable same-conversation send claim."""
-        page = self.pages.pop(submission.operation_id, None)
+        page = self.pages.get(submission.operation_id)
+        shared = page is not None and any(
+            owner != submission.operation_id and candidate is page
+            for owner, candidate in self.pages.items())
+        if page is not None and not shared:
+            await self._http_reader.close_owned_page(page)
+            if not page.is_closed():
+                self._unreusable_pages.add(page)
+                raise ConnectionError('Prepared browser page cleanup is unconfirmed')
+        self.pages.pop(submission.operation_id, None)
         self._prepared_baseline_kinds.pop(submission.operation_id, None)
-        if page is not None and page not in self.pages.values():
+        if page is not None and not shared:
             self._preparation_touched_pages.discard(page)
             self._unreusable_pages.discard(page)
-            if not page.is_closed():
-                await page.close()
 
     async def _ready(self, page: Page, submission: SubchatSubmission) -> bool:
         if page.url.rstrip('/') != self._url(submission).rstrip('/'):
@@ -883,7 +890,23 @@ class BrowserSubchatBackend:
                     await self._browser(), generation_account)
                 generation_authorization = session.authorization.get_secret_value()
             except BaseException:
-                await generation_client.aclose()
+                # This authentication GET precedes route installation and _send;
+                # this operation has exposed no draft or generation request.
+                # Persist that exact boundary before any cancellable cleanup.
+                if self._record_preflight_failure is not None:
+                    self._record_preflight_failure(submission.operation_id)
+                    try:
+                        async with asyncio.timeout(_UNCLAIMED_GENERATION_CLEANUP_TIMEOUT):
+                            await self.discard_prepared(submission)
+                    except Exception as error:
+                        logger.warning('Pre-draft page cleanup incomplete error_type=%s',
+                                       type(error).__name__)
+                try:
+                    async with asyncio.timeout(_UNCLAIMED_GENERATION_CLEANUP_TIMEOUT):
+                        await generation_client.aclose()
+                except Exception as error:
+                    logger.warning('Pre-draft client cleanup incomplete error_type=%s',
+                                   type(error).__name__)
                 raise
 
         async def augment(route: Route) -> None:

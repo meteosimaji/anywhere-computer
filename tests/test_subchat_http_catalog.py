@@ -314,14 +314,19 @@ async def test_actual_http_catalog_request_without_picker_or_send(authenticated,
 
 @pytest.mark.parametrize('status', [200, 403])
 @pytest.mark.parametrize('first_observation', ['http', 'ui'])
+@pytest.mark.parametrize('recovery', ['read_answer', 'find_submission'])
 async def test_http_catalog_challenge_stops_without_reopening_pages(
-        tmp_path, status, first_observation):
+        tmp_path, status, first_observation, recovery):
     from playwright.async_api import async_playwright
 
     from anywhere_computer.state import Ledger
     from anywhere_computer.subchat import SubchatPreparationFailed
     from anywhere_computer.subchat_browser.backend import BrowserSubchatBackend
-    from anywhere_computer.subchat_state import SubchatHTTPSelection, SubchatSubmissions
+    from anywhere_computer.subchat_state import (
+        SubchatHTTPSelection,
+        SubchatSubmission,
+        SubchatSubmissions,
+    )
 
     requests = []
 
@@ -341,6 +346,14 @@ async def test_http_catalog_challenge_stops_without_reopening_pages(
             if first_observation == 'ui':
                 observed = await backend.catalog()
                 assert observed['reason'] == 'browser_challenge'
+                saved = SubchatSubmission(
+                    operation_id='8' * 32, prompt='saved', model='Future Chat',
+                    effort='Future effort', state='submitted',
+                    conversation_id='11111111-2222-3333-4444-555555555555',
+                    user_message_id='saved-user', provider_account_id='account-a')
+                with pytest.raises(SubchatPreparationFailed) as caught:
+                    await getattr(backend, recovery)(saved)
+                assert caught.value.reason == 'browser_challenge'
             for _ in range(2):
                 with pytest.raises(SubchatPreparationFailed) as caught:
                     await asyncio.wait_for(

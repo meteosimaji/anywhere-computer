@@ -131,11 +131,12 @@ async def test_ssh_child_shutdown_drains_cancelled_observers_before_closing_stor
 
 
 @pytest.mark.asyncio
-async def test_shared_delegated_files_use_selected_engine_limits(tmp_path):
+@pytest.mark.parametrize('root_grant', [False, True])
+async def test_shared_delegated_files_use_selected_engine_limits(tmp_path, root_grant):
     control = tmp_path / "control"
     old_engine = Engine(control)
     selected_directory = control / "engines" / "selected"
-    selected = Engine(selected_directory)
+    selected = Engine(selected_directory, file_locks=control / "file-locks")
     (control / "engine-selection.json").write_text(
         EngineSelection(directory=str(selected_directory)).model_dump_json(),
         encoding="utf-8",
@@ -173,7 +174,10 @@ async def test_shared_delegated_files_use_selected_engine_limits(tmp_path):
     delegation.issue(DelegatedTaskGrant(
         owner="owner", child_id=child_id, parent_grant_id=parent_id,
         device_id="local", tools=tools,
-        read_roots=(str(allowed.resolve()),), write_roots=(str(allowed.resolve()),),
+        read_roots=("/", str(allowed.resolve())) if root_grant and os.name != 'nt'
+        else (str(allowed.resolve()),),
+        write_roots=("/", str(allowed.resolve())) if root_grant and os.name != 'nt'
+        else (str(allowed.resolve()),),
         expires_at=time.time() + 600,
     ))
     child = backend.session("child:" + child_id)
@@ -183,6 +187,11 @@ async def test_shared_delegated_files_use_selected_engine_limits(tmp_path):
             arguments={"path": str(source), "limit": 2},
         ))
         assert read.state == "completed" and read.data["text"] == "one\n"
+        valid = await child.execute(Request(
+            operation_id=uuid.uuid4().hex, tool="files_write",
+            arguments={"path": str(allowed / "valid.txt"), "text": "one"}))
+        assert valid.state == 'completed'
+        assert (allowed / 'valid.txt').read_text() == 'one'
         target = allowed / "target.txt"
         write = await child.execute(Request(
             operation_id=uuid.uuid4().hex, tool="files_write",
@@ -706,7 +715,8 @@ async def test_remote_child_call_uses_target_child_grant_not_parent_route(tmp_pa
         tmp_path / 'target-authority', resource='https://target.example/mcp',
         known_tools=frozenset(target_engine.tools))
     target_parent = parent_grant(target_authority, 'target-owner', 'target-device',
-                                 frozenset({'files_read', 'files_write', 'operations_get'}))
+                                 frozenset({'files_read', 'files_write',
+                                            'operations_get', 'computer_status'}))
     target_delegation = DelegatedTaskStore(tmp_path / 'target-delegation', target_authority)
     target_child_id = uuid.uuid4().hex
     allowed = tmp_path / 'target-allowed'
@@ -715,7 +725,7 @@ async def test_remote_child_call_uses_target_child_grant_not_parent_route(tmp_pa
     target_bearer = target_delegation.issue(DelegatedTaskGrant(
         owner='target-owner', child_id=target_child_id,
         parent_grant_id=target_parent.grant_id, device_id='local',
-        tools=frozenset({'files_read', 'files_write', 'operations_get'}),
+        tools=frozenset({'files_read', 'files_write', 'operations_get', 'computer_status'}),
         read_roots=(str(allowed.resolve()),), write_roots=(str(allowed.resolve()),),
         expires_at=time.time() + 600))
     target_binding = AuthorizedDeviceMCP(
@@ -744,7 +754,7 @@ async def test_remote_child_call_uses_target_child_grant_not_parent_route(tmp_pa
     source_bearer = source_delegation.issue(DelegatedTaskGrant(
         owner='source-owner', child_id=source_child_id,
         parent_grant_id=source_parent.grant_id, device_id=device_id,
-        tools=frozenset({'files_read', 'files_write', 'operations_get'}),
+        tools=frozenset({'files_read', 'files_write', 'operations_get', 'computer_status'}),
         expires_at=time.time() + 600))
     vault = MemoryVault()
     routes = DelegatedRouteStore(source_directory / 'delegated-routes', vault=vault)
@@ -753,12 +763,17 @@ async def test_remote_child_call_uses_target_child_grant_not_parent_route(tmp_pa
     routes.close()
 
     forwarded_packets = []
+    status_received, deliver_status = threading.Event(), threading.Event()
 
     def wire(resource, method, packet, headers):
         forwarded_packets.append(packet)
         assert resource == target_authority.resource
         response = httpx.request(method, f'http://127.0.0.1:{port}/mcp',
                                  headers=headers, json=packet, timeout=5, trust_env=False)
+        if (isinstance(packet, dict) and packet.get('method') == 'tools/call'
+                and packet.get('params', {}).get('name') == 'computer_status'):
+            status_received.set()
+            assert deliver_status.wait(10)
         return HTTPResponse(response.status_code,
                             {key.lower(): value for key, value in response.headers.items()},
                             response.json() if response.content else None)
@@ -783,6 +798,26 @@ async def test_remote_child_call_uses_target_child_grant_not_parent_route(tmp_pa
                     operation_id=operation_id or uuid.uuid4().hex, tool='devices_call',
                     arguments={'device_id': selected_device, 'tool': tool,
                                'arguments': arguments}))
+
+            status_id = uuid.uuid4().hex
+            lost_status = asyncio.create_task(remote('computer_status', {},
+                                                     operation_id=status_id))
+            try:
+                assert await asyncio.to_thread(status_received.wait, 5)
+                lost_status.cancel()
+                deliver_status.set()
+                with pytest.raises(asyncio.CancelledError):
+                    await lost_status
+            finally:
+                deliver_status.set()
+            recovered_status = await remote('operations_get', {'operation_id': status_id})
+            assert recovered_status.state == 'completed', recovered_status
+            assert recovered_status.data['result']['state'] == 'completed'
+            assert recovered_status.data['result']['operation_id'] == status_id
+            packets_before_status_retry = len(forwarded_packets)
+            retry_status = await remote('computer_status', {}, operation_id=status_id)
+            assert retry_status.state == 'completed'
+            assert len(forwarded_packets) == packets_before_status_retry
 
             read_id = uuid.uuid4().hex
             read_args = {'path': str(allowed / 'source.txt')}
@@ -1259,3 +1294,89 @@ async def test_owner_admin_binds_and_revokes_remote_child_route(tmp_path, unused
                 child_id=child_id, credentials=owner)
             assert unlinked['target_route'] == 'revoked'
             assert unlinked['target_child_id'] == 'c' * 32
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='requires POSIX delegated replacement')
+async def test_delegated_and_regular_writes_share_mutation_lock(tmp_path, monkeypatch):
+    from anywhere_computer.files import sha256
+    from anywhere_computer.locking import ProcessLock
+    from anywhere_computer.models import WriteFile
+
+    engine = Engine(tmp_path / 'engine')
+    tools = frozenset({'files_write', 'operations_get'})
+    authority = AuthorizationStore(tmp_path / 'authority', resource='https://fixture.example/mcp',
+                                   known_tools=frozenset(engine.tools))
+    authority.register_client('chat', frozenset({'https://chat.example/callback'}))
+    authority.enroll_device('owner', 'gateway', tools)
+    code = authority.approve(
+        owner='owner', device='gateway', client='chat', redirect='https://chat.example/callback',
+        resource=authority.resource, tools=tools, challenge=pkce_s256('v' * 43))
+    token = authority.exchange_code(
+        code=code, verifier='v' * 43, client='chat', redirect='https://chat.example/callback',
+        resource=authority.resource).value
+    delegation = DelegatedTaskStore(tmp_path / 'delegation', authority)
+    backend = AuthorizedDeviceMCP(authority, engine, owner='owner', device='gateway',
+                                  delegated_tasks=delegation)
+    parent_id = await backend.authenticate(token)
+    assert parent_id is not None
+    allowed = tmp_path / 'allowed'
+    allowed.mkdir()
+    path = allowed / 'shared.txt'
+    path.write_bytes(b'original')
+    original_hash = sha256(b'original')
+    child_id = uuid.uuid4().hex
+    delegation.issue(DelegatedTaskGrant(
+        owner='owner', child_id=child_id, parent_grant_id=parent_id, device_id='local',
+        tools=tools, write_roots=(str(allowed.resolve()),), expires_at=time.time() + 600))
+    child = backend.session('child:' + child_id)
+    entered, release, regular_attempted = threading.Event(), threading.Event(), threading.Event()
+    original_replace = os.replace
+    original_lock = ProcessLock.__enter__
+    main_thread = threading.get_ident()
+
+    def held_replace(source, destination, **kwargs):
+        if kwargs.get('src_dir_fd') is not None:
+            entered.set()
+            assert release.wait(10)
+        return original_replace(source, destination, **kwargs)
+
+    def observed_lock(lock):
+        if threading.get_ident() != main_thread and entered.is_set():
+            regular_attempted.set()
+        return original_lock(lock)
+
+    monkeypatch.setattr(os, 'replace', held_replace)
+    monkeypatch.setattr(ProcessLock, '__enter__', observed_lock)
+    delegated = asyncio.create_task(child.execute(Request(
+        operation_id=uuid.uuid4().hex, tool='files_write', arguments={
+            'path': str(path), 'mode': 'replace', 'expected_sha256': original_hash,
+            'text': 'delegated'})))
+    regular = None
+    lock_busy = False
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        try:
+            with ProcessLock(engine.files.locks / sha256(str(path.resolve()).encode())):
+                pass
+        except TimeoutError:
+            lock_busy = True
+        regular = asyncio.create_task(asyncio.to_thread(engine.files.write, WriteFile(
+            path=str(path), mode='replace', expected_sha256=original_hash, text='regular')))
+        assert await asyncio.to_thread(regular_attempted.wait, 5)
+        if not lock_busy:
+            # On the defective implementation the second writer can acknowledge
+            # success while delegated publication is still paused.
+            await asyncio.wait_for(asyncio.shield(regular), 5)
+    finally:
+        release.set()
+        result = await delegated
+        regular_result = ((await asyncio.gather(regular, return_exceptions=True))[0]
+                          if regular else None)
+        await backend.close()
+        delegation.close()
+        authority.close()
+        await engine.close()
+    assert lock_busy, 'Delegated publication did not hold the regular file mutation lock'
+    assert result.state == 'completed'
+    assert isinstance(regular_result, ValueError), regular_result
+    assert path.read_bytes() == b'delegated'

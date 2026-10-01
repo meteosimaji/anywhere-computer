@@ -138,14 +138,20 @@ function renderDevices(snapshot) {
   if (snapshot.device_registry_state === "unavailable") devices.textContent = "登録情報を読み取れません。保存データは変更していません。";
   else if (!snapshot.devices.length) devices.textContent = "追加の端末は登録されていません。";
   for (const device of snapshot.devices) {
-    const row = document.createElement("p"); row.className = "device";
-    row.textContent = `${device.name} · 現在の接続は未確認。前回：${device.last_observed_state} / ${device.checked_at === null ? "観測なし" : new Date(device.checked_at * 1000).toLocaleString()}`;
+    const row = document.createElement("div"); row.className = "device";
+    const description = document.createElement("div"); description.className = "device-description";
+    const name = document.createElement("p"); name.className = "device-name";
+    name.textContent = device.name;
+    const previous = document.createElement("p"); previous.className = "device-previous";
+    previous.textContent = `現在の接続は未確認。前回：${device.last_observed_state} / ${device.checked_at === null ? "観測なし" : new Date(device.checked_at * 1000).toLocaleString()}`;
+    description.append(name, previous);
     const check = document.createElement("button");
     check.type = "button"; check.textContent = "接続を確認";
     const observation = document.createElement("span");
     observation.setAttribute("role", "status"); observation.setAttribute("aria-live", "polite");
     check.addEventListener("click", () => checkDevice(device.device_id, check, observation));
-    row.append(document.createElement("br"), check, observation);
+    observation.className = "device-observation";
+    row.append(description, check, observation);
     devices.append(row);
   }
 }
@@ -193,6 +199,8 @@ function renderStartup(value) {
   field("startup-observed", `確認時刻：${new Date(value.observed_at).toLocaleString()}。エンジンの接続状態は「このPC」で確認してください。`);
   document.getElementById("startup-enable").disabled = startupBusy || remote || !["not_installed","not_enabled"].includes(value.state);
   document.getElementById("startup-disable").disabled = startupBusy || remote || !["registered","not_enabled"].includes(value.state);
+  document.getElementById("startup-enable").hidden = remote || !["not_installed","not_enabled"].includes(value.state);
+  document.getElementById("startup-disable").hidden = remote || !["registered","not_enabled"].includes(value.state);
 }
 async function refreshStartup(action = "status") {
   if (startupBusy) return;

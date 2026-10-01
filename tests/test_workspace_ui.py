@@ -98,18 +98,44 @@ def _luminance(color):
     return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
 
 
-def test_workspace_muted_text_meets_contrast_on_every_surface():
+def _contrast(foreground, background):
+    high, low = sorted((_luminance(foreground), _luminance(background)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def _theme_tokens(css):
+    """Colour tokens of each theme block (light, OS dark, explicit dark) in declaration order."""
+    return [dict(re.findall(r"--([a-z-]+):\s*(#[0-9a-f]{3,6})", block))
+            for block in re.findall(r"--bg:[^}]*", css)]
+
+
+def _check_theme_contrast(tokens):
+    for surface in (tokens["bg"], tokens["subtle"], tokens["canvas"]):
+        # Body and secondary text, the accent used for links/focus, and the error colour.
+        for role in ("ink", "muted", "accent", "danger"):
+            assert _contrast(tokens[role], surface) >= 4.5, (role, surface)
+    assert _contrast(tokens["on-accent"], tokens["accent"]) >= 4.5
+    # Input and button borders identify the control itself, so they need 3:1.
+    assert _contrast(tokens["edge"], tokens["bg"]) >= 3, tokens["edge"]
+
+
+def test_workspace_text_and_controls_meet_contrast_in_every_theme():
     html = (Path(__file__).resolve().parents[1]
             / "src/anywhere_computer/web/workspace.html").read_text(encoding="utf-8")
-    hex_color = r"#(?:[0-9a-f]{6}|[0-9a-f]{3})"
-    themes = re.findall(rf"--paper:({hex_color});--card:({hex_color});--ink:{hex_color};"
-                        rf"--muted:({hex_color});--line:{hex_color};--accent:{hex_color};"
-                        rf"--soft:({hex_color})", html)
+    themes = _theme_tokens(html)
     assert len(themes) == 3  # light, dark media query, explicit dark theme
-    for paper, card, muted, soft in themes:
-        for surface in (paper, card, soft):
-            high, low = sorted((_luminance(muted), _luminance(surface)), reverse=True)
-            assert (high + 0.05) / (low + 0.05) >= 4.5, (muted, surface)
+    for tokens in themes:
+        _check_theme_contrast(tokens)
+        for surface in (tokens["bg"], tokens["subtle"], tokens["canvas"]):
+            assert _contrast(tokens["ok"], surface) >= 4.5, ("ok", surface)
+
+
+def test_desktop_management_theme_meets_the_same_contrast():
+    css = (Path(__file__).resolve().parents[1] / "desktop/ui/style.css").read_text(encoding="utf-8")
+    themes = _theme_tokens(css)
+    assert len(themes) == 2  # light and the OS dark preference
+    for tokens in themes:
+        _check_theme_contrast(tokens)
 
 
 def test_workspace_mutation_recovery_in_javascript():

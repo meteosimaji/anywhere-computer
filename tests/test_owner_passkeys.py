@@ -249,7 +249,12 @@ async def test_full_passkey_store_rejects_registration_before_challenge(setup):
     status, page, _ = await browser.owner_passkey(
         "GET", {}, b"", urlencode({"ticket": ticket}))
     assert status == 409
-    assert page is not None and b"Passkey enrollment limit reached" in page
+    assert page is not None and b"<h1>Passkey limit reached</h1>" in page
+    # The 20-key cap is cleared by removing one key (its credential ID is chosen by the
+    # owner), not by a destructive owner reset.
+    assert b"anywhere owner-passkey-remove --credential-id ID" in page
+    assert b"anywhere owner-passkey-list" in page and b"anywhere owner-passkey-enroll" in page
+    assert b"owner-reset" not in page and b"Reset the owner" not in page
     assert b"data-options" not in page
     assert browser.registrations == {}
     assert passkeys.ticket_valid(ticket)
@@ -257,16 +262,67 @@ async def test_full_passkey_store_rejects_registration_before_challenge(setup):
 
 
 @pytest.mark.asyncio
-async def test_registration_limit_has_owner_action_message(setup, monkeypatch):
+async def test_registration_page_is_offline_and_pins_its_recomputed_script(setup):
+    import base64
+    import hashlib
+
+    from anywhere_computer.browser_authorization import _PASSKEY_REGISTRATION_SCRIPT
+
+    browser, passkeys = setup
+    ticket = passkeys.issue_local_ticket("owner-password")
+    status, body, headers = await browser.owner_passkey(
+        "GET", {}, b"", urlencode({"ticket": ticket}))
+    page = body.decode()
+    digest = base64.b64encode(
+        hashlib.sha256(_PASSKEY_REGISTRATION_SCRIPT.encode()).digest()).decode()
+    policy = headers["Content-Security-Policy"]
+    assert status == 200 and f"script-src 'sha256-{digest}';" in policy
+    assert "script-src 'unsafe" not in policy
+    assert f"<script>{_PASSKEY_REGISTRATION_SCRIPT}</script>" in page
+    assert page.count("<script") == 1
+    for external in ("<link", " src=", "url(", "@import", "<img", "<iframe"):
+        assert external not in page
+    # The app's own QR is a web link; the page must not call it a passkey prompt.
+    assert "ordinary web link to this registration page, not a passkey sign-in prompt" in page
+    assert 'id=registration-status class=status role=status></p>' in page
+    # The page lifetime is a ceiling: the one-use link may expire sooner.
+    assert "lasts up to 3 minutes, and the link may expire sooner" in page
+    assert "valid for 3 minutes" not in page
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("backend_message, heading, guidance, absent", [
+    ("Too many passkeys; reset the owner", b"<h1>Passkey limit reached</h1>",
+     b"owner-passkey-remove --credential-id ID", b"owner-reset"),
+    ("Too many passkey registrations; reset the owner",
+     b"<h1>Passkey registration limit reached</h1>",
+     b"<code>anywhere owner-reset</code>", b"owner-passkey-remove"),
+])
+async def test_registration_limit_guidance_matches_the_limit_that_was_hit(
+    setup, monkeypatch, backend_message, heading, guidance, absent,
+):
     browser, _ = setup
 
     def limit(_query):
-        raise PasskeyEnrollmentLimitReached("synthetic limit")
+        raise PasskeyEnrollmentLimitReached(backend_message)
 
     monkeypatch.setattr(browser, "_registration_begin", limit)
     status, body, _ = await browser.owner_passkey("GET", {}, b"", "ticket=fixture")
     assert status == 409
-    assert body is not None and b"Reset the owner locally" in body
+    assert body is not None and heading in body and guidance in body and absent not in body
+
+
+@pytest.mark.asyncio
+async def test_registration_page_carries_the_escaped_device_for_the_completion_text(setup):
+    browser, _ = setup
+    other = BrowserAuthorization(browser.store, browser.credentials, device="Mac <b>&'x\"")
+    ticket = other.passkeys.issue_local_ticket("owner-password")
+    status, body, _ = await other.owner_passkey("GET", {}, b"", urlencode({"ticket": ticket}))
+    page = body.decode()
+    assert status == 200
+    assert "data-device='Mac &lt;b&gt;&amp;&#x27;x&quot;'" in page
+    assert "<b>&" not in page.split("<main", 1)[1]
+    assert "connection requests for ' + device" in page
 
 
 @pytest.fixture
@@ -494,6 +550,9 @@ async def _consent(browser):
     })
     status, page, headers = await browser.authorize("GET", {}, b"", query)
     assert status == 200 and b"Allow with passkey" in page
+    assert b"may need Bluetooth near this computer" in page
+    assert b"Scanning the browser's QR code only starts the phone prompt" in page
+    assert b"nothing is approved until you finish verification there" in page
     import re
     fields = dict(re.findall(rb"name=(request_id|csrf) value='([^']+)'", page))
     identity = fields[b"request_id"].decode()

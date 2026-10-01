@@ -37,6 +37,17 @@ This status request is bound to the original browser cookie, CSRF value, ticket,
 and same-origin POST. It returns only waiting or registered, without credential
 IDs or public keys.
 
+This QR is an ordinary web link to the registration page, not a passkey sign-in
+prompt; the browser's own passkey dialogs and any phone QR/Bluetooth step on the
+consent page are not drawn by this app. Clicking “Register passkey” shows a waiting
+state, ignores repeat clicks and, if the browser dialog is cancelled, restores the
+controls without saving or posting anything. After the browser answers, the form
+posts once; extra clicks or Enter while the server verifies are ignored. When the QR
+is chosen, the form is replaced by the QR and a status line. The phone's page and
+the computer's “Passkey registered.” view (heading and title) appear only after the
+verified save described here; the phone page says the computer updates after it
+confirms the result, not within a fixed time.
+
 A consumed ticket alone does not prove successful registration. Storage or network
 errors do not produce a completion message; temporary observation errors retry
 without registering again. Expiry, a new locally issued ticket, an owner reset,
@@ -65,6 +76,12 @@ is ordered with credential removal under the passkey store lock. If another
 operation holds that lock at the final check, consent fails promptly and the
 client must start a new connection request. Existing OAuth
 grants remain until separately revoked.
+
+At most 20 passkeys can be enrolled. A registration link that meets this cap shows
+“Passkey limit reached” and tells the owner to list the keys, remove one with its
+credential ID (the page never picks which key) and issue a new link; it does not
+suggest an owner reset. The separate lifetime limit of 128 registrations is cleared
+only by an owner reset, and its page says so.
 
 ## Lost credentials and reset
 
@@ -108,6 +125,19 @@ code. Its owner credentials and authorization database live in a temporary
 test directory; it never uses a personal passkey or native credential store.
 Run it with `uv run pytest -q tests/test_owner_passkeys_browser.py` on a host
 with Google Chrome installed. A missing browser causes a reported skip.
+
+`tests/test_authorization_ui_browser.py` renders the consent page with 123
+requested tools at desktop, 390px and 320px widths (reachable controls, bounded
+complete list, no horizontal overflow, 44px touch targets, no CSP violations) and
+uses a page-local stub of `navigator.credentials` for unanswered/cancelled passkey
+and registration dialogs, checking duplicate-click blocking and no retry or post.
+It also holds the real backend's registration response (verification and save have
+already happened) while pressing Enter and clicking again, to prove exactly one POST
+and the real verified-success view; page-side timers report state because Playwright
+calls block while a form navigation is pending. Expiry and Deny while a passkey
+prompt is open are exercised with late credential resolution and rejection. A
+1280x700 window must scroll rather than clip the decision column; 390px and 320px
+keyboard reachability is checked for every decision.
 
 A second test uses separate computer and phone browser contexts. It injects a
 failed status response, verifies that the QR stays visible, registers through the

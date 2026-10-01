@@ -69,15 +69,18 @@ async def test_first_tls_connection_binds_only_authenticated_enrolled_device(
         await relay.close()
 
 
-async def test_pc_enrolls_then_runs_signed_file_operation(registration, certificates, tmp_path):
+@pytest.mark.parametrize('recover_registration', [False, True])
+async def test_pc_enrolls_then_runs_signed_file_operation(
+        registration, certificates, tmp_path, recover_registration):
     import time
 
     from cryptography.hazmat.primitives import serialization
     from test_client_tokens import MemoryVault
 
+    from anywhere_computer.client_tokens import ClientCredentialError
     from anywhere_computer.engine import Engine
     from anywhere_computer.enrollment_credentials import EnrollmentCredentials, EnrollmentToken
-    from anywhere_computer.enrollment_http import EnrollmentHTTPReply
+    from anywhere_computer.enrollment_http import EnrollmentHTTPReply, EnrollmentTransportError
     from anywhere_computer.models import Request
     from anywhere_computer.registration_client import RegistrationClient
     from anywhere_computer.relay_client import PCRelayClient
@@ -88,21 +91,49 @@ async def test_pc_enrolls_then_runs_signed_file_operation(registration, certific
     key, registry, service, claims = registration
     context, fingerprint = certificates
     token = signed(key, claims)
+    now = [time.time()]
+    vault = MemoryVault()
     credentials = EnrollmentCredentials(tmp_path / 'credentials', issuer=claims['iss'],
-                                        client=claims['azp'], profile='test', vault=MemoryVault())
+                                        client=claims['azp'], profile='test', vault=vault,
+                                        clock=lambda: now[0])
     credentials.save('b' * 32, EnrollmentToken(access_token=token, token_type='Bearer',
-                     expires_in=60, scope='device:enroll'), requested_at=time.time())
+                     expires_in=60, scope='device:enroll'), requested_at=now[0])
+
+    lose_registration = recover_registration
 
     def registration_wire(endpoint, fields, bearer):
+        nonlocal lose_registration
         if endpoint.endswith('/account'):
             return EnrollmentHTTPReply(200, service.account(bearer).model_dump())
-        return EnrollmentHTTPReply(200, service.register(bearer, **fields).model_dump())
+        receipt = service.register(bearer, **fields).model_dump()
+        if lose_registration:
+            lose_registration = False
+            raise EnrollmentTransportError(dispatched=True)
+        return EnrollmentHTTPReply(200, receipt)
 
     registration_client = RegistrationClient(
         tmp_path / 'registration', credentials, endpoint='https://relay.example/register',
         account_endpoint='https://relay.example/account', wire=registration_wire,
     )
-    saved = registration_client.register(attempt_id='b' * 32, name='PC')
+    if recover_registration:
+        with pytest.raises(EnrollmentTransportError):
+            registration_client.register(attempt_id='b' * 32, name='PC')
+        pending = registration_client.current()
+        now[0] += 120
+        fresh = EnrollmentCredentials(tmp_path / 'fresh', issuer=claims['iss'],
+                                      client=claims['azp'], profile='fresh', vault=vault)
+        fresh.save('c' * 32, EnrollmentToken(access_token=token, token_type='Bearer',
+                   expires_in=60, scope='device:enroll'), requested_at=time.time())
+        saved = registration_client.recover(fresh, attempt_id='c' * 32)
+        assert saved.attempt_id == pending.attempt_id
+        assert saved.enrollment_id == pending.enrollment_id
+        registration_client.close()
+        registration_client = RegistrationClient(
+            tmp_path / 'registration', credentials, endpoint='https://relay.example/register',
+            account_endpoint='https://relay.example/account', wire=registration_wire)
+        assert registration_client.current() == saved
+    else:
+        saved = registration_client.register(attempt_id='b' * 32, name='PC')
     device, owner = saved.device, saved.owner
     assert device is not None and owner is not None
     public = key.public_key().public_bytes(
@@ -128,9 +159,27 @@ async def test_pc_enrolls_then_runs_signed_file_operation(registration, certific
         with pytest.raises(ValueError, match='confirmed registration'):
             await registration_client.enroll_channel(client, fingerprint=fingerprint('client'))
         pc.account = owner
+        if recover_registration:
+            for selected_credentials, attempt in ((None, 'c' * 32), (fresh, None),
+                                                   (fresh, 'e' * 32)):
+                with pytest.raises((ValueError, ClientCredentialError)):
+                    await registration_client.enroll_channel(
+                        client, fingerprint=fingerprint('client'),
+                        credentials=selected_credentials, attempt_id=attempt)
+            other = EnrollmentCredentials(tmp_path / 'other', issuer=claims['iss'],
+                                          client=claims['azp'], profile='other', vault=vault)
+            other.save('e' * 32, EnrollmentToken(
+                access_token=signed(key, {**claims, 'sub': 'other'}), token_type='Bearer',
+                expires_in=60, scope='device:enroll'), requested_at=time.time())
+            with pytest.raises(ValueError, match='different account'):
+                await registration_client.enroll_channel(
+                    client, fingerprint=fingerprint('client'), credentials=other,
+                    attempt_id='e' * 32)
         assert registry.db.execute('SELECT COUNT(*) FROM relay_channels').fetchone()[0] == 0
         receipt = await registration_client.enroll_channel(
             client, fingerprint=fingerprint('client'),
+            credentials=fresh if recover_registration else None,
+            attempt_id='c' * 32 if recover_registration else None,
         )
         assert receipt.device_id == device.device_id and client.state == 'enrolled'
         assert not relay._channels

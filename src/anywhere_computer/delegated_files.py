@@ -28,6 +28,8 @@ def _require_flags() -> None:
 
 
 def _components(path: str) -> tuple[str, ...]:
+    if path == "/":
+        return ()
     candidate = Path(path)
     if (not candidate.is_absolute() or any(part in {"..", ".", ""}
                                            for part in path.split("/")[1:])):

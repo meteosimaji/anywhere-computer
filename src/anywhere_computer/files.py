@@ -53,6 +53,13 @@ def sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
 
 
+def file_mutation_lock(directory: Path, target: str) -> ProcessLock:
+    """Serialize ordinary and delegated writes to the same canonical path."""
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    key = sha256(str(absolute_path(target).resolve()).encode())
+    return ProcessLock(directory / key, timeout=5)
+
+
 def describe_metadata(metadata: os.stat_result) -> dict[str, JsonValue]:
     kinds = ((stat.S_ISREG, "file"), (stat.S_ISDIR, "directory"),
              (stat.S_ISLNK, "symlink"), (stat.S_ISFIFO, "fifo"),
@@ -191,8 +198,7 @@ class Files:
         expected_sha256: str | None,
     ) -> dict[str, JsonValue]:
         path = absolute_path(target)
-        lock_name = sha256(str(path.resolve()).encode())
-        with ProcessLock(self.locks / lock_name, timeout=5):
+        with file_mutation_lock(self.locks, target):
             if path.is_symlink():
                 raise ValueError("Write to the real file path, not a symbolic link")
             exists = path.exists()

@@ -42,6 +42,8 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../desktop/ui/app.js'),'
 });
 (async()=>{
   await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(get('startup-enable').hidden,false);
+  assert.equal(get('startup-disable').hidden,true);
   const features = get('features').children.map(child => child.textContent).join('\n');
   for (const label of ['独立ブラウザ', '音声・動画の部分プレビュー', '文書の画像プレビュー', 'Codex Skills']) {
     assert.ok(features.includes(label), `Missing capability: ${label}`);
@@ -57,7 +59,9 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../desktop/ui/app.js'),'
   await get('refresh').handlers.click();
   assert.deepEqual(observations.sort(), ['management_snapshot', 'management_startup_status']);
   const row=get('devices').children[0], button=row.children[1], output=row.children[2];
-  assert.match(row.textContent,/現在の接続は未確認/);
+  assert.equal(row.children[0].children[0].textContent, device.name);
+  assert.match(row.children[0].children[1].textContent,/現在の接続は未確認/);
+  assert.match(row.children[0].children[1].textContent,/前回：ready \/ 観測なし/);
   assert.equal(output.attributes.role,'status'); assert.equal(output.attributes['aria-live'],'polite');
   response={schema_version:1,device_id:device.device_id,state:'ready',evidence:'authorized_catalog',observed_at:snapshot.observed_at};
   await button.handlers.click(); assert.match(output.textContent,/実操作は未確認/); assert.equal(button.disabled,false);

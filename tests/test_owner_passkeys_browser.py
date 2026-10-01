@@ -99,7 +99,9 @@ async def test_virtual_authenticator_registers_and_approves_consent(tmp_path):
                 await page.goto(origin + "/authorize?" + query)
                 identity = await page.locator("input[name=request_id]").input_value()
                 await page.locator("#passkey-approve").click()
-                await page.get_by_text("approved").wait_for()
+                # The pending UI also says "nothing is approved". Only the
+                # completed callback document is the approval receipt.
+                await page.get_by_text("approved", exact=True).wait_for()
                 assert [item[0] for item in approvals] == [403, 303]
                 result = parse_qs(urlsplit(approvals[1][1]["Location"]).query)
                 assert result["state"] == ["browser-state"]
@@ -208,14 +210,28 @@ async def test_phone_registration_replaces_desktop_qr_after_verified_save(tmp_pa
                 await phone.goto(phone_url)
                 await phone.get_by_role("button", name="Register passkey", exact=True).click()
                 await phone.get_by_text("Passkey registered.", exact=True).wait_for(timeout=20000)
-                await desktop.get_by_text("Passkey registered. You can close this page.",
-                                          exact=True).wait_for(timeout=10000)
+                await desktop.get_by_role("heading", name="Passkey registered.").wait_for(
+                    timeout=10000)
+                await desktop.get_by_text(
+                    "This passkey can now approve connection requests for device. "
+                    "You can close this page.",
+                    exact=True).wait_for()
+                assert await desktop.title() == "Passkey registered. — Anywhere Computer"
                 assert len(consent.passkeys.list()) == 1
                 assert not await desktop.locator("#phone-registration").is_visible()
                 assert await desktop.locator("#phone-registration svg").count() == 0
                 assert await desktop.locator("input[name=ticket]").input_value() == ""
                 assert desktop.url == origin + "/owner-passkey"
                 assert await desktop.locator("#register-on-phone").is_disabled()
+                # The success view is the verified-save state, not an optimistic one.
+                assert await desktop.locator("#registration-status").get_attribute(
+                    "data-state") == "success"
+                assert not await desktop.locator("#registration-options").is_visible()
+                assert await desktop.get_by_text("Waiting for registration").count() == 0
+                assert await desktop.locator("h1").count() == 1
+                assert not await desktop.locator("#registration-intro").is_visible()
+                assert await phone.get_by_role(
+                    "heading", name="Passkey registered.").is_visible()
             finally:
                 await browser.close()
     finally:

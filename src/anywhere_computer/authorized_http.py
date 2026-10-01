@@ -18,6 +18,7 @@ from .device_router import NESTED_REQUEST_ID_ERROR, ROUTER_TOOLS, DeviceBackend,
 from .devices import DeviceData
 from .engine import Engine
 from .engine_selection import engine_directory
+from .files import file_mutation_lock
 from .http_client import ChildBearerTokens, HTTPBackend
 from .mcp_server import INSTRUCTIONS as MCP_INSTRUCTIONS
 from .mcp_server import OPERATION_META, REQUEST_ID_SCHEMA, MCPSession, rpc_error
@@ -110,7 +111,7 @@ class AuthorizedDeviceMCP:
                     return "child:" + child_id
         return None
 
-    def session(self, grant_id: str) -> MCPSession:
+    def session(self, grant_id: str, *, receipt_metadata: bool = False) -> MCPSession:
         if grant_id.startswith("child:"):
             return self._child_session(grant_id.removeprefix("child:"))
         def current() -> GrantIdentity:
@@ -145,6 +146,7 @@ class AuthorizedDeviceMCP:
                     - SUBCHAT_SAVE_TOOLS, request,
                     authorization_database=(self.store.database
                                             if request.tool == 'mcp_session_open' else None),
+                    receipt_metadata=receipt_metadata,
                 )
             if self.engine is None:
                 raise RuntimeError("No engine was configured")
@@ -155,6 +157,7 @@ class AuthorizedDeviceMCP:
                 self.engine, {grant.grant_id: grant.tools - ROUTER_TOOLS
                                                 - SUBCHAT_AUTH_SCOPES
                                                 - SUBCHAT_SAVE_TOOLS}, transport="http",
+                receipt_metadata=receipt_metadata,
             )
             return Reply.model_validate_json(
                 await bridge.dispatch(grant.grant_id, request.model_dump_json().encode())
@@ -362,7 +365,7 @@ class AuthorizedDeviceMCP:
         child = delegation.current(child_id)
         if child is None or not self._matches(self.store.current_grant(child.parent_grant_id)):
             raise ValueError("Delegated task authorization is unavailable")
-        parent_session = self.session(child.parent_grant_id)
+        parent_session = self.session(child.parent_grant_id, receipt_metadata=True)
         namespace = "delegated-child:" + child_id
 
         def current_file_limits() -> RuntimeSettings:
@@ -474,8 +477,15 @@ class AuthorizedDeviceMCP:
                                 if (len(file_args_write.text.splitlines())
                                         > settings.file_write_line_limit):
                                     raise ValueError("Write exceeds configured line limit")
-                                return delegated_write(file_args_write, active.write_roots,
-                                                       delegation.directory / "file-backups")
+                                locks = (self.engine.files.locks if self.engine is not None
+                                         else self.agent_directory / "file-locks"
+                                         if self.agent_directory is not None else None)
+                                if locks is None:
+                                    raise ValueError("Delegated file locks are unavailable")
+                                with file_mutation_lock(locks, file_args_write.path):
+                                    return delegated_write(
+                                        file_args_write, active.write_roots,
+                                        delegation.directory / "file-backups")
 
                         data = await asyncio.to_thread(perform_file)
                         reply = Reply(operation_id=internal_id, state="completed", data=data)

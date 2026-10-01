@@ -1,7 +1,7 @@
 """Explicit, offline addition of HTTP tools without replacing credentials.
 
-Only grants that already cover the complete old tool set are expanded for ordinary
-tools. Subchat and delegation tools require fresh consent. Restricted, revoked and
+Every existing grant retains its consented scopes so installed clients can rotate
+tokens safely. Newly published tools require fresh consent. Restricted, revoked and
 expired grants stay unchanged. A crash between the database commit and config
 publication fails closed; repeat the same command to finish publication.
 """
@@ -19,11 +19,6 @@ from .http_service import _check_enrollment, load_http_config
 from .locking import ProcessLock
 from .subchat_device_save import SUBCHAT_SAVE_TOOLS
 from .subchat_gateway import SUBCHAT_AUTH_SCOPES, SubchatGatewayConfig
-
-
-def _requires_new_consent(tools: frozenset[str]) -> bool:
-    return any(tool.startswith(("subchat_", "mcp_", "codex_plugin_", "devices_"))
-               for tool in tools)
 
 
 async def add_http_tools(directory: Path, tools: frozenset[str], *,
@@ -45,7 +40,7 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
                                              "subchat": selection})
         # Validate the expanded model, including the scope-count bound.
         expanded = type(config).model_validate_json(expanded.model_dump_json())
-        new_consent_required = _requires_new_consent(expanded.scopes - config.scopes)
+        new_consent_required = bool(expanded.scopes - config.scopes)
         database = directory / "http-server/authorization/authorization.sqlite3"
         if database.is_symlink() or not database.is_file():
             raise ValueError("HTTP authorization database is missing")
@@ -76,7 +71,6 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
             _check_enrollment(store, config.model_copy(update={"scopes": stored}))
             if not store.device_enabled(owner=config.owner, device=config.device):
                 raise ValueError("Disabled HTTP devices cannot be upgraded")
-            changed = 0
             missing_requested = 0
             with store.db:
                 store.db.execute("BEGIN IMMEDIATE")
@@ -86,16 +80,8 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
                     (config.owner, config.device, config.client, time.time()),
                 ).fetchall()
                 encoded = json.dumps(sorted(expanded.scopes))
-                for grant_id, raw in candidates:
+                for _grant_id, raw in candidates:
                     granted = frozenset(json.loads(raw))
-                    if (not new_consent_required
-                            and granted == config.scopes
-                            and config.scopes != expanded.scopes):
-                        store.db.execute(
-                            "UPDATE grants SET tools=? WHERE id=?", (encoded, grant_id)
-                        )
-                        changed += 1
-                        granted = expanded.scopes
                     if not tools <= granted:
                         missing_requested += 1
                 store.db.execute(
@@ -115,7 +101,7 @@ async def add_http_tools(directory: Path, tools: frozenset[str], *,
                 staged.unlink(missing_ok=True)
             return {
                 "added_tools": sorted(expanded.scopes - config.scopes),
-                "expanded_full_access_grants": changed,
+                "expanded_full_access_grants": 0,
                 "active_grants_missing_requested_tools": missing_requested,
                 "new_consent_required": new_consent_required or missing_requested > 0,
                 "credentials_replaced": False,

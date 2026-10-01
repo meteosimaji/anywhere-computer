@@ -8,6 +8,26 @@ from anywhere_computer.delegated_files import read, write
 from anywhere_computer.models import ReadFile, WriteFile
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX root directory")
+@pytest.mark.parametrize("mixed_roots", [False, True])
+def test_posix_root_grant_reads_and_creates_regular_files(tmp_path, mixed_roots):
+    root = tmp_path.resolve()
+    roots = ("/", str(root)) if mixed_roots else ("/",)
+    source = root / "source.txt"
+    source.write_text("root-authorized", encoding="utf-8")
+    assert read(ReadFile(path=str(source)), roots)["text"] == "root-authorized"
+    target = root / "created.txt"
+    result = write(WriteFile(path=str(target), text="created", mode="create"),
+                   roots, root / "backups")
+    assert result["sha256"] and target.read_text() == "created"
+    alias = root / "alias.txt"
+    alias.symlink_to(source)
+    with pytest.raises(OSError):
+        read(ReadFile(path=str(alias)), roots)
+    with pytest.raises((OSError, ValueError)):
+        read(ReadFile(path="/"), roots)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows-specific handle confinement")
 def test_windows_delegated_read_and_create_only(tmp_path):
     root = tmp_path / "root"

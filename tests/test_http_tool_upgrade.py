@@ -44,7 +44,7 @@ def test_http_subchat_profile_id_requires_owner_verification(tmp_path, monkeypat
 @pytest.mark.parametrize("added_tools", [
     frozenset({"computer_status"}), frozenset({"directories_list"}),
 ])
-async def test_upgrade_preserves_token_and_adds_direct_tools_over_real_http(
+async def test_upgrade_publishes_tools_without_expanding_existing_consent_over_real_http(
     tmp_path, unused_tcp_port, added_tools,
 ):
     config = await setup(tmp_path, unused_tcp_port)
@@ -56,9 +56,9 @@ async def test_upgrade_preserves_token_and_adds_direct_tools_over_real_http(
             with pytest.raises(TimeoutError):
                 await add_http_tools(tmp_path, added_tools)
         result = await add_http_tools(tmp_path, added_tools)
-        assert result["expanded_full_access_grants"] == 1
-        assert result["active_grants_missing_requested_tools"] == 0
-        assert result["new_consent_required"] is False
+        assert result["expanded_full_access_grants"] == 0
+        assert result["active_grants_missing_requested_tools"] == 1
+        assert result["new_consent_required"] is True
         assert result["credentials_replaced"] is False
         async with http_service(tmp_path, credentials=owner):
             headers = await initialize(http, token)
@@ -72,8 +72,27 @@ async def test_upgrade_preserves_token_and_adds_direct_tools_over_real_http(
                 },
             )
             assert {t["name"] for t in response.json()["result"]["tools"]} == (
-                config.scopes | added_tools
+                config.scopes
             )
+            # Fresh, explicit consent exposes the newly published tools.
+            store = AuthorizationStore(
+                tmp_path / 'http-server/authorization', resource=RESOURCE,
+                known_tools=config.scopes | added_tools)
+            try:
+                code = store.approve(
+                    owner=config.owner, device=config.device, client=config.client,
+                    redirect=next(iter(config.redirects)), resource=RESOURCE,
+                    tools=config.scopes | added_tools, challenge=pkce_s256('v' * 43))
+                fresh = store.exchange_code(
+                    code=code, verifier='v' * 43, client=config.client,
+                    redirect=next(iter(config.redirects)), resource=RESOURCE).value
+            finally:
+                store.close()
+            fresh_headers = await initialize(http, fresh)
+            visible = await http.post('/mcp', headers=fresh_headers,
+                json={'jsonrpc': '2.0', 'id': 11, 'method': 'tools/list'})
+            assert {t['name'] for t in visible.json()['result']['tools']} == (
+                config.scopes | added_tools)
         assert (await add_http_tools(tmp_path, added_tools))[
             "expanded_full_access_grants"
         ] == 0
@@ -277,3 +296,50 @@ async def test_save_scope_upgrade_preserves_existing_grants(
         assert store.db.execute("SELECT id,tools,expires,revoked FROM grants").fetchall() == before
     finally:
         store.close()
+
+
+async def test_tool_upgrade_preserves_installed_client_refresh_scope(tmp_path, unused_tcp_port):
+    import time
+
+    from anywhere_computer.client_tokens import ClientTokens, TokenReply
+
+    config = await setup(tmp_path, unused_tcp_port)
+    now = [time.time()]
+    authority = AuthorizationStore(tmp_path / 'http-server/authorization', resource=RESOURCE,
+                                   known_tools=config.scopes)
+    code = authority.approve(
+        owner=config.owner, device=config.device, client=config.client,
+        redirect=next(iter(config.redirects)), resource=RESOURCE, tools=config.scopes,
+        challenge=pkce_s256('v' * 43))
+    tokens = authority.exchange_code(
+        code=code, verifier='v' * 43, client=config.client,
+        redirect=next(iter(config.redirects)), resource=RESOURCE)
+    authority.close()
+
+    def refresh(resource, client, secret):
+        store = AuthorizationStore(tmp_path / 'http-server/authorization', resource=RESOURCE,
+                                   known_tools=load_http_config(tmp_path).scopes)
+        try:
+            renewed = store.refresh(refresh_token=secret, client=client, resource=resource)
+            return TokenReply(access_token=renewed.value, refresh_token=renewed.refresh_value,
+                              token_type='Bearer', expires_in=renewed.expires_in,
+                              scope=renewed.scope)
+        finally:
+            store.close()
+
+    client = ClientTokens(tmp_path / 'client', resource=RESOURCE, client=config.client,
+                          profile='fixture', vault=MemoryVault(), clock=lambda: now[0],
+                          refresh=refresh)
+    client.install(TokenReply(access_token=tokens.value, refresh_token=tokens.refresh_value,
+                              token_type='Bearer', expires_in=tokens.expires_in,
+                              scope=tokens.scope), requested_at=now[0])
+    await add_http_tools(tmp_path, frozenset({'computer_status'}))
+    now[0] += tokens.expires_in
+    access = client.access_token()
+    assert access != tokens.value
+    authority = AuthorizationStore(tmp_path / 'http-server/authorization', resource=RESOURCE,
+                                   known_tools=load_http_config(tmp_path).scopes)
+    try:
+        assert authority.verify(access, resource=RESOURCE).tools == config.scopes
+    finally:
+        authority.close()

@@ -1,4 +1,7 @@
 import asyncio
+import base64
+import hashlib
+import re
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -142,6 +145,39 @@ async def test_invalid_callback_cannot_consume_login(failure):
             )
             assert response.status_code == 200
             assert await callback.result == "valid-code"
+    finally:
+        await callback.close()
+
+
+@pytest.mark.parametrize("kind", ["code", "denied", "rejected"])
+async def test_callback_page_is_static_and_claims_only_what_was_received(kind):
+    callback = _LoopbackCallback("expected-state", "https://computer.example.com")
+    url = await callback.start()
+    query = {"code": {"state": "expected-state", "code": "synthetic-code"},
+             "denied": {"state": "expected-state", "error": "access_denied"},
+             "rejected": {"state": "different", "code": "synthetic-code"}}[kind]
+    try:
+        async with httpx.AsyncClient(trust_env=False) as http:
+            response = await http.get(url, params=query)
+        assert response.status_code == (400 if kind == "rejected" else 200)
+        policy = {part.split(" ", 1)[0]: part.split(" ", 1)[1]
+                  for part in response.headers["content-security-policy"].split("; ")}
+        assert policy["default-src"] == "'none'" and policy["frame-ancestors"] == "'none'"
+        assert set(policy) == {"default-src", "frame-ancestors", "style-src"}
+        stylesheet = re.search(r"<style>(.*?)</style>", response.text, re.S)
+        assert stylesheet is not None
+        digest = base64.b64encode(hashlib.sha256(stylesheet.group(1).encode()).digest()).decode()
+        assert policy["style-src"] == f"'sha256-{digest}'"  # exactly the shipped stylesheet
+        assert not re.search(r"<script|<img|<link|<form|<iframe|url\(|@import|https?:",
+                             response.text)
+        assert "<h1>" in response.text and "<title>Anywhere Computer</title>" in response.text
+        # The server has not exchanged the code yet, so it must never say it connected.
+        assert "接続しました" not in response.text and "接続されました" not in response.text
+        if kind == "code":
+            assert "まだ確認していません" in response.text
+            assert "設定画面に戻" in response.text
+        else:
+            assert "接続は完了していません" in response.text
     finally:
         await callback.close()
 

@@ -104,12 +104,18 @@ class RegistrationClient:
         return RegistrationAttempt.model_validate_json(row[1])
 
     async def enroll_channel(self, client: PCRelayClient, *,
-                             fingerprint: str) -> PCEnrollmentReceipt:
+                             fingerprint: str,
+                             credentials: EnrollmentCredentials | None = None,
+                             attempt_id: str | None = None) -> PCEnrollmentReceipt:
         """Bind a provisioned PC channel using the saved registration and OS grant.
 
         This explicit setup step returns connection enrollment evidence, not live
         readiness. It never sends a bearer through the native IPC or CLI. Normal
         resident connections use client.run() and do not read enrollment grants.
+        After recovery, the trusted caller supplies the fresh vault grant and its
+        attempt separately; the original registration request identity is retained.
+        Keep that grant until the channel receipt has been verified, including
+        after reopening this client. No credential is copied into registration state.
         """
         current = self.current()
         if (current is None or current.device is None or current.owner is None
@@ -117,9 +123,17 @@ class RegistrationClient:
                 or current.owner != client.agent.account
                 or current.device.device_id != client.agent.device_id):
             raise ValueError("PC channel does not match the confirmed registration")
-        token = self._credentials.access_token(
-            attempt_id=current.attempt_id, scope="device:enroll",
-        )
+        if (credentials is None) != (attempt_id is None):
+            raise ValueError("Select both the channel enrollment grant and its attempt")
+        selected = credentials if credentials is not None else self._credentials
+        if (selected.issuer != self._credentials.issuer
+                or selected.client != self._credentials.client):
+            raise ValueError("Channel credentials belong to another provider or client")
+        token = selected.access_token(
+            attempt_id=attempt_id if attempt_id is not None else current.attempt_id,
+            scope="device:enroll")
+        if credentials is not None and self._verified_account(token) != current.owner:
+            raise ValueError("Channel credentials belong to a different account")
         return await client.enroll(token, fingerprint=fingerprint)
 
     def reauthorization_slot(self) -> str | None:

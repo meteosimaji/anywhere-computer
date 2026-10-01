@@ -242,8 +242,30 @@ approve/deny submissions consume a request only once; current device/client/tool
 bindings are checked again inside the grant transaction. Denial returns the
 original state and `access_denied` without requiring a password.
 
-HTML has no external assets. Its inline password-visibility script is restricted
-by a CSP hash, with no-store caching and a same-origin referrer policy. Wrong
+HTML has no external assets: system fonts, inline CSS from `authorization_ui.py`,
+and one inline script per page restricted by a CSP hash computed from the script
+constant, with no-store caching and a same-origin referrer policy. The pages are
+plain left-aligned text with rules and one action colour (no logo, cards or
+shadows). The consent page reads in order: return address, device and exact
+requested-tool count; a capability summary built from the requested tool names
+(file/document read, audio capture, media preview/transcription, writes, commands,
+apps, websites, other services, ...) with the plugin/MCP/Subchat warnings; the
+entry to the exact tool list (before the decision; collapsed to one row when
+there are more than six tools, otherwise open); the decision, which repeats
+that approval lasts until `anywhere http-revoke`; then technical details and a
+“Forgot the owner password?” disclosure (open after a failed attempt) that
+explains `owner-reset` effects. A failed password or passkey shows only a short
+error and retry. The controls stay close on a phone and beside the summary on a
+wide window. The return address is the client's
+registered one and is not presented as proof of who operates it. Password and
+saved passkey are separate alternatives. A passkey click shows a waiting state,
+ignores repeat clicks and, on cancellation, error, expiry or a Deny decision,
+restores the button without retrying or posting; a late browser answer is
+dropped. A registration page submits at most one POST. The page says the browser,
+not this app, draws passkey/QR dialogs, that a phone passkey may need Bluetooth
+near the computer, and that scanning that QR alone does not approve the request.
+Outcome pages use one concrete h1 and one next step. These are presentation only;
+verification, CSRF/Origin/cookie checks, scopes and limits are unchanged. Wrong
 passwords are never echoed. Each pending request has
 a ten-attempt/60-second limit; failed attempts do not lock other pending requests.
 Only two actual password workers can run at once, and excess work returns busy

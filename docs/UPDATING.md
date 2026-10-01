@@ -114,10 +114,10 @@ uv run --locked anywhere http-add-tools --state-dir <既存のHTTP設定保存�
   --scope gui_native_action --scope browser_click --scope media_audio_clip
 ```
 
-これは追加対象の例です。既存設定・資格情報を保持し、以前の全ツールを許可していた
-有効な grant のみを通常ツールについて拡張します。制限付き・取消済み・期限切れの
-grant は拡張しません。Subchat、外部 MCP、Codex Plugin、端末ルーティングの
-追加には新しい同意が必要です。`active_grants_missing_requested_tools` は今回指定
+これは追加対象の例です。既存設定・資格情報と各接続の同意済み権限を保持し、
+HTTP サービスで公開できるツールを追加します。以前の全ツールを許可していた接続を
+含め、既存の grant は拡張しません。すべての新しいツールには新しい OAuth 同意が
+必要です。`active_grants_missing_requested_tools` は今回指定
 したツールを持たない有効な grant の件数です。制限付き grant が残る場合も
 `new_consent_required` が true になります。件数だけでは、どの接続を広げる
 べきかは判断できません。対象の接続で必要な権限を確認し、所有者が新しい OAuth

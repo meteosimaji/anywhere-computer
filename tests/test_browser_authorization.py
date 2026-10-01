@@ -79,9 +79,8 @@ async def test_consent_explains_owner_password_and_keeps_tools_reviewable(browse
     assert "at least 8 characters" in page
     assert "<details open><summary>Requested tools (1)</summary>" in page
     assert "<li><code>files_read</code></li>" in page
-    assert page.index("This connection can use the requested tools") < page.index(
-        "Requested tools (1)"
-    )
+    assert page.index("<li>read files and documents</li>") < page.index("Requested tools (1)")
+    assert "This connection can use the requested tools" not in page
     assert "anywhere http-revoke" in page
     assert "Access will be sent to <strong>client.example</strong>" in page
     assert "<details><summary>Technical details</summary>" in page
@@ -201,6 +200,52 @@ async def test_consent_summarizes_actual_write_and_delegation_tools(
         store.close()
 
 
+@pytest.mark.parametrize("tools, expected, absent", [
+    ({"files_read_many", "documents_preview"}, ("read files and documents",),
+     ("record system audio", "decode short audio", "transcribe up to")),
+    ({"audio_capture"}, ("record system audio playback to a new directory",),
+     ("read files and documents", "decode short audio", "transcribe up to")),
+    ({"media_audio_clip"}, ("decode short audio clips and video frames from local files",),
+     ("read files and documents", "record system audio", "transcribe up to")),
+    ({"media_video_frames", "media_transcribe", "codex_plugin_call"},
+     ("decode short audio clips and video frames", "transcribe up to ten seconds",
+      "Plugin and direct MCP tools can invoke"),
+     ("read files and documents", "record system audio")),
+    # Inspection-only tools are not summarized as read/record/transcribe capabilities.
+    ({"audio_status", "media_status", "files_info"}, (),
+     ("read files and documents", "record system audio", "decode short audio",
+      "transcribe up to")),
+])
+async def test_consent_summarizes_read_audio_and_media_from_exact_tool_names(
+    tmp_path, monkeypatch, tools, expected, absent,
+):
+    from anywhere_computer.authorization import AuthorizationStore
+
+    tools = frozenset(tools)
+    store = AuthorizationStore(tmp_path / "auth", resource=RESOURCE, known_tools=tools)
+    store.register_client("client", frozenset({REDIRECT}))
+    store.enroll_device("owner", "device", tools)
+    credentials = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
+    monkeypatch.setattr(credentials, "verify", lambda password: password == "synthetic-password")
+    consent = BrowserAuthorization(store, credentials, device="device")
+    try:
+        fields, _ = await begin(consent, scope=" ".join(sorted(tools)))
+        record = consent.pending[fields["request_id"]]
+        page = consent._page(fields["request_id"], record, fields["csrf"]).decode()
+        for ability in expected:
+            assert ability in page
+        for ability in absent:
+            assert ability not in page
+        if not expected:
+            assert "This connection can use the requested tools listed below." in page
+        # The exact list is never replaced by the summary.
+        for tool in tools:
+            assert f"<li><code>{tool}</code></li>" in page
+        assert f"Requested tools ({len(tools)})" in page
+    finally:
+        store.close()
+
+
 @pytest.mark.parametrize("failure", ["origin", "null_origin", "cookie", "csrf", "password"])
 async def test_invalid_consent_does_not_consume_request(browser, failure):
     fields, headers = await begin(browser)
@@ -220,8 +265,15 @@ async def test_invalid_consent_does_not_consume_request(browser, failure):
     assert status == 403
     assert b"wrong-secret-never-echo" not in body
     if failure == "password":
-        assert b"Check the Anywhere Computer owner password" in body
-        assert b"anywhere owner-reset" in body
+        page = body.decode()
+        alert = re.search(r"<p id=auth-error class=alert role=alert>(.*?)</p>", page).group(1)
+        # The failure is short; recovery is normal supporting text that stays open.
+        assert alert == "Check the Anywhere Computer owner password and try again."
+        assert "owner-reset" not in alert
+        assert "<details open><summary>Forgot the owner password?</summary>" in page
+        assert "anywhere owner-reset</code> on the computer" in page
+        assert "revokes every grant of this device" in page
+        assert "clears all enrolled passkeys" in page
     assert "Location" not in response_headers
     assert (await decide(browser, fields, headers))[0] == 303
 
@@ -342,3 +394,86 @@ def test_consent_csp_allows_only_callback_path_and_pinned_script():
     assert "form-action 'self';" in BrowserAuthorization._headers()['Content-Security-Policy']
     with pytest.raises(ValueError):
         BrowserAuthorization._headers('https://host;evil.example/callback')
+
+
+async def test_long_tool_list_is_collapsed_but_exact_and_pages_stay_offline(tmp_path, monkeypatch):
+    from anywhere_computer.authorization import AuthorizationStore
+    from anywhere_computer.browser_authorization import _PASSWORD_VISIBILITY_SCRIPT
+
+    tools = frozenset({"files_write", "mcp_call"} | {f"tool_{index:03d}" for index in range(121)})
+    store = AuthorizationStore(tmp_path / "auth", resource=RESOURCE, known_tools=tools)
+    store.register_client("client", frozenset({REDIRECT}))
+    store.enroll_device("owner", "device", tools)
+    credentials = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
+    monkeypatch.setattr(credentials, "verify", lambda password: password == "synthetic-password")
+    consent = BrowserAuthorization(store, credentials, device="device")
+    try:
+        fields, _ = await begin(consent, scope=" ".join(sorted(tools)))
+        record = consent.pending[fields["request_id"]]
+        page = consent._page(fields["request_id"], record, fields["csrf"]).decode()
+        assert len(tools) == 123
+        assert "<details><summary>Requested tools (123)</summary>" in page
+        assert page.count("<li><code>") == 123
+        assert page.count("Requested tools (123)") == 1
+        assert "<li>change files</li>" in page and "<li>call other connected services</li>" in page
+        # Scope warnings stay outside the collapsed disclosure.
+        assert page.index("Plugin and direct MCP tools can invoke") < page.index(
+            "Requested tools (123)")
+        assert "data-remaining-ms='" in page
+        # The exact scope is reachable before the decision; no repeated lead-in copy.
+        assert page.index("Requested tools (123)") < page.index("id=approval")
+        assert "This connection can:" not in page
+        assert page.count("What this connection can do") == 1
+        assert "<details><summary>Forgot the owner password?</summary>" in page
+        # The persistent duration is repeated beside the decision buttons.
+        assert page.index("id=approval") < page.index("<p class=duration>") < page.index("<form")
+        assert "Stays authorized until you revoke it</strong> with " \
+               "<code>anywhere http-revoke" in page
+        # Material copy about the client must not imply trust from its hostname.
+        assert "a hostname alone does not show who operates it" in page
+        # Offline, CSP-pinned: no remote assets, and the only script is the hashed constant.
+        assert f"<script>{_PASSWORD_VISIBILITY_SCRIPT}</script>" in page
+        assert page.count("<script") == 1
+        for external in ("<link", " src=", "url(", "@import", "<img", "<iframe"):
+            assert external not in page
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("status, registration, message, heading, expected", [
+    (403, False, "This connection request expired. Start again from your client.",
+     "This connection request expired", "Start again from your client."),
+    (429, False, "Too many authentication attempts. Try again in one minute.",
+     "Too many authentication attempts", "Try again in one minute."),
+    (429, False, "Synthetic &failure.", "Synthetic &amp;failure", "Wait a minute, then try again"),
+    (503, False, "Synthetic <b>failure</b>.", "Synthetic &lt;b&gt;failure&lt;/b&gt;",
+     "credential store is available"),
+    (403, False, "Synthetic failure.", "Synthetic failure",
+     "Return to the app that opened this page and start the connection again"),
+    (403, True, "Registration expired. Start locally again.", "Registration expired",
+     "anywhere owner-passkey-enroll"),
+    (409, True, "Passkey limit reached. Remove an unused passkey locally.",
+     "Passkey limit reached", "anywhere owner-passkey-remove --credential-id ID"),
+    (409, True, "Passkey registration limit reached. Reset the owner locally.",
+     "Passkey registration limit reached", "<code>anywhere owner-reset</code>"),
+])
+def test_error_pages_state_the_result_once_with_one_next_step(
+    browser, status, registration, message, heading, expected,
+):
+    code, body, headers = browser._error(status, message, registration=registration)
+    page = body.decode()
+    content = page.split("<main", 1)[1]
+    assert code == status
+    # One concrete h1 (its text is not repeated in the body) and a single next step.
+    assert f"<h1>{heading}</h1>" in content and content.count(heading) == 1
+    assert expected in content
+    assert content.count("<h2") == 0 and content.count("<p>") <= 2
+    assert "<b>failure</b>" not in page
+    for suggestion in ("resend", "skip", "bypass", "disable authentication"):
+        assert suggestion not in content.lower()
+    if status == 409 and "owner-reset" in content:
+        assert "revokes every grant" in content and "clears all enrolled passkeys" in content
+        assert "disables this device until you re-enable it" in content
+        assert "every client must connect again" in content
+    assert headers["Content-Security-Policy"].startswith("default-src 'none'; style-src")
+    assert "<script" not in page and "<link" not in page

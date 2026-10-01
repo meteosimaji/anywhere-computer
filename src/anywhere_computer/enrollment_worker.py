@@ -7,6 +7,7 @@ It supplies configured clients, never a WebView-selected executable or endpoint.
 import argparse
 import json
 import sys
+import webbrowser
 from collections.abc import Callable
 from pathlib import Path
 from typing import TextIO
@@ -41,10 +42,12 @@ class EnrollmentWorker:
                  registration: RegistrationClient, *,
                  reauthorization: Callable[
                      [str], tuple[DeviceAuthorizationClient, EnrollmentCredentials]
-                 ] | None = None) -> None:
+                 ] | None = None,
+                 browser_open: Callable[[str], bool] = webbrowser.open) -> None:
         self._authorization, self._registration = authorization, registration
         self._original_authorization = authorization
         self._reauthorization = reauthorization
+        self._browser_open = browser_open
         self._recovery_credentials: EnrollmentCredentials | None = None
         slot = registration.reauthorization_slot()
         if slot is not None:
@@ -65,7 +68,16 @@ class EnrollmentWorker:
             raise ValueError("Unexpected enrollment argument")
         if method in {"progress", "register"}:
             self._authorization.restore_saved()
-        if method == "start":
+        if method == "open_page":
+            # Select the still-valid provider URL natively. The WebView cannot
+            # supply a URL, executable, or browser arguments through this method.
+            progress = self._authorization.progress()
+            if progress.phase != "waiting" or progress.verification_uri is None:
+                raise ValueError("No active verification page")
+            validate_authorization_url(progress.verification_uri)
+            if not self._browser_open(progress.verification_uri):
+                raise ValueError("Browser open request was not accepted")
+        elif method == "start":
             self._authorization.start()
         elif method == "cleanup":
             factory = self._reauthorization

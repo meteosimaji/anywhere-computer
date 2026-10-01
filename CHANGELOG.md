@@ -3,7 +3,54 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0b48 / Plugin 0.2.0-beta.48 — unpublished candidate (2026-10-01)
+## 0.2.0b51 / Plugin 0.2.0-beta.51 — unpublished candidate (2026-10-01)
+
+- Include the unpublished beta.50 UI and connection repairs without replacing
+  its versioned wheel. Update the management preview to alpha.11.
+- Identify files without an extension correctly and wrap long type labels at
+  narrow widths while retaining the complete file name.
+- Put opening the enrollment page and copying its displayed code before the
+  result check. The native host chooses the active, verified provider URL;
+  cancelled, expired and completed attempts cannot dispatch a browser request.
+- Preserve the existing attempt on browser dispatch failure and provide a
+  selected-code fallback when clipboard permission is unavailable.
+
+## 0.2.0b50 / Plugin 0.2.0-beta.50 — unpublished candidate (2026-10-01)
+
+- Include the unpublished beta.49 connection, delegation, Subchat and upload repairs.
+- Validate the POSIX upload verification flags at runtime without referencing
+  unavailable Windows constants. Missing flags stop verification instead of
+  falling back to an unsafe open.
+- Give connection consent, passkey enrollment and authentication outcomes a
+  consistent offline layout. Keep exact tool scopes inspectable, show passkey
+  waiting and cancellation truthfully, and separate phone enrollment links from
+  browser-owned cross-device authentication prompts.
+- Keep permission inspection before mobile approval, prevent duplicate passkey
+  submissions and stale completion after denial or expiry, and explain the
+  distinct credential and registration-history limits without unnecessary resets.
+- Align file, settings, connection and desktop management pages around their
+  controls. Wrap long file names, distinguish disabled actions, and preserve
+  uncertain-write recovery. Native callbacks report code receipt separately from
+  completed connection, with a hash-pinned static stylesheet.
+
+## 0.2.0b49 / Plugin 0.2.0-beta.49 — unpublished candidate (2026-10-01)
+
+- Preserve existing OAuth scopes when publishing additional HTTP tools. Existing
+  clients can rotate their tokens; expanded access requires fresh owner consent.
+- Allow canonical POSIX root grants and serialize delegated writes with ordinary
+  file writes. Authenticate recovery receipts for engine-backed delegated tools
+  without changing ordinary operation lookup responses.
+- Preserve the Subchat challenge rejection across the first HTTP association.
+  Record authentication failures before any draft as known-unsent, retain page
+  ownership until closure is verified, and match background pages to the exact
+  Chrome target created by that operation.
+- Allow an explicit, separately verified fresh enrollment grant for a recovered
+  registration's first TLS channel while retaining its original request identity.
+- Verify POSIX upload destination identity and content before recording success.
+  Changed or unverified publication stays unknown with recovery data retained;
+  this does not isolate other processes running as the same OS user.
+
+## 0.2.0b48 / Plugin 0.2.0-beta.48 — published (2026-10-01)
 
 - Clamp blocked-tab diagnostic remaining time to the configured retention limit,
   avoiding a floating-point display above 300 seconds. Keep the original expiry

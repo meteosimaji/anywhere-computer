@@ -489,3 +489,58 @@ async def test_http_upload_resumes_after_lost_chunk_response(http_remote, tmp_pa
         "state"
     ] == "complete"
     assert target.read_bytes() == b"abcdef"
+
+
+@pytest.mark.parametrize('flag', ['O_NOFOLLOW', 'O_NONBLOCK'])
+@pytest.mark.parametrize('missing', [True, False])
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX descriptor publication verification')
+def test_posix_publication_requires_safe_open_flags(uploads, tmp_path, monkeypatch, flag, missing):
+    args = begin(uploads, tmp_path / 'flags.bin', b'original')
+    with uploads._connect() as db:
+        row = uploads._row(db, args.transfer_id)
+        if missing:
+            monkeypatch.delattr(os, flag)
+        else:
+            monkeypatch.setattr(os, flag, None)
+        # Invalid descriptors would fail differently if an unsafe open were attempted.
+        with pytest.raises(ValueError, match='Safe upload verification flags are unavailable'):
+            uploads._verify_posix_publication(-1, 'flags.bin', -1, row)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='POSIX staging path publication')
+@pytest.mark.parametrize('change', ['replace', 'same_inode', 'replace_after_link'])
+def test_posix_staging_tampering_never_reports_verified_publication(
+        uploads, tmp_path, monkeypatch, change):
+    content = b'original'
+    target = tmp_path / 'tampered.bin'
+    args = begin(uploads, target, content)
+    chunk(uploads, args.transfer_id, 0, content)
+    original_link = os.link
+
+    def tampered_link(source, destination, **kwargs):
+        parent = kwargs['src_dir_fd']
+        if change == 'replace':
+            os.unlink(source, dir_fd=parent)
+        if change != 'replace_after_link':
+            descriptor = os.open(source, os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
+                                 0o600, dir_fd=parent)
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(b'modified')
+        original_link(source, destination, **kwargs)
+        if change == 'replace_after_link':
+            os.unlink(destination, dir_fd=kwargs['dst_dir_fd'])
+            descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                                 0o600, dir_fd=kwargs['dst_dir_fd'])
+            with os.fdopen(descriptor, 'wb') as stream:
+                stream.write(b'modified')
+
+    monkeypatch.setattr(os, 'link', tampered_link)
+    with pytest.raises(UploadOutcomeUnknown):
+        uploads.commit(args)
+    status = uploads.status(args)
+    assert status['state'] == 'unknown' and not status['publication_verified']
+    with pytest.raises(ValueError):
+        uploads.resolve(ResolveUpload(transfer_id=args.transfer_id, action='confirm_published'))
+    with sqlite3.connect(uploads.database) as db:
+        assert db.execute('SELECT COUNT(*) FROM chunks WHERE id=?',
+                          (args.transfer_id,)).fetchone()[0] == 1
