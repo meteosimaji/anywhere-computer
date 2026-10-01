@@ -396,8 +396,10 @@ async def test_dead_browser_session_releases_capacity_without_touching_live_owne
         opened = [await control.open(owner=f"owner-{index}") for index in range(4)]
         live_entry = control.entries[opened[2]["session_id"]]
         browser_close = live_entry.browser.close
+        live_close_calls = []
 
         async def delayed_close():
+            live_close_calls.append(True)
             await asyncio.sleep(close_delay)
             await browser_close()
 
@@ -405,6 +407,15 @@ async def test_dead_browser_session_releases_capacity_without_touching_live_owne
         ended = opened[0]
         entry = control.entries[ended["session_id"]]
         if close_target == "page":
+            # Make a real owned cleanup outlive its five-second receipt deadline.
+            # The session must retain capacity until its driver actually stops.
+            ended_browser_close = entry.browser.close
+
+            async def delayed_ended_close():
+                await asyncio.sleep(close_delay)
+                await ended_browser_close()
+
+            monkeypatch.setattr(entry.browser, "close", delayed_ended_close)
             await entry.page.close()
         else:
             await entry.browser.close()
@@ -412,7 +423,21 @@ async def test_dead_browser_session_releases_capacity_without_touching_live_owne
             await control.observe(BrowserSession(session_id=ended["session_id"],
                                                  tab_id=ended["tab_id"]), owner="owner-0")
 
-        replacement = await control.open(owner="owner-new")
+        try:
+            replacement = await control.open(owner="owner-new")
+        except ValueError as error:
+            assert str(error) == "Browser session capacity reached"
+            assert control.entries.get(ended["session_id"]) is entry
+            assert entry.tabs.closing and entry.tabs.close_task is not None
+            assert len(control.entries) == 4 and not live_close_calls
+            # The failed open did not launch anything. Await the same retained
+            # task without cancelling it, then retry only after closure is proven.
+            await asyncio.wait_for(asyncio.shield(entry.tabs.close_task),
+                                   4 * _CLEANUP_WAIT_SECONDS)
+            assert ended["session_id"] not in control.entries
+            assert not entry.browser.is_connected()
+            replacement = await control.open(owner="owner-new")
+        assert not live_close_calls
         assert ended["session_id"] not in control.entries
         assert len(control.entries) == 4
         assert replacement["session_id"] in control.entries
