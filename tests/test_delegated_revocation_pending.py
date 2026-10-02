@@ -1,7 +1,6 @@
 """Real SQLite/worker revocation; only the bounded file-I/O delay is synthetic."""
 
 import asyncio
-import os
 import threading
 import time
 import uuid
@@ -16,7 +15,6 @@ from anywhere_computer.models import Request
 from anywhere_computer.remote_bridge import RemoteAgent
 
 
-@pytest.mark.skipif(os.name == 'nt', reason='requires POSIX descriptor-confined file I/O')
 @pytest.mark.parametrize('revocation', ['child', 'parent'])
 @pytest.mark.parametrize('tool', ['files_read', 'files_write'])
 async def test_long_file_worker_retains_pending_revocation_and_original_receipt(
