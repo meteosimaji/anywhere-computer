@@ -366,7 +366,13 @@ async def test_cached_page_resume_can_hold_further_edits_but_teardown_cannot(bac
               dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}));
               dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));
             }""")
-            await frame.locator("#setup-resource").fill("https://after-back.example/mcp")
+            # fill's reply can precede delivery of the host's console publication.
+            async with page.expect_console_message(
+                lambda message: message.text.startswith("fixture-widget-state:")
+                and "https://after-back.example/mcp" in message.text,
+                timeout=5000,
+            ):
+                await frame.locator("#setup-resource").fill("https://after-back.example/mcp")
             assert store.snapshot["privateContent"]["connectionDraft"]["values"][
                 "setup-resource"] == "https://after-back.example/mcp"
             await page.evaluate("""() =>
@@ -374,11 +380,16 @@ async def test_cached_page_resume_can_hold_further_edits_but_teardown_cannot(bac
               jsonrpc:'2.0',id:'fixture-teardown',method:'ui/resource-teardown',params:{}},'*')""")
             await expect(frame.locator("#setup-reload")).to_be_disabled()
             writes = len(store.writes)
-            await frame.locator("#setup-resource").evaluate("""element => {
+            host_writes = await frame.locator("#setup-resource").evaluate("""element => {
+              let writes=0;
+              const publish=window.openai.setWidgetState.bind(window.openai);
+              window.openai.setWidgetState=(value)=>{writes++;return publish(value);};
               dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));
               element.value='https://closed-frame.example/mcp';
               element.dispatchEvent(new Event('input',{bubbles:true}));
+              return writes;
             }""")
+            assert host_writes == 0
             assert len(store.writes) == writes
             assert not tool_calls(store.calls, "connection_setup_confirm")
             await context.close()
