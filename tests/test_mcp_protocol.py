@@ -2,6 +2,7 @@ import asyncio
 import io
 import json
 import sys
+from pathlib import Path
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -82,6 +83,7 @@ asyncio.run(main())
     parameters = StdioServerParameters(
         command=sys.executable, args=["-u", "-c", program, str(tmp_path / "agent")],
         env={"PATH": str(tmp_path / "empty-path"),
+             "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
              "ANYWHERE_CODEX_EXECUTABLE": str(tmp_path / "missing-codex")},
     )
     async with asyncio.timeout(15):
@@ -90,7 +92,7 @@ asyncio.run(main())
                 initialized = await client.initialize()
                 assert initialized.serverInfo.name == "anywhere-computer"
                 tools = await client.list_tools()
-                assert len(tools.tools) == 101
+                assert len(tools.tools) == 102
                 assert "gui_native_press" in {tool.name for tool in tools.tools}
                 assert "gui_native_action" in {tool.name for tool in tools.tools}
                 assert {"browser_tabs", "browser_tab_open", "browser_tab_close",

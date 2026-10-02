@@ -39,7 +39,7 @@ READ_PATH_TOOLS = frozenset({
 })
 WRITE_PATH_TOOLS = frozenset({
     "files_write", "files_write_binary", "files_edit", "files_restore", "files_move",
-    "documents_write", "documents_edit_paragraph", "directories_create",
+    "documents_write", "documents_edit_paragraph", "documents_edit_cell", "directories_create",
 })
 PATH_TOOLS = READ_PATH_TOOLS | WRITE_PATH_TOOLS
 SUPPORTED_TOOLS = PATH_TOOLS | {"computer_status", "operations_get"}

@@ -20,9 +20,10 @@ from pathlib import Path
 
 import pytest
 from playwright.async_api import Error as PlaywrightError
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, expect
 
 from anywhere_computer.engine import Engine
+from anywhere_computer.http_service import HTTPServiceConfig, save_http_config
 from anywhere_computer.mcp_server import MCPSession
 from anywhere_computer.models import Reply, Request
 from anywhere_computer.setup_connector import SetupConnector
@@ -233,7 +234,9 @@ async def test_folder_list_fits_shows_whole_names_and_stays_readable(backend, wi
             background = "e=>getComputedStyle(e).backgroundColor"
             assert await first.evaluate(background) == "rgba(0, 0, 0, 0)"
             await first.hover()
-            assert await first.evaluate(background) != "rgba(0, 0, 0, 0)"
+            await expect(first).not_to_have_css(
+                "background-color", "rgba(0, 0, 0, 0)", timeout=5000,
+            )
             assert await frame.locator(".file-columns").is_visible()
             # Touch users have no hover title, so the version and extension must not be
             # cut off: names wrap instead of being truncated.
@@ -386,6 +389,94 @@ async def test_connection_settings_review_and_save_with_real_input(
                                                      "arguments": {}}})
             data = saved["result"]["structuredContent"]["data"]
             assert data["phase"] == "configured" and long_host in data["configuration"]["resource"]
+            await context.close()
+        finally:
+            await browser.close()
+
+
+@pytest.mark.parametrize("refresh", ["status", "same-target-notification"])
+async def test_connection_draft_survives_refresh_in_real_chrome(backend, refresh):
+    folder, session = backend
+    async with async_playwright() as driver:
+        browser = await launch(driver)
+        try:
+            context, page, frame = await open_workspace(
+                browser, session, folder, width=390, view="connection")
+            resource = frame.locator("#setup-resource")
+            await resource.fill("https://reviewed.example/mcp")
+            await frame.locator("#setup-mode").select_option("files")
+            await frame.locator("#setup-plan").click()
+            await expect(frame.locator("#setup-confirm")).to_be_enabled()
+            await resource.fill("https://unsaved.example/mcp")
+            async with page.expect_response(lambda response: response.url.endswith("/rpc")):
+                if refresh == "status":
+                    await frame.locator("#setup-reload").click()
+                else:
+                    opened = await session.handle({
+                        "jsonrpc": "2.0", "id": "same-view", "method": "tools/call",
+                        "params": {"name": "workspace_open", "arguments": {"view": "connection"}},
+                    })
+                    await page.evaluate(
+                        "result=>send({method:'ui/notifications/tool-result',params:result})",
+                        opened["result"])
+            await expect(frame.locator("#setup-reload")).to_be_enabled()
+            await expect(resource).to_have_value("https://unsaved.example/mcp")
+            await expect(frame.locator("#setup-review")).to_be_hidden()
+            await expect(frame.locator("#setup-confirm")).to_be_disabled()
+            await frame.locator("#files-tab").click()
+            await expect(frame.locator("#discard")).to_be_visible()
+            await frame.locator("#keep").click()
+            await expect(resource).to_have_value("https://unsaved.example/mcp")
+            assert not any(packet["params"]["name"] == "connection_setup_confirm"
+                           for packet, _ in page.rpc_replies)
+            await context.close()
+        finally:
+            await browser.close()
+
+
+@pytest.mark.parametrize("width", [390, 1000])
+async def test_connection_confirm_conflict_keeps_reviewed_form_in_real_chrome(backend, width):
+    folder, session = backend
+    async with async_playwright() as driver:
+        browser = await launch(driver)
+        try:
+            context, page, frame = await open_workspace(
+                browser, session, folder, width=width, height=860, view="connection")
+            resource = frame.locator("#setup-resource")
+            await resource.fill("https://reviewed.example/mcp")
+            await frame.locator("#setup-mode").select_option("files")
+            await frame.locator("#setup-plan").focus()
+            await page.keyboard.press("Enter")
+            await expect(frame.locator("#setup-confirm")).to_be_enabled()
+            status = await session.handle({"jsonrpc": "2.0", "id": "review",
+                                           "method": "tools/call", "params": {
+                                               "name": "connection_setup_status", "arguments": {}}})
+            reviewed = status["result"]["structuredContent"]["data"]["configuration"]
+            saved = HTTPServiceConfig.model_validate_json(json.dumps({
+                **reviewed, "resource": "https://other.example/mcp",
+            }))
+            # Another trusted local writer publishes first; the controller must refuse overwrite.
+            await save_http_config(folder.parents[1] / "connector", saved)
+            await frame.locator("#setup-confirm").focus()
+            await page.keyboard.press("Enter")
+            await expect(frame.locator("#setup-status")).to_contain_text("別の設定が保存")
+            await expect(resource).to_have_value("https://reviewed.example/mcp")
+            await expect(resource).to_be_visible()
+            await expect(resource).to_be_enabled()
+            assert await resource.get_attribute("readonly") is not None
+            await expect(frame.locator("#setup-summary")).to_contain_text("https://other.example/mcp")
+            await expect(frame.locator("#setup-status")).to_contain_text(
+                "確認していた内容を入力欄に残しています")
+            await expect(frame.locator("#setup-confirm")).to_be_disabled()
+            await frame.locator("#setup-reload").click()
+            await expect(frame.locator("#setup-reload")).to_be_enabled()
+            await expect(resource).to_have_value("https://reviewed.example/mcp")
+            assert await page.frames[-1].evaluate(NO_SIDEWAYS)
+            await frame.locator("#files-tab").click()
+            await expect(frame.locator("#discard")).to_be_visible()
+            await frame.locator("#discard-go").click()
+            assert sum(packet["params"]["name"] == "connection_setup_confirm"
+                       for packet, _ in page.rpc_replies) == 1
             await context.close()
         finally:
             await browser.close()

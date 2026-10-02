@@ -125,6 +125,8 @@ class MCPSession:
         self.ready = False
         self.ui_enabled = False
         self.logging_level = 'info'
+        # Public UI state is bound to this transport session, never a credential or grant.
+        self._workspace_session = uuid.uuid4().hex
 
     async def handle(self, packet: JsonValue) -> dict[str, JsonValue] | None:
         if not isinstance(packet, dict):
@@ -260,10 +262,17 @@ class MCPSession:
                     "Do not repeat a write until its outcome is known.",
                 )
             result = _reply_result(name, reply)
+            if (self.ui_enabled and name in {"workspace_open", "connection_setup_status",
+                                             "connection_setup_plan", "connection_setup_confirm"}
+                    and {"workspace_open", "connection_setup_status",
+                         "connection_setup_plan", "connection_setup_confirm"} <= names):
+                result["_meta"] = {"connectionDraftSession": self._workspace_session}
             if name == "workspace_open" and self.ui_enabled:
-                result["_meta"] = {"workspaceTools": cast(list[JsonValue], sorted(
+                metadata = result.setdefault("_meta", {})
+                assert isinstance(metadata, dict)
+                metadata["workspaceTools"] = cast(list[JsonValue], sorted(
                     value for value in names if isinstance(value, str) and value in UI_ACTIONS
-                ))}
+                ))
         else:
             return rpc_error(identity, -32601, "Method not found")
         return {"jsonrpc": "2.0", "id": identity, "result": result}

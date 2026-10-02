@@ -185,6 +185,8 @@ def main() -> None:
     parser.add_argument(
         "--profile", help="Authorized connection profile in the OS credential store"
     )
+    parser.add_argument("--tool-profile", choices=["full", "public-core"],
+                        help="HTTP API offering (http-configure only); defaults to full")
     parser.add_argument("--transfer-area", choices=["local", "http"])
     parser.add_argument("--transfer-kind", choices=["upload", "download"])
     parser.add_argument("--storage-id", help="Local storage ID returned by transfers")
@@ -312,6 +314,8 @@ def main() -> None:
         parser.error("--client-id is only valid for HTTP connection setup")
     if args.profile is not None and args.command not in {"http-mcp", "login", "device-add-http"}:
         parser.error("--profile is only valid for HTTP client setup")
+    if args.tool_profile is not None and args.command != "http-configure":
+        parser.error("--tool-profile is only valid for initial HTTP configuration")
     if args.scope is not None and args.command not in {
         "login", "http-configure", "http-add-tools", "http-delegate-issue",
     }:
@@ -550,6 +554,7 @@ def main() -> None:
                     client=args.client_id,
                     port=args.port if args.port is not None else 8768,
                     scopes=frozenset(args.scope),
+                    tool_profile=args.tool_profile or "full",
                     redirects=frozenset(
                         args.redirect_uri
                         or ["http://127.0.0.1/oauth/callback", "http://[::1]/oauth/callback"]

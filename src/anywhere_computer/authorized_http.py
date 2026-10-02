@@ -20,6 +20,7 @@ from .engine import Engine
 from .engine_selection import engine_directory
 from .files import file_mutation_lock
 from .http_client import ChildBearerTokens, HTTPBackend
+from .http_tool_profile import HTTPToolProfile, validate_http_tool_profile
 from .mcp_server import INSTRUCTIONS as MCP_INSTRUCTIONS
 from .mcp_server import OPERATION_META, REQUEST_ID_SCHEMA, MCPSession, rpc_error
 from .models import OperationId, ReadFile, Reply, Request, RuntimeSettings, WriteFile
@@ -71,12 +72,15 @@ class AuthorizedDeviceMCP:
         device: str,
         client: str | None = None,
         allowed_tools: frozenset[str] | None = None,
+        tool_profile: HTTPToolProfile = "full",
         device_directory: Path | None = None,
         subchat_gateway: SubchatGateway | LazySubchatGateway | None = None,
         delegated_tasks: DelegatedTaskStore | None = None,
     ) -> None:
         if (engine is None) == (agent_directory is None):
             raise ValueError("Select exactly one embedded engine or shared agent directory")
+        validate_http_tool_profile(tool_profile, allowed_tools,
+                                   has_subchat=subchat_gateway is not None)
         self.store = store
         self.engine = engine
         self.agent_directory = agent_directory

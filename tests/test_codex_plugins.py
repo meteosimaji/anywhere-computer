@@ -460,6 +460,7 @@ async def test_full_description_detail_tail_search_and_digest(stub_catalog, tmp_
 @pytest.mark.parametrize("server,tool", [
     ("cua_repl", "js"), ("codex_apps", "cua_repl.js"),
     ("unified-computer-use", "js"), ("codex_apps", "mcp__cua_repl__js"),
+    ("computer-use", "js"), ("codex_apps", "mcp__computer_use__js"),
 ])
 async def test_computer_use_reports_context_and_blocks_before_runtime(
     stub_catalog, tmp_path, server, tool,
@@ -480,6 +481,11 @@ async def test_computer_use_reports_context_and_blocks_before_runtime(
     stub_catalog["calls"].clear()
     with pytest.raises(codex_plugins.PluginPreflightError) as caught:
         await call_codex_plugin_tool(**descriptor["call_arguments"], arguments={"code": "1+1"})
+    assert caught.value.code == "unsupported_execution_context"
+    assert stub_catalog["calls"] == []
+    context = codex_plugins.PluginContext(str(tmp_path))
+    with pytest.raises(codex_plugins.PluginPreflightError) as caught:
+        await context.call(server, tool, {"code": "1+1"}, descriptor["catalog_sha256"])
     assert caught.value.code == "unsupported_execution_context"
     assert stub_catalog["calls"] == []
 

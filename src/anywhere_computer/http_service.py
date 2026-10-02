@@ -31,6 +31,7 @@ from .engine import Engine
 from .engine_selection import require_no_migration
 from .files import read_bytes
 from .http_mcp import HTTPMCP
+from .http_tool_profile import HTTPToolProfile, validate_http_tool_profile
 from .locking import ProcessLock
 from .models import MAX_TOOL_SCOPES
 from .oauth_endpoints import OAuthEndpoints
@@ -58,9 +59,12 @@ class HTTPServiceConfig(BaseModel):
     redirects: frozenset[str] = Field(min_length=1, max_length=10)
     shared_agent_directory: str | None = Field(default=None, max_length=4096)
     subchat: SubchatGatewayConfig | None = None
+    tool_profile: HTTPToolProfile = "full"
 
     @model_validator(mode="after")
     def check_subchat_selection(self) -> "HTTPServiceConfig":
+        validate_http_tool_profile(self.tool_profile, self.scopes,
+                                   has_subchat=self.subchat is not None)
         if self.subchat is None and self.scopes & (SUBCHAT_AUTH_SCOPES | SUBCHAT_SAVE_TOOLS):
             raise ValueError("Subchat scopes require an explicit gateway selection")
         return self
@@ -118,6 +122,7 @@ async def configure_http(
     scopes: frozenset[str],
     redirects: frozenset[str],
     subchat: SubchatGatewayConfig | None = None,
+    tool_profile: HTTPToolProfile = "full",
 ) -> HTTPServiceConfig:
     config = HTTPServiceConfig(
         resource=resource,
@@ -128,12 +133,16 @@ async def configure_http(
         scopes=scopes,
         redirects=redirects,
         subchat=subchat,
+        tool_profile=tool_profile,
     )
     return await save_http_config(directory, config)
 
 
 async def save_http_config(directory: Path, config: HTTPServiceConfig) -> HTTPServiceConfig:
     """Commit an already validated setup plan without changing its reviewed fields."""
+    # Frozen models can still be copied/constructed without validation by trusted
+    # callers. Revalidate before touching enrollment or publishing configuration.
+    config = HTTPServiceConfig.model_validate_json(config.model_dump_json())
     prepare_directory(directory)
     with ProcessLock(directory / "http-server.lock"):
         destination = directory / "http-server"
@@ -282,6 +291,7 @@ async def http_service(
                         device=config.device,
                         client=config.client,
                         allowed_tools=config.scopes,
+                        tool_profile=config.tool_profile,
                         device_directory=agent_directory or directory,
                         subchat_gateway=subchat_gateway,
                         delegated_tasks=delegated,
