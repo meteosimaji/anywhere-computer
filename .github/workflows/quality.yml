@@ -97,7 +97,7 @@ jobs:
           tests/test_peer_mcp.py tests/test_ssh_client.py tests/test_subchat_device_save.py
           tests/test_subchat_queue_auto.py tests/test_subchat_setup.py
           tests/test_subchat_upload_state.py tests/test_uploads_windows.py
-          tests/test_engine_selection.py
+          tests/test_engine_selection.py tests/test_mcp_config.py
   windows-preflight:
     runs-on: windows-latest
     steps:

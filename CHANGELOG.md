@@ -3,6 +3,19 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b67 / Plugin 0.2.0-beta.67 — unpublished candidate (2026-10-02)
+
+- Include the unpublished beta.64 MCP onboarding and connection repairs without
+  replacing that version's immutable wheel.
+- Report a frame removed during observation as unavailable and invalidate its
+  snapshot. Require a new observation without switching to the parent frame,
+  replaying a read or hiding unrelated Playwright errors.
+- Check exported MCP configuration in the early Windows feature job. Record
+  native SDK job membership and termination decisions on the controlled
+  lifecycle test's original failure without extending native handle lifetimes,
+  changing process creation flags or replaying a stop. Windows shutdown remains
+  under investigation; this candidate is not approved for release.
+
 ## 0.2.0b64 / Plugin 0.2.0-beta.64 — unpublished candidate (2026-10-02)
 
 - Include the unpublished beta.62 MCP export, catalog diagnosis and setup-status

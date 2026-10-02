@@ -1220,6 +1220,70 @@ async def test_frame_scope_is_owned_observed_and_invalidated_on_same_url_reload(
         await _close_browser_control(control)
 
 
+async def test_frame_detached_between_scope_check_and_title_requires_new_observation(monkeypatch):
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="frame-owner")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        entry = control.entries[ids["session_id"]]
+        await entry.page.set_content(
+            '<title>Parent</title><iframe name="child" srcdoc="<title>Child</title>"></iframe>'
+        )
+        await entry.page.frame_locator("iframe").locator("body").wait_for(state="attached")
+        main = await control.observe(BrowserObserve(**ids), owner="frame-owner")
+        frame_id = main["frames"][0]["frame_id"]
+        frame = entry.observed_frames[frame_id]
+        original_title = frame.title
+        calls = 0
+
+        async def title_after_detach():
+            nonlocal calls
+            calls += 1
+            # Mutate the real DOM after _scope accepted the frame, then let
+            # the actual Playwright transport report the failed frame read.
+            await entry.page.locator("iframe").evaluate("element => element.remove()")
+            assert frame.is_detached()
+            return await original_title()
+
+        monkeypatch.setattr(frame, "title", title_after_detach)
+        with pytest.raises(ValueError, match="frame unavailable"):
+            await control.observe(BrowserObserve(**ids, frame_id=frame_id), owner="frame-owner")
+        assert calls == 1
+        assert entry.snapshot_id is None
+        assert not entry.page.is_closed()
+        recovered = await control.observe(BrowserObserve(**ids), owner="frame-owner")
+        assert recovered["title"] == "Parent"
+    finally:
+        await _close_browser_control(control)
+
+
+async def test_live_frame_read_error_is_not_reported_as_detachment(monkeypatch):
+    from playwright.async_api import Error
+
+    control = BrowserControl(channel="chrome")
+    try:
+        opened = await control.open(owner="frame-owner")
+        ids = {"session_id": opened["session_id"], "tab_id": opened["tab_id"]}
+        entry = control.entries[ids["session_id"]]
+        await entry.page.set_content('<iframe srcdoc="<title>Child</title>"></iframe>')
+        await entry.page.frame_locator("iframe").locator("body").wait_for(state="attached")
+        main = await control.observe(BrowserObserve(**ids), owner="frame-owner")
+        frame_id = main["frames"][0]["frame_id"]
+        frame = entry.observed_frames[frame_id]
+        failure = Error("fixture transport read failed")
+
+        async def failed_title():
+            raise failure
+
+        monkeypatch.setattr(frame, "title", failed_title)
+        with pytest.raises(Error) as result:
+            await control.observe(BrowserObserve(**ids, frame_id=frame_id), owner="frame-owner")
+        assert result.value is failure
+        assert not frame.is_detached()
+    finally:
+        await _close_browser_control(control)
+
+
 async def test_shadow_labels_match_semantic_actions_and_frame_images_keep_tab_coordinates():
     control = BrowserControl(channel="chrome")
     try:

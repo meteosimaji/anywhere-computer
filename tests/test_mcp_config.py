@@ -6,6 +6,7 @@ import subprocess
 import sys
 import tomllib
 import venv
+import weakref
 from pathlib import Path
 
 import psutil
@@ -123,6 +124,28 @@ connection.hmac.compare_digest = observed_compare
     parameters = StdioServerParameters(**config, cwd=str(hostile), env=env)
     admitted_endpoint = None
     admitted_parent = None
+    client_job = {}
+    client_process = None
+    if sys.platform == 'win32':
+        from mcp.client import stdio
+
+        real_create = stdio._create_platform_compatible_process
+        real_terminate = stdio._terminate_process_tree
+
+        async def observed_create(*args, **kwargs):
+            nonlocal client_process
+            process = await real_create(*args, **kwargs)
+            # Never extend the process/job lifetime: closing the real SDK
+            # context must still release its original native handles.
+            client_process = weakref.ref(process)
+            return process
+
+        async def observed_terminate(process):
+            client_job['forced_termination_requested'] = True
+            return await real_terminate(process)
+
+        monkeypatch.setattr(stdio, '_create_platform_compatible_process', observed_create)
+        monkeypatch.setattr(stdio, '_terminate_process_tree', observed_terminate)
     try:
         async with asyncio.timeout(45):
             async with stdio_client(parameters) as (reader, writer):
@@ -145,6 +168,28 @@ connection.hmac.compare_digest = observed_compare
                     admitted_process = psutil.Process(admitted_endpoint['pid'])
                     assert admitted_process.create_time() == admitted_endpoint['process_started']
                     admitted_parent = admitted_process.ppid()
+                    if sys.platform == 'win32':
+                        import win32job
+
+                        assert client_process is not None
+                        process = client_process()
+                        job = getattr(process, '_job_object', None)
+                        if job is not None:
+                            limits = win32job.QueryInformationJobObject(
+                                job, win32job.JobObjectExtendedLimitInformation,
+                            )
+                            members = win32job.QueryInformationJobObject(
+                                job, win32job.JobObjectBasicProcessIdList,
+                            )
+                            client_job['kill_on_job_close'] = bool(
+                                limits['BasicLimitInformation']['LimitFlags']
+                                & win32job.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                            )
+                            client_job['agent_in_client_job'] = (
+                                admitted_endpoint['pid'] in members
+                            )
+                        # Release strong references before the SDK context exits.
+                        del job, process
         assert not marker.exists()
         assert not (tmp_path / 'wrong-state').exists()
     finally:
@@ -206,12 +251,16 @@ connection.hmac.compare_digest = observed_compare
                 evidence = tmp_path / 'fixture-auth-phases.jsonl'
                 if evidence.exists():
                     error.add_note('Controlled local auth comparisons: ' + evidence.read_text())
-                try:
-                    health = await exchange(state, '__status', timeout=2)
-                    status_evidence = {'reply_state': health.state,
-                                       'engine_state': health.data.get('state')}
-                except (OSError, TimeoutError, ValueError) as failure:
-                    status_evidence = {'error_type': type(failure).__name__}
+                error.add_note('Controlled SDK job lifecycle: ' + json.dumps(client_job))
+                status_evidence = {'not_probed': 'owner_pipe_unavailable'}
+                if (sys.platform == 'win32' and isinstance(admitted_endpoint, dict)
+                        and admitted_endpoint.get('owner_pipe') is not None):
+                    try:
+                        health = await exchange(state, '__status', timeout=2)
+                        status_evidence = {'reply_state': health.state,
+                                           'engine_state': health.data.get('state')}
+                    except (OSError, TimeoutError, ValueError, RuntimeError) as failure:
+                        status_evidence = {'error_type': type(failure).__name__}
                 error.add_note('Controlled read-only agent probe: ' + json.dumps(status_evidence))
                 raise
             assert stopped.state == 'completed'
