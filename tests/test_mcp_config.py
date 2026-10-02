@@ -86,10 +86,20 @@ async def test_exported_configuration_runs_real_mcp_without_path_or_workspace_im
     (fixture_site / 'sitecustomize.py').write_text(f'''
 from pathlib import Path
 from anywhere_computer import credentials
+import json
 def fixture_credential(directory, *, create=False):
     assert directory == Path({str(state)!r}), 'Fixture credential requested for another state'
     return {credential!r}
 credentials.local_credential = fixture_credential
+from anywhere_computer import connection
+real_compare = connection.hmac.compare_digest
+def observed_compare(a, b):
+    matched = real_compare(a, b)
+    if isinstance(a, str) and isinstance(b, str):
+        with Path({str(tmp_path / 'fixture-auth-phases.jsonl')!r}).open('a') as log:
+            log.write(json.dumps({{'matched': matched}}) + '\\n')
+    return matched
+connection.hmac.compare_digest = observed_compare
 ''', encoding='utf-8')
     hostile = tmp_path / 'unrelated client workspace'
     hostile.mkdir()
@@ -193,5 +203,15 @@ credentials.local_credential = fixture_credential
                     'same_process_after_client': same,
                     'live_after_client': live,
                 }))
+                evidence = tmp_path / 'fixture-auth-phases.jsonl'
+                if evidence.exists():
+                    error.add_note('Controlled local auth comparisons: ' + evidence.read_text())
+                try:
+                    health = await exchange(state, '__status', timeout=2)
+                    status_evidence = {'reply_state': health.state,
+                                       'engine_state': health.data.get('state')}
+                except (OSError, TimeoutError, ValueError) as failure:
+                    status_evidence = {'error_type': type(failure).__name__}
+                error.add_note('Controlled read-only agent probe: ' + json.dumps(status_evidence))
                 raise
             assert stopped.state == 'completed'
