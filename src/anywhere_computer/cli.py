@@ -80,6 +80,7 @@ def main() -> None:
             "auto-update-disable",
             "serve",
             "mcp",
+            "mcp-config",
             "ssh-child-mcp",
             "status",
             "doctor",
@@ -143,6 +144,8 @@ def main() -> None:
         ],
     )
     parser.add_argument("--state-dir", type=Path, default=None)
+    parser.add_argument("--format", choices=['json', 'toml'], default=None,
+                        help="Output format for mcp-config (default: json)")
     parser.add_argument("--verifier", type=Path,
                         help="GitHub CLI absolute path for updates (default: gh on PATH)")
     parser.add_argument("--http-state-dir", type=Path,
@@ -207,6 +210,14 @@ def main() -> None:
     skill_options.add_argument("--clear-skill-roots", action="store_true",
                                help="Restore standard .agents/skills discovery")
     args = parser.parse_args()
+    show_local_config = False
+    if args.format is not None and args.command != 'mcp-config':
+        parser.error('--format is only valid for mcp-config')
+    if args.command == 'mcp-config' and any(
+        value != parser.get_default(name) for name, value in vars(args).items()
+        if name not in {'command', 'state_dir', 'format'}
+    ):
+        parser.error('mcp-config accepts only --state-dir and --format')
     if ((args.skill_root is not None or args.clear_skill_roots)
             and args.command != "skills-configure"):
         parser.error("Skill root options are only valid for skills-configure")
@@ -236,9 +247,7 @@ def main() -> None:
             parser.error("Choose 1, 2, 3 or q; no setup action was started")
         args.command = setup_choices[choice]
         if choice == "1":
-            print("After startup, configure your local MCP client to run anywhere mcp "
-                  "from this installation with the same --state-dir, if specified. "
-                  "Client registration and login startup are not changed.")
+            show_local_config = True
     if args.command == 'update':
         if args.verifier is None:
             discovered_verifier = shutil.which('gh')
@@ -421,7 +430,12 @@ def main() -> None:
         parser.error("management-device-check requires --device")
     directory = (args.state_dir or state_directory()).resolve()
     try:
-        if args.command == "management-device-check":
+        if args.command == 'mcp-config':
+            from .mcp_config import render_mcp_config
+
+            print(render_mcp_config(directory, args.format or 'json'))
+            return
+        elif args.command == "management-device-check":
             from .management import ManagementController
 
             print(asyncio.run(ManagementController(directory).check_device(
@@ -747,6 +761,15 @@ def main() -> None:
                 raise SystemExit(1)
         elif args.command == "start":
             print(json.dumps(ensure_agent(directory, replace_idle=True), indent=2))
+            if show_local_config:
+                from .mcp_config import render_mcp_config
+
+                print("\nAdd this entry to your client's existing mcpServers configuration. "
+                      "Keep its other entries; client registration is not changed here.")
+                print(render_mcp_config(directory))
+                print("For Codex's TOML format, run anywhere mcp-config --format toml "
+                      "from this installation with the same --state-dir. "
+                      "Then check the client's tools and call computer_status.")
         elif args.command in {"auto-update-enable", "auto-update-disable"}:
             from .release_supervisor import configure_automatic_updates
 

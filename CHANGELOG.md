@@ -3,6 +3,21 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b59 / Plugin 0.2.0-beta.59 — unpublished candidate (2026-10-02)
+
+- Export local MCP JSON/TOML with the installed interpreter and explicit state
+  directory. Show the JSON entry after interactive local setup; do not overwrite
+  client settings, initialize credentials or start an agent during export.
+- Report unavailable, malformed or duplicate engine catalogs separately from
+  authenticated engine readiness. Fail doctor rather than report success when
+  the catalog is unconfirmed; keep actual AI client acceptance separate.
+- Preserve safe startup failure categories in management and reconcile once
+  without repeating a start after a lost acknowledgement. Show catalog evidence
+  and localized next steps without exposing exception contents.
+- Capture bounded initial-frame bootstrap messages and RPC timing on browser
+  readiness failure. Keep the original assertion and deadline without retrying
+  initialization or recording connection draft fields.
+
 ## 0.2.0b57 / Plugin 0.2.0-beta.57 — unpublished personal-use candidate (2026-10-02)
 
 - Recover public connection fields after frame recreation on hosts with the

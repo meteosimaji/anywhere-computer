@@ -164,6 +164,10 @@ ChatGPT self-hosted HTTPS setup and native OAuth self-hosted HTTPS setup. It
 accepts only an optional state directory; advanced commands retain their existing
 interfaces. This is a command selector, not hosted relay provisioning or automatic
 AI registration. The local selection preserves `start`'s idle replacement policy.
+After local startup it prints a JSON MCP entry bound to the installed Python and
+state directory. `anywhere mcp-config` exports the same entry without starting
+an engine or writing credentials; `--format toml` selects Codex's format. Client
+registration and actual tool acceptance remain separate steps.
 
 ## Optional frame-recreation draft recovery
 
