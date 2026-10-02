@@ -1,6 +1,7 @@
 """Actual opaque iframe with only the documented optional host state API simulated."""
 
 import asyncio
+import inspect
 import json
 import time
 from dataclasses import dataclass, field
@@ -29,6 +30,46 @@ class HostState:
     calls: list = field(default_factory=list)
 
 
+def instrument_bootstrap(session, trace):
+    connector = session.execute.__self__
+    connector.fixture_bootstrap_trace = trace
+    if getattr(connector, 'fixture_bootstrap_instrumented', False):
+        session.catalog = connector.catalog
+        return
+    connector.fixture_bootstrap_instrumented = True
+
+    def instrument(owner, name, stage):
+        original = getattr(owner, name)
+        if inspect.iscoroutinefunction(original):
+            async def observed(*args, **kwargs):
+                callback = connector.fixture_bootstrap_trace
+                callback(stage + '_start')
+                try:
+                    return await original(*args, **kwargs)
+                finally:
+                    callback(stage + '_end')
+        else:
+            def observed(*args, **kwargs):
+                callback = connector.fixture_bootstrap_trace
+                callback(stage + '_start')
+                try:
+                    return original(*args, **kwargs)
+                finally:
+                    callback(stage + '_end')
+        setattr(owner, name, observed)
+
+    # These are owned fixture instances. Keep the real catalog, SQLite commits,
+    # operation bindings and setup controller; record only method boundaries.
+    instrument(connector, 'catalog', 'catalog')
+    instrument(connector, '_bind', 'connector_bind')
+    instrument(connector, '_claim', 'connector_claim')
+    instrument(connector, '_save_reply', 'connector_record')
+    instrument(connector.controller, 'progress', 'connector_progress')
+    instrument(connector.fixture_engine.ledger, 'claim', 'engine_claim')
+    instrument(connector.fixture_engine.ledger, 'finish', 'engine_record')
+    session.catalog = connector.catalog
+
+
 async def open_with_state(browser, session, folder, store, *, width=390, supported=True):
     context = await browser.new_context(viewport={"width": width, "height": 860},
                                         reduced_motion="reduce")
@@ -41,6 +82,8 @@ async def open_with_state(browser, session, folder, store, *, width=390, support
         if len(events) < 40:
             events.append({'at_ms': round((time.monotonic() - started) * 1000),
                            'stage': stage, **details})
+
+    instrument_bootstrap(session, trace)
 
     # Record bootstrap message names and RPC timing, never form values or state.
     # A failure retains the original deadline/assertion; no initialization retry.
@@ -146,6 +189,10 @@ async def test_initial_readiness_failure_records_bootstrap_without_draft_fields(
             evidence = json.loads(str(result.value).split('Bootstrap observation: ', 1)[1])
             assert evidence['ui']['reloadDisabled'] is True
             assert len(evidence['events']) <= 40
+            stages = {item['stage'] for item in evidence['events']}
+            assert {'catalog_start', 'catalog_end', 'connector_bind_start',
+                    'connector_bind_end', 'engine_claim_start', 'engine_claim_end',
+                    'engine_record_start', 'engine_record_end'} <= stages
             status = [item for item in evidence['events']
                       if item.get('tool') == 'connection_setup_status'
                       and item['stage'].startswith('rpc_')]
