@@ -31,7 +31,8 @@ def _linux() -> None:
 
 def chrome_binary(value: str) -> Path:
     """Check metadata only; this is not a publisher signature or a launch test."""
-    _linux()
+    if sys.platform != "linux":
+        raise ValueError("Explicit Chrome executable selection currently requires Linux")
     path = Path(value)
     if not path.is_absolute() or any(ord(char) < 32 for char in value):
         raise ValueError("Chrome executable must be an absolute path without control characters")
@@ -61,6 +62,8 @@ def _digest(path: Path) -> str:
 
 
 def _load(directory: Path) -> ChromeSelection | None:
+    if sys.platform != "linux":
+        raise ValueError("Explicit Chrome executable selection currently requires Linux")
     path = directory / _CONFIG
     try:
         info = path.lstat()
@@ -85,6 +88,13 @@ def selected_chrome(directory: Path | None) -> Path | None:
     if _digest(path) != selection.sha256:
         raise ValueError("Selected Chrome changed; rerun browser-configure locally")
     return path
+
+
+def reject_configuration_download(directory: Path | None, destination: Path) -> None:
+    """A browser download must not create the host's executable-selection control file."""
+    if (sys.platform == "linux" and directory is not None
+            and destination.resolve() == (directory / _CONFIG).resolve()):
+        raise ValueError("Browser downloads cannot write the local Chrome selection")
 
 
 def browser_configuration(directory: Path | None) -> dict[str, JsonValue]:

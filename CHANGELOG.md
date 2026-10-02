@@ -3,6 +3,19 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b58 / Plugin 0.2.0-beta.58 — unpublished Linux draft candidate (2026-10-02)
+
+- Add read-only Linux startup diagnostics for the calling process, approved secure-store
+  selection, actual Python KWallet binding imports, and running/activatable session-bus services.
+  Do not activate/unlock services or create/read credentials.
+- Add host-local selection of trusted user-installed Google Chrome ELF binaries, with
+  version validation, private configuration, SHA-256 checks before launch and Chromium
+  sandboxing enabled. Keep existing macOS/Windows defaults.
+- Refuse browser downloads to the executable-selection file, including canonical aliases
+  before page input and changed aliases before saving; keep owner file/terminal authority distinct.
+- Report unsupported Linux Office rendering explicitly and document staged native GUI,
+  audio and renderer work. Actual desktop acceptance is tracked separately from implementation.
+
 ## 0.2.0b57 / Plugin 0.2.0-beta.57 — unpublished personal-use candidate (2026-10-02)
 
 - Recover public connection fields after frame recreation on hosts with the

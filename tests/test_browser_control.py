@@ -408,7 +408,7 @@ async def test_configured_linux_chrome_navigation_isolation_and_input(local_page
         assert navigated["http_status"] == 200
         assert "Browser verified 42" in navigated["text"]
         filled = await control.fill(BrowserFill(**first_ids, selector="#entry",
-                                               text="Linux configured Chrome"), owner="owner-a")
+                                               value="Linux configured Chrome"), owner="owner-a")
         clicked = await control.click(BrowserClick(
             **first_ids, role="button", name="Go", snapshot_id=filled["snapshot_id"],
         ), owner="owner-a")

@@ -3,6 +3,8 @@
 import ast
 import os
 import platform
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -61,35 +63,69 @@ def linux_credential_services() -> dict[str, JsonValue]:
         "service_activation_requested": False, "unlock_state": "not_checked",
         "kwallet_python_dbus_available": kwallet_binding,
     }
-    executable = shutil.which("gdbus")
-    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") or executable is None:
+    utility = next(((name, path) for name in ("gdbus", "busctl", "dbus-send")
+                    if (path := shutil.which(name)) is not None), None)
+    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") or utility is None:
         report["reason"] = ("session_bus_environment_absent" if not os.environ.get(
-            "DBUS_SESSION_BUS_ADDRESS") else "gdbus_unavailable")
+            "DBUS_SESSION_BUS_ADDRESS") else "dbus_probe_utility_unavailable")
         return report
+    tool, executable = utility
+    report["probe_tool"] = tool
     observed: dict[str, set[str]] = {}
     try:
         for method, key in (("ListNames", "running"), ("ListActivatableNames", "activatable")):
-            result = subprocess.run([
-                executable, "call", "--session", "--dest", "org.freedesktop.DBus",
-                "--object-path", "/org/freedesktop/DBus",
-                "--method", "org.freedesktop.DBus." + method,
-            ], capture_output=True, timeout=2, check=False)
+            if tool == "gdbus":
+                command = [executable, "call", "--session", "--dest", "org.freedesktop.DBus",
+                           "--object-path", "/org/freedesktop/DBus",
+                           "--method", "org.freedesktop.DBus." + method]
+            elif tool == "busctl":
+                command = [executable, "--user", "--timeout=1s", "call", "org.freedesktop.DBus",
+                           "/org/freedesktop/DBus", "org.freedesktop.DBus", method]
+            else:
+                command = [executable, "--session", "--dest=org.freedesktop.DBus", "--print-reply",
+                           "--reply-timeout=1000", "/org/freedesktop/DBus",
+                           "org.freedesktop.DBus." + method]
+            result = subprocess.run(command, capture_output=True, timeout=2, check=False)
             if result.returncode or len(result.stdout) > 65536:
                 raise ValueError("Unconfirmed session bus response")
-            # gdbus prints a GVariant tuple of string arrays. The empty-array
-            # type annotation is the only extra syntax for these two methods.
-            value = ast.literal_eval(result.stdout.decode("utf-8").replace("@as []", "[]"))
-            if (not isinstance(value, tuple) or len(value) != 1
-                    or not isinstance(value[0], list)
-                    or not all(isinstance(name, str) for name in value[0])):
-                raise ValueError("Invalid session bus response")
-            observed[key] = set(value[0])
+            observed[key] = _credential_bus_names(tool, result.stdout.decode("utf-8"))
         report.update(state="observed", services={
             name: {key: name in found for key, found in observed.items()} for name in names
         })
     except (OSError, ValueError, SyntaxError, UnicodeError, subprocess.TimeoutExpired):
         report.update(state="unavailable", reason="session_bus_probe_failed")
     return report
+
+
+def _credential_bus_names(tool: str, output: str) -> set[str]:
+    """Accept the string-array shape from a known DBus utility; never return its other metadata."""
+    if tool == "gdbus":
+        # gdbus's empty string-array annotation is extra GVariant syntax.
+        value = ast.literal_eval(output.replace("@as []", "[]"))
+        if not isinstance(value, tuple) or len(value) != 1 or not isinstance(value[0], list):
+            raise ValueError("Invalid session bus response")
+        entries = value[0]
+    elif tool == "busctl":
+        fields = shlex.split(output)
+        if (len(fields) < 2 or fields[0] != "as" or not fields[1].isdigit()
+                or int(fields[1]) != len(fields) - 2):
+            raise ValueError("Invalid session bus response")
+        entries = fields[2:]
+    else:
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if (len(lines) < 3 or not lines[0].startswith("method return ")
+                or lines[1] != "array [" or lines[-1] != "]"):
+            raise ValueError("Invalid session bus response")
+        entries = []
+        for line in lines[2:-1]:
+            match = re.fullmatch(r'string "([A-Za-z0-9_.:\-]+)"', line)
+            if match is None:
+                raise ValueError("Invalid session bus response")
+            entries.append(match[1])
+    if not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_.:\-]{1,255}", name)
+               for name in entries):
+        raise ValueError("Invalid session bus response")
+    return set(entries)
 
 
 def linux_prerequisites() -> dict[str, JsonValue]:

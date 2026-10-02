@@ -145,7 +145,7 @@ async def test_browser_only_http_grant_cannot_select_or_update_executable(
 
     from anywhere_computer.browser_control import BrowserControl
 
-    scopes = frozenset({"browser_open"})
+    scopes = frozenset({"browser_open", "browser_download", "browser_file_upload"})
     config = await setup(tmp_path, unused_tcp_port, scopes=scopes)
     owner = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
     owner.initialize("synthetic owner password")
@@ -167,6 +167,13 @@ async def test_browser_only_http_grant_cannot_select_or_update_executable(
                 ("browser_open", {"executable_path": "/untrusted/program"}),
                 ("settings_update", {"key": "chrome_executable", "value": "/untrusted/program"}),
                 ("browser-configure", {"executable": "/untrusted/program"}),
+                ("files_write", {"path": str(tmp_path / "browser.json"), "text": "forged"}),
+                ("files_write_binary", {"path": str(tmp_path / "browser.json"),
+                                        "data_base64": "eA=="}),
+                ("upload_begin", {"path": str(tmp_path / "browser.json"),
+                                  "transfer_id": "a" * 32, "total_bytes": 1,
+                                  "sha256": sha256(b"x")}),
+                ("upload_commit", {"transfer_id": "a" * 32}),
             ):
                 response = await http.post("/mcp", headers=headers, json={
                     "jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": "tools/call",

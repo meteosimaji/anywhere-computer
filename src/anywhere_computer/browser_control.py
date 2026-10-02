@@ -23,7 +23,7 @@ from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
-from .browser_configuration import selected_chrome
+from .browser_configuration import reject_configuration_download, selected_chrome
 from .files import absolute_path, read_bytes, sha256
 from .models import (
     BrowserClick,
@@ -1168,6 +1168,7 @@ class BrowserControl:
             self._entry(args, owner)
             self._check_snapshot(entry, args.snapshot_id, args.frame_id)
             destination = absolute_path(args.path)
+            reject_configuration_download(self.directory, destination)
             if not destination.parent.is_dir() or os.path.lexists(destination):
                 raise ValueError(
                     "Browser download requires an unused path in an existing directory"
@@ -1192,7 +1193,13 @@ class BrowserControl:
                 source = await received.path()
                 if source is None:
                     raise ValueError("Browser download file is unavailable")
-                size, digest = await asyncio.to_thread(_save_download, str(source), args.path)
+                # Revalidate after page/network waits, including a changed parent
+                # symlink. Pass the resolved target to the no-overwrite writer.
+                resolved_destination = destination.resolve()
+                reject_configuration_download(self.directory, resolved_destination)
+                size, digest = await asyncio.to_thread(
+                    _save_download, str(source), str(resolved_destination),
+                )
                 snapshot = await self._snapshot(entry, frame_id=args.frame_id)
                 snapshot["download"] = {
                     "path": str(destination), "bytes": size, "sha256": digest,

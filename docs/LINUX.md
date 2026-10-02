@@ -25,14 +25,17 @@ Secret Service/KWallet in the same user login session remains required. Plaintex
 file-backed and credential-free engine fallbacks are refused. A no-sudo environment
 without that service needs owner/operator setup outside this change.
 
-When `gdbus` and a session-bus address are present, the diagnostic also runs only
-the bus daemon's `ListNames` and `ListActivatableNames` (two-second timeout per
+When a session-bus address and a supported utility are present, the diagnostic
+also runs only the bus daemon's `ListNames` and `ListActivatableNames` (two-second timeout per
 call). It returns only the running/activatable flags for Secret Service and
 KWallet5/6, not other bus names or addresses. A registered, stopped KWallet is
 therefore distinguishable from a missing service. Failure leaves service state
 unknown. It never requests activation/unlock. KWallet also needs Python's `dbus`
 binding in the **selected Python runtime**; an OS utility working in a desktop
 terminal does not prove that the portable Python can access that backend.
+The first installed utility is selected in order `gdbus`, `busctl`, `dbus-send`.
+`probe_tool` names it. Utility failure or malformed output leaves service state
+unknown; no different session, service activation or password access is attempted.
 
 A safe follow-up for a KWallet-only desktop is to qualify `dbus-python` for the
 portable interpreter/ABI and its native library dependencies in Linux packaging CI,
@@ -111,7 +114,15 @@ It opens/cleans up the two cookie-isolation sessions sequentially, so at most on
 owned Chrome browser runs at a time. Its temporary state is not an engine or a
 filesystem-access sandbox. Browser-only HTTP/MCP grants cannot supply executable
 paths to `browser_open`, update this setting through `settings_update`, or invoke
-the local configuration command as a tool.
+the local configuration command as a tool. `browser_download` also refuses the
+canonical Chrome-selection file before page input, including parent symlink aliases.
+It checks again after receiving the download and saves to the resolved destination
+with the existing no-overwrite writer. If an alias changes to the selection file
+during page/network waits, saving is refused and the input outcome stays unconfirmed.
+These checks do not provide filesystem isolation against another process with
+authority to rename parent directories or change application state.
+Full owner file/terminal authority can change local state; a state directory is
+not an isolation boundary for those grants.
 
 ## Remaining Linux features
 

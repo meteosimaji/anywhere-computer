@@ -453,3 +453,60 @@ def test_linux_bus_probe_failure_never_claims_missing_services(monkeypatch, fail
     assert all(value == {"running": "unknown", "activatable": "unknown"}
                for value in report["services"].values())
     assert "private" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("tool", ["busctl", "dbus-send"])
+def test_linux_bus_probe_uses_existing_read_only_fallback(monkeypatch, tool):
+    from types import SimpleNamespace
+
+    from anywhere_computer import diagnostics
+
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "private-address")
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: (
+        "/usr/bin/" + tool if name == tool else None
+    ))
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        activated = argv[-1].endswith("ListActivatableNames")
+        names = ["org.kde.kwalletd5", "org.kde.kwalletd6"] if activated else [":1.4"]
+        if tool == "busctl":
+            output = "as " + str(len(names)) + " " + " ".join(json.dumps(name) for name in names)
+        else:
+            output = 'method return time=0 sender=org.freedesktop.DBus reply_serial=1\n   array [\n'
+            output += "".join('      string "' + name + '"\n' for name in names) + "   ]\n"
+        return SimpleNamespace(returncode=0, stdout=output.encode())
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", run)
+    report = diagnostics.linux_credential_services()
+    assert report["state"] == "observed"
+    assert report["probe_tool"] == tool
+    assert report["services"]["org.kde.kwalletd5"] == {"running": False, "activatable": True}
+    assert report["services"]["org.freedesktop.secrets"] == {"running": False, "activatable": False}
+    assert report["service_activation_requested"] is False
+    assert len(calls) == 2
+    assert all(kwargs == {"capture_output": True, "timeout": 2, "check": False}
+               for _, kwargs in calls)
+    assert "private" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("tool,output", [
+    ("gdbus", "(@as [],)"), ("busctl", "as 0"),
+    ("dbus-send", "method return time=0\n   array [\n   ]\n"),
+])
+def test_bus_probe_accepts_empty_arrays(tool, output):
+    from anywhere_computer.diagnostics import _credential_bus_names
+
+    assert _credential_bus_names(tool, output) == set()
+
+
+@pytest.mark.parametrize("tool,output", [
+    ("gdbus", "('private-invalid-scalar',)"), ("busctl", 'as 2 "only-one"'),
+    ("dbus-send", 'method return time=0\n   array [\n      int32 1\n   ]\n'),
+])
+def test_bus_probe_rejects_invalid_shape(tool, output):
+    from anywhere_computer.diagnostics import _credential_bus_names
+
+    with pytest.raises(ValueError):
+        _credential_bus_names(tool, output)

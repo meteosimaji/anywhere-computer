@@ -256,3 +256,122 @@ async def test_tool_calls_cannot_select_or_reconfigure_a_browser(
         assert "browser-configure" not in {row["name"] for row in engine.catalog()}
     finally:
         await engine.close()
+
+
+@pytest.mark.parametrize("alias", [False, True])
+@pytest.mark.parametrize("existing", [False, True])
+async def test_browser_download_cannot_create_host_selection_before_page_input(
+    linux, tmp_path, monkeypatch, alias, existing,
+):
+    import uuid
+
+    from anywhere_computer.models import BrowserDownload, BrowserTarget
+
+    directory = tmp_path / "state"
+    directory.mkdir()
+    path = directory / "browser.json"
+    if existing:
+        path.write_bytes(b"existing owner selection")
+    if alias:
+        redirect = tmp_path / "redirect"
+        redirect.symlink_to(directory, target_is_directory=True)
+        path = redirect / "browser.json"
+    control = BrowserControl(directory=directory)
+    entry = SimpleNamespace(lock=asyncio.Lock())
+    monkeypatch.setattr(control, "_entry", lambda *_: entry)
+    monkeypatch.setattr(control, "_check_snapshot", lambda *_: None)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("A reserved download path must be refused before locating or clicking the page")
+
+    monkeypatch.setattr(control, "_target_locator", forbidden)
+    args = BrowserDownload(session_id=uuid.uuid4().hex, tab_id=uuid.uuid4().hex,
+                           snapshot_id=uuid.uuid4().hex, path=str(path),
+                           target=BrowserTarget(selector="#download"))
+    with pytest.raises(ValueError, match="local Chrome selection"):
+        await control.download(args, owner="browser-only")
+    if existing:
+        assert (directory / "browser.json").read_bytes() == b"existing owner selection"
+    else:
+        assert not (directory / "browser.json").exists()
+
+
+def test_unrelated_download_destinations_remain_available(linux, tmp_path):
+    directory = tmp_path / "state"
+    configuration.reject_configuration_download(directory, tmp_path / "browser.json")
+    configuration.reject_configuration_download(directory, directory / "ordinary-download.txt")
+
+
+@pytest.mark.parametrize("existing", [False, True])
+async def test_browser_download_rechecks_a_parent_alias_after_page_input(
+    linux, tmp_path, monkeypatch, existing,
+):
+    import uuid
+    from contextlib import asynccontextmanager
+
+    from anywhere_computer.browser_control import BrowserActionUnknown
+    from anywhere_computer.models import BrowserDownload, BrowserTarget
+
+    directory = tmp_path / "state"
+    directory.mkdir()
+    saved = directory / "browser.json"
+    if existing:
+        saved.write_bytes(b"existing owner selection")
+    safe = tmp_path / "downloads"
+    safe.mkdir()
+    redirect = tmp_path / "redirect"
+    redirect.symlink_to(safe, target_is_directory=True)
+    source = tmp_path / "received"
+    source.write_bytes(b"download cannot select a browser")
+    clicks = []
+
+    async def received_path():
+        return source
+
+    received = SimpleNamespace(path=received_path)
+    pending = asyncio.get_running_loop().create_future()
+    pending.set_result(received)
+
+    @asynccontextmanager
+    async def expect_download(**kwargs):
+        yield SimpleNamespace(value=pending)
+
+    class Target:
+        async def count(self):
+            return 1
+
+        async def is_visible(self):
+            return True
+
+        async def is_enabled(self):
+            return True
+
+        async def click(self, **kwargs):
+            clicks.append(True)
+            redirect.unlink()
+            redirect.symlink_to(directory, target_is_directory=True)
+
+    entry = SimpleNamespace(lock=asyncio.Lock(), snapshot_id="observed",
+                            page=SimpleNamespace(expect_download=expect_download))
+    control = BrowserControl(directory=directory)
+    monkeypatch.setattr(control, "_entry", lambda *_: entry)
+    monkeypatch.setattr(control, "_check_snapshot", lambda *_: None)
+    monkeypatch.setattr(control, "_target_locator", lambda *_: Target())
+
+    async def until_dialog(entry, operation):
+        return await operation
+
+    monkeypatch.setattr(control, "_until_dialog", until_dialog)
+    args = BrowserDownload(session_id=uuid.uuid4().hex, tab_id=uuid.uuid4().hex,
+                           snapshot_id=uuid.uuid4().hex, path=str(redirect / "browser.json"),
+                           target=BrowserTarget(selector="#download"))
+    with pytest.raises(BrowserActionUnknown) as error:
+        await control.download(args, owner="browser-only")
+    assert isinstance(error.value.__cause__, ValueError)
+    assert "local Chrome selection" in str(error.value.__cause__)
+    assert clicks == [True]  # Input happened; its outcome must not be reported as unsubmitted.
+    assert not (safe / "browser.json").exists()
+    if existing:
+        assert saved.read_bytes() == b"existing owner selection"
+    else:
+        assert not saved.exists()
