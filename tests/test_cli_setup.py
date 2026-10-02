@@ -1,3 +1,4 @@
+import json
 import sys
 
 import pytest
@@ -21,7 +22,7 @@ def test_setup_routes_to_existing_remote_flow(tmp_path, monkeypatch, choice, kin
     assert not target.exists()
 
 
-def test_setup_local_uses_existing_start(tmp_path, monkeypatch):
+def test_setup_local_uses_existing_start(tmp_path, monkeypatch, capsys):
     target = tmp_path / 'new-state'
     monkeypatch.setattr(sys, 'argv', ['anywhere', 'setup', '--state-dir', str(target)])
     monkeypatch.setattr(cli, 'has_interactive_input', lambda: True)
@@ -33,6 +34,20 @@ def test_setup_local_uses_existing_start(tmp_path, monkeypatch):
     monkeypatch.setattr(cli, 'ensure_agent', start)
     cli.main()
     assert calls == [(target, True)]
+    output = capsys.readouterr().out
+    start = output.index('{', output.index('Add this entry'))
+    exported, _ = json.JSONDecoder().raw_decode(output[start:])
+    entry = exported['mcpServers']['anywhere-computer']
+    assert entry['command'] == sys.executable
+    assert entry['args'][-2:] == ['--state-dir', str(target)]
+    assert not target.exists()
+
+
+def test_explicit_start_retains_json_output(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(sys, 'argv', ['anywhere', 'start', '--state-dir', str(tmp_path)])
+    monkeypatch.setattr(cli, 'ensure_agent', lambda *a, **k: {'state': 'ready'})
+    cli.main()
+    assert json.loads(capsys.readouterr().out) == {'state': 'ready'}
 
 
 @pytest.mark.parametrize('choice', ['q', 'invalid', 'eof'])

@@ -13,6 +13,7 @@ const engineNames = {
   ready: "エンジンが応答しています", stopped: "エンジンは停止しています",
   different_build: "別のビルドが稼働しています", stale_endpoint: "記録されたエンジンは終了しています",
   unresponsive: "エンジンの応答を確認できません", credential_unavailable: "認証情報を利用できません",
+  catalog_unavailable: "エンジンは応答しています。MCPツール一覧は未確認です",
 };
 const engineActions = {
   ready: "", stopped: "起動ボタンで、このPCのエンジンを起動できます。",
@@ -20,6 +21,13 @@ const engineActions = {
   stale_endpoint: "エンジンを起動してから、状態を更新してください。",
   unresponsive: "処理中の可能性があります。状態を再確認してください。",
   credential_unavailable: "このPCの認証情報を読み取れるか確認してください。",
+  catalog_unavailable: "ツール一覧を取得できませんでした。状態を再確認し、続く場合は anywhere doctor で診断してください。",
+};
+const startFailureActions = {
+  timeout: "起動の確認が時間内に終わりませんでした。状態を再確認してから、再試行を判断してください。",
+  io_error: "起動時に入出力エラーが発生しました。インストールと保存先へのアクセスを確認してください。",
+  invalid_state: "起動に必要な状態を確認できませんでした。設定を保持したまま anywhere doctor で診断してください。",
+  start_failed: "起動処理を完了できませんでした。状態を再確認し、続く場合は anywhere doctor で診断してください。",
 };
 const resourceNames = {
   terminal_sessions: "端末セッション", plugin_sessions: "Pluginセッション",
@@ -104,6 +112,7 @@ function renderIdentity(snapshot) {
     ["version一致", matchLabel(snapshot.runtime_comparison?.version_matches)],
     ["runtime ID一致", matchLabel(snapshot.runtime_comparison?.runtime_id_matches)],
     ["instance ID", snapshot.instance_id],
+    ["MCPツール一覧", {available:"取得済み（実クライアント接続は未確認）", unavailable:"取得できません", unknown:"未確認"}[snapshot.catalog_state] ?? "未確認"],
   ]);
 }
 
@@ -182,6 +191,9 @@ async function refresh(start = false) {
     const snapshot = start ? result.snapshot : result;
     if (snapshot.schema_version !== 1) throw new Error("状態情報の版に対応していません。");
     render(snapshot);
+    if (start && result.state !== "ready" && result.failure?.stage === "engine_start") {
+      field("action", startFailureActions[result.failure.code] ?? "起動の診断が必要です。");
+    }
     startButton.disabled = !["stopped", "stale_endpoint"].includes(snapshot.engine_state);
     field("status",start ? (result.state === "ready" ? "このPCのエンジンの応答を確認しました。AIからの接続は未確認です。" : "起動結果を確認できませんでした。表示された診断を確認してください。") : "状態を更新しました。登録端末への接続試験は行っていません。");
   } catch (error) { field("status",`更新できませんでした。表示が残っている場合は前回の確認結果です。${String(error)}`); }

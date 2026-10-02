@@ -52,6 +52,7 @@ class ManagementSnapshot(Contract):
     observed_at: str
     engine_state: str
     next_action: str
+    catalog_state: Literal['available', 'unavailable', 'unknown'] = 'unknown'
     version: str | None = None
     runtime_id: str | None = None
     instance_id: str | None = None
@@ -79,11 +80,17 @@ class ManagementDeviceCheck(Contract):
     evidence: Literal["agent_status", "authorized_catalog"]
 
 
+class ManagementStartFailure(Contract):
+    stage: Literal['engine_start'] = 'engine_start'
+    code: Literal['timeout', 'io_error', 'invalid_state', 'start_failed']
+
+
 class ManagementStartResult(Contract):
     schema_version: Literal[1] = 1
     state: Literal["ready", "not_confirmed"]
     snapshot: ManagementSnapshot
     action: str
+    failure: ManagementStartFailure | None = None
 
 
 def _text(data: dict[str, JsonValue], key: str) -> str | None:
@@ -163,20 +170,29 @@ class ManagementController:
     async def start(self) -> ManagementStartResult:
         # Starting is explicit. Keep the existing selected runtime and busy-work
         # rules; opening the manager must not silently activate another build.
+        failure = None
         try:
             await asyncio.to_thread(ensure_agent, self.directory)
-        except (OSError, RuntimeError, ValueError, TimeoutError):
+        except (OSError, RuntimeError, ValueError, TimeoutError) as error:
             # The start acknowledgement may be lost after the engine starts.
             # Reconcile real status instead of repeating the start or claiming
             # that an exception proves no process was created.
-            pass
+            # Keep only an observed category. The exception text may contain
+            # credentials or private paths, and does not prove an internal stage.
+            code: Literal['timeout', 'io_error', 'invalid_state', 'start_failed'] = (
+                'timeout' if isinstance(error, TimeoutError) else
+                'io_error' if isinstance(error, OSError) else
+                'invalid_state' if isinstance(error, ValueError) else 'start_failed'
+            )
+            failure = ManagementStartFailure(code=code)
         observed = await self.snapshot()
-        ready = observed.engine_state == "ready"
+        ready = observed.engine_state in {"ready", "catalog_unavailable"}
         return ManagementStartResult(
             state="ready" if ready else "not_confirmed",
             snapshot=observed,
             action="Engine responded; inspect the observed runtime before work."
             if ready else "Start was not confirmed; inspect diagnosis before retrying.",
+            failure=None if ready else failure,
         )
 
     async def snapshot(self) -> ManagementSnapshot:
@@ -211,10 +227,16 @@ class ManagementController:
         source_build = diagnosis.get("source_build")
         runtime_comparison = diagnosis.get("runtime_comparison")
         blocker_details = agent.get("update_blocker_details")
+        catalog_state: Literal['available', 'unavailable', 'unknown'] = 'unknown'
+        if diagnosis.get('catalog_state') == 'available':
+            catalog_state = 'available'
+        elif diagnosis.get('catalog_state') == 'unavailable':
+            catalog_state = 'unavailable'
         return ManagementSnapshot(
             observed_at=datetime.now(UTC).isoformat(),
             engine_state=_text(diagnosis, "state") or "unknown",
             next_action=_text(diagnosis, "action") or "Run connection diagnosis.",
+            catalog_state=catalog_state,
             version=_text(agent, "version"), runtime_id=_text(agent, "runtime_id"),
             instance_id=_text(agent, "instance_id"),
             capabilities={k: v for k, v in capabilities.items() if isinstance(v, bool)}

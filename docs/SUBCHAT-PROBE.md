@@ -355,6 +355,20 @@ with `subchat_wait` or `subchat_recover` until the answer is final. If a host
 blocks or loses the reply, inspect `subchat_list` and saved status first; the
 missing reply does not prove that no Chat was created. A submission receipt
 alone is not a completed answer.
+
+The send-capable MCP core saves each accepted transport request's owner, exact
+tool/argument digest and canonical submission ID in the same transaction as
+intent preparation. Gateway cache cleanup or restart does not free that ID for
+different input or another tool. This identity table contains no duplicate prompt,
+attachment contents or credentials. Recovery calls need a fresh transport request
+ID and the original canonical submission ID in their arguments.
+Completed intent aliases can leave the bounded gateway cache only after the same
+owner's persisted binding and terminal submission are verified. Active workers
+and uncertain submissions stay retained. When every retained request is uncertain,
+the rejection reports `retained_requests` and the selected owner's deduplicated
+`recoverable_submission_ids`; other owners/accounts do not supply recovery IDs or
+justify alias cleanup. Inspect `subchat_list` if no saved ID can be established.
+
 `provider_receipt` separates the transport call from the provider: `not_sent`
 is a saved pre-dispatch state, `unconfirmed` means the outcome still needs
 reconciliation, and `confirmed` means matching provider history shows the

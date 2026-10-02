@@ -473,6 +473,8 @@ class SubchatSession(MCPSession):
                  sends: dict[str, asyncio.Task[SubchatSubmission]],
                  *, instructions: str = INSTRUCTIONS,
                  require_send_intent: bool = False,
+                 send_request_submission: Callable[[str, str, str],
+                                                   SubchatSubmission | None] | None = None,
                  live_transport: Callable[[], bool] | None = None,
                  close_transport: Callable[[], Awaitable[None]] | None = None) -> None:
         self.recoveries = tasks
@@ -488,6 +490,7 @@ class SubchatSession(MCPSession):
         self.live_transport = live_transport
         self.close_transport = close_transport
         self.require_send_intent = require_send_intent
+        self.send_request_submission = send_request_submission
 
         async def managed(request: Request) -> Reply:
             if self.closed:
@@ -1006,6 +1009,11 @@ def session(service: Subchats, *,
                          error='This Subchat session permits observation only.',
                          data={'error_code': 'read_only', 'dispatched': False})
         try:
+            # A send transport ID remains bound after the gateway evicts its cache
+            # or restarts. Check every tool before any provider access/delegation.
+            service.store.send_request_submission(
+                request.operation_id, owner=owner, tool=request.tool,
+                digest=_mutation_digest(request))
             if (request.tool == 'subchat_browser_diagnostics'
                     and request.tool in definitions):
                 diagnostic = BrowserDiagnostic.model_validate(request.arguments)
@@ -1484,7 +1492,7 @@ def session(service: Subchats, *,
                     request.operation_id, args.prompt, model, effort, owner=owner,
                     conversation_id=args.conversation_id, work_context=args.work_context,
                     resources=args.resources, http_selection=selection,
-                    intent_key=args.intent_key)
+                    intent_key=args.intent_key, request_digest=_mutation_digest(request))
                 submission_id = prepared.operation_id
                 send_operation_id = submission_id
                 sending = sends.get(submission_id)
@@ -1746,6 +1754,9 @@ def session(service: Subchats, *,
         catalog, execute, recoveries, sends,
         instructions=INSTRUCTIONS if instructions is None else instructions,
         require_send_intent=require_send_intent,
+        send_request_submission=lambda request_id, tool, digest:
+            service.store.send_request_submission(request_id, owner=owner,
+                                                  tool=tool, digest=digest),
         live_transport=getattr(service.backend, 'has_live_transport',
                                getattr(service.backend, 'has_live_generation', None)),
         close_transport=getattr(service.backend, 'close_generations', None))

@@ -204,6 +204,9 @@ class SubchatSubmissions:
     def __init__(self, connection: sqlite3.Connection, *, initialize: bool = True) -> None:
         self.connection = connection
         if not initialize:
+            self._send_requests_available = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' "
+                "AND name='subchat_send_requests'").fetchone() is not None
             self._answer_types_available = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type='table' "
                 "AND name='subchat_answer_types'").fetchone() is not None
@@ -289,6 +292,11 @@ class SubchatSubmissions:
             connection.execute('CREATE UNIQUE INDEX IF NOT EXISTS '
                                'subchat_send_intents_unowned ON '
                                'subchat_send_intents(intent_key) WHERE owner IS NULL')
+            connection.execute('CREATE TABLE IF NOT EXISTS subchat_send_requests ('
+                               'request_id TEXT PRIMARY KEY, owner TEXT, '
+                               'tool TEXT NOT NULL, digest TEXT NOT NULL, '
+                               'operation_id TEXT NOT NULL)')
+            self._send_requests_available = True
             connection.execute('CREATE TABLE IF NOT EXISTS subchat_preparation_failures ('
                                'operation_id TEXT PRIMARY KEY, owner TEXT, '
                                'reason TEXT NOT NULL)')
@@ -564,13 +572,32 @@ class SubchatSubmissions:
         return SubchatPage(submissions=summaries, next_before=(
             rows[request.limit - 1][0] if len(rows) > request.limit else None))
 
+    def send_request_submission(self, request_id: str, *, owner: str | None,
+                                tool: str, digest: str) -> SubchatSubmission | None:
+        """Resolve an exact persisted transport request in this owner's ledger."""
+        if not self._send_requests_available:
+            return None
+        row = self.connection.execute(
+            'SELECT owner, tool, digest, operation_id FROM subchat_send_requests '
+            'WHERE request_id=?', (request_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if (row[0], row[1], row[2]) != (owner, tool, digest):
+            raise SubchatRequestConflict('Subchat send request ID was already used')
+        return self.get(row[3], owner=owner)
+
     def prepare(self, operation_id: str, prompt: str, model: str, effort: str,
                 *, owner: str | None, conversation_id: str | None = None,
                 work_context: SubchatWorkContext | None = None,
                 after_operation_id: str | None = None,
                 resources: SubchatResources | None = None,
                 http_selection: SubchatHTTPSelection | None = None,
-                intent_key: str | None = None) -> SubchatSubmission:
+                intent_key: str | None = None,
+                request_digest: str | None = None) -> SubchatSubmission:
+        request_id = operation_id
+        if request_digest is not None and re.fullmatch(r'[0-9a-f]{64}', request_digest) is None:
+            raise ValueError('Invalid Subchat send request digest')
         if conversation_id is not None and not conversation_id.strip():
             raise ValueError('Conversation identity must not be empty')
         if work_context is not None and work_context.parent_operation_id is not None:
@@ -597,6 +624,16 @@ class SubchatSubmissions:
             expected_last_user_message_id = target.user_message_id
         with self.connection:
             self.connection.execute('BEGIN IMMEDIATE')
+            if request_digest is not None:
+                self.send_request_submission(request_id, owner=owner,
+                                             tool='subchat_send', digest=request_digest)
+            elif self._send_requests_available:
+                bound_request = self.connection.execute(
+                    'SELECT owner, operation_id FROM subchat_send_requests WHERE request_id=?',
+                    (request_id,)).fetchone()
+                if bound_request is not None and bound_request != (owner, request_id):
+                    raise SubchatRequestConflict(
+                        'A Subchat transport alias cannot become a new submission ID')
             if intent_key is not None:
                 if re.fullmatch(r'[0-9a-f]{32}', intent_key) is None:
                     raise ValueError('Invalid Subchat intent key')
@@ -655,6 +692,13 @@ class SubchatSubmissions:
                         (model, effort, http_selection))):
                 raise SubchatRequestConflict(
                     'Subchat submission ID was already used for different arguments')
+            if request_digest is not None:
+                # Bind the original communication ID only after all semantic checks,
+                # in the same transaction as the canonical intent/submission binding.
+                # No prompt or resources are duplicated into this identity table.
+                self.connection.execute(
+                    'INSERT OR IGNORE INTO subchat_send_requests VALUES (?,?,?,?,?)',
+                    (request_id, owner, 'subchat_send', request_digest, operation_id))
             return existing
 
     def _replace(self, old: SubchatSubmission, new: SubchatSubmission,

@@ -1,4 +1,6 @@
 import asyncio
+import json
+import sqlite3
 import uuid
 
 import pytest
@@ -36,6 +38,114 @@ async def test_setup_catalog_is_local_only(connector):
         "computer_status", "connection_setup_status", "connection_setup_plan",
         "connection_setup_confirm",
     }
+
+
+async def test_status_persists_binding_and_receipt_in_one_transaction(connector):
+    statements = []
+    connector.db.set_trace_callback(statements.append)
+    request = operation('connection_setup_status')
+    reply = await connector.execute(request)
+    assert reply.state == 'completed' and reply.data['phase'] == 'new'
+    row = connector.db.execute(
+        'SELECT digest, dispatched, reply FROM setup_operations WHERE id=?',
+        (request.operation_id,),
+    ).fetchone()
+    assert row == (connector._digest(request), 1, reply.model_dump_json())
+    assert sum(line == 'COMMIT' for line in statements) == 1
+    assert not connector.db.in_transaction
+    assert await connector.execute(request) == reply
+
+
+async def test_status_inspects_pending_save_without_waiting_or_repeating_it(
+    connector, monkeypatch,
+):
+    import anywhere_computer.setup_controller as controller_module
+
+    plan = HTTPServiceConfig(
+        resource='https://fixture.example/mcp', owner='owner', device='a' * 32,
+        client='anywhere-native', port=8768, scopes=frozenset({'computer_status'}),
+        redirects=frozenset({'http://127.0.0.1/oauth/callback'}),
+    )
+
+    async def make_plan(**_):
+        return plan
+
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_save = controller_module.save_http_config
+    saves = 0
+
+    async def held_save(directory, configuration):
+        nonlocal saves
+        saves += 1
+        entered.set()
+        await release.wait()
+        await original_save(directory, configuration)
+
+    monkeypatch.setattr('anywhere_computer.setup_connector.plan_remote_setup', make_plan)
+    monkeypatch.setattr(controller_module, 'save_http_config', held_save)
+    reviewed = await connector.execute(operation(
+        'connection_setup_plan', resource=plan.resource))
+    confirm = operation('connection_setup_confirm', plan_id=reviewed.data['plan_id'])
+    saving = asyncio.create_task(connector.execute(confirm))
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        status = await asyncio.wait_for(connector.execute(
+            operation('connection_setup_status')), .3)
+        assert status.state == 'completed' and status.data['phase'] == 'saving'
+        assert not saving.done() and saves == 1
+        release.set()
+        saved = await saving
+        assert saved.data['phase'] == 'configured'
+        assert await connector.execute(confirm) == saved
+        assert saves == 1
+    finally:
+        release.set()
+        await saving
+
+
+async def test_failed_status_keeps_exact_request_binding(connector, monkeypatch):
+    request = operation('connection_setup_status')
+
+    def unreadable():
+        raise ValueError('synthetic private detail')
+
+    monkeypatch.setattr(connector.controller, 'progress', unreadable)
+    reply = await connector.execute(request)
+    assert reply.state == 'failed' and 'private' not in json.dumps(reply.model_dump())
+    changed = await connector.execute(Request(
+        operation_id=request.operation_id, tool='computer_status', arguments={}))
+    assert changed.state == 'failed'  # Never reaches the forbidden local execute fixture.
+    assert connector.db.execute(
+        'SELECT digest FROM setup_operations WHERE id=?', (request.operation_id,),
+    ).fetchone() == (connector._digest(request),)
+
+
+async def test_status_commit_failure_never_returns_success(connector):
+    def deny_commit(action, first, *_):
+        if action == sqlite3.SQLITE_TRANSACTION and first == 'COMMIT':
+            return sqlite3.SQLITE_DENY
+        return sqlite3.SQLITE_OK
+
+    connector.db.set_authorizer(deny_commit)
+    request = operation('connection_setup_status')
+    reply = await connector.execute(request)
+    assert reply.state == 'failed'
+    assert not connector.db.in_transaction
+    assert connector.db.execute(
+        'SELECT id FROM setup_operations WHERE id=?', (request.operation_id,),
+    ).fetchone() is None
+    connector.db.set_authorizer(None)
+    assert (await connector.execute(request)).state == 'completed'
+
+
+async def test_invalid_status_keeps_binding_without_claiming(connector):
+    request = operation('connection_setup_status', unexpected='value')
+    assert (await connector.execute(request)).state == 'failed'
+    changed = Request(operation_id=request.operation_id, tool='computer_status', arguments={})
+    assert (await connector.execute(changed)).state == 'failed'
+    assert connector.db.execute(
+        'SELECT digest, dispatched FROM setup_operations WHERE id=?', (request.operation_id,),
+    ).fetchone() == (connector._digest(request), 0)
 
 
 async def test_plan_replay_keeps_generated_device_id_after_restart(connector, monkeypatch):

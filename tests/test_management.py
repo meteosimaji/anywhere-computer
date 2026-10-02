@@ -50,6 +50,48 @@ async def test_management_start_reconciles_error_without_repeating(tmp_path, mon
     assert "private error payload" not in result.model_dump_json()
 
 
+@pytest.mark.parametrize('failure,code', [
+    (TimeoutError, 'timeout'), (OSError, 'io_error'),
+    (ValueError, 'invalid_state'), (RuntimeError, 'start_failed'),
+])
+async def test_management_start_keeps_safe_failure_classification(
+        tmp_path, monkeypatch, failure, code):
+    calls = []
+
+    def failed(directory):
+        calls.append(directory)
+        raise failure('private-token /private/path')
+
+    monkeypatch.setattr('anywhere_computer.management.ensure_agent', failed)
+    result = await ManagementController(tmp_path).start()
+    assert result.state == 'not_confirmed'
+    assert result.snapshot.engine_state == 'stopped'
+    assert result.failure.model_dump() == {'stage': 'engine_start', 'code': code}
+    assert calls == [tmp_path]
+    assert 'private-token' not in result.model_dump_json()
+    assert '/private/path' not in result.model_dump_json()
+
+
+@pytest.mark.parametrize('observed', ['ready', 'catalog_unavailable'])
+async def test_management_lost_start_ack_is_resolved_by_live_status(
+        tmp_path, monkeypatch, observed):
+    def failed(_):
+        raise TimeoutError('private acknowledgement detail')
+
+    async def diagnosis(_):
+        return {'state': observed, 'action': 'fixture',
+                'catalog_state': 'available' if observed == 'ready' else 'unavailable',
+                'agent': {'state': 'ready'}}
+
+    monkeypatch.setattr('anywhere_computer.management.ensure_agent', failed)
+    monkeypatch.setattr('anywhere_computer.management.diagnose', diagnosis)
+    result = await ManagementController(tmp_path).start()
+    assert result.state == 'ready'  # Engine response, not client authentication or operation proof.
+    assert result.failure is None
+    assert result.snapshot.catalog_state == (
+        'available' if observed == 'ready' else 'unavailable')
+
+
 async def test_saved_setup_and_cached_device_do_not_claim_live_readiness(tmp_path):
     controller = ManagementController(tmp_path)
     plan = await plan_remote_setup(resource="https://fixture.example/mcp")

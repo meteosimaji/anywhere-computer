@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import sys
 
 import psutil
 import pytest
@@ -49,6 +50,56 @@ async def test_credentials_failure_is_sanitized(tmp_path, monkeypatch):
     result = await diagnose(tmp_path)
     assert result["state"] == "credential_unavailable"
     assert "secret-backend-detail" not in json.dumps(result)
+
+
+@pytest.mark.parametrize('catalog_case', [
+    'timeout', 'failed', 'not_list', 'malformed_entry', 'duplicate_names',
+])
+async def test_unavailable_catalog_is_not_ready_or_successful_doctor(
+        tmp_path, monkeypatch, capsys, catalog_case):
+    from anywhere_computer import cli, diagnostics
+    from anywhere_computer.models import Reply
+
+    (tmp_path / 'agent.json').write_text(json.dumps({
+        'pid': os.getpid(), 'process_started': psutil.Process().create_time(),
+        'instance_id': 'fixture-instance',
+    }), encoding='utf-8')
+    monkeypatch.setattr(diagnostics, 'local_credential', lambda *_: 'fixture-credential')
+    monkeypatch.setattr(diagnostics, 'runtime_identity', lambda: 'fixture-runtime')
+    calls = []
+
+    async def fixture_exchange(_directory, tool, **_kwargs):
+        calls.append(tool)
+        if tool == '__status':
+            return Reply(operation_id='a' * 32, state='completed', data={
+                'state': 'ready', 'instance_id': 'fixture-instance',
+                'version': __version__, 'runtime_id': 'fixture-runtime',
+            })
+        assert tool == '__catalog'
+        if catalog_case == 'timeout':
+            raise TimeoutError('private-token /private/path')
+        data = {'tools': {
+            'not_list': {}, 'malformed_entry': [{'name': 'files_read'}, None],
+            'duplicate_names': [{'name': 'files_read'}, {'name': 'files_read'}],
+        }.get(catalog_case, [])}
+        return Reply(operation_id='b' * 32,
+                     state='failed' if catalog_case == 'failed' else 'completed', data=data)
+
+    monkeypatch.setattr(diagnostics, 'exchange', fixture_exchange)
+    result = await diagnose(tmp_path)
+    assert calls == ['__status', '__catalog', '__status']
+    assert result['state'] == 'catalog_unavailable'
+    assert result['catalog_state'] == 'unavailable'
+    assert result['agent']['state'] == 'ready'
+    assert result['agent']['capability_diagnostics']['files']['connection_publication'] == 'unknown'
+    assert result['runtime_comparison']['connection_authorization'] == 'authenticated_status_only'
+    assert 'private-token' not in json.dumps(result)
+    assert '/private/path' not in json.dumps(result)
+    monkeypatch.setattr(sys, 'argv', ['anywhere', 'doctor', '--state-dir', str(tmp_path)])
+    with pytest.raises(SystemExit) as stopped:
+        await asyncio.to_thread(cli.main)
+    assert stopped.value.code == 1
+    assert json.loads(capsys.readouterr().out)['state'] == 'catalog_unavailable'
 
 
 async def test_live_diagnosis_does_not_restart_or_modify_agent(tmp_path, monkeypatch):

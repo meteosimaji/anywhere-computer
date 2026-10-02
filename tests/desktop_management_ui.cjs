@@ -25,13 +25,14 @@ snapshot.update_blocker_details = [{
   resource: 'browser_sessions', id: 'fixture-browser', state: 'closing',
   reason: 'cleanup_in_progress', inspect_tool: 'browser_tabs',
 }];
-let calls = 0, starts = 0, response;
+let calls = 0, starts = 0, response, startResponse;
 const observations = [];
 vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../desktop/ui/app.js'),'utf8'), {
   document:{getElementById:get,createElement:element},
   window:{__TAURI__:{core:{invoke:async (command,args)=>{
     if(command==='management_snapshot') {observations.push(command);return JSON.stringify(snapshot);}
     if(command==='management_start') {
+      if (startResponse) {starts++; return JSON.stringify({...startResponse, snapshot});}
       starts++; snapshot.engine_state = 'ready';
       return JSON.stringify({state:'ready',snapshot});
     }
@@ -76,6 +77,25 @@ vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../desktop/ui/app.js'),'
   assert.equal(starts, 1);
   assert.equal(get('start').disabled, true);
   assert.match(get('status').textContent, /エンジンの応答を確認/);
+  for (const [code, description] of [
+    ['timeout', /時間内/], ['io_error', /入出力エラー/],
+    ['invalid_state', /必要な状態/], ['start_failed', /起動処理/],
+  ]) {
+    snapshot.engine_state = 'stopped';
+    startResponse = {state:'not_confirmed', failure:{stage:'engine_start', code}};
+    await get('start').handlers.click();
+    assert.match(get('action').textContent, description);
+    assert.equal(get('start').disabled, false);
+  }
+  startResponse = undefined;
+  snapshot.engine_state = 'catalog_unavailable';
+  snapshot.catalog_state = 'unavailable';
+  await get('refresh').handlers.click();
+  assert.match(get('engine').textContent, /エンジンは応答/);
+  assert.match(get('action').textContent, /ツール一覧を取得できません/);
+  assert.match(get('identity').children.map(child => child.textContent).join('\n'),
+    /MCPツール一覧\n取得できません/);
+  assert.equal(get('start').disabled, true);
   for (const state of ['unresponsive', 'identity_mismatch']) {
     snapshot.engine_state = state;
     await get('refresh').handlers.click();

@@ -41,6 +41,7 @@ WIRE_LIMIT = 8 * 1024 * 1024
 # Includes unauthenticated readers. Admission happens synchronously before a task
 # can retain a full legacy credential-bearing frame (8 MiB per connection).
 MAX_CONNECTIONS = 8
+STOP_REPLY_DRAIN_TIMEOUT = 2.0
 
 
 class GrantedRequest(Contract):
@@ -128,7 +129,13 @@ async def exchange(
         return reply
     finally:
         writer.close()
-        await writer.wait_closed()
+        try:
+            await writer.wait_closed()
+        except (ConnectionResetError, BrokenPipeError):
+            # A peer stopping after its reply can reset Windows' close waiter.
+            # Keep the validated reply (or the original read/validation error);
+            # a cleanup-only reset must not change the operation's outcome.
+            writer.transport.abort()
 
 
 async def serve(
@@ -230,6 +237,17 @@ async def serve(
                 response = await dispatch(request)
                 writer.write(response)
                 await asyncio.wait_for(writer.drain(), 5)
+                if request.tool == '__stop' and stop.is_set():
+                    # Windows overlapped reads can be reset if the process exits
+                    # immediately after queuing its stop reply. Send EOF first,
+                    # then let the client consume the reply and close. A client
+                    # which waits for EOF also completes; one which never closes
+                    # cannot retain the stopping process without a bound.
+                    writer.write_eof()
+                    try:
+                        await asyncio.wait_for(reader.read(1), STOP_REPLY_DRAIN_TIMEOUT)
+                    except TimeoutError:
+                        pass
             except (ValueError, OSError, TimeoutError):
                 # Do not log packet contents: they may contain credentials or private files.
                 pass
