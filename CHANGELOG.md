@@ -3,6 +3,17 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b64 / Plugin 0.2.0-beta.64 — unpublished candidate (2026-10-02)
+
+- Include the unpublished beta.62 MCP export, catalog diagnosis and setup-status
+  fixes without changing that bundle's wheel bytes. Beta.63 belongs to the
+  separate Subchat intent-recovery candidate.
+- Half-close the TCP stop reply before waiting for its client to close, bounded
+  to two seconds. Do not let process exit race an outstanding Windows reply read;
+  retain active-work refusal, exact replies and original transport failures.
+- Record bounded, secret-free transport phases and independent fixture health
+  on platform-test failures. Do not retry requests or extend read deadlines.
+
 ## 0.2.0b62 / Plugin 0.2.0-beta.62 — unpublished candidate (2026-10-02)
 
 - Export local MCP JSON/TOML with the installed interpreter and explicit state
