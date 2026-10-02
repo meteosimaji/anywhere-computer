@@ -1,4 +1,5 @@
 """Saved final answers must match the original input, not merely look complete."""
+import asyncio
 import json
 
 import pytest
@@ -549,6 +550,12 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
+            if self.path == '/fixture-health':
+                self.send_response(200)
+                self.send_header('Content-Length', '2')
+                self.end_headers()
+                self.wfile.write(b'ok')
+                return
             calls.append((self.path, self.headers.get('Authorization') == 'Bearer fixture'
                           and self.headers.get('oai-language') == 'ja'
                           and self.headers.get('chatgpt-account-id') == 'fixture-account'
@@ -612,6 +619,24 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                         return await real_get(f'http://127.0.0.1:{server.server_port}' +
                                               url.removeprefix('https://chatgpt.com'), **kwargs)
                     except Error as error:
+                        health = 'unconfirmed'
+                        try:
+                            async with asyncio.timeout(1):
+                                health_reader, health_writer = await asyncio.open_connection(
+                                    '127.0.0.1', server.server_port)
+                                try:
+                                    health_writer.write(b'GET /fixture-health HTTP/1.0\r\n\r\n')
+                                    await health_writer.drain()
+                                    health_headers = await health_reader.readuntil(b'\r\n\r\n')
+                                    health_body = await health_reader.readexactly(2)
+                                    health = ('available' if b' 200 ' in health_headers[:40]
+                                              and health_body == b'ok'
+                                              else 'invalid_response')
+                                finally:
+                                    health_writer.close()
+                                    await health_writer.wait_closed()
+                        except (OSError, TimeoutError, asyncio.IncompleteReadError):
+                            health = 'unavailable'
                         # Only controlled-fixture facts: no URLs, headers, response
                         # bodies or a new CDP request which could also be stalled.
                         error.add_note('Controlled HTTP fixture: ' + json.dumps({
@@ -624,6 +649,8 @@ async def test_repeated_http_reads_auth_expiry_and_redirects(
                             'context_page_count': len(context.pages),
                             'original_page_closed': original.is_closed(),
                             'bootstrap_get_count': len(tab_gets),
+                            'fixture_worker_alive': worker.is_alive(),
+                            'fixture_health': health,
                         }, sort_keys=True))
                         raise
 
