@@ -3,6 +3,46 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b69 / Plugin 0.2.0-beta.69 — unpublished main candidate (2026-10-02)
+
+- Validate persisted Subchat communication-ID bindings before local reads and
+  unavailable-gateway recovery, preserving conflicts across profile outages.
+  Five real SQLite regressions reproduced successful-looking stale receipts
+  before the fix, with no provider sends, and now reject changed send inputs.
+- Complete beta.68 guest-local stdio MCP acceptance in the Magic OS Linux VM:
+  file/hash integrity and stale-write rejection, observed browser input/click,
+  terminal output and original operation recovery after reconnection, and owned
+  resource cleanup. This does not establish Linux ordinary Chat/Subchat login
+  or cloud routing and does not update the installed/public beta.52 release.
+
+## 0.2.0b68 / Plugin 0.2.0-beta.68 — unpublished main candidate (2026-10-02)
+
+- Integrate the Linux startup diagnostics and host-only browser configuration
+  from PR #252 on main. Explicit Chromium selection supports Arm64 test VMs
+  while retaining Google Chrome-specific validation and sandbox-enabled launch.
+- Qualify an Ubuntu 24.04 Arm64/HVF guest: real boot, SSH, isolated browser
+  navigation/input/cookie separation, and native Secret Service-backed local MCP
+  status and browser lifecycle. These trials do not establish native Linux GUI,
+  ordinary Chat/Subchat login, persistent startup or cloud connectivity.
+- Fix issue #255 using the reviewed intent-binding changes from PR #258:
+  preserve communication-ID input bindings in the ledger, recover the canonical
+  submission safely, and release completed aliases without evicting uncertain
+  work or using another owner/account's receipt. The regression fails before
+  the fix and accepts a new intent after more than 128 completed aliases.
+
+## 0.2.0b58 / Plugin 0.2.0-beta.58 — unpublished Linux draft candidate (2026-10-02)
+
+- Add read-only Linux startup diagnostics for the calling process, approved secure-store
+  selection, actual Python KWallet binding imports, and running/activatable session-bus services.
+  Do not activate/unlock services or create/read credentials.
+- Add host-local selection of trusted user-installed Google Chrome ELF binaries, with
+  version validation, private configuration, SHA-256 checks before launch and Chromium
+  sandboxing enabled. Keep existing macOS/Windows defaults.
+- Refuse browser downloads to the executable-selection file, including canonical aliases
+  before page input and changed aliases before saving; keep owner file/terminal authority distinct.
+- Report unsupported Linux Office rendering explicitly and document staged native GUI,
+  audio and renderer work. Actual desktop acceptance is tracked separately from implementation.
+
 ## 0.2.0b57 / Plugin 0.2.0-beta.57 — unpublished personal-use candidate (2026-10-02)
 
 - Recover public connection fields after frame recreation on hosts with the

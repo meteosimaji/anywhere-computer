@@ -128,6 +128,12 @@ async def test_status_native_adapter_matches_unsupported_platform(
         }
         assert status["capability_diagnostics"]["gui_mcp"]["runtime_available"] == "unknown"
         assert status["capability_diagnostics"]["gui_mcp_adapter"]["helper"] == "not_checked"
+        for name in ("office_rendered_preview", "office_rendered_preview_adapter"):
+            details = status["capability_diagnostics"][name]
+            assert details["runtime_available"] is False
+            assert details["helper"] == "unsupported_platform"
+            assert details["acceptance"] == "not_verified"
+            assert "Office text read/write" in details["next_action"]
         refused = await engine.execute(
             request("gui_native_windows", app="fixture"), peer="fixture",
         )

@@ -298,3 +298,215 @@ def test_bad_codex_override_is_not_replaced_by_path_lookup(monkeypatch, override
     assert result['path'] is None
     assert result['execution_verified'] is False
     assert override not in json.dumps(result)
+
+
+@pytest.mark.parametrize("store_available", [True, False])
+async def test_linux_startup_diagnosis_scopes_session_and_never_reads_credentials(
+    tmp_path, monkeypatch, store_available,
+):
+    from anywhere_computer import diagnostics
+
+    class SecureStore:
+        def get_password(self, *args):
+            pytest.fail("Startup diagnosis must not read or create credentials")
+
+        set_password = get_password
+
+    SecureStore.__module__ = "keyring.backends.SecretService"
+
+    def select():
+        if not store_available:
+            raise RuntimeError("private DBus value")
+        return SecureStore()
+
+    monkeypatch.setattr(diagnostics.sys, "platform", "linux")
+    monkeypatch.setattr(diagnostics, "secure_backend", select)
+    monkeypatch.setattr(diagnostics, "linux_credential_services", lambda: {
+        "state": "not_checked", "service_activation_requested": False,
+    })
+    monkeypatch.setenv("DISPLAY", "private-display-value")
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.setenv("XDG_SESSION_TYPE", "x11")
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "private DBus value")
+    monkeypatch.setenv("XDG_RUNTIME_DIR", "private runtime value")
+    directory = tmp_path / "missing"
+    result = await diagnostics.diagnose(directory)
+    assert result["state"] == "stopped"
+    assert not directory.exists()
+    details = result["runtime_environment"]["linux_prerequisites"]
+    assert details["scope"] == "diagnostic_process_only"
+    assert details["session_type"] == "x11"
+    assert details["display_environment_present"] is True
+    assert details["wayland_environment_present"] is False
+    assert details["session_bus_environment_present"] is True
+    assert details["desktop_session_verified"] is False
+    assert details["credential_store"]["selection"] == (
+        "selected" if store_available else "unavailable"
+    )
+    assert details["credential_store"]["unlock_state"] == "not_checked"
+    assert details["credential_store"]["plaintext_fallback"] is False
+    for name in ("gui_native", "audio_capture", "documents_preview"):
+        assert details["platform_support"][name] == "unsupported_platform"
+    assert "private" not in json.dumps(details)
+
+
+def test_linux_bus_probe_distinguishes_activatable_wallet_without_starting_it(monkeypatch):
+    from anywhere_computer import diagnostics
+
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "private-session-address")
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda _: "/usr/bin/gdbus")
+    def missing_binding(_):
+        raise ImportError("private dependency detail")
+
+    monkeypatch.setattr(diagnostics, "import_module", missing_binding)
+    calls = []
+
+    def call(argv, **kwargs):
+        from types import SimpleNamespace
+
+        calls.append((argv, kwargs))
+        output = (b"(['org.kde.kwalletd5', 'org.kde.kwalletd6'],)"
+                  if argv[-1].endswith("ListActivatableNames") else
+                  b"(['org.freedesktop.DBus', 'private-unrelated-service'],)")
+        return SimpleNamespace(returncode=0, stdout=output)
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", call)
+    report = diagnostics.linux_credential_services()
+    assert report["state"] == "observed"
+    assert report["services"] == {
+        "org.freedesktop.secrets": {"running": False, "activatable": False},
+        "org.kde.kwalletd5": {"running": False, "activatable": True},
+        "org.kde.kwalletd6": {"running": False, "activatable": True},
+    }
+    assert report["kwallet_python_dbus_available"] is False
+    assert report["service_activation_requested"] is False
+    assert "private" not in json.dumps(report)
+    assert len(calls) == 2
+    assert [argv[-1] for argv, _ in calls] == [
+        "org.freedesktop.DBus.ListNames", "org.freedesktop.DBus.ListActivatableNames",
+    ]
+    assert all(kwargs == {"capture_output": True, "timeout": 2, "check": False}
+               for _, kwargs in calls)
+
+
+@pytest.mark.parametrize("import_failure", [None, ImportError, OSError])
+def test_kwallet_requires_an_importable_binding_even_without_bus_probe(monkeypatch, import_failure):
+    from anywhere_computer import diagnostics
+
+    def binding(name):
+        assert name == "dbus"
+        if import_failure is not None:
+            raise import_failure("private-extension-error")
+        return object()
+
+    monkeypatch.setattr(diagnostics, "import_module", binding)
+    monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS", raising=False)
+    report = diagnostics.linux_credential_services()
+    assert report["kwallet_python_dbus_available"] is (import_failure is None)
+    assert report["state"] == "not_checked"
+    assert "private-extension-error" not in json.dumps(report)
+
+
+def test_linux_wallet_advertisement_is_not_usable_without_python_binding(monkeypatch):
+    from anywhere_computer import diagnostics
+
+    def unavailable():
+        raise RuntimeError("No secure Python backend")
+
+    monkeypatch.setattr(diagnostics, "secure_backend", unavailable)
+    monkeypatch.setattr(diagnostics, "linux_credential_services", lambda: {
+        "services": {"org.kde.kwalletd5": {"running": False, "activatable": True}},
+        "kwallet_python_dbus_available": False,
+    })
+    report = diagnostics.linux_prerequisites()
+    assert report["credential_store"]["selection"] == "unavailable"
+    assert report["credential_store"]["reason"] == "kwallet_python_binding_unavailable"
+    assert "cannot import dbus" in report["credential_store"]["next_action"]
+    assert report["credential_store"]["credential_created"] is False
+
+
+@pytest.mark.parametrize("failure", ["no_bus", "no_gdbus", "timeout", "malformed"])
+def test_linux_bus_probe_failure_never_claims_missing_services(monkeypatch, failure):
+    from types import SimpleNamespace
+
+    from anywhere_computer import diagnostics
+
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "private-bus")
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda _: (
+        None if failure == "no_gdbus" else "/usr/bin/gdbus"
+    ))
+    if failure == "no_bus":
+        monkeypatch.delenv("DBUS_SESSION_BUS_ADDRESS")
+
+    def run(*args, **kwargs):
+        import subprocess
+
+        if failure in {"no_bus", "no_gdbus"}:
+            pytest.fail("No bus environment or utility must not launch a probe")
+        if failure == "timeout":
+            raise subprocess.TimeoutExpired(args[0], 2, output=b"private-detail")
+        return SimpleNamespace(returncode=0, stdout=b"private-invalid-response")
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", run)
+    report = diagnostics.linux_credential_services()
+    assert report["state"] in {"unavailable", "not_checked"}
+    assert all(value == {"running": "unknown", "activatable": "unknown"}
+               for value in report["services"].values())
+    assert "private" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("tool", ["busctl", "dbus-send"])
+def test_linux_bus_probe_uses_existing_read_only_fallback(monkeypatch, tool):
+    from types import SimpleNamespace
+
+    from anywhere_computer import diagnostics
+
+    monkeypatch.setenv("DBUS_SESSION_BUS_ADDRESS", "private-address")
+    monkeypatch.setattr(diagnostics.shutil, "which", lambda name: (
+        "/usr/bin/" + tool if name == tool else None
+    ))
+    calls = []
+
+    def run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        activated = argv[-1].endswith("ListActivatableNames")
+        names = ["org.kde.kwalletd5", "org.kde.kwalletd6"] if activated else [":1.4"]
+        if tool == "busctl":
+            output = "as " + str(len(names)) + " " + " ".join(json.dumps(name) for name in names)
+        else:
+            output = 'method return time=0 sender=org.freedesktop.DBus reply_serial=1\n   array [\n'
+            output += "".join('      string "' + name + '"\n' for name in names) + "   ]\n"
+        return SimpleNamespace(returncode=0, stdout=output.encode())
+
+    monkeypatch.setattr(diagnostics.subprocess, "run", run)
+    report = diagnostics.linux_credential_services()
+    assert report["state"] == "observed"
+    assert report["probe_tool"] == tool
+    assert report["services"]["org.kde.kwalletd5"] == {"running": False, "activatable": True}
+    assert report["services"]["org.freedesktop.secrets"] == {"running": False, "activatable": False}
+    assert report["service_activation_requested"] is False
+    assert len(calls) == 2
+    assert all(kwargs == {"capture_output": True, "timeout": 2, "check": False}
+               for _, kwargs in calls)
+    assert "private" not in json.dumps(report)
+
+
+@pytest.mark.parametrize("tool,output", [
+    ("gdbus", "(@as [],)"), ("busctl", "as 0"),
+    ("dbus-send", "method return time=0\n   array [\n   ]\n"),
+])
+def test_bus_probe_accepts_empty_arrays(tool, output):
+    from anywhere_computer.diagnostics import _credential_bus_names
+
+    assert _credential_bus_names(tool, output) == set()
+
+
+@pytest.mark.parametrize("tool,output", [
+    ("gdbus", "('private-invalid-scalar',)"), ("busctl", 'as 2 "only-one"'),
+    ("dbus-send", 'method return time=0\n   array [\n      int32 1\n   ]\n'),
+])
+def test_bus_probe_rejects_invalid_shape(tool, output):
+    from anywhere_computer.diagnostics import _credential_bus_names
+
+    with pytest.raises(ValueError):
+        _credential_bus_names(tool, output)

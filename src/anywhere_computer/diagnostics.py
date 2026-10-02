@@ -2,8 +2,13 @@
 
 import ast
 import os
+import platform
+import re
+import shlex
 import shutil
+import subprocess
 import sys
+from importlib import import_module
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -11,10 +16,11 @@ import psutil
 from pydantic import JsonValue
 
 from . import __version__
+from .browser_configuration import browser_configuration
 from .capability_contract import CAPABILITY_TOOLS
 from .codex_context import _executable
 from .connection import exchange, load_endpoint
-from .credentials import local_credential
+from .credentials import local_credential, secure_backend
 from .execution_environment import with_tool_path
 from .runtime_identity import runtime_identity
 
@@ -41,8 +47,147 @@ def source_capability_implementations() -> dict[str, JsonValue]:
     }
 
 
-def runtime_environment() -> dict[str, JsonValue]:
-    """Inspect this process, without launching tools or disclosing environment values."""
+def linux_credential_services() -> dict[str, JsonValue]:
+    """List bus names only; never activate a wallet, inspect a collection or unlock it."""
+    names = ("org.freedesktop.secrets", "org.kde.kwalletd5", "org.kde.kwalletd6")
+    try:
+        import_module("dbus")
+        kwallet_binding = True
+    except Exception:
+        # An installed extension can still fail to import due to missing shared
+        # libraries. No connection or password operation is performed here.
+        kwallet_binding = False
+    report: dict[str, JsonValue] = {
+        "scope": "diagnostic_process_session_bus", "state": "not_checked",
+        "services": {name: {"running": "unknown", "activatable": "unknown"} for name in names},
+        "service_activation_requested": False, "unlock_state": "not_checked",
+        "kwallet_python_dbus_available": kwallet_binding,
+    }
+    utility = next(((name, path) for name in ("gdbus", "busctl", "dbus-send")
+                    if (path := shutil.which(name)) is not None), None)
+    if not os.environ.get("DBUS_SESSION_BUS_ADDRESS") or utility is None:
+        report["reason"] = ("session_bus_environment_absent" if not os.environ.get(
+            "DBUS_SESSION_BUS_ADDRESS") else "dbus_probe_utility_unavailable")
+        return report
+    tool, executable = utility
+    report["probe_tool"] = tool
+    observed: dict[str, set[str]] = {}
+    try:
+        for method, key in (("ListNames", "running"), ("ListActivatableNames", "activatable")):
+            if tool == "gdbus":
+                command = [executable, "call", "--session", "--dest", "org.freedesktop.DBus",
+                           "--object-path", "/org/freedesktop/DBus",
+                           "--method", "org.freedesktop.DBus." + method]
+            elif tool == "busctl":
+                command = [executable, "--user", "--timeout=1s", "call", "org.freedesktop.DBus",
+                           "/org/freedesktop/DBus", "org.freedesktop.DBus", method]
+            else:
+                command = [executable, "--session", "--dest=org.freedesktop.DBus", "--print-reply",
+                           "--reply-timeout=1000", "/org/freedesktop/DBus",
+                           "org.freedesktop.DBus." + method]
+            result = subprocess.run(command, capture_output=True, timeout=2, check=False)
+            if result.returncode or len(result.stdout) > 65536:
+                raise ValueError("Unconfirmed session bus response")
+            observed[key] = _credential_bus_names(tool, result.stdout.decode("utf-8"))
+        report.update(state="observed", services={
+            name: {key: name in found for key, found in observed.items()} for name in names
+        })
+    except (OSError, ValueError, SyntaxError, UnicodeError, subprocess.TimeoutExpired):
+        report.update(state="unavailable", reason="session_bus_probe_failed")
+    return report
+
+
+def _credential_bus_names(tool: str, output: str) -> set[str]:
+    """Accept the string-array shape from a known DBus utility; never return its other metadata."""
+    if tool == "gdbus":
+        # gdbus's empty string-array annotation is extra GVariant syntax.
+        value = ast.literal_eval(output.replace("@as []", "[]"))
+        if not isinstance(value, tuple) or len(value) != 1 or not isinstance(value[0], list):
+            raise ValueError("Invalid session bus response")
+        entries = value[0]
+    elif tool == "busctl":
+        fields = shlex.split(output)
+        if (len(fields) < 2 or fields[0] != "as" or not fields[1].isdigit()
+                or int(fields[1]) != len(fields) - 2):
+            raise ValueError("Invalid session bus response")
+        entries = fields[2:]
+    else:
+        lines = [line.strip() for line in output.splitlines() if line.strip()]
+        if (len(lines) < 3 or not lines[0].startswith("method return ")
+                or lines[1] != "array [" or lines[-1] != "]"):
+            raise ValueError("Invalid session bus response")
+        entries = []
+        for line in lines[2:-1]:
+            match = re.fullmatch(r'string "([A-Za-z0-9_.:\-]+)"', line)
+            if match is None:
+                raise ValueError("Invalid session bus response")
+            entries.append(match[1])
+    if not all(isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9_.:\-]{1,255}", name)
+               for name in entries):
+        raise ValueError("Invalid session bus response")
+    return set(entries)
+
+
+def linux_prerequisites() -> dict[str, JsonValue]:
+    """Inspect this process's session and select a secure backend without reading secrets."""
+    credential_store: dict[str, JsonValue] = {
+        "selection": "unavailable", "unlock_state": "not_checked",
+        "credential_read": False, "credential_created": False,
+        "plaintext_fallback": False,
+        "next_action": "Use an unlocked Secret Service/KWallet in the same login session. "
+                       "A shell's session environment does not describe another desktop session.",
+    }
+    try:
+        backend = secure_backend()
+        module = type(backend).__module__
+        credential_store.update(selection="selected", backend=(
+            "SecretService" if module.startswith("keyring.backends.SecretService") else
+            "KWallet" if module.startswith("keyring.backends.kwallet") else "native_os_store"
+        ))
+    except Exception:
+        # Backend discovery can raise provider-specific DBus errors. Never echo
+        # those messages, switch stores, read a password or prompt to unlock.
+        pass
+    credential_services = linux_credential_services()
+    services = credential_services.get("services")
+    wallet_advertised = isinstance(services, dict) and any(
+        isinstance(details, dict) and (details.get("running") is True
+                                      or details.get("activatable") is True)
+        for name, details in services.items() if name in {"org.kde.kwalletd5", "org.kde.kwalletd6"}
+    )
+    if (credential_store["selection"] == "unavailable" and wallet_advertised
+            and credential_services.get("kwallet_python_dbus_available") is False):
+        credential_store.update(
+            reason="kwallet_python_binding_unavailable",
+            next_action="KWallet is advertised but this Python cannot import dbus. "
+                        "Use a qualified runtime with the KWallet binding or an operator-provided "
+                        "Secret Service, then verify the existing store is unlocked. "
+                        "No dependency, service or credential was created.",
+        )
+    session_type = os.environ.get("XDG_SESSION_TYPE")
+    return {
+        "scope": "diagnostic_process_only", "architecture": platform.machine(),
+        "display_environment_present": bool(os.environ.get("DISPLAY")),
+        "wayland_environment_present": bool(os.environ.get("WAYLAND_DISPLAY")),
+        "session_bus_environment_present": bool(os.environ.get("DBUS_SESSION_BUS_ADDRESS")),
+        "runtime_directory_environment_present": bool(os.environ.get("XDG_RUNTIME_DIR")),
+        "session_type": session_type if session_type in {"x11", "wayland", "tty"} else "unknown",
+        "desktop_session_verified": False,
+        "credential_store": credential_store,
+        "credential_services": credential_services,
+        "platform_support": {
+            "files": "implemented", "terminal": "implemented",
+            "office_text_read_write": "implemented",
+            "browser_isolated": "requires_playwright_and_chrome",
+            "gui_native": "unsupported_platform", "audio_capture": "unsupported_platform",
+            "documents_preview": "unsupported_platform",
+        },
+        "acceptance": "not_verified",
+    }
+
+
+def runtime_environment(directory: Path | None = None) -> dict[str, JsonValue]:
+    """Inspect this process without starting task tools or disclosing environment values."""
     try:
         sdk_version = version('mcp')
     except PackageNotFoundError:
@@ -65,7 +210,7 @@ def runtime_environment() -> dict[str, JsonValue]:
         # Use the same selection contract as execution, without launching Codex
         # or printing a malformed override/exception containing private values.
         pass
-    return {
+    report: dict[str, JsonValue] = {
         'scope': 'diagnostic_process',
         'python': sys.executable,
         'python_version': sys.version.split()[0],
@@ -78,7 +223,11 @@ def runtime_environment() -> dict[str, JsonValue]:
         'direct_mcp_action': 'No dependency action required.' if sdk_version == '1.30.0' else
             'From source, run uv sync --locked --extra mcp; then use that Python runtime.',
         'browser_operation_verified': False,
+        'browser_configuration': browser_configuration(directory),
     }
+    if sys.platform == "linux":
+        report["linux_prerequisites"] = linux_prerequisites()
+    return report
 
 
 async def diagnose(directory: Path) -> dict[str, JsonValue]:
@@ -89,7 +238,7 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
         return {"state": state, "action": action, "changed": False,
                 "source_build": {"version": __version__, "runtime_id": source_runtime_id},
                 "source_capabilities": source_capabilities,
-                "runtime_environment": runtime_environment(), **details}
+                "runtime_environment": runtime_environment(directory), **details}
 
     try:
         endpoint = load_endpoint(directory)

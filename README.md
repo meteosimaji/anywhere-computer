@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b57` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.57` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b69` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.69` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -239,7 +239,10 @@ CSS-pixel element boxes. Call
 as a bounded native MCP image alongside the semantic observation. The image
 and structure are captured sequentially and can differ on a changing page.
 The default isolated browser is installed Edge on Windows and Chrome on macOS
-and Linux. A local startup failure returns `browser_startup_unavailable` before
+and Linux. Linux can explicitly select a trusted user-installed Google Chrome ELF
+with the local `browser-configure` command; see [Linux support](docs/LINUX.md) for
+validation, startup diagnosis and current native-feature limits.
+A local startup failure returns `browser_startup_unavailable` before
 any tab navigation.
 The same session and tab IDs continue across document and SPA navigation.
 Snapshots include `last_navigation` for the most recent explicit navigation:
