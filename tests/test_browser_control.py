@@ -4,6 +4,8 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
+import sys
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -383,6 +385,56 @@ async def test_isolated_browser_exact_owner_tab_and_stale_references(local_page)
             await control.observe(session, owner="owner-a")
     finally:
         await _close_browser_control(control)
+
+
+@pytest.mark.skipif(
+    sys.platform != "linux" or not (os.environ.get("ANYWHERE_TEST_CHROME_EXECUTABLE")
+                                   or os.environ.get("ANYWHERE_TEST_CHROMIUM_EXECUTABLE")),
+    reason="Requires an explicitly selected trusted Linux Chrome for acceptance",
+)
+async def test_configured_linux_chrome_navigation_isolation_and_input(local_page, tmp_path):
+    from anywhere_computer.browser_configuration import configure_browser
+
+    directory = tmp_path / "isolated-browser-state"
+    configuration = configure_browser(
+        directory, executable=os.environ.get("ANYWHERE_TEST_CHROME_EXECUTABLE"),
+        chromium_executable=os.environ.get("ANYWHERE_TEST_CHROMIUM_EXECUTABLE"),
+    )
+    assert configuration["selection"] == "configured"
+    control = BrowserControl(directory=directory)
+    try:
+        first = await control.open(owner="owner-a")
+        first_ids = {"session_id": first["session_id"], "tab_id": first["tab_id"]}
+        navigated = await control.navigate(BrowserNavigate(**first_ids, url=local_page),
+                                           owner="owner-a")
+        assert navigated["http_status"] == 200
+        assert "Browser verified 42" in navigated["text"]
+        filled = await control.fill(BrowserFill(**first_ids, selector="#entry",
+                                               value="Linux configured Chrome"), owner="owner-a")
+        clicked = await control.click(BrowserClick(
+            **first_ids, role="button", name="Go", snapshot_id=filled["snapshot_id"],
+        ), owner="owner-a")
+        assert "Linux configured Chrome clicked" in clicked["text"]
+        await control.navigate(BrowserNavigate(
+            **first_ids, url=local_page.rsplit("/", 1)[0] + "/cookie",
+        ), owner="owner-a")
+        cookie_check = await control.navigate(BrowserNavigate(**first_ids, url=local_page),
+                                              owner="owner-a")
+        assert "isolated=owner-a" in cookie_check["text"]
+        with pytest.raises(ValueError, match="unavailable"):
+            await control.observe(BrowserSession(**first_ids), owner="owner-b")
+        # Keep acceptance within the cloud trial's one-browser resource limit.
+        await _close_browser_control(control)
+        second = await control.open(owner="owner-b")
+        second_ids = {"session_id": second["session_id"], "tab_id": second["tab_id"]}
+        separate = await control.navigate(BrowserNavigate(**second_ids, url=local_page),
+                                          owner="owner-b")
+        assert "isolated=owner-a" not in separate["text"]
+    finally:
+        await _close_browser_control(control)
+    assert not control.entries
+    assert not (directory / "agent.json").exists()
+    assert not (directory / "operations.sqlite3").exists()
 
 
 @pytest.mark.parametrize("close_target", ["page", "browser"])

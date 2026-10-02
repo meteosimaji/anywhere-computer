@@ -18,6 +18,9 @@ MCP クライアントには、このリポジトリを作業ディレクトリ�
 資格情報は OS の保管機能を利用します。Linux では Secret Service/KWallet などの
 利用可能な保管機能が必要です。
 
+Linuxのログインセッション診断、ユーザー領域の公式Chrome実行パス指定、
+未対応のネイティブ機能と段階計画は[Linux対応](LINUX.md)を参照してください。
+
 ```sh
 uv run anywhere doctor
 uv run anywhere stop
