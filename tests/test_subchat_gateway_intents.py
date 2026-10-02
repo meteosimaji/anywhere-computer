@@ -1,11 +1,17 @@
 """Real gateway/core/SQLite intent recovery; only provider I/O is synthetic."""
 
+from contextlib import asynccontextmanager
+
 import pytest
 
 from anywhere_computer.models import Request
 from anywhere_computer.state import Ledger
 from anywhere_computer.subchat import SubchatReceipt, Subchats
-from anywhere_computer.subchat_gateway import SubchatGateway
+from anywhere_computer.subchat_gateway import (
+    LazySubchatGateway,
+    SubchatGateway,
+    SubchatGatewayConfig,
+)
 from anywhere_computer.subchat_mcp import session
 from anywhere_computer.subchat_state import SubchatRequestConflict, SubchatSubmissions
 
@@ -214,3 +220,74 @@ async def test_persisted_alias_cannot_be_rebound_to_another_owner(fixture):
         tool='subchat_send', arguments=ARGS), SCOPES)
     assert changed.state == 'failed' and changed.data['error_code'] == 'request_conflict'
     assert CANONICAL not in changed.model_dump_json() and provider.sent == []
+
+
+@pytest.mark.parametrize('change', [
+    {'prompt': 'changed'}, {'model': 'other'}, {'effort': 'more'},
+    {'intent_key': 'c' * 32}, {'resources': {'attachments': [
+        {'id': 'file_fixture', 'name': 'note.txt', 'mime_type': 'text/plain', 'size': 4}]}},
+])
+async def test_alias_conflicts_are_rejected_when_selected_gateway_is_unavailable(
+    fixture, tmp_path, monkeypatch, change,
+):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    _, _, provider, make_gateway = fixture
+    alias = '1' * 32
+    request = Request(operation_id=alias, tool='subchat_send', arguments=ARGS)
+    gateway = make_gateway()
+    assert (await gateway.execute('owner-a', request, SCOPES)).state == 'completed'
+    await gateway.close()
+
+    @asynccontextmanager
+    async def unavailable(config, *, owner):
+        raise RuntimeError('synthetic selected profile outage')
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gateway_module, 'open_subchat_gateway', unavailable)
+    lazy = LazySubchatGateway(SubchatGatewayConfig(
+        profile=str(tmp_path / 'Default'), ledger=str(tmp_path), account_id='account-a',
+        consent='ordinary-chat-browser-control-approved'), owner='owner')
+    try:
+        unchanged = await lazy.execute('owner-a', request, SCOPES)
+        assert unchanged.state == 'completed' and unchanged.data['operation_id'] == CANONICAL
+        changed = await lazy.execute('owner-a', request.model_copy(
+            update={'arguments': {**ARGS, **change}}), SCOPES)
+        assert changed.state == 'failed' and changed.data['error_code'] == 'request_conflict'
+        assert provider.sent == []
+    finally:
+        await lazy.close()
+
+
+async def test_persisted_send_alias_cannot_bypass_binding_through_lazy_local_read(
+    fixture, tmp_path, monkeypatch,
+):
+    import anywhere_computer.subchat_gateway as gateway_module
+
+    _, _, provider, make_gateway = fixture
+    alias = '1' * 32
+    gateway = make_gateway()
+    await gateway.execute('owner-a', Request(operation_id=alias,
+        tool='subchat_send', arguments=ARGS), SCOPES)
+    await gateway.close()
+
+    @asynccontextmanager
+    async def forbidden(config, *, owner):
+        pytest.fail('A local read must not open the provider')
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(gateway_module, 'open_subchat_gateway', forbidden)
+    lazy = LazySubchatGateway(SubchatGatewayConfig(
+        profile=str(tmp_path / 'Default'), ledger=str(tmp_path), account_id='account-a',
+        consent='ordinary-chat-browser-control-approved'), owner='owner')
+    try:
+        request = Request(operation_id=alias, tool='subchat_status',
+                          arguments={'operation_id': CANONICAL})
+        rejected = await lazy.execute('owner-a', request, SCOPES)
+        assert rejected.state == 'failed' and rejected.data['error_code'] == 'request_conflict'
+        accepted = await lazy.execute('owner-a', request.model_copy(
+            update={'operation_id': '2' * 32}), SCOPES)
+        assert accepted.state == 'completed' and accepted.data['operation_id'] == CANONICAL
+        assert provider.sent == []
+    finally:
+        await lazy.close()

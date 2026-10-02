@@ -3,6 +3,18 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b69 / Plugin 0.2.0-beta.69 — unpublished main candidate (2026-10-02)
+
+- Validate persisted Subchat communication-ID bindings before local reads and
+  unavailable-gateway recovery, preserving conflicts across profile outages.
+  Five real SQLite regressions reproduced successful-looking stale receipts
+  before the fix, with no provider sends, and now reject changed send inputs.
+- Complete beta.68 guest-local stdio MCP acceptance in the Magic OS Linux VM:
+  file/hash integrity and stale-write rejection, observed browser input/click,
+  terminal output and original operation recovery after reconnection, and owned
+  resource cleanup. This does not establish Linux ordinary Chat/Subchat login
+  or cloud routing and does not update the installed/public beta.52 release.
+
 ## 0.2.0b68 / Plugin 0.2.0-beta.68 — unpublished main candidate (2026-10-02)
 
 - Integrate the Linux startup diagnostics and host-only browser configuration

@@ -489,6 +489,20 @@ class LazySubchatGateway:
             return Reply(operation_id=request.operation_id, state="failed",
                          error="Subchat prompt preview requires separate consent",
                          data={"dispatched": False})
+        try:
+            # Local reads and outage recovery also bypass the live core. Retain
+            # its durable transport-ID binding before returning any saved result.
+            await asyncio.to_thread(self._check_saved_send_request, grant_id, request)
+        except SubchatRequestConflict:
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="This request ID belongs to a different Subchat mutation.",
+                         data={"error_code": "request_conflict", "dispatched": False})
+        except (ValueError, OSError, sqlite3.Error):
+            return Reply(operation_id=request.operation_id, state="failed",
+                         error="The selected Subchat ledger could not be checked. "
+                               "Inspect the original operation before retrying.",
+                         data={"error_code": "gateway_unavailable", "dispatched": None,
+                               "automatic_retry": False})
         if request.tool in {"subchat_status", "subchat_capabilities", "subchat_list",
                             "subchat_activity",
                             "subchat_cancel", "subchat_queue_events"}:
@@ -745,6 +759,19 @@ class LazySubchatGateway:
                 operation_id, owner=grant_id, request_id=request_id, digest=digest))
         finally:
             ledger.close()
+
+    def _check_saved_send_request(self, grant_id: str, request: Request) -> None:
+        ledger_path = Path(self.config.ledger)
+        database = ledger_path / "operations.sqlite3"
+        if ledger_path.is_symlink() or database.is_symlink():
+            raise ValueError("Selected Subchat ledger is unavailable")
+        if not database.is_file():
+            return
+        with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro",
+                                     uri=True)) as connection:
+            SubchatSubmissions(connection, initialize=False).send_request_submission(
+                request.operation_id, owner=grant_id, tool=request.tool,
+                digest=_mutation_digest(request))
 
     def _saved_intent_id(self, grant_id: str, intent_key: str) -> str | None:
         ledger_path = Path(self.config.ledger)

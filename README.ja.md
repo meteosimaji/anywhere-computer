@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b68` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.68` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b69` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.69` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
