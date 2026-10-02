@@ -102,6 +102,7 @@ def main() -> None:
             "http-delegate-issue",
             "http-delegate-list",
             "http-delegate-revoke",
+            "http-delegate-receipt",
             "http-delegate-route",
             "http-delegate-unroute",
             "login",
@@ -160,6 +161,7 @@ def main() -> None:
     parser.add_argument("--scope", action="append", help="Tool to authorize (repeat per tool)")
     parser.add_argument("--parent-grant-id", help="Active parent OAuth grant ID for child issue")
     parser.add_argument("--child-id", help="Delegated child ID to revoke")
+    parser.add_argument('--operation-id', help='Original delegated file operation ID to recover')
     parser.add_argument("--target-child-id",
                         help="Target-issued child ID recorded with a delegated route")
     parser.add_argument("--delegated-device-id", default=None,
@@ -326,6 +328,7 @@ def main() -> None:
     if any(value is not None for value in delegation_options) and args.command not in {
         "http-delegate-issue", "http-delegate-revoke", "http-delegate-route",
         "http-delegate-unroute",
+        "http-delegate-receipt",
     }:
         parser.error("Delegation options are only valid for delegate issue/revoke")
     if args.command == "http-delegate-issue" and (
@@ -340,6 +343,15 @@ def main() -> None:
         ))
     ):
         parser.error("Delegate revoke requires only --child-id")
+    if args.operation_id is not None and args.command != 'http-delegate-receipt':
+        parser.error('--operation-id is only valid for delegated receipt recovery')
+    if args.command == 'http-delegate-receipt' and (
+        not args.child_id or not args.operation_id or any(value is not None for value in (
+            args.parent_grant_id, args.target_child_id, args.delegated_device_id, args.read_root,
+            args.read_file, args.write_root, args.expires_in,
+        ))
+    ):
+        parser.error('Delegate receipt requires only --child-id and --operation-id')
     if args.command in {"http-delegate-route", "http-delegate-unroute"} and (
         not args.child_id or any(value is not None for value in (
             args.parent_grant_id, args.delegated_device_id, args.read_root,
@@ -695,6 +707,7 @@ def main() -> None:
         elif args.command in {
             "http-delegate-issue", "http-delegate-list", "http-delegate-revoke",
             "http-delegate-route", "http-delegate-unroute",
+            "http-delegate-receipt",
         }:
             from .delegation_admin import manage_delegation
 
@@ -715,6 +728,7 @@ def main() -> None:
                 expires_in=3600 if args.expires_in is None else args.expires_in,
                 target_bearer=target_bearer,
                 target_child_id=args.target_child_id,
+                operation_id=args.operation_id,
             )
             print(json.dumps(delegation_result))
         elif args.command in {"http-mcp", "login"}:
