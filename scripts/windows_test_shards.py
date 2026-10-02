@@ -33,6 +33,13 @@ SERIAL_GROUPS = {
         'tests/test_browser_tabs_dialogs.py::test_failed_excess_popup_cleanup_closes_only_its_owned_session[normal]',
         'tests/test_browser_tabs_dialogs.py::test_failed_excess_popup_cleanup_closes_only_its_owned_session[slow-browser-close]',
     ],
+    # Keep actual iframe startup and migration's production-cost owner login
+    # out of competing workers. Assertions, deadlines, and exact-once coverage
+    # stay unchanged; every collected case still contributes to the release gate.
+    'connection-recovery': [
+        'tests/test_connection_frame_draft_browser.py',
+        'tests/test_engine_migration.py',
+    ],
 }
 COSTS = ROOT / 'scripts/ci/windows_test_costs.json'
 
