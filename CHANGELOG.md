@@ -3,6 +3,19 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b63 / Plugin 0.2.0-beta.63 — unpublished candidate (2026-10-02)
+
+- Retain exact Subchat send transport-ID bindings to their canonical submission
+  in the same durable transaction as intent preparation. Reject changed input,
+  another tool/owner and conversion of an alias into a new direct submission
+  after cache eviction or restart. Store digests without duplicating prompts.
+- Recover capacity occupied by completed send-intent aliases using same-owner,
+  same-account persisted receipts. Keep active workers and uncertain sends;
+  report retained request count and deduplicated owned recovery IDs truthfully.
+- Include the unpublished beta.62 setup, MCP export and local socket cleanup
+  repairs without changing its wheel bytes. Provider wire/hardware acceptance
+  and deployed-runtime updates remain separate gates.
+
 ## 0.2.0b62 / Plugin 0.2.0-beta.62 — unpublished candidate (2026-10-02)
 
 - Export local MCP JSON/TOML with the installed interpreter and explicit state
