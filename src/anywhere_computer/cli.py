@@ -74,6 +74,7 @@ def main() -> None:
         choices=[
             "setup",
             "skills-configure",
+            "browser-configure",
             "start",
             "update",
             "auto-update-enable",
@@ -201,12 +202,21 @@ def main() -> None:
     parser.add_argument("--startup-id", help=argparse.SUPPRESS)
     parser.add_argument("--codex-executable",
                         help="Optional pinned Codex CLI for supervised services")
+    browser_options = parser.add_mutually_exclusive_group()
+    browser_options.add_argument("--chrome-executable",
+                                 help="Trusted Linux Google Chrome ELF binary absolute path; "
+                                      "browser-configure executes it with --version")
+    browser_options.add_argument("--clear-chrome-executable", action="store_true",
+                                 help="Restore the default isolated browser channel on Linux")
     skill_options = parser.add_mutually_exclusive_group()
     skill_options.add_argument("--skill-root", action="append",
                                help="Absolute skill collection directory; repeat to select several")
     skill_options.add_argument("--clear-skill-roots", action="store_true",
                                help="Restore standard .agents/skills discovery")
     args = parser.parse_args()
+    if ((args.chrome_executable is not None or args.clear_chrome_executable)
+            and args.command != "browser-configure"):
+        parser.error("Chrome executable options are only valid for browser-configure")
     if ((args.skill_root is not None or args.clear_skill_roots)
             and args.command != "skills-configure"):
         parser.error("Skill root options are only valid for skills-configure")
@@ -745,6 +755,13 @@ def main() -> None:
             print(reply.model_dump_json(indent=2))
             if reply.state != "completed":
                 raise SystemExit(1)
+        elif args.command == "browser-configure":
+            from .browser_configuration import configure_browser
+
+            print(json.dumps(configure_browser(
+                directory, executable=args.chrome_executable,
+                clear=args.clear_chrome_executable,
+            ), ensure_ascii=False, indent=2))
         elif args.command == "start":
             print(json.dumps(ensure_agent(directory, replace_idle=True), indent=2))
         elif args.command in {"auto-update-enable", "auto-update-disable"}:

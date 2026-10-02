@@ -17,11 +17,13 @@ import uuid
 from collections import deque
 from collections.abc import Coroutine
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 from urllib.parse import urlsplit
 
 from pydantic import JsonValue
 
+from .browser_configuration import selected_chrome
 from .files import absolute_path, read_bytes, sha256
 from .models import (
     BrowserClick,
@@ -317,12 +319,13 @@ class _Entry:
 
 
 class BrowserControl:
-    def __init__(self, *, channel: str | None = "auto") -> None:
+    def __init__(self, *, channel: str | None = "auto", directory: Path | None = None) -> None:
         # The isolated tab has no account profile. Use the browser shipped with
         # Windows; callers can still request an explicit Playwright channel.
         self.channel = (
             "msedge" if sys.platform == "win32" else "chrome"
         ) if channel == "auto" else channel
+        self.directory = directory
         self.entries: dict[str, _Entry] = {}
         self._lock = asyncio.Lock()
 
@@ -462,6 +465,12 @@ class BrowserControl:
             if len(self.entries) >= 4:
                 raise ValueError("Browser session capacity reached")
             try:
+                executable = await asyncio.to_thread(selected_chrome, self.directory)
+            except (OSError, ValueError) as error:
+                raise BrowserStartupUnavailable(
+                    "Selected Chrome is unavailable or changed; run browser-configure locally"
+                ) from error
+            try:
                 from playwright.async_api import async_playwright
             except ImportError as error:
                 raise BrowserStartupUnavailable(
@@ -499,7 +508,12 @@ class BrowserControl:
                 raise
             browser = None
             try:
-                browser = await driver.chromium.launch(headless=True, channel=self.channel)
+                if executable is None:
+                    browser = await driver.chromium.launch(headless=True, channel=self.channel)
+                else:
+                    browser = await driver.chromium.launch(
+                        headless=True, executable_path=str(executable), chromium_sandbox=True,
+                    )
                 context = await browser.new_context(accept_downloads=True)
                 page = await context.new_page()
             except BaseException as error:

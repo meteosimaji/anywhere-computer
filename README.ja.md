@@ -128,7 +128,10 @@ macOS のネイティブ Accessibility 経路は、`compact=true` で操作可�
 MCPの画像として確認できます。画像と要素情報は順番に取得するため、動くページでは
 完全に同じ瞬間を表すとは限りません。
 隔離ブラウザの既定起動先はWindowsではインストール済みEdge、macOSとLinuxでは
-Chromeです。起動できない場合は送信前の`browser_startup_unavailable`を返します。
+Chromeです。Linuxではローカルの`browser-configure`で、信頼したユーザー領域の
+公式Chrome ELFを指定できます。検証・起動診断・現在のネイティブ機能の制限は
+[Linux対応](docs/LINUX.md)を参照してください。
+起動できない場合は送信前の`browser_startup_unavailable`を返します。
 
 ローカルのエージェント同士で明示的に文章を送る`anywhere-peer` MCPもあります。
 `anywhere-peer --help`に所有者による登録と起動方法を示します。各peerの資格情報は

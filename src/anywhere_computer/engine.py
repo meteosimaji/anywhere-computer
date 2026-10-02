@@ -17,6 +17,7 @@ from . import __version__, codex_context, codex_plugins, skills_context
 from .audio_capture import AudioCapture, AudioCaptureUnknown, capture_audio
 from .audio_status import inspect_audio, verified_audio_helper
 from .authorization import GrantIdentity, current_grant_read_only
+from .browser_configuration import browser_configuration
 from .browser_control import (
     BrowserActionUnknown,
     BrowserControl,
@@ -297,7 +298,7 @@ class Engine:
         )
         self.gui_mcp = GUIMCP(self.direct_mcp_sessions)
         self.native_gui = NativeGUI()
-        self.browser = BrowserControl()
+        self.browser = BrowserControl(directory=directory)
         self._document_preview_slots = asyncio.Semaphore(2)
         # Transport-owned identity, inherited by the durable execution task only.
         # Tool arguments cannot set this value; None is the local execution scope.
@@ -1505,11 +1506,14 @@ class Engine:
                     for operation_id, task in self.inflight.items()
                 ),
             }
+        browser_configuration_status = browser_configuration(self.browser.directory)
         capabilities: dict[str, JsonValue] = {
             "browser_isolated_adapter": {
                 "available": True,
-                "requires": "Playwright and installed Edge on Windows or Chrome on macOS/Linux",
+                "requires": "Playwright and installed Edge on Windows or Chrome on macOS/Linux; "
+                            "Linux also accepts a locally configured Chrome ELF binary",
                 "runtime_verified": False,
+                "configuration": browser_configuration_status,
             },
             "files": True,
             "terminal": True,
@@ -1598,6 +1602,20 @@ class Engine:
                 "Provide a trusted local Whisper checkpoint path; no model is downloaded."
             ),
         }
+        if platform.system() != "Darwin":
+            for name in ("office_rendered_preview", "office_rendered_preview_adapter"):
+                details = capability_diagnostics[name]
+                assert isinstance(details, dict)
+                details.update(runtime_available=False, helper="unsupported_platform",
+                               next_action="Document rendering currently requires macOS "
+                                           "sandbox-exec; Office text read/write remains available."
+                               )
+        browser_details = capability_diagnostics["browser_isolated"]
+        assert isinstance(browser_details, dict)
+        browser_details["configuration"] = browser_configuration_status
+        if browser_configuration_status["selection"] == "invalid":
+            browser_details.update(runtime_available=False,
+                                   next_action=browser_configuration_status["next_action"])
         for capability, check in (
             ("audio_capture", verified_audio_helper), ("gui_native", installed_helper),
         ):
