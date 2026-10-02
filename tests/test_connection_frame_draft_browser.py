@@ -64,6 +64,7 @@ def instrument_bootstrap(session, trace):
     instrument(connector, '_bind', 'connector_bind')
     instrument(connector, '_claim', 'connector_claim')
     instrument(connector, '_save_reply', 'connector_record')
+    instrument(connector, '_status_reply', 'connector_status_transaction')
     instrument(connector.controller, 'progress', 'connector_progress')
     instrument(connector.fixture_engine.ledger, 'claim', 'engine_claim')
     instrument(connector.fixture_engine.ledger, 'finish', 'engine_record')

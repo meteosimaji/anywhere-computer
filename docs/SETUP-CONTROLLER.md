@@ -83,6 +83,13 @@ new review, callers receive unknown and must inspect status. Cancellation leaves
 claim in place. The database stores request digests and public setup replies, never
 credentials or the argument contents of delegated tools.
 
+Status binds its request, claims it, reads the public configuration and records
+the receipt in one durable transaction before returning. This synchronous read
+does not wait for an asynchronous confirmation save: a fresh status request can
+report `saving` while that save is pending. Configuration writes still commit
+their claims before dispatch. Invalid status arguments retain their operation-ID
+binding; an unsuccessful durable commit cannot report a successful status result.
+
 The screen still requires an installed local MCP connector and a user-provided
 public URL. One-click native runtime bootstrap, credentials, service launch, actual
 internet reachability and official-directory acceptance remain outstanding.
