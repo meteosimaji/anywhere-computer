@@ -111,6 +111,8 @@ credentials.local_credential = fixture_credential
     assert config['command'] == str(interpreter)
     assert not state.exists()
     parameters = StdioServerParameters(**config, cwd=str(hostile), env=env)
+    admitted_endpoint = None
+    admitted_parent = None
     try:
         async with asyncio.timeout(45):
             async with stdio_client(parameters) as (reader, writer):
@@ -178,6 +180,8 @@ credentials.local_credential = fixture_credential
             except ConnectionError as error:
                 error.add_note('Controlled MCP stop phases: ' + json.dumps(phases))
                 try:
+                    if admitted_endpoint is None:
+                        raise psutil.NoSuchProcess(0)
                     process = psutil.Process(admitted_endpoint['pid'])
                     same = process.create_time() == admitted_endpoint['process_started']
                     live = (same and process.is_running()
