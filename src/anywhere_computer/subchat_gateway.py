@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, f
 
 from .authorization import GrantIdentity
 from .models import Contract, OperationId, Reply, Request
+from .subchat import SubchatAccessError
 from .subchat_mcp import (
     HTTPQueueModelChange,
     QueueAuto,
@@ -323,7 +324,8 @@ class LazySubchatGateway:
                 await resources.aclose()
                 # Provider errors can carry private URLs or account data.
                 logger.warning("Subchat gateway unavailable: %s", type(error).__name__)
-                self._failure_code = ("chrome_profile_access_denied"
+                self._failure_code = (error.code if isinstance(error, SubchatAccessError)
+                                      else "chrome_profile_access_denied"
                                       if isinstance(error, PermissionError)
                                       else "gateway_unavailable")
                 self._retry_after = time.monotonic() + 10
@@ -523,11 +525,17 @@ class LazySubchatGateway:
                 else:
                     return saved
             data: dict[str, JsonValue] = {"error_code": self._failure_code}
+            access_rejected = self._failure_code in {"authentication_required", "access_denied"}
+            if access_rejected:
+                data["automatic_retry"] = False
             if (request.tool != "subchat_send" or send_unrecorded) and request.tool in {
                     "subchat_send", "subchat_message", "subchat_catalog"}:
                 data["dispatched"] = False
             return Reply(operation_id=request.operation_id, state="failed",
-                         error="Selected Subchat account is unavailable",
+                         error=("Check the selected Chat login and account access. Saved "
+                                "submissions are preserved; after restoring access, recover "
+                                "existing IDs without sending them again." if access_rejected
+                                else "Selected Subchat account is unavailable"),
                          data=data)
         try:
             return await gateway.execute(

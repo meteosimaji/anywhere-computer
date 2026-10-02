@@ -463,7 +463,7 @@ class BrowserAuthorization:
             abilities.append("transcribe up to ten seconds of local audio or video")
         if record.tools & {"files_write", "files_write_binary", "files_edit", "files_restore",
                            "files_move", "directories_create", "documents_write",
-                           "documents_edit_paragraph", "upload_commit"}:
+                           "documents_edit_paragraph", "documents_edit_cell", "upload_commit"}:
             abilities.append("change files")
         if record.tools & {"terminal_start", "terminal_input", "mcp_session_open"}:
             abilities.append("run commands as this device user")

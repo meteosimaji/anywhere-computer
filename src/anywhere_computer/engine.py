@@ -27,6 +27,7 @@ from .capability_contract import CAPABILITY_TOOLS
 from .common_skills import SkillResource, SkillsPage, list_skills, read_skill
 from .direct_mcp import DirectMCPOutcomeUnknown
 from .direct_mcp_sessions import DirectMCPSessions
+from .document_editor import edit_spreadsheet_cell
 from .document_preview import DocumentPreviewUnavailable, preview_document
 from .document_writer import edit_document_paragraph, write_document
 from .documents import read_document
@@ -77,6 +78,7 @@ from .models import (
     DownloadRange,
     EditDocumentParagraph,
     EditFile,
+    EditSpreadsheetCell,
     Empty,
     FilePath,
     History,
@@ -212,6 +214,12 @@ _TERMINAL_INPUT_REJECTIONS: dict[str, tuple[str, str]] = {
     ),
 }
 _DOCUMENT_EDIT_REJECTIONS: dict[str, tuple[str, str]] = {
+    "Workbook changed; read it again": (
+        "document_changed", "Read the document again before editing."
+    ),
+    "Cell text changed; no edit was applied": (
+        "cell_changed", "Read the document again before editing."
+    ),
     "Document changed; read it again": (
         "document_changed", "Read the document again before editing."
     ),
@@ -993,6 +1001,9 @@ class Engine:
         async def document_edit(args: EditDocumentParagraph) -> Result:
             return await asyncio.to_thread(edit_document_paragraph, self.files, args)
 
+        async def document_edit_cell(args: EditSpreadsheetCell) -> Result:
+            return await asyncio.to_thread(edit_spreadsheet_cell, self.files, args)
+
         async def read(args: ReadFile) -> Result:
             args = args.model_copy(
                 update={"limit": min(args.limit, self.settings().file_read_line_limit)}
@@ -1167,6 +1178,12 @@ class Engine:
             "Replace one plain-text DOCX paragraph by number, requiring the file hash and "
             "exact old text. Return a before/after diff and retain a backup.",
             EditDocumentParagraph, document_edit, destructive=True,
+        )
+        self.register(
+            "documents_edit_cell",
+            "Preview or edit one existing plain-text XLSX cell using its workbook hash "
+            "and exact old text. Returns a before/after diff; edits retain a backup.",
+            EditSpreadsheetCell, document_edit_cell, destructive=True,
         )
         self.register(
             "computer_status",
@@ -1507,7 +1524,7 @@ class Engine:
             },
             "gui": False,
             "gui_native_adapter": {
-                "available": True, "provider": "macos_ax",
+                "available": platform.system() == "Darwin", "provider": "macos_ax",
                 "requires": "verified portable helper and existing Accessibility permission",
                 "runtime_verified": False,
             },
@@ -1598,6 +1615,13 @@ class Engine:
             if helper_status == "unsupported_platform":
                 details["runtime_available"] = False
                 details["next_action"] = "This helper requires macOS; no helper was run."
+                if capability == "gui_native":
+                    adapter_details = capability_diagnostics["gui_native_adapter"]
+                    assert isinstance(adapter_details, dict)
+                    adapter_details.update({
+                        "runtime_available": False, "helper": helper_status,
+                        "next_action": details["next_action"],
+                    })
             elif helper_status in {"unavailable", "verification_failed"}:
                 details["runtime_available"] = False
                 details["next_action"] = (
@@ -1973,7 +1997,8 @@ class Engine:
                         data={"error_code": code, "dispatched": False,
                               "execution_state": "not_dispatched", "next_action": action},
                     )
-                elif (request.tool == "documents_edit_paragraph" and type(error) is ValueError
+                elif (request.tool in {"documents_edit_paragraph", "documents_edit_cell"}
+                      and type(error) is ValueError
                       and (fixed := _DOCUMENT_EDIT_REJECTIONS.get(str(error))) is not None):
                     code, action = fixed
                     reply = Reply(

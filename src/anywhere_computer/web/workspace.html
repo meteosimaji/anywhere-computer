@@ -78,6 +78,7 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
 <div class="field"><label for="setup-mode">許可する操作</label><select id="setup-mode"><option value="custom" disabled hidden>保存済みの操作（詳細を確認）</option><option value="read-only">見る・調べる</option><option value="files">ファイルを編集する</option><option value="all">すべての操作（コマンド実行・ほかのPlugin・登録端末の操作を含む）</option></select></div>
 <details id="setup-options"><summary>詳細設定</summary><div class="setup-options"><label for="setup-owner">所有者名</label><input id="setup-owner" value="owner" maxlength="128" autocomplete="off"><label id="setup-client-label" for="setup-client">接続アプリ名</label><input id="setup-client" value="anywhere-native" maxlength="128" autocomplete="off"><label for="setup-port">このコンピューターの待受ポート</label><input id="setup-port" type="number" value="8768" min="1" max="65535"></div></details>
 <div><button id="setup-plan" class="primary">内容を確認</button></div>
+<p id="setup-draft-note" class="intro" role="status" hidden></p>
 </div>
 <div id="setup-review" class="review" hidden><h2 id="setup-review-title">この内容で保存します</h2><dl id="setup-summary"></dl><details><summary>接続設定の詳細</summary><dl id="setup-technical"></dl></details><details><summary>許可する操作の一覧</summary><ul id="setup-scopes"></ul></details><p class="setup-explanation">保存するのは接続の設定です。認証とサービスの起動は、このあと別途必要です。</p><button id="setup-confirm" class="primary">この内容を保存</button></div>
 </section>
@@ -91,7 +92,7 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
   const pending = new Map();
   const MAX_TEXT = 1024 * 1024, MAX_IMAGE = 5 * 1024 * 1024;
   const operationMeta = "io.github.meteosimaji.anywhere-computer/operation_id";
-  const state = {ready:false, busy:false, target:"local", rootTools:new Set(), tools:new Set(), current:null, dirty:false, history:[], limit:200, mutation:null, objectUrl:null, pendingNavigation:null, hostOrigin:null, setup:null, setupUncertain:false, setupMode:null, setupBase:null, setupHeld:false, setupReviewed:null};
+  const state = {ready:false, busy:false, target:"local", rootTools:new Set(), tools:new Set(), current:null, dirty:false, history:[], limit:200, mutation:null, objectUrl:null, pendingNavigation:null, hostOrigin:null, setup:null, setupUncertain:false, setupMode:null, setupBase:null, setupHeld:false, setupReviewed:null, setupSession:null, setupRestored:false, setupClosed:false, setupPendingPlan:null};
   const ids = ["welcome","folder","text-panel","preview","settings","setup"];
   const id32 = () => crypto.randomUUID().replaceAll("-", "");
   const normalize = text => text.replace(/\r\n?/g, "\n");
@@ -163,6 +164,78 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
   // A reviewed form whose save was not confirmed is also held as a draft, though the user never edited it.
   const setupFormEdited=()=>!!state.setupBase && setupFields.some(id=>$(id).value!==state.setupBase[id]);
   const setupDraftDirty=()=>state.setupHeld || setupFormEdited();
+  // Host-owned private widget state survives frame recreation without granting storage access.
+  // Hosts without this optional API retain only the current frame's draft.
+  const setupSnapshotKeys=["version","session","target","values","held","pendingPlan"];
+  function safeSetupValues(values) {
+    if(!values || typeof values!=="object" || Object.keys(values).length!==setupFields.length ||
+       !setupFields.every(id=>typeof values[id]==="string")) return false;
+    if(!["chatgpt","native"].includes(values["setup-kind"]) ||
+       !["read-only","files","all","custom"].includes(values["setup-mode"]) ||
+       !/^[0-9]{0,5}$/.test(values["setup-port"]) ||
+       !["setup-owner","setup-client"].every(id=>/^[\x21-\x7e]{0,128}$/.test(values[id]))) return false;
+    const raw=values["setup-resource"];
+    if(!raw) return true;
+    if(raw.length>2048 || /[\x00-\x20\x7f-\uffff\\"<>?#]/.test(raw)) return false;
+    try {const url=new URL(raw);return url.protocol==="https:" && !!url.hostname && !url.username && !url.password && !url.search && !url.hash;}
+    catch {return false;}
+  }
+  function widgetBridge() {
+    try {return typeof window.openai?.setWidgetState==="function" ? window.openai : null;}
+    catch {return null;}
+  }
+  function draftNote(text="") {
+    $("setup-draft-note").textContent=text;$("setup-draft-note").hidden=!text;
+  }
+  function persistSetup() {
+    if(state.setupClosed || state.target!=="local") return;
+    const host=widgetBridge();
+    if(!host || !state.setupSession ||
+       !["connection_setup_status","connection_setup_plan","connection_setup_confirm"].every(name=>state.rootTools.has(name))) {
+      draftNote("このホストでは画面を閉じると未保存の入力が失われます。");return;
+    }
+    const values=setupValues(),dirty=setupDraftDirty(),safe=safeSetupValues(values);
+    const snapshot=dirty && safe ? {
+      version:1,session:state.setupSession,target:"local",values,
+      held:state.setupHeld,pendingPlan:state.setupPendingPlan,
+    } : null;
+    // Never copy arbitrary prior host state or a URL that could contain credentials.
+    try {
+      host.setWidgetState({modelContent:"",privateContent:{connectionDraft:snapshot},imageIds:[]});
+      draftNote(dirty && !safe ? "この入力は画面を閉じると保持できません。必要な内容を手元に控えてください。" : "");
+    } catch {
+      // A refused optional snapshot does not block normal review/save.
+      draftNote("このホストでは画面を閉じると未保存の入力が失われます。");
+    }
+  }
+  function bindSetupSession(value) {
+    if(typeof value!=="string" || !/^[a-f0-9]{32}$/.test(value)) {state.setupSession=null;return;}
+    if(state.setupSession && state.setupSession!==value) {
+      state.setupHeld=false;state.setupReviewed=null;state.setupPendingPlan=null;
+      state.setupBase=null;state.setupRestored=false;
+    }
+    state.setupSession=value;
+  }
+  function restoreSetup(progress) {
+    if(state.setupRestored || !state.setupSession || state.target!=="local" ||
+       !["connection_setup_status","connection_setup_plan","connection_setup_confirm"].every(name=>state.rootTools.has(name))) return;
+    state.setupRestored=true;
+    let snapshot;try {snapshot=widgetBridge()?.widgetState?.privateContent?.connectionDraft;} catch {return;}
+    if(!snapshot || Object.keys(snapshot).length!==setupSnapshotKeys.length ||
+       !setupSnapshotKeys.every(key=>Object.hasOwn(snapshot,key)) || snapshot.version!==1 ||
+       snapshot.session!==state.setupSession || snapshot.target!=="local" ||
+       typeof snapshot.held!=="boolean" || (snapshot.pendingPlan!==null &&
+         (typeof snapshot.pendingPlan!=="string" || !/^[a-f0-9]{64}$/.test(snapshot.pendingPlan))) ||
+       !safeSetupValues(snapshot.values)) return;
+    // Configured plus this controller's same immutable plan proves the pending save;
+    // otherwise restored fields remain held and cannot confirm a previous review.
+    if(snapshot.held && snapshot.pendingPlan && progress.phase==="configured" &&
+       progress.plan_id===snapshot.pendingPlan && progress.configuration &&
+       ["resource","owner","client","port"].every(key=>snapshot.values["setup-"+key]===String(progress.configuration[key]))) return;
+    for(const id of setupFields) $(id).value=snapshot.values[id];
+    state.setupHeld=snapshot.held;state.setupPendingPlan=snapshot.pendingPlan;
+    renderSetup(progress,{keepDraft:true});
+  }
   function navigate(action) {
     if(state.mutation) {message("未確認の操作を照会してから移動してください。",true);return;}
     if(state.dirty || setupDraftDirty()) {state.pendingNavigation=action; $("discard").showModal();return;}
@@ -468,7 +541,7 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
       }
       for(const scope of config.scopes){const entry=document.createElement("li");entry.textContent=scope;$("setup-scopes").append(entry);}
     }
-    if(adopt) {state.setupBase=setupValues();state.setupHeld=false;state.setupReviewed=null;}
+    if(adopt) {state.setupBase=setupValues();state.setupHeld=false;state.setupReviewed=null;state.setupPendingPlan=null;}
     controls();
   }
   async function setupCall(name,args={}) {
@@ -480,11 +553,12 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
     const reviewed=name==="connection_setup_confirm" && state.setup?.plan_id===args.plan_id ? state.setup.configuration : null;
     if(changes) state.setupUncertain=true;
     // The reviewed form is held from the moment a save is sent; only this save's own confirmed reply releases it.
-    if(name==="connection_setup_confirm") {state.setupHeld=true;state.setupReviewed=reviewed;}
+    if(name==="connection_setup_confirm") {state.setupHeld=true;state.setupReviewed=reviewed;state.setupPendingPlan=args.plan_id;persistSetup();}
     try {
       const response=await rpc("tools/call",{name,arguments:args,_meta:{[operationMeta]:operationId}});
       const reply=response?.structuredContent;
       if(reply?.operation_id!==operationId || reply.state!=="completed" || !validSetupProgress(reply.data)) throw new Error("接続設定の結果を確認できません。状態を確認してください。");
+      bindSetupSession(response._meta?.connectionDraftSession);
       state.setupUncertain=false;
       if(name==="connection_setup_plan" && reply.data.phase==="review") state.setupMode={mode:args.mode,scopesKey:JSON.stringify([...reply.data.configuration.scopes].sort())};
       // Only this request's own confirmed reply may replace the form; anything else is shown beside the draft.
@@ -496,7 +570,9 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
           (args.client_kind==="chatgpt"
             ? got.client==="anywhere-chatgpt" && got.redirects.length===1 && got.redirects[0]===CHATGPT_REDIRECT
             : args.client===undefined || got.client===args.client);
-      renderSetup(reply.data,{keepDraft:!own});return reply.data;
+      renderSetup(reply.data,{keepDraft:!own});
+      if(name==="connection_setup_status") restoreSetup(reply.data);
+      persistSetup();return reply.data;
     } catch(error) {
       $("setup-status").textContent="応答を確認できません。状態を確認してから続けてください。";$("setup-status").dataset.error="true";
       controls();throw error;
@@ -549,6 +625,7 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
     const allowed=result._meta?.workspaceTools;
     if(!Array.isArray(allowed)) {message("画面用の操作権限情報がありません。",true);return;}
     state.rootTools=new Set(allowed.filter(value=>typeof value==="string"));state.tools=state.rootTools;
+    bindSetupSession(result._meta?.connectionDraftSession);
     state.target="local";$("device").value="local";state.history=[];clearFile();
     const routing=state.rootTools.has("devices_list")&&state.rootTools.has("devices_call")&&state.rootTools.has("devices_tools");
     $("device-label").hidden=!routing;$("devices").hidden=!routing;
@@ -575,6 +652,7 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
       if(["light","dark"].includes(packet.params?.theme)) document.documentElement.dataset.theme=packet.params.theme;
     } else if(packet.method==="ping" && packet.id!==undefined) window.parent.postMessage({jsonrpc:"2.0",id:packet.id,result:{}},state.hostOrigin||"*");
     else if(packet.method==="ui/resource-teardown" && packet.id!==undefined) {
+      persistSetup();state.setupClosed=true;state.ready=false;controls();
       for(const item of pending.values()) {clearTimeout(item.timer);item.reject(new Error("画面が閉じられました。"));}pending.clear();
       if(state.objectUrl) URL.revokeObjectURL(state.objectUrl);
       window.parent.postMessage({jsonrpc:"2.0",id:packet.id,result:{}},state.hostOrigin||"*");
@@ -591,7 +669,7 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
   $("discard-go").onclick=()=>{const action=state.pendingNavigation;state.pendingNavigation=null;state.dirty=false;
     if(setupDraftDirty()) {
       if(state.setupBase) for(const id of setupFields) $(id).value=state.setupBase[id];
-      state.setupHeld=false;
+      state.setupHeld=false;state.setupPendingPlan=null;persistSetup();
       // Show what the backend reported, not the discarded draft, once its form is hidden.
       if(state.setup?.configuration && ["saving","configured","conflict"].includes(state.setup.phase)) renderSetup(state.setup);
     }
@@ -601,13 +679,15 @@ dialog{width:min(26rem,calc(100vw - 32px));padding:24px;color:var(--ink);backgro
   $("setup-tab").onclick=()=>{if($("setup").hidden) navigate(()=>job(setupView));else job(setupView);};
   $("setup-reload").onclick=()=>job(()=>setupCall("connection_setup_status"));
   $("setup-plan").onclick=()=>job(planSetup);$("setup-confirm").onclick=()=>job(confirmSetup);
-  for(const id of setupFields) $(id).oninput=()=>{if(state.setup?.phase==="review"){state.setup={phase:"new",plan_id:null,configuration:null};$("setup-review").hidden=true;}controls();};
+  for(const id of setupFields) $(id).oninput=()=>{if(state.setup?.phase==="review"){state.setup={phase:"new",plan_id:null,configuration:null};$("setup-review").hidden=true;}persistSetup();controls();};
   $("settings-tab").onclick=()=>navigate(()=>job(async()=>{try {await settingsView();} finally {focusHeading();}}));
   $("files-tab").onclick=()=>navigate(()=>{clearFile();show("welcome");message("絶対パスを指定してください。");controls();focusHeading();});
   $("set-shell").onclick=()=>job(()=>applySetting("default_shell","default-shell"));
   $("set-read").onclick=()=>job(()=>applySetting("file_read_line_limit","read-limit",true));
   $("set-write").onclick=()=>job(()=>applySetting("file_write_line_limit","write-limit",true));
   $("resolve").onclick=()=>job(resolveMutation);
+  window.addEventListener("pagehide",()=>{persistSetup();state.setupClosed=true;});
+  window.addEventListener("pageshow",event=>{if(event.persisted && state.ready) state.setupClosed=false;});
   controls();
   if(window.parent===window) {$("connection").textContent="ホスト未接続";message("この画面はMCP Apps対応ホストから開いてください。ファイルには接続していません。");return;}
   rpc("ui/initialize",{appInfo:{name:"Anywhere Computer workspace",version:"1"},appCapabilities:{availableDisplayModes:["inline","fullscreen"]},protocolVersion:"2026-01-26"}).then(result=>{

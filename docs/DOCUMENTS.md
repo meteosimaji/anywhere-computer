@@ -17,6 +17,24 @@ editing. Markdown interpretation, formula calculation and images are not yet imp
 Generated packages are tested with the internal reader;
 Microsoft Office rendering remains unverified.
 
+`documents_edit_cell` previews or replaces one existing plain-string XLSX cell.
+Supply its `sheet` name, A1 `cell` address, exact `old_text`, `new_text`, and
+workbook `expected_sha256` from `documents_read`. With `preview: true`, it returns
+a before/after diff and predicted new hash without writing a file or creating a
+backup. Apply the same arguments with `preview: false` after reviewing the diff;
+the current file hash and cell text must still match. The atomic replacement
+retains a backup usable by `files_restore`. Stale file or cell text reports
+`document_changed` or `cell_changed` with `edit_applied: false`; read and reassess
+the current document before making another edit.
+Only existing plain inline/shared-string cells can be edited. Rich text,
+formulas, numbers, missing cells, macro-enabled or signed workbooks, symbolic
+links, and worksheet markup compatibility content are rejected. The selected
+worksheet XML is serialized again, while other ZIP members retain identical
+content and other cells retain their values and styles. Formulas elsewhere are
+preserved without calculation. The existing package and size limits apply.
+This tool requires its own explicit HTTP tool grant and does not extend a
+delegated file read/write grant. General Office editing remains unsupported.
+
 `documents_edit_paragraph` replaces one DOCX main-body paragraph selected by its
 one-based `paragraph` number from `documents_read`. Supply the exact
 `expected_sha256`, `expected_text`, and `new_text`. The tool currently accepts

@@ -83,7 +83,7 @@ class PluginCallOutcomeUnknown(RuntimeError):
 
 def _computer_use_route(server: str, tool: str) -> bool:
     names = re.split(r"[.:/]|__", f"{server}.{tool}".casefold().replace("-", "_"))
-    return bool({"cua_repl", "unified_computer_use"}.intersection(names))
+    return bool({"cua_repl", "unified_computer_use", "computer_use"}.intersection(names))
 
 
 def _computer_use_compatibility() -> dict[str, JsonValue]:

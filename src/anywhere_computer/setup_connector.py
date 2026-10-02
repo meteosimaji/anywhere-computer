@@ -26,7 +26,7 @@ class ConnectionSetupDraft(Contract):
         default="native",
         description="Use chatgpt to set its OAuth client and callback automatically",
     )
-    mode: Literal["read-only", "files", "all"] = "read-only"
+    mode: Literal["read-only", "files", "all", "public-core"] = "read-only"
     owner: str = Field(default="owner", min_length=1, max_length=128)
     client: str = Field(default="anywhere-native", min_length=1, max_length=128)
     port: int = Field(default=8768, ge=1, le=65535)

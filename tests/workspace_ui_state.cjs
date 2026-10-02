@@ -36,7 +36,7 @@ const documentStub = {body, activeElement:body, getElementById(id) {
 const context = vm.createContext({
   crypto:webcrypto, TextEncoder, setTimeout, clearTimeout, atob, btoa, Blob, URL,
   document:documentStub,
-  window:{parent,addEventListener:(_, callback)=>{listener=callback;},matchMedia:()=>({matches:false})}
+  window:{parent,addEventListener:(type, callback)=>{if(type==='message') listener=callback;},matchMedia:()=>({matches:false})}
 });
 const settle = () => new Promise(resolve=>setTimeout(resolve,0));
 const summaryText = () => elements.get('setup-summary').children.map(item=>item.textContent).join('\n');

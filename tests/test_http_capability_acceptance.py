@@ -422,7 +422,8 @@ for line in sys.stdin:
             await call("upload_abort", abandoned)
             for format_ in ("docx", "xlsx"):
                 document = str(tmp_path / ("document." + format_))
-                content = {"text": "Document 日本語"} if format_ == "docx" else {"rows": [[40, 42]]}
+                content = ({"text": "Document 日本語"} if format_ == "docx"
+                           else {"rows": [[40, 42], ["old"]]})
                 await call("documents_write", {"path": document, "format": format_, **content})
                 result = await call("documents_read", {"path": document})
                 assert "Document" in str(result) if format_ == "docx" else "42" in str(result)
@@ -442,6 +443,20 @@ for line in sys.stdin:
                     assert (await call("documents_read", {"path": document}))["entries"][0][
                         "text"
                     ] == "Document 更新済み"
+                else:
+                    args = {"path": document, "sheet": "Sheet1", "cell": "A2",
+                            "old_text": "old", "new_text": "更新済み",
+                            "expected_sha256": result["sha256"]}
+                    preview = await call("documents_edit_cell", {**args, "preview": True})
+                    assert (await call("documents_read", {"path": document}))["sha256"] == (
+                        result["sha256"]
+                    )
+                    edited = await call("documents_edit_cell", args)
+                    assert edited["sha256"] == preview["sha256"]
+                    assert edited["diff"] == {"old": "old", "new": "更新済み"}
+                    assert (await call("documents_read", {"path": document}))["entries"][2][
+                        "value"
+                    ] == "更新済み"
             search = await call(
                 "search_start",
                 {"path": str(tmp_path / "work"), "pattern": "日本語", "kind": "text"},

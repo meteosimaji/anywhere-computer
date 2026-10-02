@@ -3,6 +3,27 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b57 / Plugin 0.2.0-beta.57 — unpublished personal-use candidate (2026-10-02)
+
+- Recover public connection fields after frame recreation on hosts with the
+  optional private widget-state API. Bind them to the same MCP session and target,
+  retain uncertain-save recovery, and require a new review after restoring edits.
+  Explain when the host cannot retain the fields; never replay planning or saving.
+- Add an explicit fixed `public-core` HTTP tool offering, validated during setup,
+  save, reload, update and direct service construction. Existing full configurations
+  retain their scopes. This personal full package still contains private features
+  and is not a private-code-free public distribution or an OS sandbox.
+- Recover hash-conditional preview and atomic edit of one existing plain-string
+  XLSX cell. Retain a backup and reject unsupported, signed, macro-enabled,
+  compatibility-markup or shared-worksheet packages. Existing grants do not expand.
+- Report native macOS GUI support truthfully on Windows/Linux and preserve typed
+  Subchat startup 401/403 reasons without relabeling unknown submissions as unsent.
+- Reject additional Computer Use aliases before starting an unsupported direct
+  execution context. Extend exact-file read-only and frame-recreation regressions.
+- Retain owned browser cleanup and correct bounded fixture observations. Natural
+  intermittent browser stalls remain under investigation; no input retry or
+  timeout extension is added.
+
 ## 0.2.0b55 / Plugin 0.2.0-beta.55 — unpublished candidate (2026-10-01)
 
 - Build from published beta.52 with the connection draft repair only; the

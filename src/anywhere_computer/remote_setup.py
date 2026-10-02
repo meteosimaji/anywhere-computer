@@ -20,6 +20,7 @@ from .credentials import has_interactive_input
 from .device_router import ROUTER_TOOLS
 from .engine import Engine
 from .http_service import HTTPServiceConfig, load_http_config, save_http_config
+from .http_tool_profile import PUBLIC_CORE_TOOLS
 from .locking import ProcessLock
 from .owner_credentials import OwnerCredentials
 from .runtime_launch import python_module_command
@@ -52,14 +53,18 @@ def setup_commands(
 
 
 async def setup_scopes(mode: str) -> frozenset[str]:
-    if mode not in {"read-only", "files", "all"}:
-        raise ValueError("Choose read-only, files, or all")
+    if mode not in {"read-only", "files", "all", "public-core"}:
+        raise ValueError("Choose read-only, files, all, or public-core")
     # Persist the exact current catalog, not a wildcard that expands on updates.
     with tempfile.TemporaryDirectory(prefix="anywhere-setup-catalog-") as raw:
         # TemporaryDirectory creates its root with the platform default ACL.
         # Let the state layer create a private child instead of adopting it.
         engine = Engine(Path(raw) / "catalog-state")
         try:
+            if mode == "public-core":
+                if PUBLIC_CORE_TOOLS - engine.tools.keys():
+                    raise ValueError("This Engine does not provide the complete public core")
+                return PUBLIC_CORE_TOOLS
             return frozenset(
                 name for name, tool in engine.tools.items()
                 if name not in LOCAL_ONLY_TOOLS and (
@@ -86,6 +91,7 @@ async def plan_remote_setup(
     return HTTPServiceConfig(
         resource=resource, owner=owner, client=client, port=port,
         device=secrets.token_hex(16), scopes=await setup_scopes(mode),
+        tool_profile="public-core" if mode == "public-core" else "full",
         redirects=redirects if redirects is not None else frozenset({
             "http://127.0.0.1/oauth/callback", "http://[::1]/oauth/callback",
         }),
@@ -125,7 +131,8 @@ def setup_remote(
                     or "anywhere-native"
                 )
                 port = int(input("Loopback port [8768]: ").strip() or "8768")
-            print("Access: read-only; files (file changes); all (includes running commands).")
+            print("Access: read-only; files (file changes); all (includes running commands); "
+                  "public-core (files, terminal, browser; excludes private bridges and routing).")
             mode = input("Access [read-only]: ").strip().casefold() or "read-only"
             callbacks = [CHATGPT_REDIRECT] if client_kind == "chatgpt" else input(
                 "OAuth callback URLs (space-separated; Enter for native loopback): "

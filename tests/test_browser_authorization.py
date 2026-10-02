@@ -159,6 +159,7 @@ async def test_consent_explains_indirect_plugin_route_separately_from_direct_sub
 
 
 @pytest.mark.parametrize("tools, expected, absent", [
+    ({"documents_edit_cell"}, ("change files",), ("control apps",)),
     ({"documents_write", "browser_fill", "devices_call", "subchat_message", "codex_plugin_call"},
      ("change files", "interact with websites", "operate registered computers",
       "call other connected services", "send Chat messages"),

@@ -164,3 +164,29 @@ ChatGPT self-hosted HTTPS setup and native OAuth self-hosted HTTPS setup. It
 accepts only an optional state directory; advanced commands retain their existing
 interfaces. This is a command selector, not hosted relay provisioning or automatic
 AI registration. The local selection preserves `start`'s idle replacement policy.
+
+## Optional frame-recreation draft recovery
+
+On hosts that provide the documented `window.openai.widgetState` and synchronous
+`setWidgetState` API, the connection screen holds the six public form fields in
+host-owned `privateContent`. It adds no tool, Engine capability, storage permission,
+credential field, or sandbox exception. The ordinary in-frame behavior remains
+available when the host API is missing or refuses a snapshot.
+
+Restoration requires the current local setup capabilities and a matching random
+MCP-session identifier supplied through widget-only result metadata. A different
+transport session, target, unknown snapshot version, unrecognized field, excessive
+input, or URL with user information, query, or fragment is rejected. This identifier
+is UI correlation data, not authentication. The host owns account/widget isolation;
+this connector receives no ChatGPT account identifier and does not establish that
+host guarantee. Actual host capability and account-switch behavior require acceptance.
+
+Restored unreviewed fields cannot confirm an earlier review. A save pending at
+closure is reconciled only by setup status; neither planning nor saving is replayed.
+Only this controller's same immutable plan and matching public identity can release
+an uncertain saved form. Explicit Discard clears the snapshot and returns to backend
+state. Teardown closes the old frame's UI and prevents late callbacks from replacing
+its snapshot. The recovery is limited to the same MCP transport session; restarting
+the connector or using a host without the optional API does not preserve the draft.
+
+Host API: https://developers.openai.com/plugins/build/chatgpt-ui
