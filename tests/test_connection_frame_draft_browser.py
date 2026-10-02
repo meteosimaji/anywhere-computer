@@ -1,7 +1,9 @@
 """Actual opaque iframe with only the documented optional host state API simulated."""
 
 import asyncio
+import inspect
 import json
+import time
 from dataclasses import dataclass, field
 
 import pytest
@@ -28,11 +30,75 @@ class HostState:
     calls: list = field(default_factory=list)
 
 
+def instrument_bootstrap(session, trace):
+    connector = session.execute.__self__
+    connector.fixture_bootstrap_trace = trace
+    if getattr(connector, 'fixture_bootstrap_instrumented', False):
+        session.catalog = connector.catalog
+        return
+    connector.fixture_bootstrap_instrumented = True
+
+    def instrument(owner, name, stage):
+        original = getattr(owner, name)
+        if inspect.iscoroutinefunction(original):
+            async def observed(*args, **kwargs):
+                callback = connector.fixture_bootstrap_trace
+                callback(stage + '_start')
+                try:
+                    return await original(*args, **kwargs)
+                finally:
+                    callback(stage + '_end')
+        else:
+            def observed(*args, **kwargs):
+                callback = connector.fixture_bootstrap_trace
+                callback(stage + '_start')
+                try:
+                    return original(*args, **kwargs)
+                finally:
+                    callback(stage + '_end')
+        setattr(owner, name, observed)
+
+    # These are owned fixture instances. Keep the real catalog, SQLite commits,
+    # operation bindings and setup controller; record only method boundaries.
+    instrument(connector, 'catalog', 'catalog')
+    instrument(connector, '_bind', 'connector_bind')
+    instrument(connector, '_claim', 'connector_claim')
+    instrument(connector, '_save_reply', 'connector_record')
+    instrument(connector, '_status_reply', 'connector_status_transaction')
+    instrument(connector.controller, 'progress', 'connector_progress')
+    instrument(connector.fixture_engine.ledger, 'claim', 'engine_claim')
+    instrument(connector.fixture_engine.ledger, 'finish', 'engine_record')
+    session.catalog = connector.catalog
+
+
 async def open_with_state(browser, session, folder, store, *, width=390, supported=True):
     context = await browser.new_context(viewport={"width": width, "height": 860},
                                         reduced_motion="reduce")
     page = await context.new_page()
     page.rpc_replies = []
+    started = time.monotonic()
+    events = []
+
+    def trace(stage, **details):
+        if len(events) < 40:
+            events.append({'at_ms': round((time.monotonic() - started) * 1000),
+                           'stage': stage, **details})
+
+    instrument_bootstrap(session, trace)
+
+    # Record bootstrap message names and RPC timing, never form values or state.
+    # A failure retains the original deadline/assertion; no initialization retry.
+    await page.add_init_script("""(() => {
+      let count = 0;
+      addEventListener('message', event => {
+        const data = event.data;
+        if (!data || data.jsonrpc !== '2.0' || count++ >= 20) return;
+        console.debug('fixture-bootstrap:' + JSON.stringify({
+          frame: self === top ? 'host' : 'widget', method: data.method || 'reply',
+          tool: data.params?.name || null, error: Boolean(data.error)
+        }));
+      });
+    })();""")
 
     def captured(message):
         prefix = "fixture-widget-state:"
@@ -40,8 +106,11 @@ async def open_with_state(browser, session, folder, store, *, width=390, support
             value = json.loads(message.text[len(prefix):])
             store.snapshot = value
             store.writes.append(value)
+        elif message.text.startswith('fixture-bootstrap:'):
+            trace('message', **json.loads(message.text[len('fixture-bootstrap:'):]))
 
     page.on("console", captured)
+    page.on('pageerror', lambda error: trace('page_error', message=str(error)[:160]))
 
     async def route(handler):
         url = handler.request.url
@@ -59,24 +128,80 @@ async def open_with_state(browser, session, folder, store, *, width=390, support
                                       body=html.replace("<script>", bridge + "<script>", 1))
             elif url.endswith("/rpc"):
                 packet = json.loads(handler.request.post_data)
+                fields = {'method': packet.get('method'),
+                          'tool': packet.get('params', {}).get('name')}
+                trace('rpc_received', **fields)
                 store.calls.append(packet)
                 reply = await session.handle(packet)
+                trace('rpc_handled', **fields)
                 page.rpc_replies.append((packet, reply))
                 await handler.fulfill(content_type="application/json", body=json.dumps(reply))
+                trace('rpc_fulfilled', **fields)
             elif url.endswith("/away"):
                 await handler.fulfill(content_type="text/html", body="<p>fixture away</p>")
             else:
                 await handler.fulfill(content_type="text/html; charset=utf-8", body=HOST)
         except PlaywrightError:
+            trace('route_error', page_closed=page.is_closed())
             if not page.is_closed():
                 raise
 
     await page.route("https://host.test/**", route)
     await page.goto(f"https://host.test/?path={folder}&view=connection")
     frame = page.frame_locator("iframe")
-    await expect(frame.locator("#setup-reload")).to_be_enabled()
-    await expect(frame.locator("#notice")).to_contain_text("このコンピューター")
+    try:
+        await expect(frame.locator("#setup-reload")).to_be_enabled()
+        await expect(frame.locator("#notice")).to_contain_text("このコンピューター")
+    except AssertionError as error:
+        try:
+            observation = await asyncio.wait_for(
+                frame.locator('body').evaluate("""body => ({
+                  reloadDisabled: body.querySelector('#setup-reload')?.disabled,
+                  notice: body.querySelector('#notice')?.textContent?.slice(0, 180),
+                  status: body.querySelector('#setup-status')?.textContent?.slice(0, 180)
+                })"""), 2,
+            )
+        except (PlaywrightError, TimeoutError):
+            observation = {'state': 'inspection_unavailable'}
+        raise AssertionError(f'{error}\nBootstrap observation: '
+                             + json.dumps({'events': events, 'ui': observation},
+                                          ensure_ascii=False)) from error
     return context, page, frame
+
+
+async def test_initial_readiness_failure_records_bootstrap_without_draft_fields(
+    backend, monkeypatch,
+):
+    folder, session = backend
+    gate = asyncio.Event()
+    original_handle = session.handle
+
+    async def held_status(packet):
+        if packet.get('params', {}).get('name') == 'connection_setup_status':
+            await gate.wait()
+        return await original_handle(packet)
+
+    monkeypatch.setattr(session, 'handle', held_status)
+    async with async_playwright() as driver:
+        browser = await launch(driver)
+        try:
+            with pytest.raises(AssertionError) as result:
+                await open_with_state(browser, session, folder, HostState())
+            evidence = json.loads(str(result.value).split('Bootstrap observation: ', 1)[1])
+            assert evidence['ui']['reloadDisabled'] is True
+            assert len(evidence['events']) <= 40
+            stages = {item['stage'] for item in evidence['events']}
+            assert {'catalog_start', 'catalog_end', 'connector_bind_start',
+                    'connector_bind_end', 'engine_claim_start', 'engine_claim_end',
+                    'engine_record_start', 'engine_record_end'} <= stages
+            status = [item for item in evidence['events']
+                      if item.get('tool') == 'connection_setup_status'
+                      and item['stage'].startswith('rpc_')]
+            assert [item['stage'] for item in status] == ['rpc_received']
+            assert all('values' not in item and 'params' not in item for item in evidence['events'])
+        finally:
+            gate.set()
+            await browser.close()
 
 
 async def review_and_change(frame, *, changed="https://unreviewed.example/mcp"):

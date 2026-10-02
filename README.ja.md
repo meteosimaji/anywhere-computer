@@ -19,8 +19,8 @@ READMEはこのチェックアウトの案内です。開発版の機能が過�
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b57` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.57` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b67` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.67` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 各項目の正本:
@@ -50,6 +50,9 @@ ChatGPTからこのMacの`localhost`へ直接接続はできません。所有�
 という選択肢がありますが、本プロジェクトでは未検証です。公開Pluginの提出には
 安定した公開HTTPSエンドポイントが必要です。
 日常の起動・診断・常駐設定は日本語の運用ガイドを参照してください。
+ローカルMCP設定は `mcp-config` でJSON、`--format toml` でCodex用TOMLを出力できます。
+実行先と状態保存先を固定した設定を、クライアントの既存設定へ追加します。
+詳しいソース版・同梱版の手順は[MCPクライアントの設定](docs/MCP-CLIENTS.md)を参照してください。
 Codex Pluginの導入にはCodexから使える`uv`が必要です。このチェックアウトを使う場合は
 [英語READMEの導入コマンド](README.md#get-started)でローカルmarketplaceを登録し、
 `anywhere-computer`を導入します。再接続後、独立した`anywhere-computer`と

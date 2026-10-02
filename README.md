@@ -21,8 +21,8 @@ This checkout (not a publication or installed-runtime claim):
 
 | Source | Value |
 | --- | --- |
-| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b57` |
-| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.57` |
+| [Python package](src/anywhere_computer/__init__.py) | `0.2.0b67` |
+| [Codex Plugin version mapping](scripts/package_plugin.py) | `0.2.0-beta.67` |
 | [Python requirement](pyproject.toml) | `>=3.12` |
 
 Canonical guides:
@@ -59,9 +59,13 @@ uv run --locked anywhere status
 credential store is required: macOS Keychain, Windows Credential Manager, or a
 supported, unlocked Linux store. Local startup does not configure OS autostart.
 
-For a local MCP client, use this checkout as the working directory and configure
-`uv run --locked anywhere mcp`. It starts an absent agent or reuses a compatible
-running engine; connecting alone does not replace it with another build.
+For a local MCP client, run `uv run --locked anywhere mcp-config` in this checkout
+to print a JSON registration entry, or add `--format toml` for Codex. A portable
+installation provides the same command through its `anywhere` launcher. The
+entry pins that installation and state directory without relying on the client's
+working directory or PATH. Merge it with the client's existing configuration;
+see the [client guide](docs/MCP-CLIENTS.md). Connecting starts an absent agent or
+reuses a compatible running engine; it does not replace it with another build.
 
 For the Codex Plugin in this checkout, install `uv` and make it available to
 Codex, then register this checkout's local marketplace and install its Plugin:

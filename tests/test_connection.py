@@ -104,6 +104,128 @@ async def test_authenticated_rpc_and_catalog(agent):
     assert again.data["instance_id"] == status.data["instance_id"]
 
 
+@pytest.mark.parametrize('close_error', [ConnectionResetError, BrokenPipeError])
+async def test_peer_reset_during_close_preserves_validated_reply(agent, monkeypatch, close_error):
+    directory, credential = agent
+    original_open = asyncio.open_connection
+    clients = []
+
+    async def open_with_close_reset(*args, **kwargs):
+        reader, writer = await original_open(*args, **kwargs)
+        clients.append(writer)
+        original_wait = writer.wait_closed
+
+        async def reset_after_close():
+            await original_wait()
+            raise close_error('synthetic close-only reset')
+
+        monkeypatch.setattr(writer, 'wait_closed', reset_after_close)
+        return reader, writer
+
+    monkeypatch.setattr(asyncio, 'open_connection', open_with_close_reset)
+    reply = await exchange(directory, '__status', operation_id='c' * 32, credential=credential)
+    assert reply.operation_id == 'c' * 32 and reply.data['state'] == 'ready'
+    assert len(clients) == 1 and clients[0].transport.is_closing()
+
+
+async def test_peer_close_reset_does_not_mask_missing_outcome(agent, monkeypatch):
+    directory, _ = agent
+    original_open = asyncio.open_connection
+
+    async def open_with_close_reset(*args, **kwargs):
+        reader, writer = await original_open(*args, **kwargs)
+        original_wait = writer.wait_closed
+
+        async def reset_after_close():
+            await original_wait()
+            raise ConnectionResetError('synthetic close-only reset')
+
+        monkeypatch.setattr(writer, 'wait_closed', reset_after_close)
+        return reader, writer
+
+    monkeypatch.setattr(asyncio, 'open_connection', open_with_close_reset)
+    with pytest.raises(ConnectionError, match='before returning an outcome'):
+        await exchange(directory, '__status', credential='wrong')
+
+
+async def test_stop_reply_half_closes_before_server_exits(tmp_path):
+    import json
+
+    from anywhere_computer.connection import load_endpoint
+    from anywhere_computer.models import Reply
+
+    credential = secrets.token_urlsafe(32)
+    ready = asyncio.Event()
+    shutdown = asyncio.Event()
+    server = asyncio.create_task(serve(tmp_path, credential=credential, ready=ready,
+                                       shutdown=shutdown))
+    writer = None
+    try:
+        await asyncio.wait_for(ready.wait(), 5)
+        reader, writer = await asyncio.open_connection(
+            '127.0.0.1', load_endpoint(tmp_path)['port'])
+        writer.write(json.dumps({'credential': credential, 'request': {
+            'operation_id': 'd' * 32, 'tool': '__stop', 'arguments': {},
+        }}).encode() + b'\n')
+        await writer.drain()
+        reply = Reply.model_validate_json(await asyncio.wait_for(reader.readline(), 2))
+        assert reply.state == 'completed' and reply.data['state'] == 'stopping'
+        # EOF releases clients which consume the entire reply before closing.
+        # Keep the client side open: process exit must wait for its close, rather
+        # than reset an overlapped Windows read after queueing the reply.
+        assert await asyncio.wait_for(reader.read(1), 2) == b''
+        done, _ = await asyncio.wait({server}, timeout=0.05)
+        assert not done, 'Server exited before the client closed its stop connection'
+        writer.close()
+        await writer.wait_closed()
+        await asyncio.wait_for(server, 5)
+        assert not (tmp_path / 'agent.json').exists()
+    finally:
+        shutdown.set()
+        if writer is not None:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except ConnectionError:
+                pass
+        await asyncio.wait_for(server, 5)
+
+
+async def test_nonclosing_stop_client_cannot_hold_server_forever(tmp_path, monkeypatch):
+    import json
+
+    import anywhere_computer.connection as connection
+    from anywhere_computer.models import Reply
+
+    monkeypatch.setattr(connection, 'STOP_REPLY_DRAIN_TIMEOUT', 0.05)
+    credential = secrets.token_urlsafe(32)
+    ready, shutdown = asyncio.Event(), asyncio.Event()
+    server = asyncio.create_task(serve(tmp_path, credential=credential, ready=ready,
+                                       shutdown=shutdown))
+    writer = None
+    try:
+        await asyncio.wait_for(ready.wait(), 5)
+        reader, writer = await asyncio.open_connection(
+            '127.0.0.1', connection.load_endpoint(tmp_path)['port'])
+        writer.write(json.dumps({'credential': credential, 'request': {
+            'operation_id': 'e' * 32, 'tool': '__stop', 'arguments': {},
+        }}).encode() + b'\n')
+        await writer.drain()
+        assert Reply.model_validate_json(await reader.readline()).state == 'completed'
+        assert await reader.read(1) == b''
+        await asyncio.wait_for(server, 2)
+        assert not (tmp_path / 'agent.json').exists()
+    finally:
+        shutdown.set()
+        if writer is not None:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except ConnectionError:
+                pass
+        await asyncio.wait_for(server, 5)
+
+
 async def test_local_transport_does_not_persist_credential(agent):
     directory, credential = agent
     await exchange(directory, "computer_status", credential=credential)

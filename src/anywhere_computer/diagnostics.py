@@ -86,7 +86,7 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
     source_capabilities = source_capability_implementations()
 
     def report(state: str, action: str, **details: JsonValue) -> dict[str, JsonValue]:
-        return {"state": state, "action": action, "changed": False,
+        return {"state": state, "action": action, "changed": False, "catalog_state": "unknown",
                 "source_build": {"version": __version__, "runtime_id": source_runtime_id},
                 "source_capabilities": source_capabilities,
                 "runtime_environment": runtime_environment(), **details}
@@ -147,10 +147,13 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
     try:
         catalog_reply = await exchange(directory, "__catalog", credential=credential, timeout=3)
         catalog = catalog_reply.data.get("tools")
-        catalog_names = {
-            row["name"] for row in catalog
-            if isinstance(row, dict) and isinstance(row.get("name"), str)
-        } if catalog_reply.state == "completed" and isinstance(catalog, list) else None
+        catalog_names = None
+        if catalog_reply.state == "completed" and isinstance(catalog, list):
+            names = {row["name"] for row in catalog
+                     if isinstance(row, dict) and isinstance(row.get("name"), str)
+                     and bool(row["name"])}
+            if len(names) == len(catalog):
+                catalog_names = names
     except (OSError, ValueError, TimeoutError):
         catalog_names = None
     try:
@@ -241,6 +244,14 @@ async def diagnose(directory: Path) -> dict[str, JsonValue]:
             "were not checked.",
             runtime_comparison=runtime_comparison,
             update_readiness={"state": update_state, "action": update_action}, agent=agent,
+            catalog_state="available" if catalog_names is not None else "unavailable",
+        )
+    if catalog_names is None:
+        return report(
+            "catalog_unavailable",
+            "Agent status responded, but its MCP tool catalog could not be confirmed. "
+            "Rerun anywhere doctor; no client connection or tool execution was verified.",
+            catalog_state="unavailable", runtime_comparison=runtime_comparison, agent=agent,
         )
     return report("ready", "No action required.",
-                  runtime_comparison=runtime_comparison, agent=agent)
+                  catalog_state="available", runtime_comparison=runtime_comparison, agent=agent)

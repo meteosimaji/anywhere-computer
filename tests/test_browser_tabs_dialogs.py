@@ -1,6 +1,7 @@
 """Disposable Chrome acceptance for owned tabs, popups and explicit page dialogs."""
 
 import asyncio
+import json
 import time
 import uuid
 
@@ -416,17 +417,39 @@ async def test_final_tab_cleanup_remains_an_update_blocker_until_driver_stops(
         ids = tab_args(await engine.browser.open(owner="owner-a"))
         entry = engine.browser.entries[ids["session_id"]]
         original_stop = entry.playwright.stop
+        phases = []
+        started = time.monotonic()
+
+        def trace(stage):
+            phases.append({'stage': stage, 'at_ms': round((time.monotonic() - started) * 1000)})
+
+        def observed_close(original, name):
+            async def observed(*args, **kwargs):
+                trace(name + '_start')
+                try:
+                    return await original(*args, **kwargs)
+                finally:
+                    trace(name + '_end')
+            return observed
 
         async def held_stop():
+            trace('driver_stop_start')
             entered.set()
             await release.wait()
             await original_stop()
 
         with monkeypatch.context() as patch:
+            patch.setattr(entry.page, 'close', observed_close(entry.page.close, 'page_close'))
+            patch.setattr(entry.browser, 'close',
+                          observed_close(entry.browser.close, 'browser_close'))
             patch.setattr(entry.playwright, "stop", held_stop)
             closing = asyncio.create_task(engine.browser.tab_close(BrowserSession(**ids),
                                                                    owner="owner-a"))
-            await asyncio.wait_for(entered.wait(), 3)
+            try:
+                await asyncio.wait_for(entered.wait(), 3)
+            except TimeoutError as error:
+                error.add_note('Controlled final-tab cleanup phases: ' + json.dumps(phases))
+                raise
             status = engine.status(owner="owner-a")
             assert status["active_sessions"] == 1
             assert status["update_blocker_details"][0]["stop_available"] is False

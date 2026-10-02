@@ -1194,7 +1194,9 @@ class BrowserControl:
 
     async def _snapshot(self, entry: _Entry, *, include_image: bool = False,
                         frame_id: str | None = None) -> dict[str, JsonValue]:
-        from playwright._impl._errors import TargetClosedError
+        from playwright._impl._errors import Error, TargetClosedError
+
+        observed_frame = entry.observed_frames.get(frame_id) if frame_id is not None else None
 
         pending = entry.pending_dialog
         if pending is not None and pending.state == "response_unconfirmed":
@@ -1226,11 +1228,15 @@ class BrowserControl:
                     "dialog": entry.pending_dialog.data() if entry.pending_dialog else None,
                     "tabs": self._tab_rows(entry),
                     "last_dialog_response": entry.last_dialog_response}
-        except TargetClosedError as error:
+        except Error as error:
             # Chrome can reject a frame read before its detach event updates
             # Playwright's frame list. Keep an ended tab distinct from a lost frame.
             if (frame_id is not None and not entry.page.is_closed()
-                    and entry.browser.is_connected()):
+                    and entry.browser.is_connected()
+                    and (isinstance(error, TargetClosedError)
+                         or (observed_frame is not None and observed_frame.is_detached())
+                         or error.message.endswith('Frame was detached'))):
+                entry.snapshot_id = None
                 raise ValueError("Browser frame unavailable; observe the tab again") from error
             raise
 

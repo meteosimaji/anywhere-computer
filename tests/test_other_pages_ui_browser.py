@@ -165,6 +165,7 @@ async def backend(tmp_path):
         return await engine.execute(request)
 
     setup = SetupConnector(tmp_path / "connector", catalog, execute)
+    setup.fixture_engine = engine
     session = MCPSession(setup.catalog, setup.execute)
     await session.handle({"jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {
         "protocolVersion": "2025-11-25", "clientInfo": {"name": "ui-browser", "version": "1"},

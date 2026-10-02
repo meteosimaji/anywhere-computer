@@ -3,6 +3,56 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b67 / Plugin 0.2.0-beta.67 — unpublished candidate (2026-10-02)
+
+- Include the unpublished beta.64 MCP onboarding and connection repairs without
+  replacing that version's immutable wheel.
+- Report a frame removed during observation as unavailable and invalidate its
+  snapshot. Require a new observation without switching to the parent frame,
+  replaying a read or hiding unrelated Playwright errors.
+- Check exported MCP configuration in the early Windows feature job. Record
+  native SDK job membership and termination decisions on the controlled
+  lifecycle test's original failure without extending native handle lifetimes,
+  changing process creation flags or replaying a stop. Windows shutdown remains
+  under investigation; this candidate is not approved for release.
+
+## 0.2.0b64 / Plugin 0.2.0-beta.64 — unpublished candidate (2026-10-02)
+
+- Include the unpublished beta.62 MCP export, catalog diagnosis and setup-status
+  fixes without changing that bundle's wheel bytes. Beta.63 belongs to the
+  separate Subchat intent-recovery candidate.
+- Half-close the TCP stop reply before waiting for its client to close, bounded
+  to two seconds. Do not let process exit race an outstanding Windows reply read;
+  retain active-work refusal, exact replies and original transport failures.
+- Record bounded, secret-free transport phases and independent fixture health
+  on platform-test failures. Do not retry requests or extend read deadlines.
+
+## 0.2.0b62 / Plugin 0.2.0-beta.62 — unpublished candidate (2026-10-02)
+
+- Export local MCP JSON/TOML with the installed interpreter and explicit state
+  directory. Show the JSON entry after interactive local setup; do not overwrite
+  client settings, initialize credentials or start an agent during export.
+- Keep JSON/TOML exports copyable through legacy console encodings, preserving
+  Unicode paths including non-BMP characters with the appropriate format escapes.
+  Supersede the unpublished beta.59/60/61 bundles without changing their wheel bytes.
+- Report unavailable, malformed or duplicate engine catalogs separately from
+  authenticated engine readiness. Fail doctor rather than report success when
+  the catalog is unconfirmed; keep actual AI client acceptance separate.
+- Preserve safe startup failure categories in management and reconcile once
+  without repeating a start after a lost acknowledgement. Show catalog evidence
+  and localized next steps without exposing exception contents.
+- Capture bounded initial-frame bootstrap messages and RPC timing on browser
+  readiness failure. Keep the original assertion and deadline without retrying
+  initialization or recording connection draft fields.
+- Commit setup status binding, claim and receipt in one durable transaction.
+  Let status inspect an asynchronous save without waiting or repeating it; retain
+  separate durable claims before configuration writes and delegated operations.
+  Failed or invalid status requests retain their exact operation-ID binding;
+  a failed commit cannot return a successful status receipt.
+- Preserve an authenticated, validated local RPC reply when peer shutdown resets
+  only the socket close waiter. Keep original read/authentication/validation
+  failures and cancellation; never repeat an operation to handle that reset.
+
 ## 0.2.0b57 / Plugin 0.2.0-beta.57 — unpublished personal-use candidate (2026-10-02)
 
 - Recover public connection fields after frame recreation on hosts with the

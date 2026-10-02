@@ -73,51 +73,89 @@ class SetupConnector:
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def _bind(self, request: Request) -> None:
-        digest = self._digest(request)
         with self.db:
-            self.db.execute(
-                "INSERT OR IGNORE INTO setup_operations(id,digest,dispatched) VALUES (?,?,0)",
-                (request.operation_id, digest),
-            )
-            row = self.db.execute(
-                "SELECT digest FROM setup_operations WHERE id=?", (request.operation_id,),
-            ).fetchone()
-            if row is None or row[0] != digest:
-                raise ValueError("Operation ID is already bound to another connector request")
+            self._bind_in_transaction(request)
+
+    def _bind_in_transaction(self, request: Request) -> None:
+        digest = self._digest(request)
+        self.db.execute(
+            "INSERT OR IGNORE INTO setup_operations(id,digest,dispatched) VALUES (?,?,0)",
+            (request.operation_id, digest),
+        )
+        row = self.db.execute(
+            "SELECT digest FROM setup_operations WHERE id=?", (request.operation_id,),
+        ).fetchone()
+        if row is None or row[0] != digest:
+            raise ValueError("Operation ID is already bound to another connector request")
 
     def _claim(self, request: Request) -> Reply | None:
         with self.db:
-            claimed = self.db.execute(
-                "UPDATE setup_operations SET dispatched=1 WHERE id=? AND dispatched=0",
-                (request.operation_id,),
-            ).rowcount
-            if claimed == 1:
-                return None
-            row = self.db.execute(
-                "SELECT reply FROM setup_operations WHERE id=?", (request.operation_id,),
-            ).fetchone()
-            if row is None:
-                raise sqlite3.Error("Setup operation binding was not created")
-            if row[0] is not None:
-                if request.tool != "connection_setup_plan":
-                    return Reply.model_validate_json(str(row[0]))
-                recorded = Reply.model_validate_json(str(row[0]))
-                current = self.controller.progress()
-                if (request.operation_id == self._plan_operation and current.phase == "review"
-                        and current.plan_id == recorded.data.get("plan_id")):
-                    return recorded
-            return Reply(
-                operation_id=request.operation_id, state="unknown",
-                error="Setup operation was already started and was not repeated. "
-                "Query connection_setup_status to inspect current state before continuing.",
-            )
+            return self._claim_in_transaction(request)
+
+    def _claim_in_transaction(self, request: Request) -> Reply | None:
+        claimed = self.db.execute(
+            "UPDATE setup_operations SET dispatched=1 WHERE id=? AND dispatched=0",
+            (request.operation_id,),
+        ).rowcount
+        if claimed == 1:
+            return None
+        row = self.db.execute(
+            "SELECT reply FROM setup_operations WHERE id=?", (request.operation_id,),
+        ).fetchone()
+        if row is None:
+            raise sqlite3.Error("Setup operation binding was not created")
+        if row[0] is not None:
+            if request.tool != "connection_setup_plan":
+                return Reply.model_validate_json(str(row[0]))
+            recorded = Reply.model_validate_json(str(row[0]))
+            current = self.controller.progress()
+            if (request.operation_id == self._plan_operation and current.phase == "review"
+                    and current.plan_id == recorded.data.get("plan_id")):
+                return recorded
+        return Reply(
+            operation_id=request.operation_id, state="unknown",
+            error="Setup operation was already started and was not repeated. "
+            "Query connection_setup_status to inspect current state before continuing.",
+        )
 
     def _save_reply(self, request: Request, reply: Reply) -> None:
         with self.db:
-            self.db.execute(
-                "UPDATE setup_operations SET reply=? WHERE id=?",
-                (reply.model_dump_json(), request.operation_id),
-            )
+            self._save_reply_in_transaction(request, reply)
+
+    def _save_reply_in_transaction(self, request: Request, reply: Reply) -> None:
+        self.db.execute(
+            "UPDATE setup_operations SET reply=? WHERE id=?",
+            (reply.model_dump_json(), request.operation_id),
+        )
+
+    @staticmethod
+    def _setup_failure(request: Request) -> Reply:
+        return Reply(operation_id=request.operation_id, state="failed",
+                     error="Setup could not be completed. Check the public configuration "
+                     "fields and reload connection_setup_status to inspect saved state.")
+
+    def _status_reply(self, request: Request) -> Reply:
+        # This read has no awaited side effects. Bind, claim and record its result in
+        # one durable commit, without waiting for an asynchronous configuration save.
+        # Writes still commit their claim separately before starting the side effect.
+        with self.db:
+            self._bind_in_transaction(request)
+            try:
+                Empty.model_validate(request.arguments)
+            except ValueError:
+                # Retain the namespace binding even when arguments are invalid.
+                return self._setup_failure(request)
+            replay = self._claim_in_transaction(request)
+            if replay is not None:
+                return replay
+            try:
+                progress = self.controller.progress()
+                reply = Reply(operation_id=request.operation_id, state="completed",
+                              data=cast(dict[str, JsonValue], progress.model_dump(mode="json")))
+            except (OSError, ValueError, RuntimeError):
+                reply = self._setup_failure(request)
+            self._save_reply_in_transaction(request, reply)
+            return reply
 
     async def catalog(self) -> list[JsonValue]:
         original = await self.local_catalog()
@@ -147,6 +185,8 @@ class SetupConnector:
 
     async def execute(self, request: Request) -> Reply:
         try:
+            if request.tool == "connection_setup_status":
+                return self._status_reply(request)
             # Bind the outer request namespace before delegation, so a setup operation
             # ID cannot also dispatch a file/terminal/device operation (or vice versa).
             self._bind(request)
@@ -158,18 +198,14 @@ class SetupConnector:
         async with self._lock:
             try:
                 # Validate before dispatch. A corrected request requires a fresh ID.
-                if request.tool == "connection_setup_status":
-                    Empty.model_validate(request.arguments)
-                elif request.tool == "connection_setup_plan":
+                if request.tool == "connection_setup_plan":
                     args = ConnectionSetupDraft.model_validate(request.arguments)
                 else:
                     confirmation = ConnectionSetupConfirmation.model_validate(request.arguments)
                 replay = self._claim(request)
                 if replay is not None:
                     return replay
-                if request.tool == "connection_setup_status":
-                    progress = self.controller.progress()
-                elif request.tool == "connection_setup_plan":
+                if request.tool == "connection_setup_plan":
                     plan = await plan_remote_setup(
                         resource=args.resource, owner=args.owner,
                         client=CHATGPT_CLIENT if args.client_kind == "chatgpt" else args.client,
@@ -188,9 +224,7 @@ class SetupConnector:
                     self._plan_operation = request.operation_id
                 return reply
             except (OSError, ValueError, RuntimeError, sqlite3.Error):
-                return Reply(operation_id=request.operation_id, state="failed",
-                             error="Setup could not be completed. Check the public configuration "
-                             "fields and reload connection_setup_status to inspect saved state.")
+                return self._setup_failure(request)
 
     def close(self) -> None:
         self.db.close()
