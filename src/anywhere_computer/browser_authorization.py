@@ -1,8 +1,8 @@
-"""Password-authenticated, request-bound consent for one enrolled device owner.
+"""Request-bound consent for one enrolled device owner.
 
-The public form cannot approve itself: the owner password must verify against
-OS-keyring data initialized through a trusted local setup. Pending requests are
-memory-only and expire on restart. This module does not deploy a public service.
+The public form cannot approve itself: the owner password or an enrolled
+passkey must verify against OS-keyring data initialized through trusted local
+setup. Pending requests are memory-only and expire on restart.
 """
 
 import asyncio
@@ -33,6 +33,7 @@ from webauthn import (
 )
 from webauthn.helpers.exceptions import InvalidAuthenticationResponse, InvalidRegistrationResponse
 from webauthn.helpers.structs import (
+    AuthenticatorAttachment,
     AuthenticatorSelectionCriteria,
     PublicKeyCredentialDescriptor,
     ResidentKeyRequirement,
@@ -55,7 +56,7 @@ from .owner_passkeys import (
 _PASSWORD_VISIBILITY_SCRIPT = r"""(() => {
   const field = document.getElementById('password');
   const toggle = document.getElementById('password-visibility');
-  const form = field.form;
+  const form = document.querySelector('#approval form');
   const status = document.getElementById('submit-status');
   const passkey = document.getElementById('passkey-approve');
   const approve = form.querySelector('button[name=approve]');
@@ -70,12 +71,13 @@ _PASSWORD_VISIBILITY_SCRIPT = r"""(() => {
     if (state) status.scrollIntoView({block: 'nearest'});
   }
   function hide() {
+    if (!field || !toggle) return;
     field.type = 'password';
     toggle.textContent = 'Show';
     toggle.setAttribute('aria-pressed', 'false');
     toggle.setAttribute('aria-label', 'Show password');
   }
-  toggle.addEventListener('click', () => {
+  if (toggle) toggle.addEventListener('click', () => {
     if (field.type === 'text') { hide(); return; }
     field.type = 'text';
     toggle.textContent = 'Hide';
@@ -118,7 +120,7 @@ _PASSWORD_VISIBILITY_SCRIPT = r"""(() => {
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) hide();
   });
-  if (document.getElementById('auth-error')) field.focus();
+  if (document.getElementById('auth-error')) (field || passkey)?.focus();
   if (passkey) passkey.addEventListener('click', async event => {
     if (document.getElementById('passkey-assertion').value) return;
     event.preventDefault();
@@ -127,7 +129,7 @@ _PASSWORD_VISIBILITY_SCRIPT = r"""(() => {
     pending = true;
     passkey.setAttribute('aria-disabled', 'true');
     passkey.textContent = 'Waiting for passkey…';
-    approve.disabled = true;
+    if (approve) approve.disabled = true;
     say('Waiting for your passkey. Complete the prompt from your browser, security key or ' +
       'phone. Nothing is approved until it finishes.', 'pending');
     try {
@@ -157,12 +159,13 @@ _PASSWORD_VISIBILITY_SCRIPT = r"""(() => {
       pending = false;
       passkey.removeAttribute('aria-disabled');
       passkey.textContent = passkeyLabel;
-      approve.disabled = false;
+      if (approve) approve.disabled = false;
       say(error && error.name === 'NotAllowedError'
         ? 'Passkey approval was cancelled or timed out. Nothing was approved. You can try ' +
-          'the passkey again or use the owner password.'
-        : 'Passkey approval was cancelled or unavailable. Nothing was approved. Use the ' +
-          'owner password or try again in a browser that supports passkeys.', 'error');
+          (field ? 'the passkey again or use the owner password.' : 'the passkey again.')
+        : 'Passkey approval was cancelled or unavailable. Nothing was approved. ' +
+          (field ? 'Use the owner password or try again in a browser that supports passkeys.'
+            : 'Try again in a browser that supports passkeys.'), 'error');
     }
   });
 })();"""
@@ -187,7 +190,7 @@ _PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
   let generation = 0;
   let timer;
   let request;
-  const deadline = Date.now() + Number(phoneButton.dataset.remainingMs);
+  const deadline = Date.now() + Number(button.dataset.remainingMs);
   function say(message, state) {
     status.textContent = message;
     if (state) status.dataset.state = state; else delete status.dataset.state;
@@ -200,16 +203,18 @@ _PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
     submitted = true;
     say('Passkey received. Verifying and saving…', 'pending');
     // Defer disabling: the submitter must stay in the encoded form.
-    setTimeout(() => { button.disabled = true; phoneButton.disabled = true; }, 0);
+    setTimeout(() => {
+      button.disabled = true;
+      if (phoneButton) phoneButton.disabled = true;
+    }, 0);
   });
   function finish(message, registered) {
     stopped = true;
     clearTimeout(timer);
     if (request) request.abort();
-    phone.replaceChildren();
-    phone.hidden = true;
+    if (phone) { phone.replaceChildren(); phone.hidden = true; }
     button.disabled = true;
-    phoneButton.disabled = true;
+    if (phoneButton) phoneButton.disabled = true;
     // Outcome view: a concrete heading and title, and none of the old QR/form/wait text.
     options.hidden = true;
     document.getElementById('registration-intro').hidden = true;
@@ -265,13 +270,13 @@ _PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
     } finally { clearTimeout(timeout); }
     if (!stopped && !paused && currentGeneration === generation) timer = setTimeout(poll, 2000);
   }
-  phoneButton.addEventListener('click', () => {
+  if (phoneButton) phoneButton.addEventListener('click', () => {
     phoneStarted = true;
     // The chosen route becomes the status line; the QR and its explanation move up.
     button.form.hidden = true;
     document.getElementById('phone-choice').hidden = true;
     phone.hidden = false;
-    phoneButton.disabled = true;
+    if (phoneButton) phoneButton.disabled = true;
     button.disabled = true;
     say('Waiting for registration on your phone…', 'pending');
     poll();
@@ -295,7 +300,7 @@ _PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
     pending = true;
     button.setAttribute('aria-disabled', 'true');
     button.textContent = 'Waiting for passkey…';
-    phoneButton.disabled = true;
+    if (phoneButton) phoneButton.disabled = true;
     say('Waiting for your browser’s passkey prompt. Complete it to register. Nothing is ' +
       'saved until verification finishes.', 'pending');
     try {
@@ -320,9 +325,10 @@ _PASSKEY_REGISTRATION_SCRIPT = r"""(() => {
       pending = false;
       button.removeAttribute('aria-disabled');
       button.textContent = buttonLabel;
-      if (!stopped) phoneButton.disabled = false;
+      if (!stopped && phoneButton) phoneButton.disabled = false;
       say('Passkey registration was cancelled or unavailable. Nothing was saved. ' +
-        'You can try again on this device or use your phone.', 'error');
+        (phoneButton ? 'You can try again on this device or use your phone.'
+          : 'You can try again with Windows Hello on this device.'), 'error');
     }
   });
 })();"""
@@ -515,7 +521,9 @@ class BrowserAuthorization:
             "new consent page.</p>"
             if record.missing_subchat_tools else ""
         )
+        passkey_only = self.credentials.is_passkey_only()
         passkey_html = ""
+        separator = "" if passkey_only else "<div class=or aria-hidden=true>or</div>"
         try:
             enrolled = self.passkeys.list()
             if enrolled:
@@ -530,7 +538,7 @@ class BrowserAuthorization:
                     options_to_json(options).encode()
                 ).decode().rstrip("=")
                 passkey_html = (
-                    "<div class=or aria-hidden=true>or</div>"
+                    f"{separator}"
                     "<p class=hint id=passkey-hint>Use a saved passkey. Your browser opens the "
                     "prompt, not this page. A phone passkey may need Bluetooth near this "
                     "computer. Scanning the browser's QR code only starts the phone prompt; "
@@ -541,9 +549,47 @@ class BrowserAuthorization:
                     f"data-options='{options_b64}'>Allow with passkey</button>"
                 )
         except (ClientCredentialError, ValueError):
-            # An invalid optional passkey record must not hide the established
-            # password consent route.
-            pass
+            if passkey_only:
+                raise  # No password fallback exists; fail closed.
+        password_html = (
+            "<label for=password>Anywhere Computer owner password</label>"
+            "<p class=hint id=password-hint>This is not your computer or ChatGPT login "
+            "password.</p>"
+            "<div class=password-row>"
+            "<input id=password type=password name=password autocomplete=current-password "
+            f"maxlength=1024 aria-describedby='password-hint{' auth-error' if error else ''}' "
+            f"{'aria-invalid=true ' if error else ''}required>"
+            "<button class='btn quiet' type=button id=password-visibility "
+            "aria-controls=password aria-pressed=false aria-label='Show password'>Show</button>"
+            "</div>"
+            "<button class=btn type=submit name=approve value=yes>Allow connection</button>"
+            if not passkey_only else
+            "<p class=hint>Use the owner passkey saved with Windows Hello on this computer.</p>"
+        )
+        owner_detail = (
+            "<dt>Owner password</dt><dd>Set with <code>anywhere owner-init</code> "
+            "(at least 8 characters) on the computer; it is not shared with the client.</dd>"
+            if not passkey_only else
+            "<dt>Owner passkey</dt><dd>Started locally with "
+            "<code>anywhere owner-passkey-init</code> and verified with Windows Hello.</dd>"
+        )
+        recovery = (
+            f"<details{' open' if error else ''}><summary>Forgot the owner password?</summary>"
+            "<div class=details-body><p>Stop the HTTP service and run "
+            "<code>anywhere owner-reset</code> on the computer. It revokes every grant of "
+            "this device, clears all enrolled passkeys and disables the device until you "
+            "re-enable it, so every client must connect again.</p></div></details>"
+            if not passkey_only else
+            f"<details{' open' if error else ''}><summary>Lost the owner passkey?</summary>"
+            "<div class=details-body><p>Stop the HTTP service and run "
+            "<code>anywhere owner-passkey-reset</code> locally. It revokes every grant "
+            "and disables this device. Register a new Windows Hello passkey and "
+            "re-enable the device before connecting again.</p></div></details>"
+        )
+        credential_notice = (
+            "Your passkey remains on your device." if passkey_only else
+            "Your password is not shared with the connecting client."
+        )
         body = (
             "<h1>Allow this connection?</h1>"
             "<div class=consent><section class=summary>"
@@ -571,23 +617,13 @@ class BrowserAuthorization:
             f"<form method=post action=/authorize data-remaining-ms='{remaining_ms}'>"
             f"<input type=hidden name=request_id value='{escape(identity)}'>"
             f"<input type=hidden name=csrf value='{escape(csrf)}'>"
-            "<label for=password>Anywhere Computer owner password</label>"
-            "<p class=hint id=password-hint>This is not your computer or ChatGPT login "
-            "password.</p>"
-            "<div class=password-row>"
-            "<input id=password type=password name=password autocomplete=current-password "
-            f"maxlength=1024 aria-describedby='password-hint{' auth-error' if error else ''}' "
-            f"{'aria-invalid=true ' if error else ''}required>"
-            "<button class='btn quiet' type=button id=password-visibility "
-            "aria-controls=password aria-pressed=false aria-label='Show password'>Show</button>"
-            "</div>"
-            "<button class=btn type=submit name=approve value=yes>Allow connection</button>"
+            f"{password_html}"
             f"{passkey_html}"
             "<div class=deny><button class='btn secondary' type=submit name=deny value=yes "
             "formnovalidate>Deny</button></div>"
             "<p id=submit-status class=status role=status></p>"
             "</form><p class=fine>This request expires 5 minutes after it was opened. "
-            "Your password is not shared with the connecting client.</p></section>"
+            f"{credential_notice}</p></section>"
             "<div class=more>"
             "<details><summary>Technical details</summary><div class=details-body>"
             "<dl class=tech>"
@@ -595,16 +631,11 @@ class BrowserAuthorization:
             f"<dt>Device</dt><dd>{escape(self.device)}</dd>"
             f"<dt>Resource</dt><dd>{escape(record.resource)}</dd>"
             f"<dt>Return address</dt><dd>{escape(record.redirect)}</dd>"
-            "<dt>Owner password</dt><dd>Set with <code>anywhere owner-init</code> "
-            "(at least 8 characters) on the computer; it is not shared with the client.</dd>"
+            f"{owner_detail}"
             "</dl></div></details>"
             # Recovery help is permanent supporting text (open after a failed attempt),
             # not part of the short error message.
-            f"<details{' open' if error else ''}><summary>Forgot the owner password?</summary>"
-            "<div class=details-body><p>Stop the HTTP service and run "
-            "<code>anywhere owner-reset</code> on the computer. It revokes every grant of "
-            "this device, clears all enrolled passkeys and disables the device until you "
-            "re-enable it, so every client must connect again.</p></div></details>"
+            f"{recovery}"
             "</div></div>"
         )
         return document(
@@ -637,10 +668,12 @@ class BrowserAuthorization:
                 "new link."
             )
         elif registration:
+            renewal = ("owner-passkey-init" if self.credentials.is_passkey_only()
+                       else "owner-passkey-enroll")
             action = (
                 "On the computer running Anywhere Computer, run "
                 "<code>anywhere owner-passkey-list</code> if you are unsure whether a passkey "
-                "was saved, then <code>anywhere owner-passkey-enroll</code> for a new "
+                f"was saved, then <code>anywhere {renewal}</code> for a new "
                 "one-use link."
             )
         elif status == 429 and not rest:
@@ -818,11 +851,15 @@ class BrowserAuthorization:
                     503, "Authentication is busy. Wait a moment and try again."
                 )
             if not valid:
-                # Short failure and retry only; password recovery is permanent page help.
+                # Short failure and retry only; recovery is permanent page help.
                 retry = (
-                    "The passkey could not be verified. Try again or use the owner password."
+                    ("The passkey could not be verified. Try again."
+                     if self.credentials.is_passkey_only() else
+                     "The passkey could not be verified. Try again or use the owner password.")
                     if "passkey" in params else
-                    "Check the Anywhere Computer owner password and try again."
+                    ("Use the enrolled owner passkey to approve this request."
+                     if self.credentials.is_passkey_only() else
+                     "Check the Anywhere Computer owner password and try again.")
                 )
                 return (
                     403,
@@ -923,6 +960,7 @@ class BrowserAuthorization:
     def _registration_page(
         self, identity: str, csrf: str, ticket: str, record: PendingRegistration,
     ) -> bytes:
+        passkey_only = self.credentials.is_passkey_only()
         options = generate_registration_options(
             rp_id=urlsplit(self.origin).hostname or "",
             rp_name="Anywhere Computer",
@@ -930,6 +968,8 @@ class BrowserAuthorization:
             user_id=hashlib.sha256(self.credentials.account.encode()).digest(),
             challenge=record.challenge,
             authenticator_selection=AuthenticatorSelectionCriteria(
+                authenticator_attachment=(AuthenticatorAttachment.PLATFORM
+                                          if passkey_only else None),
                 resident_key=ResidentKeyRequirement.PREFERRED,
                 user_verification=UserVerificationRequirement.REQUIRED,
             ),
@@ -944,6 +984,32 @@ class BrowserAuthorization:
             registration_url, image_factory=SvgPathFillImage,
         ).to_string(encoding="unicode")
         remaining_ms = max(0, int((record.expires - time.monotonic()) * 1000))
+        phone_html = (
+            "<div id=phone-choice><div class=or aria-hidden=true>or</div>"
+            "<h2>Use a phone instead</h2>"
+            "<p class=hint>Show a QR code for this one-use registration link, open it "
+            "on a phone you control, and register there.</p>"
+            f"<button class='btn secondary' id=register-on-phone type=button "
+            f"data-remaining-ms='{remaining_ms}'>Register on your phone</button></div>"
+            "<section class=phone id=phone-registration hidden><h2>Scan with your phone</h2>"
+            "<p>This QR code is an ordinary web link to this registration page, not a passkey "
+            "sign-in prompt. Open it with your phone camera, then "
+            "register a passkey in its password manager. Only scan it with a phone you control. "
+            "This page confirms the result automatically.</p>"
+            "<div class=qr role=img aria-label='QR code for the one-use registration web link'>"
+            f"{qr_svg}</div>"
+            f"<a id=phone-registration-link href='{html.escape(registration_url)}'>"
+            "Registration link</a></section>"
+            if not passkey_only else ""
+        )
+        prompt_hint = (
+            "Your browser, security key or password manager shows the passkey prompt, "
+            "not this page."
+            if not passkey_only else
+            "Choose Windows Hello on this computer and complete its face, fingerprint "
+            "or PIN prompt. This page never receives that secret."
+        )
+        renewal_command = "owner-passkey-init" if passkey_only else "owner-passkey-enroll"
         body = (
             f"<h1 id=registration-title data-device='{html.escape(self.device)}'>"
             "Register an owner passkey</h1>"
@@ -962,28 +1028,14 @@ class BrowserAuthorization:
             "enrolled list.</p>"
             "<input id=passkey-label type=text name=label maxlength=80 value='Owner passkey' "
             "aria-describedby=passkey-label-hint required>"
-            "<p class=hint>Your browser, security key or password manager shows the "
-            "passkey prompt, not this page.</p>"
-            f"<button class=btn id=register-passkey type=submit data-options='{options_b64}'>"
+            f"<p class=hint>{prompt_hint}</p>"
+            f"<button class=btn id=register-passkey type=submit "
+            f"data-remaining-ms='{remaining_ms}' data-options='{options_b64}'>"
             "Register passkey</button></form>"
-            "<div id=phone-choice><div class=or aria-hidden=true>or</div>"
-            "<h2>Use a phone instead</h2>"
-            "<p class=hint>Show a QR code for this one-use registration link, open it "
-            "on a phone you control, and register there.</p>"
-            f"<button class='btn secondary' id=register-on-phone type=button "
-            f"data-remaining-ms='{remaining_ms}'>Register on your phone</button></div>"
-            "<section class=phone id=phone-registration hidden><h2>Scan with your phone</h2>"
-            "<p>This QR code is an ordinary web link to this registration page, not a passkey "
-            "sign-in prompt. Open it with your phone camera, then "
-            "register a passkey in its password manager. Only scan it with a phone you control. "
-            "This page confirms the result automatically.</p>"
-            "<div class=qr role=img aria-label='QR code for the one-use registration web link'>"
-            f"{qr_svg}</div>"
-            f"<a id=phone-registration-link href='{html.escape(registration_url)}'>"
-            "Registration link</a></section>"
+            f"{phone_html}"
             "<p class=fine>This registration page lasts up to 3 minutes, and the link may "
             "expire sooner. If it expires, "
-            "run <code>anywhere owner-passkey-enroll</code> locally for a new link; check "
+            f"run <code>anywhere {renewal_command}</code> locally for a new link; check "
             "<code>anywhere owner-passkey-list</code> first if you are unsure whether a "
             "passkey was saved.</p></div>"
         )

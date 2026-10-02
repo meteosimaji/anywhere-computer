@@ -23,10 +23,12 @@ from .engine_migration import migrate_engine
 from .http_client import run_http_mcp
 from .http_diagnostics import diagnose_http, diagnose_remote
 from .http_service import (
+    begin_http_owner_passkey,
     configure_http,
     enable_http_device,
     http_authorization_status,
     load_http_config,
+    reset_http_owner_passkey,
     reset_http_owner_password,
     retain_http_grants,
     revoke_http_device,
@@ -96,6 +98,8 @@ def main() -> None:
             "owner-init",
             "owner-change",
             "owner-reset",
+            "owner-passkey-init",
+            "owner-passkey-reset",
             "owner-passkey-enroll",
             "owner-passkey-list",
             "owner-passkey-remove",
@@ -665,6 +669,32 @@ def main() -> None:
                 raise ValueError("Owner passwords did not match")
             reset_http_owner_password(directory, password)
             print(json.dumps({"owner_password_reset": True, "http_device_enabled": False}))
+        elif args.command == "owner-passkey-init":
+            if sys.platform != "win32":
+                raise ValueError("Windows Hello setup is only available on Windows")
+            if not has_interactive_input():
+                raise ValueError("Passkey setup requires an interactive local terminal")
+            config = load_http_config(directory)
+            token = begin_http_owner_passkey(directory)
+            parsed = urlsplit(config.resource)
+            origin = f"{parsed.scheme}://{parsed.netloc}"
+            print(json.dumps({"registration_url": (
+                origin + "/owner-passkey?ticket=" + quote(token, safe="")
+            ), "expires_in_seconds": 300,
+               "authenticator": "Choose Windows Hello on this computer"}))
+        elif args.command == "owner-passkey-reset":
+            if sys.platform != "win32":
+                raise ValueError("Windows Hello reset is only available on Windows")
+            if not has_interactive_input():
+                raise ValueError("Passkey reset requires an interactive local terminal")
+            confirmation = input(
+                "Reset the owner to Windows Hello, revoke all grants and clear all passkeys? "
+                "Type REVOKE to continue: "
+            )
+            if confirmation != "REVOKE":
+                raise ValueError("Owner reset cancelled; authorization was not changed")
+            reset_http_owner_passkey(directory)
+            print(json.dumps({"owner_passkeys_reset": True, "http_device_enabled": False}))
         elif args.command in {
             "owner-passkey-enroll", "owner-passkey-list", "owner-passkey-remove",
         }:
