@@ -39,6 +39,7 @@ from .subchat_state import (
     SubchatOperationNotFound,
     SubchatPage,
     SubchatRequestConflict,
+    SubchatSubmission,
     SubchatSubmissions,
 )
 
@@ -101,6 +102,53 @@ class SubchatGateway:
         self.cores: dict[str, SubchatSession] = {}
         self.pending: dict[tuple[str, str], tuple[str, str, asyncio.Task[Reply]]] = {}
 
+    def _saved_send(self, identity: tuple[str, str],
+                    entry: tuple[str, str, asyncio.Task[Reply]]) -> SubchatSubmission | None:
+        core = self.cores.get(identity[0])
+        lookup = getattr(core, 'send_request_submission', None)
+        if not callable(lookup):
+            return None
+        tool, digest, _ = entry
+        try:
+            saved = lookup(identity[1], tool, digest)
+        except (ValueError, sqlite3.Error):
+            return None
+        if not isinstance(saved, SubchatSubmission):
+            return None
+        if (self.account_id and saved.provider_account_id is not None
+                and saved.provider_account_id != self.account_id):
+            return None
+        return saved
+
+    def _durable(self, identity: tuple[str, str],
+                 entry: tuple[str, str, asyncio.Task[Reply]]) -> bool:
+        tool, _, task = entry
+        if not task.done() or task.cancelled():
+            return False
+        if tool not in {'subchat_send', 'subchat_message'}:
+            return True
+        try:
+            reply = task.result()
+        except Exception:
+            return False
+        saved = self._saved_send(identity, entry)
+        if saved is not None:
+            core = self.cores[identity[0]]
+            sending = core.sends.get(saved.operation_id)
+            recovering = core.recoveries.get(saved.operation_id)
+            return (saved.state in {'completed', 'cancelled', 'interrupted', 'preflight_failed'}
+                    and (sending is None or sending.done())
+                    and (recovering is None or recovering.done()))
+        if reply.state == 'failed' and reply.data.get('dispatched') is False:
+            return True
+        if (tool == 'subchat_send' and callable(getattr(
+                self.cores.get(identity[0]), 'send_request_submission', None))):
+            return False
+        # Compatibility for cores without persisted transport aliases. Never
+        # infer an alias's durability from its response ID alone.
+        return (reply.state == 'completed'
+                and reply.data.get('operation_id') == identity[1])
+
     def _core(self, grant_id: str) -> SubchatSession:
         core = self.cores.get(grant_id)
         if core is None:
@@ -142,6 +190,8 @@ class SubchatGateway:
         digest = json.dumps((request.arguments,
                              authorization_grant_id if request.tool == 'subchat_queue_auto'
                              else None), sort_keys=True, separators=(",", ":"))
+        if request.tool == 'subchat_send':
+            digest = _mutation_digest(request)
         key = (grant_id, request.operation_id)
         existing = self.pending.get(key)
         if existing is not None:
@@ -181,24 +231,8 @@ class SubchatGateway:
                 # Completed sends and messages have a durable receipt in the
                 # Subchat ledger. The ledger checks their exact arguments when
                 # an evicted ID is used again. Never evict live work.
-                def durable(entry: tuple[str, str, asyncio.Task[Reply]],
-                            operation_id: str) -> bool:
-                    tool, _, task = entry
-                    if not task.done() or task.cancelled():
-                        return False
-                    if tool not in {"subchat_send", "subchat_message"}:
-                        return True
-                    try:
-                        reply = task.result()
-                    except Exception:
-                        return False
-                    if reply.state == "failed" and reply.data.get("dispatched") is False:
-                        return True
-                    return (reply.state == "completed"
-                            and reply.data.get("operation_id") == operation_id)
-
                 completed = next((identity for identity, entry in self.pending.items()
-                                  if durable(entry, identity[1])), None)
+                                  if self._durable(identity, entry)), None)
                 if completed is not None:
                     self.pending.pop(completed)
                 elif request.tool not in {"subchat_send", "subchat_message"}:
@@ -213,12 +247,28 @@ class SubchatGateway:
                         target = request.arguments.get("operation_id")
                         if isinstance(target, str):
                             self.pending.pop((grant_id, target), None)
+                            for identity, entry in list(self.pending.items()):
+                                if identity[0] != grant_id:
+                                    continue
+                                saved = self._saved_send(identity, entry)
+                                if (saved is not None and saved.operation_id == target
+                                        and self._durable(identity, entry)):
+                                    self.pending.pop(identity)
                     return observed
                 else:
+                    recoverable_ids = {saved.operation_id
+                        for identity, entry in self.pending.items()
+                        if identity[0] == grant_id
+                        and (saved := self._saved_send(identity, entry)) is not None}
+                    recoverable: list[JsonValue] = [value for value in sorted(recoverable_ids)]
                     return Reply(operation_id=request.operation_id, state="failed",
                                  error="Recover an uncertain Subchat send before starting "
-                                       "another; the gateway has 128 unresolved operations",
-                                 data={"dispatched": False})
+                                       f"another; the gateway has {len(self.pending)} retained "
+                                       "requests with uncertain outcomes. Use subchat_list "
+                                       "to locate their saved submission IDs; do not resend.",
+                                 data={"dispatched": False, "automatic_retry": False,
+                                       "retained_requests": len(self.pending),
+                                       "recoverable_submission_ids": recoverable})
             async def run() -> Reply:
                 reply = await execute_core()
                 if request.tool == "subchat_capabilities" and reply.state == "completed":

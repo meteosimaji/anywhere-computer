@@ -3,6 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b65 / Plugin 0.2.0-beta.65 — unpublished candidate (2026-10-02)
+
+- Combine beta.64's bounded stop-reply drain with beta.63's durable Subchat
+  transport/intent bindings and completed-alias capacity recovery. Preserve
+  the previous candidate wheels in Git without changing their bytes.
+- Keep unknown/active sends and their exact argument, owner and account bindings.
+  Recover the original canonical submission; never resend to reclaim capacity.
+
 ## 0.2.0b64 / Plugin 0.2.0-beta.64 — unpublished candidate (2026-10-02)
 
 - Include the unpublished beta.62 MCP export, catalog diagnosis and setup-status
@@ -13,6 +21,19 @@
   retain active-work refusal, exact replies and original transport failures.
 - Record bounded, secret-free transport phases and independent fixture health
   on platform-test failures. Do not retry requests or extend read deadlines.
+
+## 0.2.0b63 / Plugin 0.2.0-beta.63 — unpublished candidate (2026-10-02)
+
+- Retain exact Subchat send transport-ID bindings to their canonical submission
+  in the same durable transaction as intent preparation. Reject changed input,
+  another tool/owner and conversion of an alias into a new direct submission
+  after cache eviction or restart. Store digests without duplicating prompts.
+- Recover capacity occupied by completed send-intent aliases using same-owner,
+  same-account persisted receipts. Keep active workers and uncertain sends;
+  report retained request count and deduplicated owned recovery IDs truthfully.
+- Include the unpublished beta.62 setup, MCP export and local socket cleanup
+  repairs without changing its wheel bytes. Provider wire/hardware acceptance
+  and deployed-runtime updates remain separate gates.
 
 ## 0.2.0b62 / Plugin 0.2.0-beta.62 — unpublished candidate (2026-10-02)
 
