@@ -14,13 +14,14 @@ from mcp.client.stdio import stdio_client
 
 from anywhere_computer import cli
 from anywhere_computer.connection import exchange
+from anywhere_computer.mcp_config import render_mcp_config
 
 
 @pytest.mark.parametrize('output_format', ['json', 'toml'])
 def test_export_keeps_installation_and_state_without_starting(
     tmp_path, monkeypatch, capsys, output_format,
 ):
-    state = tmp_path / 'state 日本語 with "quotes"'
+    state = tmp_path / 'state 日本語 🙂 with "quotes"\x7f'
     executable = str(tmp_path / 'installation with spaces' / 'python')
     monkeypatch.setattr(sys, 'executable', executable)
     monkeypatch.setattr(sys, 'argv', ['anywhere', 'mcp-config', '--state-dir', str(state),
@@ -28,6 +29,9 @@ def test_export_keeps_installation_and_state_without_starting(
     monkeypatch.setattr(cli, 'ensure_agent', lambda *a, **k: pytest.fail('Unexpected start'))
     cli.main()
     output = capsys.readouterr().out
+    # Redirected Windows output may use a legacy code page. Copyable exports
+    # must retain exact Unicode paths without depending on stdout's encoding.
+    output.encode('ascii')
     parsed = json.loads(output) if output_format == 'json' else tomllib.loads(output)
     entry = parsed['mcpServers' if output_format == 'json' else 'mcp_servers']['anywhere-computer']
     assert entry == {
@@ -37,6 +41,11 @@ def test_export_keeps_installation_and_state_without_starting(
     }
     assert not state.exists()
     assert 'env' not in entry
+
+
+def test_toml_export_rejects_invalid_unicode_before_output(tmp_path):
+    with pytest.raises(ValueError, match='Unicode scalar'):
+        render_mcp_config(tmp_path / 'invalid\ud800', 'toml')
 
 
 @pytest.mark.parametrize('options', [
@@ -92,8 +101,9 @@ credentials.local_credential = fixture_credential
     generated = subprocess.run(
         [str(interpreter), '-B', '-I', '-m', 'anywhere_computer', 'mcp-config',
          '--state-dir', str(state)],
-        cwd=hostile, env=env, check=True, text=True, capture_output=True, timeout=15,
+        cwd=hostile, env=env, text=True, capture_output=True, timeout=15,
     )
+    assert generated.returncode == 0, generated.stderr[-2000:]
     config = json.loads(generated.stdout)['mcpServers']['anywhere-computer']
     assert config['command'] == str(interpreter)
     assert not state.exists()
