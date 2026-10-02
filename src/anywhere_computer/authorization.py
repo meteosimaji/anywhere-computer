@@ -18,6 +18,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .grant_revocation import (
+    RevocationState,
+    finish_revocation,
+    request_revocation,
+    revocation_requested,
+)
 from .state import prepare_directory
 
 LOCAL_ONLY_TOOLS = frozenset({"operations_recent"})
@@ -117,6 +123,23 @@ class AuthorizationStore:
         self.db = sqlite3.connect(self.database, timeout=10)
         self.db.execute("PRAGMA foreign_keys=ON")
         try:
+            if self.db.execute('PRAGMA user_version').fetchone()[0] == 4:
+                # Existing owner administration must be able to open during a
+                # file guard. Validate the current schema/resource with reads;
+                # do not take a write reservation merely to repeat its DDL.
+                if self.db.execute('SELECT resource FROM settings').fetchall() != [(resource,)]:
+                    raise ValueError('Authorization store belongs to a different resource')
+                for query in (
+                    'SELECT id,redirects FROM clients LIMIT 0',
+                    'SELECT id,owner,tools,active,generation,reset_pending '
+                    'FROM authorized_devices LIMIT 0',
+                    'SELECT id,owner,device,client,tools,expires,revoked FROM grants LIMIT 0',
+                    'SELECT digest,grant_id,redirect,challenge,expires,consumed FROM codes LIMIT 0',
+                    'SELECT digest,grant_id,expires FROM tokens LIMIT 0',
+                    'SELECT digest,grant_id,expires,consumed FROM refresh_tokens LIMIT 0',
+                ):
+                    self.db.execute(query)
+                return
             with self.db:
                 self.db.execute("BEGIN IMMEDIATE")
                 version = self.db.execute("PRAGMA user_version").fetchone()[0]
@@ -394,6 +417,9 @@ class AuthorizationStore:
         return issued
 
     def _grant(self, grant: str, now: float) -> GrantIdentity | None:
+        if revocation_requested(self.database, grant):
+            finish_revocation(self.database, grant, 'parent')
+            return None
         row = self.db.execute(
             "SELECT g.owner,g.device,g.client,g.tools,g.expires,g.revoked,d.owner,d.tools,d.active "
             "FROM grants g JOIN authorized_devices d ON g.device=d.id WHERE g.id=?",
@@ -468,13 +494,14 @@ class AuthorizationStore:
                 changed += 1
         return changed
 
-    def revoke(self, *, owner: str, grant: str) -> None:
-        with self.db:
-            changed = self.db.execute(
-                "UPDATE grants SET revoked=1 WHERE id=? AND owner=?", (grant, owner)
-            )
-            if changed.rowcount != 1:
-                raise AuthorizationError("access_denied")
+    def revoke(self, *, owner: str, grant: str) -> RevocationState:
+        if self.db.execute('SELECT owner FROM grants WHERE id=?', (grant,)).fetchone() != (owner,):
+            raise AuthorizationError('access_denied')
+        request_revocation(self.database, grant, owner)
+        state = finish_revocation(self.database, grant, 'parent')
+        if state is None:
+            raise AuthorizationError('Revocation acceptance could not be confirmed')
+        return state
 
     def revoke_device(self, *, owner: str, device: str) -> None:
         with self.db:
@@ -554,6 +581,8 @@ class AuthorizationStore:
 def current_grant_read_only(database: Path, grant_id: str) -> GrantIdentity | None:
     """Check an existing grant from an Engine worker without opening a writable store."""
     if database.is_symlink() or not database.is_file():
+        return None
+    if revocation_requested(database, grant_id):
         return None
     with closing(sqlite3.connect(database.absolute().as_uri() + "?mode=ro", uri=True)) as db:
         resource_row = db.execute("SELECT resource FROM settings").fetchone()

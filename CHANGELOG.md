@@ -3,6 +3,24 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
+## 0.2.0b66 / Plugin 0.2.0-beta.66 — unpublished candidate (2026-10-02)
+
+- Include beta.65's MCP onboarding and Subchat recovery candidate. Cross-platform
+  SDK shutdown and browser-cleanup failures still block release of its parent.
+- Save parent/child revocation intents outside the grant database reserved by
+  admitted descriptor-confined file I/O. Distinguish durable acceptance, pending
+  confirmation and a committed revocation, while denying new admission.
+- Preserve existing request bindings; new bindings and queued denial audits do
+  not wait on the admitted file worker. Retain both grant reservations through
+  I/O and reconcile revocation/audits after releasing them.
+- Add password-authenticated `http-delegate-receipt` for the original local child
+  and operation IDs after revocation. Never restore a revoked child bearer's
+  access or dispatch again to recover a saved result.
+- Cover long reads/writes after observer cancellation, pending-store reopen,
+  commit faults, owner/ID boundaries, actual loopback refusal and owner recovery.
+  Serving runtimes must support the independent gate before relying on pending
+  revocation; older serving installations are not claimed upgraded.
+
 ## 0.2.0b65 / Plugin 0.2.0-beta.65 — unpublished candidate (2026-10-02)
 
 - Combine beta.64's bounded stop-reply drain with beta.63's durable Subchat

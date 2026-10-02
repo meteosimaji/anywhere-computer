@@ -5,16 +5,26 @@ arguments is never an authentication credential.
 """
 
 import hashlib
+import logging
 import secrets
 import sqlite3
 import time
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Awaitable, Callable, Generator, Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from .authorization import AuthorizationStore, current_grant_read_only
+from .grant_revocation import (
+    RevocationState,
+    bind_request_input,
+    finish_revocation,
+    flush_pending_audit,
+    record_pending_audit,
+    request_revocation,
+    revocation_requested,
+)
 from .models import Reply, Request
 from .remote_bridge import RemoteAgent
 from .state import Ledger, prepare_directory
@@ -43,6 +53,7 @@ WRITE_PATH_TOOLS = frozenset({
 })
 PATH_TOOLS = READ_PATH_TOOLS | WRITE_PATH_TOOLS
 SUPPORTED_TOOLS = PATH_TOOLS | {"computer_status", "operations_get"}
+logger = logging.getLogger(__name__)
 
 
 def _inside(path_value: JsonValue, roots: tuple[str, ...]) -> bool:
@@ -136,19 +147,16 @@ class DelegatedTaskStore:
     def bind_request(self, child_id: str, request: Request) -> None:
         """Keep one child operation ID bound across local and remote ledgers."""
         digest = Ledger.request_digest(request)
-        with self.db:
-            self.db.execute("BEGIN IMMEDIATE")
-            self.db.execute(
-                "INSERT OR IGNORE INTO operation_inputs VALUES (?,?,?)",
-                (child_id, request.operation_id, digest),
-            )
-            row = self.db.execute(
-                "SELECT request_digest FROM operation_inputs "
-                "WHERE child_id=? AND operation_id=?",
-                (child_id, request.operation_id),
-            ).fetchone()
-            if row is None or row[0] != digest:
-                raise ValueError("Delegated operation ID was used for another request")
+        # Honor bindings written by previous versions. New admission metadata
+        # uses the independent store, so a revoked call can be durably denied
+        # while an already admitted file worker holds both grant reservations.
+        row = self.db.execute(
+            "SELECT request_digest FROM operation_inputs WHERE child_id=? AND operation_id=?",
+            (child_id, request.operation_id),
+        ).fetchone()
+        if row is not None and row[0] != digest:
+            raise ValueError("Delegated operation ID was used for another request")
+        bind_request_input(self.database, child_id, request.operation_id, digest)
 
     def remote_operation(self, child_id: str, operation_id: str
                          ) -> tuple[str, str, str, str] | None:
@@ -199,9 +207,28 @@ class DelegatedTaskStore:
         child_id = str(row[0]) if row is not None else None
         return child_id if child_id is not None and self.current(child_id) is not None else None
 
-    def revoke(self, child_id: str) -> None:
-        with self.db:
-            self.db.execute("UPDATE grants SET revoked=1 WHERE child_id=?", (child_id,))
+    def revoke(self, child_id: str) -> RevocationState:
+        row = self.db.execute('SELECT body FROM grants WHERE child_id=?', (child_id,)).fetchone()
+        if row is None:
+            raise ValueError('Delegated child is unavailable')
+        grant = DelegatedTaskGrant.model_validate_json(row[0])
+        request_revocation(self.database, child_id, grant.owner)
+        state = finish_revocation(self.database, child_id, 'child')
+        if state is None:
+            raise ValueError('Delegated revocation acceptance could not be confirmed')
+        return state
+
+    @property
+    def database(self) -> Path:
+        return self.directory / 'delegated-tasks.sqlite3'
+
+    def revocation_state(self, child_id: str) -> RevocationState | None:
+        state = finish_revocation(self.database, child_id, 'child')
+        if state is not None:
+            return state
+        row = self.db.execute('SELECT revoked FROM grants WHERE child_id=?',
+                              (child_id,)).fetchone()
+        return 'revoked' if row is not None and row[0] else None
 
     def list_grants(self, *, owner: str) -> list[tuple[DelegatedTaskGrant, bool]]:
         """Owner administration metadata; bearer digests never leave storage."""
@@ -215,6 +242,9 @@ class DelegatedTaskStore:
         return result
 
     def current(self, child_id: str) -> DelegatedTaskGrant | None:
+        if revocation_requested(self.database, child_id):
+            finish_revocation(self.database, child_id, 'child')
+            return None
         row = self.db.execute("SELECT body,revoked FROM grants WHERE child_id=?",
                               (child_id,)).fetchone()
         if row is None or row[1]:
@@ -291,10 +321,9 @@ class DelegatedTaskStore:
                     return previous.model_copy(update={"operation_id": request.operation_id})
             else:
                 ledger.finish(denial.model_copy(update={"operation_id": internal_id}))
-        with self.db:
-            self.db.execute("INSERT OR IGNORE INTO audit VALUES (?,?,?,?,?,?)",
-                            (request.operation_id, child_id, request.tool, "denied", reason,
-                             time.time()))
+        record_pending_audit(self.database, request.operation_id, child_id, request.tool,
+                             reason, time.time())
+        flush_pending_audit(self.database)
         return denial
 
     def record_target_failure(self, child_id: str, request: Request, *,
@@ -311,10 +340,33 @@ class DelegatedTaskStore:
     def local_file_guard(self, child_id: str, request: Request) -> Iterator[DelegatedTaskGrant]:
         """Serialize a local file operation with child and parent revocation.
 
-        Use from the file worker thread. Both databases hold a write reservation
-        until the descriptor-confined file operation returns. A revocation that
-        wins first denies the operation; one that follows waits for it to end.
+        Both write reservations remain held through descriptor-confined I/O.
+        A committed revocation intent denies new admission while its UPDATE is
+        pending. This already admitted worker may finish; its exit reconciles
+        the pending UPDATE after releasing both reservations.
         """
+        if revocation_requested(self.database, child_id):
+            raise ValueError('Delegated task authorization is unavailable')
+        grant: DelegatedTaskGrant | None = None
+        try:
+            with closing(self._reserved_file_guard(child_id, request)) as reservation:
+                grant = next(reservation)
+                yield grant
+        finally:
+            # Never replace a file result/error with bookkeeping failure. A
+            # persisted intent remains pending and denies new dispatch until a
+            # later owner query or worker exit confirms its original UPDATE.
+            try:
+                finish_revocation(self.database, child_id, 'child')
+                if grant is not None:
+                    finish_revocation(self.authority.database, grant.parent_grant_id, 'parent')
+                flush_pending_audit(self.database)
+            except (sqlite3.Error, OSError, ValueError) as error:
+                logger.warning('Delegated revocation remains unconfirmed: error_type=%s',
+                               type(error).__name__)
+
+    def _reserved_file_guard(self, child_id: str, request: Request
+                             ) -> Generator[DelegatedTaskGrant, None, None]:
         with closing(sqlite3.connect(self.authority.database, timeout=10)) as parent_db, \
                 closing(sqlite3.connect(self.directory / "delegated-tasks.sqlite3",
                                         timeout=10)) as child_db:
@@ -325,7 +377,7 @@ class DelegatedTaskStore:
                     row = child_db.execute(
                         "SELECT body,revoked FROM grants WHERE child_id=?", (child_id,)
                     ).fetchone()
-                    if row is None or row[1]:
+                    if row is None or row[1] or revocation_requested(self.database, child_id):
                         raise ValueError("Delegated task authorization is unavailable")
                     grant = DelegatedTaskGrant.model_validate_json(row[0])
                     parent = current_grant_read_only(

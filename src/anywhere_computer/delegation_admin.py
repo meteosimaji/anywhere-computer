@@ -12,6 +12,7 @@ from .delegated_tasks import DelegatedTaskGrant, DelegatedTaskStore
 from .devices import DeviceStore
 from .http_service import _check_enrollment, _http_authority
 from .owner_credentials import OwnerCredentials
+from .remote_bridge import RemoteAgent
 
 
 def _canonical_roots(values: tuple[str, ...]) -> tuple[str, ...]:
@@ -49,6 +50,7 @@ def manage_delegation(
     expires_in: int = 3600,
     target_bearer: str | None = None,
     target_child_id: str | None = None,
+    operation_id: str | None = None,
     credentials: OwnerCredentials | None = None,
 ) -> dict[str, JsonValue]:
     """Execute a trusted local owner action; never put the bearer in logs."""
@@ -65,6 +67,25 @@ def manage_delegation(
             directory / "http-server" / "delegated-tasks", authority,
         )
         try:
+            if operation_id is not None and action != 'receipt':
+                raise ValueError('Operation ID is only valid for delegated receipt recovery')
+            if action == 'receipt':
+                if child_id is None or operation_id is None:
+                    raise ValueError('Select the original child and operation IDs')
+                # Password-authenticated owner recovery remains available after
+                # a child loses access. Never use a revoked child bearer to read.
+                child = next((grant for grant, _ in delegated.list_grants(owner=config.owner)
+                              if grant.child_id == child_id), None)
+                if child is None or child.device_id != 'local':
+                    raise ValueError('Local delegated child was not found for this owner')
+                uuid.UUID(hex=operation_id)  # Reject invalid IDs before receipt lookup.
+                if len(operation_id) != 32 or operation_id != operation_id.lower():
+                    raise ValueError('Use the original 32-character operation ID')
+                internal = RemoteAgent.internal_id('delegated-child:' + child_id, operation_id)
+                receipt = delegated.ledger.get(internal).model_copy(update={
+                    'operation_id': operation_id})
+                return {'child_id': child_id, 'operation_id': operation_id,
+                        'receipt': cast(JsonValue, receipt.model_dump(mode='json'))}
             if action in {'route', 'unroute'}:
                 if child_id is None:
                     raise ValueError('Select a delegated child for the route')
@@ -132,6 +153,7 @@ def manage_delegation(
                          "read_files": list(grant.read_files),
                          "write_roots": list(grant.write_roots),
                          "expires_at": grant.expires_at, "active": active,
+                         "revocation_state": delegated.revocation_state(grant.child_id),
                          "target_child_id": (list_routes.target_child_id(
                              grant.child_id, grant.device_id)
                              if list_routes is not None and grant.device_id != 'local'
@@ -147,7 +169,7 @@ def manage_delegation(
                               if grant.child_id == child_id), None)
                 if child is None:
                     raise ValueError("Delegated child was not found for this owner")
-                delegated.revoke(child.child_id)
+                revocation = delegated.revoke(child.child_id)
                 recorded_target: str | None = None
                 if child.device_id != 'local':
                     device_directory = (Path(config.shared_agent_directory)
@@ -160,8 +182,15 @@ def manage_delegation(
                         routes.revoke(child.child_id, child.device_id)
                     finally:
                         routes.close()
-                return {"child_id": child_id, "revoked": True,
-                        "source_child": "revoked",
+                return {"child_id": child_id, "revoked": revocation == 'revoked',
+                        "revocation_accepted": True,
+                        "revocation_state": revocation,
+                        "next_action": ('Use http-delegate-list to confirm revocation; '
+                                        'recover the original operation with http-delegate-receipt'
+                                        if revocation == 'pending' else
+                                        'Recover any admitted file operation by its original ID'),
+                        "source_child": ("revoked" if revocation == 'revoked'
+                                         else "revocation_pending"),
                         "source_route": ("revoked" if child.device_id != 'local'
                                          else "not_applicable"),
                         "target_child_grant": ("not_revoked_here"

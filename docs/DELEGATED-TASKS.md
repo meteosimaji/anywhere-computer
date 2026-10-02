@@ -11,6 +11,7 @@ anywhere http-delegate-issue --parent-grant-id PARENT_ID --scope files_read \
 anywhere http-delegate-issue --parent-grant-id PARENT_ID --scope files_read \
   --read-file /absolute/existing/file.txt --expires-in 3600
 anywhere http-delegate-revoke --child-id CHILD_ID
+anywhere http-delegate-receipt --child-id CHILD_ID --operation-id ORIGINAL_ID
 ```
 
 Each action prompts for the current owner password. The issue command prints the
@@ -99,7 +100,8 @@ cancel a request that has already entered the transport; revoke the target
 child grant as well when stopping its independent access.
 Revoking the source grant stops new source calls; revoke the separately issued
 target child grant on the target to end its independent access there.
-The owner administration result reports `source_child=revoked` and, for a
+The owner administration result reports `source_child=revoked` after its local
+grant update is confirmed, and, for a
 remote child, `source_route=revoked` with
 `target_child_grant=not_revoked_here`. The `revoked=true` compatibility field
 describes only the source child. A call already handed to the target transport
@@ -120,8 +122,33 @@ active parent grant. Reconnects use the same child ID and current grant checks.
 The local file worker rechecks the child and parent grants after the async
 handoff. It holds reservations on both authorization databases while the
 descriptor-confined read or write runs. A revocation that wins before the
-worker starts denies the call and is recorded in the audit; a revocation that
-arrives during the operation waits for that operation to finish. This boundary
+worker starts denies the call and is recorded in the audit. A revocation during
+an admitted operation commits a separate, durable intent without waiting behind
+its file-I/O reservation. The result distinguishes `revocation_accepted=true`,
+`revocation_state=pending`, and `revoked=false` from a confirmed
+`revocation_state=revoked` / `revoked=true`. A failed intent commit raises an error
+and does not claim acceptance. New calls check the intent before dispatch, even
+after reconnect or reopening the stores. The admitted worker can finish; its
+exit releases both reservations and attempts the original grant update. If
+confirmation fails, the intent stays pending and keeps new calls denied.
+
+Use `http-delegate-list` to reconcile and inspect the same child:
+`active=false` alone is not confirmation of its grant update; check
+`revocation_state` as well. New request bindings and denial audits use the
+independent control store; existing bindings remain reserved. Audit rows move
+to the original table only after a confirmed commit, without paths or arguments.
+The local owner command `http-delegate-receipt` reads the saved local child
+receipt using its original child and operation IDs, with the current owner
+password. It works after revocation and never dispatches the file operation.
+A revoked child bearer remains denied, including for `operations_get`; owner
+recovery does not restore its access. An unknown/missing receipt is not evidence
+that the operation failed to run. Keep the original ID and do not resend it
+under a new ID. Remote target receipts still require recovery on the target.
+
+The independent admission gate requires this implementation in both the
+running authorization service and delegated file executor. Do not use a newer
+owner CLI's pending result as proof that an older serving runtime checks intents;
+update serving runtimes after their existing work settles. This boundary
 does not add a child identity to ordinary ChatGPT. The routed HTTP path uses
 the target's independently authenticated child identity.
 
