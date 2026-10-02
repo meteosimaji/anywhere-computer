@@ -133,6 +133,8 @@ class OwnerPasskeys:
                         ) or ticket.verifier_digest != self._verifier_digest()):
                     return False
                 current = self._read()
+                if self.credentials.is_passkey_only() and current.credentials:
+                    return False
                 if any(hmac.compare_digest(item.digest, ticket.digest)
                        for item in current.redeemed_tickets):
                     return False
@@ -224,8 +226,8 @@ class OwnerPasskeys:
     def clear(self) -> None:
         """Offline owner reset revokes every passkey, including synced copies."""
         with ProcessLock(self.lock_path):
-            # The caller resets the salted owner verifier before clearing keys,
-            # so a restored old ticket cannot pass its verifier binding.
+            # The caller rotates the owner binding before clearing keys, so a
+            # restored old ticket cannot pass its verifier binding.
             self._write(_PasskeySet(credentials=[]))
             self.ticket_path.unlink(missing_ok=True)
 
@@ -245,26 +247,40 @@ class OwnerPasskeys:
         with ProcessLock(self.credentials.directory / "owner-reset.lock", timeout=30):
             if not self.credentials.verify(password):
                 raise ValueError("Current owner password is incorrect")
-            token = secrets.token_urlsafe(32)
-            ticket = _EnrollmentTicket(
-                digest=hashlib.sha256(token.encode()).hexdigest(),
-                verifier_digest=self._verifier_digest(),
-                expires=time.time() + 300,
-                device=self.device,
-            )
             with ProcessLock(self.lock_path):
-                temporary = self.ticket_path.with_name(
-                    self.ticket_path.name + "." + secrets.token_hex(8)
-                )
-                descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                try:
-                    with os.fdopen(descriptor, "w", encoding="utf-8") as target:
-                        target.write(ticket.model_dump_json())
-                        target.flush()
-                        os.fsync(target.fileno())
-                    os.replace(temporary, self.ticket_path)
-                finally:
-                    temporary.unlink(missing_ok=True)
+                return self._issue_ticket()
+
+    def issue_initial_local_ticket(self) -> str:
+        """Trusted local CLI only; allow one first key in passkey-only mode."""
+        with ProcessLock(self.credentials.directory / "owner-reset.lock", timeout=30):
+            if not self.credentials.is_passkey_only():
+                raise ValueError("Owner is not configured for passkey-only authentication")
+            with ProcessLock(self.lock_path):
+                if self._read().credentials:
+                    raise ValueError("An owner passkey is already enrolled")
+                return self._issue_ticket()
+
+    def _issue_ticket(self) -> str:
+        """Caller holds the owner-reset and passkey locks."""
+        token = secrets.token_urlsafe(32)
+        ticket = _EnrollmentTicket(
+            digest=hashlib.sha256(token.encode()).hexdigest(),
+            verifier_digest=self._verifier_digest(),
+            expires=time.time() + 300,
+            device=self.device,
+        )
+        temporary = self.ticket_path.with_name(
+            self.ticket_path.name + "." + secrets.token_hex(8)
+        )
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as target:
+                target.write(ticket.model_dump_json())
+                target.flush()
+                os.fsync(target.fileno())
+            os.replace(temporary, self.ticket_path)
+        finally:
+            temporary.unlink(missing_ok=True)
         return token
 
     def ticket_valid(self, token: str) -> bool:
@@ -281,11 +297,13 @@ class OwnerPasskeys:
                     ticket = _EnrollmentTicket.model_validate_json(raw)
                 except (FileNotFoundError, ValueError, OSError):
                     return False
+                current = self._read()
                 return (
                     ticket.device == self.device and ticket.expires > time.time()
                     and ticket.verifier_digest == self._verifier_digest()
+                    and not (self.credentials.is_passkey_only() and current.credentials)
                     and not any(hmac.compare_digest(item.digest, ticket.digest)
-                                for item in self._read().redeemed_tickets)
+                                for item in current.redeemed_tickets)
                     and hmac.compare_digest(
                         ticket.digest, hashlib.sha256(token.encode()).hexdigest()
                     )
@@ -305,10 +323,12 @@ class OwnerPasskeys:
                     if len(raw) > 4096:
                         return False
                     ticket = _EnrollmentTicket.model_validate_json(raw)
+                    current = self._read()
                     if (ticket.device != self.device or ticket.expires <= time.time()
                             or ticket.verifier_digest != self._verifier_digest()
+                            or (self.credentials.is_passkey_only() and current.credentials)
                             or any(hmac.compare_digest(item.digest, ticket.digest)
-                                   for item in self._read().redeemed_tickets)
+                                   for item in current.redeemed_tickets)
                             or not hmac.compare_digest(
                                 ticket.digest, hashlib.sha256(token.encode()).hexdigest()
                             )):

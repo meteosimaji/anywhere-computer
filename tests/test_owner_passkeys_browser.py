@@ -13,7 +13,8 @@ from anywhere_computer.owner_passkeys import OwnerPasskeys
 
 
 @pytest.mark.asyncio
-async def test_virtual_authenticator_registers_and_approves_consent(tmp_path):
+@pytest.mark.parametrize("passkey_only", [False, True])
+async def test_virtual_authenticator_registers_and_approves_consent(tmp_path, passkey_only):
     # A routed HTTPS origin gives Chromium a secure context without touching the
     # user's keychain, passkeys, network service, or persisted HTTP configuration.
     origin = "https://localhost"
@@ -24,9 +25,14 @@ async def test_virtual_authenticator_registers_and_approves_consent(tmp_path):
     store.register_client("client", frozenset({redirect}))
     store.enroll_device("owner", "device", frozenset({"files_read"}))
     owner = OwnerCredentials(tmp_path, resource=resource, owner="owner", vault=MemoryVault())
-    owner.initialize("owner-password")
+    if passkey_only:
+        owner.initialize_passkey_only()
+    else:
+        owner.initialize("owner-password")
     consent = BrowserAuthorization(store, owner, device="device")
-    ticket = OwnerPasskeys(owner, device="device").issue_local_ticket("owner-password")
+    passkeys = OwnerPasskeys(owner, device="device")
+    ticket = (passkeys.issue_initial_local_ticket() if passkey_only else
+              passkeys.issue_local_ticket("owner-password"))
     try:
         async with async_playwright() as driver:
             try:
@@ -84,6 +90,8 @@ async def test_virtual_authenticator_registers_and_approves_consent(tmp_path):
                     "code_challenge": pkce_s256(verifier), "code_challenge_method": "S256",
                 })
                 await page.goto(origin + "/authorize?" + query)
+                if passkey_only:
+                    assert await page.locator("#password").count() == 0
                 identity = await page.locator("input[name=request_id]").input_value()
                 assert identity in consent.pending
                 await page.evaluate("""() => {

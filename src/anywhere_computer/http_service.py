@@ -344,6 +344,31 @@ def revoke_http_device(directory: Path) -> None:
         store.revoke_device(owner=config.owner, device=config.device)
 
 
+def begin_http_owner_passkey(directory: Path) -> str:
+    """Begin local first-owner setup without a password or an existing grant.
+
+    Only the trusted local CLI calls this. The public server can redeem the
+    resulting one-use ticket but cannot issue one.
+    """
+    with _http_authority(directory) as (config, store):
+        _check_enrollment(store, config)
+        owner = OwnerCredentials(directory, resource=config.resource, owner=config.owner)
+        if owner.is_initialized():
+            if not owner.is_passkey_only():
+                raise ValueError("Owner already uses a password; first-owner setup is unavailable")
+            if (store.db.execute("SELECT 1 FROM grants WHERE revoked=0 LIMIT 1").fetchone()
+                    is not None or (
+                        store.db.execute("SELECT 1 FROM grants LIMIT 1").fetchone() is not None
+                        and store.device_enabled(owner=config.owner, device=config.device)
+                    )):
+                raise ValueError("Existing grants require an offline owner reset")
+        else:
+            if store.db.execute("SELECT 1 FROM grants LIMIT 1").fetchone() is not None:
+                raise ValueError("Existing grants require an offline owner reset")
+            owner.initialize_passkey_only()
+        return OwnerPasskeys(owner, device=config.device).issue_initial_local_ticket()
+
+
 def enable_http_device(directory: Path) -> bool:
     """Allow fresh consent after revocation; never restore existing credentials."""
     with ProcessLock(directory / "owner-reset.lock"):
@@ -352,7 +377,7 @@ def enable_http_device(directory: Path) -> bool:
             return store.enable_device(owner=config.owner, device=config.device)
 
 
-def reset_http_owner_password(directory: Path, replacement: str) -> None:
+def _reset_http_owner(directory: Path, replacement: str | None) -> None:
     """Recover the configured owner only after all serving engines have stopped."""
     prepare_directory(directory)
     with ProcessLock(directory / "http-server.lock"):
@@ -381,9 +406,21 @@ def reset_http_owner_password(directory: Path, replacement: str) -> None:
                         if remaining is not None:
                             raise ValueError("Grant revocation was not confirmed")
 
-                    credentials.reset_password(replacement, revoke_and_check)
+                    if replacement is None:
+                        credentials.reset_passkey_only(revoke_and_check)
+                    else:
+                        credentials.reset_password(replacement, revoke_and_check)
                     OwnerPasskeys(credentials, device=config.device).clear()
                     store.complete_owner_reset(owner=config.owner, device=config.device)
+
+
+def reset_http_owner_password(directory: Path, replacement: str) -> None:
+    _reset_http_owner(directory, replacement)
+
+
+def reset_http_owner_passkey(directory: Path) -> None:
+    """Offline passkey-only recovery; all old grants and keys are revoked."""
+    _reset_http_owner(directory, None)
 
 
 def retain_http_grants(directory: Path) -> int:

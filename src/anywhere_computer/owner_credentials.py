@@ -24,6 +24,14 @@ class _PasswordRecord(BaseModel):
     digest: str = Field(pattern=r"^[a-f0-9]{64}$", repr=False)
 
 
+class _PasskeyOnlyRecord(BaseModel):
+    """A native-store owner binding without a usable password verifier."""
+
+    model_config = ConfigDict(strict=True, extra="forbid", hide_input_in_errors=True)
+    version: Literal[2]
+    nonce: str = Field(pattern=r"^[a-f0-9]{64}$", repr=False)
+
+
 class OwnerPasswordChangeUnknown(ClientCredentialError):
     """The credential store could not confirm which password is installed."""
 
@@ -81,6 +89,23 @@ class OwnerCredentials:
             except Exception:
                 raise ClientCredentialError("Could not save owner verification data") from None
 
+    def initialize_passkey_only(self) -> None:
+        """Trusted local bootstrap; never replace an existing owner binding."""
+        with ProcessLock(self.directory / "owner-reset.lock", timeout=30), \
+                ProcessLock(self.lock_path, timeout=30):
+            if self._read() is not None:
+                raise ClientCredentialError(
+                    "Owner credentials already exist; setup cannot overwrite them"
+                )
+            record = _PasskeyOnlyRecord(version=2, nonce=secrets.token_hex(32))
+            try:
+                self.vault.set_password(SERVICE, self.account, record.model_dump_json())
+            except Exception:
+                # Native stores can commit a write and then report an error.
+                pass
+            if self._record() != record:
+                raise ClientCredentialError("Passkey-only owner binding was not confirmed")
+
     @staticmethod
     def _validate_password(password: str) -> None:
         if len(password) < 8 or len(password.encode("utf-8")) > 1024:
@@ -100,6 +125,8 @@ class OwnerCredentials:
         with ProcessLock(self.directory / "owner-reset.lock", timeout=30), \
                 ProcessLock(self.lock_path, timeout=30):
             previous = self._record()
+            if not isinstance(previous, _PasswordRecord):
+                raise ValueError("This owner uses passkeys and has no password to change")
             if not hmac.compare_digest(self._derive(current, previous.salt), previous.digest):
                 raise ValueError("Current owner password is incorrect")
             if hmac.compare_digest(current.encode("utf-8"), replacement.encode("utf-8")):
@@ -156,14 +183,48 @@ class OwnerCredentials:
                     "Password reset was not confirmed; device remains disabled"
                 )
 
-    def _record(self) -> _PasswordRecord:
+    def reset_passkey_only(self, revoke: Callable[[], None]) -> None:
+        """Offline recovery: revoke all grants before rotating the owner binding.
+
+        The caller holds the HTTP service and owner-reset locks and clears all
+        enrolled keys before the device can be enabled again.
+        """
+        with ProcessLock(self.lock_path, timeout=30):
+            self._record()
+            revoke()
+            updated = _PasskeyOnlyRecord(version=2, nonce=secrets.token_hex(32))
+            try:
+                self.vault.set_password(SERVICE, self.account, updated.model_dump_json())
+            except Exception:
+                pass
+            try:
+                installed = self._record()
+            except ClientCredentialError:
+                raise OwnerPasswordChangeUnknown(
+                    "Owner reset outcome is unknown; device remains disabled"
+                ) from None
+            if installed != updated:
+                raise OwnerPasswordChangeUnknown(
+                    "Owner reset was not confirmed; device remains disabled"
+                )
+
+    def _record(self) -> _PasswordRecord | _PasskeyOnlyRecord:
         raw = self._read()
         if raw is None:
             raise ClientCredentialError("Owner authentication has not been initialized")
         try:
             if len(raw) > 4096:
                 raise ValueError("Owner credential exceeds limit")
-            record = _PasswordRecord.model_validate_json(raw)
+            value = json.loads(raw)
+            if not isinstance(value, dict):
+                raise ValueError("Invalid owner binding")
+            version = value.get("version")
+            if version == 1:
+                record = _PasswordRecord.model_validate_json(raw)
+            elif version == 2:
+                record = _PasskeyOnlyRecord.model_validate_json(raw)
+            else:
+                raise ValueError("Unknown owner binding version")
         except ValueError:
             raise ClientCredentialError("Owner verification data is invalid") from None
         return record
@@ -179,11 +240,18 @@ class OwnerCredentials:
         self.ensure_initialized()
         return True
 
+    def is_passkey_only(self) -> bool:
+        if self._read() is None:
+            return False
+        return isinstance(self._record(), _PasskeyOnlyRecord)
+
     def verify(self, password: str) -> bool:
         if not password or len(password.encode("utf-8")) > 1024:
             return False
         with ProcessLock(self.lock_path, timeout=30):
             record = self._record()
+            if not isinstance(record, _PasswordRecord):
+                return False
             return hmac.compare_digest(self._derive(password, record.salt), record.digest)
 
     def forget(self) -> None:
