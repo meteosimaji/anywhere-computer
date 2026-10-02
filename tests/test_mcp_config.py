@@ -8,6 +8,7 @@ import tomllib
 import venv
 from pathlib import Path
 
+import psutil
 import pytest
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -128,6 +129,10 @@ credentials.local_credential = fixture_credential
                     read = await client.call_tool('files_read', {'path': str(sample)})
                     assert not read.isError
                     assert read.structuredContent['data']['text'] == sample.read_text('utf-8')
+                    admitted_endpoint = json.loads((state / 'agent.json').read_text('utf-8'))
+                    admitted_process = psutil.Process(admitted_endpoint['pid'])
+                    assert admitted_process.create_time() == admitted_endpoint['process_started']
+                    admitted_parent = admitted_process.ppid()
         assert not marker.exists()
         assert not (tmp_path / 'wrong-state').exists()
     finally:
@@ -172,5 +177,17 @@ credentials.local_credential = fixture_credential
                 stopped = await exchange(state, '__stop', credential=credential)
             except ConnectionError as error:
                 error.add_note('Controlled MCP stop phases: ' + json.dumps(phases))
+                try:
+                    process = psutil.Process(admitted_endpoint['pid'])
+                    same = process.create_time() == admitted_endpoint['process_started']
+                    live = (same and process.is_running()
+                            and process.status() != psutil.STATUS_ZOMBIE)
+                except psutil.Error:
+                    same, live = False, False
+                error.add_note('Controlled MCP agent lifecycle: ' + json.dumps({
+                    'parent_during_client': admitted_parent,
+                    'same_process_after_client': same,
+                    'live_after_client': live,
+                }))
                 raise
             assert stopped.state == 'completed'
