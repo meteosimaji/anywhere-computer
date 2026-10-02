@@ -138,6 +138,46 @@ async def initialize(http, token):
     return headers
 
 
+async def test_browser_only_http_grant_cannot_select_or_update_executable(
+    tmp_path, unused_tcp_port, monkeypatch, fast_owner_derivation,
+):
+    import uuid
+
+    from anywhere_computer.browser_control import BrowserControl
+
+    scopes = frozenset({"browser_open"})
+    config = await setup(tmp_path, unused_tcp_port, scopes=scopes)
+    owner = OwnerCredentials(tmp_path, resource=RESOURCE, owner="owner", vault=MemoryVault())
+    owner.initialize("synthetic owner password")
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("A browser-only grant must not start an injected executable")
+
+    monkeypatch.setattr(BrowserControl, "open", forbidden)
+    async with http_service(tmp_path, credentials=owner):
+        async with httpx.AsyncClient(base_url=f"http://127.0.0.1:{config.port}",
+                                     trust_env=False) as http:
+            token = await authenticate(http, scopes=scopes)
+            headers = await initialize(http, token)
+            catalog = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "id": "catalog", "method": "tools/list",
+            })
+            assert {row["name"] for row in catalog.json()["result"]["tools"]} == scopes
+            for tool, arguments in (
+                ("browser_open", {"executable_path": "/untrusted/program"}),
+                ("settings_update", {"key": "chrome_executable", "value": "/untrusted/program"}),
+                ("browser-configure", {"executable": "/untrusted/program"}),
+            ):
+                response = await http.post("/mcp", headers=headers, json={
+                    "jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": "tools/call",
+                    "params": {"name": tool, "arguments": arguments},
+                })
+                assert response.status_code == 200
+                body = response.json()
+                assert "error" in body or body["result"]["isError"] is True
+    assert not list(tmp_path.rglob("browser.json"))
+
+
 async def test_subchat_login_failure_keeps_http_tools_and_recovers_without_restart(
     tmp_path, unused_tcp_port, monkeypatch,
 ):

@@ -221,3 +221,38 @@ def test_cli_cannot_apply_chrome_option_to_other_commands(monkeypatch, tmp_path)
         cli.main()
     assert error.value.code == 2
     assert not (tmp_path / "state").exists()
+
+
+@pytest.mark.parametrize("tool,arguments", [
+    ("browser_open", {"executable_path": "/untrusted/program"}),
+    ("browser_open", {"chrome_executable": "/untrusted/program"}),
+    ("settings_update", {"key": "chrome_executable", "value": "/untrusted/program"}),
+    ("browser-configure", {"executable": "/untrusted/program"}),
+])
+async def test_tool_calls_cannot_select_or_reconfigure_a_browser(
+    tmp_path, monkeypatch, tool, arguments,
+):
+    import uuid
+
+    from anywhere_computer.engine import Engine
+    from anywhere_computer.models import Request
+
+    async def forbidden(*args, **kwargs):
+        pytest.fail("Rejected executable injection must not start a browser")
+
+    engine = Engine(tmp_path / "state")
+    monkeypatch.setattr(engine.browser, "open", forbidden)
+    try:
+        reply = await engine.execute(Request(operation_id=uuid.uuid4().hex,
+                                             tool=tool, arguments=arguments), peer="remote-owner")
+        assert reply.state == "failed"
+        assert "untrusted" not in reply.model_dump_json()
+        if tool != "browser-configure":
+            assert reply.data["error_code"] == "invalid_parameter"
+            assert reply.data["dispatched"] is False
+        else:
+            assert reply.error == "Unknown tool"
+        assert not (tmp_path / "state/browser.json").exists()
+        assert "browser-configure" not in {row["name"] for row in engine.catalog()}
+    finally:
+        await engine.close()

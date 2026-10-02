@@ -107,6 +107,11 @@ independent cookies, owner rejection and completed cleanup. Keep its result sepa
 from authenticated MCP/HTTPS and Secret Service acceptance. The native worker on
 the actual desktop should perform the trial; a different cloud shell is not a
 substitute for that session.
+It opens/cleans up the two cookie-isolation sessions sequentially, so at most one
+owned Chrome browser runs at a time. Its temporary state is not an engine or a
+filesystem-access sandbox. Browser-only HTTP/MCP grants cannot supply executable
+paths to `browser_open`, update this setting through `settings_update`, or invoke
+the local configuration command as a tool.
 
 ## Remaining Linux features
 
