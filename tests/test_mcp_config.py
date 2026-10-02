@@ -63,7 +63,9 @@ def test_export_rejects_unrelated_or_private_options(monkeypatch, capsys, option
     assert capsys.readouterr().out == ''
 
 
-async def test_exported_configuration_runs_real_mcp_without_path_or_workspace_imports(tmp_path):
+async def test_exported_configuration_runs_real_mcp_without_path_or_workspace_imports(
+    tmp_path, monkeypatch,
+):
     state = tmp_path / 'agent state 日本語'
     credential = 'synthetic-mcp-config-credential'
     # Install only fixture credential hooks in a disposable interpreter's trusted
@@ -130,5 +132,45 @@ credentials.local_credential = fixture_credential
         assert not (tmp_path / 'wrong-state').exists()
     finally:
         if (state / 'agent.json').exists():
-            stopped = await exchange(state, '__stop', credential=credential)
+            # Observe the actual TCP phases without replacing its transport,
+            # retrying the stop, or recording request/reply bodies or secrets.
+            phases = []
+            real_open = asyncio.open_connection
+
+            async def observed_open(*args, **kwargs):
+                reader, writer = await real_open(*args, **kwargs)
+                phases.append('connected')
+                real_readline, real_drain = reader.readline, writer.drain
+                real_close = writer.wait_closed
+
+                async def observed_readline():
+                    phases.append('reading_reply')
+                    result = await real_readline()
+                    phases.append('reply_received' if result else 'reply_missing')
+                    return result
+
+                async def observed_drain():
+                    await real_drain()
+                    phases.append('request_drained')
+
+                async def observed_close():
+                    phases.append('closing')
+                    try:
+                        await real_close()
+                    except ConnectionError:
+                        phases.append('close_reset')
+                        raise
+                    phases.append('closed')
+
+                monkeypatch.setattr(reader, 'readline', observed_readline)
+                monkeypatch.setattr(writer, 'drain', observed_drain)
+                monkeypatch.setattr(writer, 'wait_closed', observed_close)
+                return reader, writer
+
+            monkeypatch.setattr(asyncio, 'open_connection', observed_open)
+            try:
+                stopped = await exchange(state, '__stop', credential=credential)
+            except ConnectionError as error:
+                error.add_note('Controlled MCP stop phases: ' + json.dumps(phases))
+                raise
             assert stopped.state == 'completed'
