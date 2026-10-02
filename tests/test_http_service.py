@@ -182,6 +182,8 @@ async def test_browser_only_http_grant_cannot_select_or_update_executable(
                 assert response.status_code == 200
                 body = response.json()
                 assert "error" in body or body["result"]["isError"] is True
+                if tool != "browser_open":
+                    assert body["error"] == {"code": -32602, "message": "Unknown tool"}
     assert not list(tmp_path.rglob("browser.json"))
 
 
