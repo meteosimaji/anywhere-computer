@@ -104,6 +104,50 @@ async def test_authenticated_rpc_and_catalog(agent):
     assert again.data["instance_id"] == status.data["instance_id"]
 
 
+@pytest.mark.parametrize('close_error', [ConnectionResetError, BrokenPipeError])
+async def test_peer_reset_during_close_preserves_validated_reply(agent, monkeypatch, close_error):
+    directory, credential = agent
+    original_open = asyncio.open_connection
+    clients = []
+
+    async def open_with_close_reset(*args, **kwargs):
+        reader, writer = await original_open(*args, **kwargs)
+        clients.append(writer)
+        original_wait = writer.wait_closed
+
+        async def reset_after_close():
+            await original_wait()
+            raise close_error('synthetic close-only reset')
+
+        monkeypatch.setattr(writer, 'wait_closed', reset_after_close)
+        return reader, writer
+
+    monkeypatch.setattr(asyncio, 'open_connection', open_with_close_reset)
+    reply = await exchange(directory, '__status', operation_id='c' * 32, credential=credential)
+    assert reply.operation_id == 'c' * 32 and reply.data['state'] == 'ready'
+    assert len(clients) == 1 and clients[0].transport.is_closing()
+
+
+async def test_peer_close_reset_does_not_mask_missing_outcome(agent, monkeypatch):
+    directory, _ = agent
+    original_open = asyncio.open_connection
+
+    async def open_with_close_reset(*args, **kwargs):
+        reader, writer = await original_open(*args, **kwargs)
+        original_wait = writer.wait_closed
+
+        async def reset_after_close():
+            await original_wait()
+            raise ConnectionResetError('synthetic close-only reset')
+
+        monkeypatch.setattr(writer, 'wait_closed', reset_after_close)
+        return reader, writer
+
+    monkeypatch.setattr(asyncio, 'open_connection', open_with_close_reset)
+    with pytest.raises(ConnectionError, match='before returning an outcome'):
+        await exchange(directory, '__status', credential='wrong')
+
+
 async def test_local_transport_does_not_persist_credential(agent):
     directory, credential = agent
     await exchange(directory, "computer_status", credential=credential)

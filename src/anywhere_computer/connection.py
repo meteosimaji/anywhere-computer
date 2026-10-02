@@ -128,7 +128,13 @@ async def exchange(
         return reply
     finally:
         writer.close()
-        await writer.wait_closed()
+        try:
+            await writer.wait_closed()
+        except (ConnectionResetError, BrokenPipeError):
+            # A peer stopping after its reply can reset Windows' close waiter.
+            # Keep the validated reply (or the original read/validation error);
+            # a cleanup-only reset must not change the operation's outcome.
+            writer.transport.abort()
 
 
 async def serve(

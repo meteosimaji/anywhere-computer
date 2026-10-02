@@ -3,14 +3,14 @@
 公開パッケージと未公開の開発作業を分けて記載します。alpha版は正式stableではありません。
 日付付きの実機検証記録はローカルの履歴資料として保管しています。
 
-## 0.2.0b61 / Plugin 0.2.0-beta.61 — unpublished candidate (2026-10-02)
+## 0.2.0b62 / Plugin 0.2.0-beta.62 — unpublished candidate (2026-10-02)
 
 - Export local MCP JSON/TOML with the installed interpreter and explicit state
   directory. Show the JSON entry after interactive local setup; do not overwrite
   client settings, initialize credentials or start an agent during export.
 - Keep JSON/TOML exports copyable through legacy console encodings, preserving
   Unicode paths including non-BMP characters with the appropriate format escapes.
-  Supersede the unpublished beta.59/60 bundles without changing their wheel bytes.
+  Supersede the unpublished beta.59/60/61 bundles without changing their wheel bytes.
 - Report unavailable, malformed or duplicate engine catalogs separately from
   authenticated engine readiness. Fail doctor rather than report success when
   the catalog is unconfirmed; keep actual AI client acceptance separate.
@@ -25,6 +25,9 @@
   separate durable claims before configuration writes and delegated operations.
   Failed or invalid status requests retain their exact operation-ID binding;
   a failed commit cannot return a successful status receipt.
+- Preserve an authenticated, validated local RPC reply when peer shutdown resets
+  only the socket close waiter. Keep original read/authentication/validation
+  failures and cancellation; never repeat an operation to handle that reset.
 
 ## 0.2.0b57 / Plugin 0.2.0-beta.57 — unpublished personal-use candidate (2026-10-02)
 
